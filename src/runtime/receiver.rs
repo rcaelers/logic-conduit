@@ -117,9 +117,7 @@ impl<'a, T> Receiver<'a, T> {
                     return Err(WorkError::Shutdown);
                 }
                 Err(_) => {
-                    tracing::debug!(
-                        "Receiver::peek() - channel disconnected, returning Shutdown"
-                    );
+                    tracing::debug!("Receiver::peek() - channel disconnected, returning Shutdown");
                     return Err(WorkError::Shutdown);
                 }
             }
@@ -280,11 +278,17 @@ impl<'b, 'a, T> ReceiverSelector<'b, 'a, T> {
             Ok(ChannelMessage::Sample(item)) => Ok((ch_idx, item)),
             Ok(ChannelMessage::EndOfStream) => {
                 self.channels[ch_idx].eos.store(true, Ordering::Relaxed);
-                tracing::debug!("ReceiverSelector::select() - channel {} EndOfStream", ch_idx);
+                tracing::debug!(
+                    "ReceiverSelector::select() - channel {} EndOfStream",
+                    ch_idx
+                );
                 Err(WorkError::Shutdown)
             }
             Err(_) => {
-                tracing::debug!("ReceiverSelector::select() - channel {} disconnected, returning Shutdown", ch_idx);
+                tracing::debug!(
+                    "ReceiverSelector::select() - channel {} disconnected, returning Shutdown",
+                    ch_idx
+                );
                 Err(WorkError::Shutdown)
             }
         }
@@ -328,11 +332,17 @@ impl<'b, 'a, T> ReceiverSelector<'b, 'a, T> {
             Ok(ChannelMessage::Sample(item)) => Ok((rx_idx, item)),
             Ok(ChannelMessage::EndOfStream) => {
                 self.channels[rx_idx].eos.store(true, Ordering::Relaxed);
-                tracing::debug!("ReceiverSelector::select_from() - channel {} EndOfStream", rx_idx);
+                tracing::debug!(
+                    "ReceiverSelector::select_from() - channel {} EndOfStream",
+                    rx_idx
+                );
                 Err(WorkError::Shutdown)
             }
             Err(_) => {
-                tracing::debug!("ReceiverSelector::select_from() - channel {} disconnected, returning Shutdown", rx_idx);
+                tracing::debug!(
+                    "ReceiverSelector::select_from() - channel {} disconnected, returning Shutdown",
+                    rx_idx
+                );
                 Err(WorkError::Shutdown)
             }
         }
@@ -341,9 +351,9 @@ impl<'b, 'a, T> ReceiverSelector<'b, 'a, T> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::sender::ChannelMessage;
     use super::*;
     use crossbeam_channel::bounded;
-    use super::super::sender::ChannelMessage;
 
     // Helper to create a test watchdog
     fn test_watchdog() -> crate::runtime::Watchdog {
@@ -391,7 +401,7 @@ mod tests {
 
         assert_eq!(pr.recv().unwrap(), 77);
         assert!(!pr.has_buffered());
-        
+
         drop(tx);
     }
 

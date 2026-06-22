@@ -216,8 +216,16 @@ mod tests {
     fn test_basic_graph_building() {
         let mut builder = GraphBuilder::new();
 
-        let source = builder.add_process_node("source", vec![], vec![(TypeId::of::<u32>(), "u32".to_string())]);
-        let sink = builder.add_process_node("sink", vec![(TypeId::of::<u32>(), "u32".to_string())], vec![]);
+        let source = builder.add_process_node(
+            "source",
+            vec![],
+            vec![(TypeId::of::<u32>(), "u32".to_string())],
+        );
+        let sink = builder.add_process_node(
+            "sink",
+            vec![(TypeId::of::<u32>(), "u32".to_string())],
+            vec![],
+        );
 
         assert!(builder.connect::<u32>(source, 0, sink, 0, 1000).is_ok());
         assert!(builder.validate().is_ok());
@@ -227,8 +235,16 @@ mod tests {
     fn test_type_mismatch() {
         let mut builder = GraphBuilder::new();
 
-        let source = builder.add_process_node("source", vec![], vec![(TypeId::of::<u32>(), "u32".to_string())]);
-        let sink = builder.add_process_node("sink", vec![(TypeId::of::<u64>(), "u64".to_string())], vec![]);
+        let source = builder.add_process_node(
+            "source",
+            vec![],
+            vec![(TypeId::of::<u32>(), "u32".to_string())],
+        );
+        let sink = builder.add_process_node(
+            "sink",
+            vec![(TypeId::of::<u64>(), "u64".to_string())],
+            vec![],
+        );
 
         assert!(builder.connect::<u32>(source, 0, sink, 0, 1000).is_err());
     }
@@ -237,8 +253,16 @@ mod tests {
     fn test_invalid_port() {
         let mut builder = GraphBuilder::new();
 
-        let source = builder.add_process_node("source", vec![], vec![(TypeId::of::<u32>(), "u32".to_string())]);
-        let sink = builder.add_process_node("sink", vec![(TypeId::of::<u32>(), "u32".to_string())], vec![]);
+        let source = builder.add_process_node(
+            "source",
+            vec![],
+            vec![(TypeId::of::<u32>(), "u32".to_string())],
+        );
+        let sink = builder.add_process_node(
+            "sink",
+            vec![(TypeId::of::<u32>(), "u32".to_string())],
+            vec![],
+        );
 
         // Try to connect to non-existent port
         assert!(builder.connect::<u32>(source, 1, sink, 0, 1000).is_err());

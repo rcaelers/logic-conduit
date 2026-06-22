@@ -110,11 +110,18 @@ impl InputPort {
         &'a self,
         buffer: &'a mut std::collections::VecDeque<T>,
     ) -> Option<Receiver<'a, T>> {
-        let receiver = self.channel.downcast_ref::<CrossbeamReceiver<ChannelMessage<T>>>()?;
+        let receiver = self
+            .channel
+            .downcast_ref::<CrossbeamReceiver<ChannelMessage<T>>>()?;
         let watchdog = self.watchdog_handle.as_ref().expect(
             "InputPort.get() called before watchdog attached - this is a bug in the pipeline",
         );
-        Some(Receiver::with_watchdog(receiver, buffer, watchdog.clone(), &self.eos_received))
+        Some(Receiver::with_watchdog(
+            receiver,
+            buffer,
+            watchdog.clone(),
+            &self.eos_received,
+        ))
     }
 }
 

@@ -1,14 +1,16 @@
 //! Type registry for dynamic channel creation
 
 use super::sender::{ChannelMessage, Sender};
-use crossbeam_channel::{bounded, Sender as CrossbeamSender};
+use crossbeam_channel::{Sender as CrossbeamSender, bounded};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// Type registry for creating channels dynamically based on TypeId
-type ChannelCreatorFn = Box<dyn Fn(usize) -> (Box<dyn Any + Send>, Box<dyn Any + Send>) + Send + Sync>;
-type OutputWrapperFn = Box<dyn Fn(Vec<Box<dyn Any + Send>>) -> Result<Box<dyn Any + Send>, String> + Send + Sync>;
+type ChannelCreatorFn =
+    Box<dyn Fn(usize) -> (Box<dyn Any + Send>, Box<dyn Any + Send>) + Send + Sync>;
+type OutputWrapperFn =
+    Box<dyn Fn(Vec<Box<dyn Any + Send>>) -> Result<Box<dyn Any + Send>, String> + Send + Sync>;
 
 pub(crate) struct TypeRegistry {
     channel_creators: HashMap<TypeId, ChannelCreatorFn>,
@@ -26,7 +28,7 @@ impl TypeRegistry {
     /// Register a type for use in channels
     fn register<T: 'static + Send + Clone>(&mut self) {
         let type_id = TypeId::of::<T>();
-        
+
         // Register channel creator — channels carry ChannelMessage<T> internally
         self.channel_creators.insert(
             type_id,
@@ -63,15 +65,24 @@ impl TypeRegistry {
         );
     }
 
-    pub(crate) fn create_channel(&self, type_id: TypeId, buffer_size: usize) -> Option<(Box<dyn Any + Send>, Box<dyn Any + Send>)> {
-        self.channel_creators.get(&type_id).map(|creator| creator(buffer_size))
+    pub(crate) fn create_channel(
+        &self,
+        type_id: TypeId,
+        buffer_size: usize,
+    ) -> Option<(Box<dyn Any + Send>, Box<dyn Any + Send>)> {
+        self.channel_creators
+            .get(&type_id)
+            .map(|creator| creator(buffer_size))
     }
 
-    pub(crate) fn wrap_output(&self, type_id: TypeId, senders: Vec<Box<dyn Any + Send>>) -> Result<Box<dyn Any + Send>, String> {
+    pub(crate) fn wrap_output(
+        &self,
+        type_id: TypeId,
+        senders: Vec<Box<dyn Any + Send>>,
+    ) -> Result<Box<dyn Any + Send>, String> {
         self.output_wrappers
             .get(&type_id)
-            .ok_or_else(|| format!("Type {:?} not registered", type_id))?
-            (senders)
+            .ok_or_else(|| format!("Type {:?} not registered", type_id))?(senders)
     }
 }
 
@@ -79,7 +90,7 @@ impl TypeRegistry {
 lazy_static::lazy_static! {
     pub(crate) static ref TYPE_REGISTRY: Arc<Mutex<TypeRegistry>> = {
         let mut registry = TypeRegistry::new();
-        
+
         // Register common types
         use crate::Sample;
         use crate::runtime::sample::SampleBlock;
@@ -88,7 +99,7 @@ lazy_static::lazy_static! {
         registry.register::<SampleBlock>();
         registry.register::<SpiTransfer>();
         registry.register::<ParallelWord>();
-        
+
         Arc::new(Mutex::new(registry))
     };
 }

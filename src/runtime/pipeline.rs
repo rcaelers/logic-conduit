@@ -1,10 +1,10 @@
 //! Pipeline builder for constructing node graphs
 
 use super::errors::ConnectionError;
+use super::node::{InputPort, OutputPort, ProcessNode};
 use super::ports::PortSchema;
 use super::scheduler::Scheduler;
 use super::type_registry::TYPE_REGISTRY;
-use super::node::{InputPort, OutputPort, ProcessNode};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use tracing::{debug, info};
@@ -81,7 +81,13 @@ impl Pipeline {
         to_node: &str,
         to_port: &str,
     ) -> Result<(), Box<ConnectionError>> {
-        self.connect_with_buffer(from_node, from_port, to_node, to_port, self.default_buffer_size)
+        self.connect_with_buffer(
+            from_node,
+            from_port,
+            to_node,
+            to_port,
+            self.default_buffer_size,
+        )
     }
 
     /// Connect with custom buffer size
@@ -148,7 +154,11 @@ impl Pipeline {
         }
 
         // Check for duplicate connection to same input port
-        if self.connections.iter().any(|c| c.to_node == to_id && c.to_port == to_schema.index) {
+        if self
+            .connections
+            .iter()
+            .any(|c| c.to_node == to_id && c.to_port == to_schema.index)
+        {
             return Err(Box::new(ConnectionError::DuplicateConnection(format!(
                 "Input port '{}' on node '{}' is already connected",
                 to_port, to_node
@@ -285,9 +295,9 @@ impl Pipeline {
 
                     // Inject watchdog context
                     let port_name = input_schemas
-                            .get(i)
-                            .map(|s| s.name.clone())
-                            .unwrap_or_else(|| format!("in{}", i));
+                        .get(i)
+                        .map(|s| s.name.clone())
+                        .unwrap_or_else(|| format!("in{}", i));
                     port.with_watchdog(watchdog.clone(), node_name.clone(), port_name)
                 })
                 .collect();
@@ -301,9 +311,7 @@ impl Pipeline {
                             .map(OutputPort::from_type_erased)?
                     } else {
                         // Unconnected output: use dummy port
-                        OutputPort::from_type_erased(
-                            Box::new(()) as Box<dyn Any + Send>
-                        )
+                        OutputPort::from_type_erased(Box::new(()) as Box<dyn Any + Send>)
                     };
 
                     // Inject watchdog context
@@ -338,17 +346,25 @@ impl Default for Pipeline {
 mod tests {
     use super::*;
     use crate::nodes::Sample;
-    use crate::runtime::ports::PortSchema;
     use crate::runtime::node::ProcessNode;
+    use crate::runtime::ports::PortSchema;
     use std::any::TypeId;
 
     // Minimal test node implementations
     struct TestSource;
     impl ProcessNode for TestSource {
-        fn name(&self) -> &str { "test_source" }
-        fn num_inputs(&self) -> usize { 0 }
-        fn num_outputs(&self) -> usize { 1 }
-        fn input_schema(&self) -> Vec<PortSchema> { vec![] }
+        fn name(&self) -> &str {
+            "test_source"
+        }
+        fn num_inputs(&self) -> usize {
+            0
+        }
+        fn num_outputs(&self) -> usize {
+            1
+        }
+        fn input_schema(&self) -> Vec<PortSchema> {
+            vec![]
+        }
         fn output_schema(&self) -> Vec<PortSchema> {
             vec![PortSchema {
                 name: "out".to_string(),
@@ -357,16 +373,26 @@ mod tests {
                 direction: crate::runtime::ports::PortDirection::Output,
             }]
         }
-        fn work(&mut self, _inputs: &[crate::runtime::node::InputPort], _outputs: &[crate::runtime::node::OutputPort]) -> crate::runtime::errors::WorkResult<usize> {
+        fn work(
+            &mut self,
+            _inputs: &[crate::runtime::node::InputPort],
+            _outputs: &[crate::runtime::node::OutputPort],
+        ) -> crate::runtime::errors::WorkResult<usize> {
             Ok(0)
         }
     }
 
     struct TestSink;
     impl ProcessNode for TestSink {
-        fn name(&self) -> &str { "test_sink" }
-        fn num_inputs(&self) -> usize { 1 }
-        fn num_outputs(&self) -> usize { 0 }
+        fn name(&self) -> &str {
+            "test_sink"
+        }
+        fn num_inputs(&self) -> usize {
+            1
+        }
+        fn num_outputs(&self) -> usize {
+            0
+        }
         fn input_schema(&self) -> Vec<PortSchema> {
             vec![PortSchema {
                 name: "in".to_string(),
@@ -375,17 +401,29 @@ mod tests {
                 direction: crate::runtime::ports::PortDirection::Input,
             }]
         }
-        fn output_schema(&self) -> Vec<PortSchema> { vec![] }
-        fn work(&mut self, _inputs: &[crate::runtime::node::InputPort], _outputs: &[crate::runtime::node::OutputPort]) -> crate::runtime::errors::WorkResult<usize> {
+        fn output_schema(&self) -> Vec<PortSchema> {
+            vec![]
+        }
+        fn work(
+            &mut self,
+            _inputs: &[crate::runtime::node::InputPort],
+            _outputs: &[crate::runtime::node::OutputPort],
+        ) -> crate::runtime::errors::WorkResult<usize> {
             Ok(0)
         }
     }
 
     struct TestProcessor;
     impl ProcessNode for TestProcessor {
-        fn name(&self) -> &str { "test_processor" }
-        fn num_inputs(&self) -> usize { 1 }
-        fn num_outputs(&self) -> usize { 1 }
+        fn name(&self) -> &str {
+            "test_processor"
+        }
+        fn num_inputs(&self) -> usize {
+            1
+        }
+        fn num_outputs(&self) -> usize {
+            1
+        }
         fn input_schema(&self) -> Vec<PortSchema> {
             vec![PortSchema {
                 name: "in".to_string(),
@@ -402,7 +440,11 @@ mod tests {
                 direction: crate::runtime::ports::PortDirection::Output,
             }]
         }
-        fn work(&mut self, _inputs: &[crate::runtime::node::InputPort], _outputs: &[crate::runtime::node::OutputPort]) -> crate::runtime::errors::WorkResult<usize> {
+        fn work(
+            &mut self,
+            _inputs: &[crate::runtime::node::InputPort],
+            _outputs: &[crate::runtime::node::OutputPort],
+        ) -> crate::runtime::errors::WorkResult<usize> {
             Ok(0)
         }
     }
@@ -412,7 +454,7 @@ mod tests {
         let mut pipeline = Pipeline::new();
         pipeline.add_process("source", TestSource).unwrap();
         pipeline.add_process("sink", TestSink).unwrap();
-        
+
         let result = pipeline.connect("source", "out", "sink", "in");
         assert!(result.is_ok(), "Single connection should succeed");
     }
@@ -423,14 +465,22 @@ mod tests {
         pipeline.add_process("source1", TestSource).unwrap();
         pipeline.add_process("source2", TestSource).unwrap();
         pipeline.add_process("sink", TestSink).unwrap();
-        
+
         // First connection should succeed
         pipeline.connect("source1", "out", "sink", "in").unwrap();
-        
+
         // Second connection to same input should fail
         let result = pipeline.connect("source2", "out", "sink", "in");
-        assert!(result.is_err(), "Duplicate input connection should be rejected");
-        assert!(result.unwrap_err().to_string().contains("already connected"));
+        assert!(
+            result.is_err(),
+            "Duplicate input connection should be rejected"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("already connected")
+        );
     }
 
     #[test]
@@ -439,22 +489,28 @@ mod tests {
         pipeline.add_process("source", TestSource).unwrap();
         pipeline.add_process("sink1", TestSink).unwrap();
         pipeline.add_process("sink2", TestSink).unwrap();
-        
+
         // Multiple connections from same output should succeed (broadcasting)
         let result1 = pipeline.connect("source", "out", "sink1", "in");
         let result2 = pipeline.connect("source", "out", "sink2", "in");
-        
+
         assert!(result1.is_ok(), "First output connection should succeed");
-        assert!(result2.is_ok(), "Second output connection should succeed (broadcasting)");
+        assert!(
+            result2.is_ok(),
+            "Second output connection should succeed (broadcasting)"
+        );
     }
 
     #[test]
     fn test_connection_to_nonexistent_node() {
         let mut pipeline = Pipeline::new();
         pipeline.add_process("source", TestSource).unwrap();
-        
+
         let result = pipeline.connect("source", "out", "nonexistent", "in");
-        assert!(result.is_err(), "Connection to nonexistent node should fail");
+        assert!(
+            result.is_err(),
+            "Connection to nonexistent node should fail"
+        );
     }
 
     #[test]
@@ -462,9 +518,12 @@ mod tests {
         let mut pipeline = Pipeline::new();
         pipeline.add_process("source", TestSource).unwrap();
         pipeline.add_process("sink", TestSink).unwrap();
-        
+
         let result = pipeline.connect("source", "wrong_port", "sink", "in");
-        assert!(result.is_err(), "Connection to nonexistent port should fail");
+        assert!(
+            result.is_err(),
+            "Connection to nonexistent port should fail"
+        );
     }
 
     #[test]
@@ -473,10 +532,10 @@ mod tests {
         pipeline.add_process("source", TestSource).unwrap();
         pipeline.add_process("processor", TestProcessor).unwrap();
         pipeline.add_process("sink", TestSink).unwrap();
-        
+
         let result1 = pipeline.connect("source", "out", "processor", "in");
         let result2 = pipeline.connect("processor", "out", "sink", "in");
-        
+
         assert!(result1.is_ok(), "First chain connection should succeed");
         assert!(result2.is_ok(), "Second chain connection should succeed");
     }
@@ -486,9 +545,12 @@ mod tests {
         let mut pipeline = Pipeline::new();
         pipeline.add_process("source", TestSource).unwrap();
         pipeline.add_process("sink", TestSink).unwrap();
-        
+
         let result = pipeline.connect_with_buffer("source", "out", "sink", "in", 10000);
-        assert!(result.is_ok(), "Connection with custom buffer size should succeed");
+        assert!(
+            result.is_ok(),
+            "Connection with custom buffer size should succeed"
+        );
     }
 
     #[test]
@@ -496,7 +558,7 @@ mod tests {
         let mut pipeline = Pipeline::new();
         let result1 = pipeline.add_process("node1", TestSource);
         let result2 = pipeline.add_process("node1", TestSource);
-        
+
         assert!(result1.is_ok(), "First node addition should succeed");
         assert!(result2.is_err(), "Duplicate node name should be rejected");
         assert!(result2.unwrap_err().contains("already exists"));
@@ -507,7 +569,7 @@ mod tests {
         let mut pipeline = Pipeline::new();
         pipeline.add_process("source", TestSource).unwrap();
         pipeline.add_process("sink", TestSink).unwrap();
-        
+
         let nodes = pipeline.list_nodes();
         assert_eq!(nodes.len(), 2);
         assert!(nodes.contains(&"source"));

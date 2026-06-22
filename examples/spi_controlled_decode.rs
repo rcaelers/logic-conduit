@@ -304,9 +304,13 @@ impl ControlledParallelWriter {
         if self.tgck_records.len() < 2 {
             return None;
         }
-        let mut diffs: Vec<usize> = self.tgck_records
+        let mut diffs: Vec<usize> = self
+            .tgck_records
             .windows(2)
-            .map(|w| w[1].falling_byte_index.saturating_sub(w[0].falling_byte_index))
+            .map(|w| {
+                w[1].falling_byte_index
+                    .saturating_sub(w[0].falling_byte_index)
+            })
             .collect();
         diffs.sort_unstable();
         Some(diffs[diffs.len() / 2])
@@ -436,15 +440,22 @@ impl ControlledParallelWriter {
             .join(format!("capture_{:04}_tgck.csv", file_num));
         let file = File::create(&csv_path)?;
         let mut writer = BufWriter::new(file);
-        writeln!(writer, "rising_byte_index,rising_timestamp,falling_byte_index,falling_timestamp,first_clock_rising_byte_index,first_clock_rising_timestamp,first_clock_falling_byte_index,first_clock_falling_timestamp")?;
+        writeln!(
+            writer,
+            "rising_byte_index,rising_timestamp,falling_byte_index,falling_timestamp,first_clock_rising_byte_index,first_clock_rising_timestamp,first_clock_falling_byte_index,first_clock_falling_timestamp"
+        )?;
         for r in &self.tgck_records {
             writeln!(
                 writer,
                 "{},{},{},{},{},{},{},{}",
-                r.rising_byte_index, r.rising_timestamp,
-                r.falling_byte_index, r.falling_timestamp,
-                r.first_clock_after_rising_byte_index, r.first_clock_after_rising_timestamp,
-                r.first_clock_after_falling_byte_index, r.first_clock_after_falling_timestamp,
+                r.rising_byte_index,
+                r.rising_timestamp,
+                r.falling_byte_index,
+                r.falling_timestamp,
+                r.first_clock_after_rising_byte_index,
+                r.first_clock_after_rising_timestamp,
+                r.first_clock_after_falling_byte_index,
+                r.first_clock_after_falling_timestamp,
             )?;
         }
         writer.flush()?;
@@ -467,7 +478,9 @@ impl ControlledParallelWriter {
                 self.write_tgck_csv(self.file_count)?;
                 info!(
                     "Closed file {} with {} words ({} bytes), {} TGCK records",
-                    self.file_count, self.words_in_file, self.words_in_file,
+                    self.file_count,
+                    self.words_in_file,
+                    self.words_in_file,
                     self.tgck_records.len()
                 );
             } else {
@@ -521,7 +534,7 @@ impl ProcessNode for ControlledParallelWriter {
 
     fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
         const BATCH_SIZE: usize = 1000; // Process up to 1000 words per work() call
-        
+
         let mut words_buffer = std::collections::VecDeque::new();
         let mut words_input = inputs
             .first()
@@ -565,72 +578,74 @@ impl ProcessNode for ControlledParallelWriter {
             self.edges_to_process_buf.clear();
             self.tgck_rising_buf.clear();
             self.tgck_falling_buf.clear();
-        {
-            if !self.enable_channel_closed {
-                let mut enable_input = inputs
-                    .get(1)
-                    .and_then(|port| port.get::<Sample>(&mut self.enable_buffer))
-                    .ok_or_else(|| WorkError::NodeError("Missing enable_signal input".to_string()))?;
+            {
+                if !self.enable_channel_closed {
+                    let mut enable_input = inputs
+                        .get(1)
+                        .and_then(|port| port.get::<Sample>(&mut self.enable_buffer))
+                        .ok_or_else(|| {
+                            WorkError::NodeError("Missing enable_signal input".to_string())
+                        })?;
 
-                loop {
-                    match enable_input.peek() {
-                        Ok(next_edge) => {
-                            if next_edge.start_time <= word_position {
-                                let edge = enable_input.recv()?;
-                                if edge.value != self.current_enable_state {
-                                    self.edges_to_process_buf.push(edge);
-                                    // Update state to track further transitions
-                                    self.current_enable_state = edge.value;
-                                    self.current_enable_timestamp = edge.start_time;
+                    loop {
+                        match enable_input.peek() {
+                            Ok(next_edge) => {
+                                if next_edge.start_time <= word_position {
+                                    let edge = enable_input.recv()?;
+                                    if edge.value != self.current_enable_state {
+                                        self.edges_to_process_buf.push(edge);
+                                        // Update state to track further transitions
+                                        self.current_enable_state = edge.value;
+                                        self.current_enable_timestamp = edge.start_time;
+                                    }
+                                } else {
+                                    break;
                                 }
-                            } else {
+                            }
+                            Err(WorkError::Shutdown) => {
+                                debug!("[{}] Enable input channel closed", self.name());
+                                self.enable_channel_closed = true;
                                 break;
                             }
+                            Err(e) => return Err(e),
                         }
-                        Err(WorkError::Shutdown) => {
-                            debug!("[{}] Enable input channel closed", self.name());
-                            self.enable_channel_closed = true;
-                            break;
-                        }
-                        Err(e) => return Err(e),
                     }
                 }
-            }
 
-            // Consume TGCK edges up to this word's position
-            if !self.tgck_channel_closed {
-                let mut tgck_input = inputs
-                    .get(2)
-                    .and_then(|port| port.get::<Sample>(&mut self.tgck_buffer))
-                    .ok_or_else(|| WorkError::NodeError("Missing tgck input".to_string()))?;
+                // Consume TGCK edges up to this word's position
+                if !self.tgck_channel_closed {
+                    let mut tgck_input = inputs
+                        .get(2)
+                        .and_then(|port| port.get::<Sample>(&mut self.tgck_buffer))
+                        .ok_or_else(|| WorkError::NodeError("Missing tgck input".to_string()))?;
 
-                loop {
-                    match tgck_input.peek() {
-                        Ok(next_edge) => {
-                            if next_edge.start_time <= word_position {
-                                let edge = tgck_input.recv()?;
-                                // Detect rising edge
-                                if edge.value && !self.last_tgck_value {
-                                    self.tgck_rising_buf.push(edge.start_time);
+                    loop {
+                        match tgck_input.peek() {
+                            Ok(next_edge) => {
+                                if next_edge.start_time <= word_position {
+                                    let edge = tgck_input.recv()?;
+                                    // Detect rising edge
+                                    if edge.value && !self.last_tgck_value {
+                                        self.tgck_rising_buf.push(edge.start_time);
+                                    }
+                                    // Detect falling edge
+                                    if !edge.value && self.last_tgck_value {
+                                        self.tgck_falling_buf.push(edge.start_time);
+                                    }
+                                    self.last_tgck_value = edge.value;
+                                } else {
+                                    break;
                                 }
-                                // Detect falling edge
-                                if !edge.value && self.last_tgck_value {
-                                    self.tgck_falling_buf.push(edge.start_time);
-                                }
-                                self.last_tgck_value = edge.value;
-                            } else {
+                            }
+                            Err(WorkError::Shutdown) => {
+                                debug!("[{}] TGCK input channel closed", self.name());
+                                self.tgck_channel_closed = true;
                                 break;
                             }
+                            Err(e) => return Err(e),
                         }
-                        Err(WorkError::Shutdown) => {
-                            debug!("[{}] TGCK input channel closed", self.name());
-                            self.tgck_channel_closed = true;
-                            break;
-                        }
-                        Err(e) => return Err(e),
                     }
                 }
-            }
             } // enable_input and tgck_input dropped here
 
             // Record TGCK rising edges — each starts a new record
@@ -661,8 +676,9 @@ impl ProcessNode for ControlledParallelWriter {
                         ">>> Enable INACTIVE at position {} - closing capture file",
                         edge.start_time,
                     );
-                    self.close_file()
-                        .map_err(|e| WorkError::NodeError(format!("Failed to close file: {}", e)))?;
+                    self.close_file().map_err(|e| {
+                        WorkError::NodeError(format!("Failed to close file: {}", e))
+                    })?;
                 } else {
                     info!(">>> Enable ACTIVE at position {}", edge.start_time,);
                 }
@@ -684,11 +700,13 @@ impl ProcessNode for ControlledParallelWriter {
 
                 // Track first clock (strobe) edge after TGCK events
                 if self.tgck_need_clock_after_rising {
-                    self.tgck_first_clock_after_rising = Some((self.words_in_file, word.timing.position));
+                    self.tgck_first_clock_after_rising =
+                        Some((self.words_in_file, word.timing.position));
                     self.tgck_need_clock_after_rising = false;
                 }
                 if self.tgck_need_clock_after_falling {
-                    self.tgck_first_clock_after_falling = Some((self.words_in_file, word.timing.position));
+                    self.tgck_first_clock_after_falling =
+                        Some((self.words_in_file, word.timing.position));
                     self.tgck_need_clock_after_falling = false;
                 }
 
@@ -1000,12 +1018,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Connect TGCK from source to writer
-    pipeline.connect(
-        "source",
-        &format!("d{}", args.tgck),
-        "writer",
-        "tgck",
-    )?;
+    pipeline.connect("source", &format!("d{}", args.tgck), "writer", "tgck")?;
 
     // Build and run
     info!("Building pipeline...");

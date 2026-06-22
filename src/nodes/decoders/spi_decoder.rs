@@ -47,7 +47,13 @@ pub struct SpiDecoder {
 impl SpiDecoder {
     /// Create a new SPI decoder with active-low CS (standard)
     pub fn new(mode: SpiMode, bits_per_word: usize, has_mosi: bool, has_miso: bool) -> Self {
-        Self::with_cs_polarity(mode, bits_per_word, has_mosi, has_miso, CsPolarity::ActiveLow)
+        Self::with_cs_polarity(
+            mode,
+            bits_per_word,
+            has_mosi,
+            has_miso,
+            CsPolarity::ActiveLow,
+        )
     }
 
     /// Create a new SPI decoder with configurable CS polarity
@@ -411,7 +417,8 @@ mod tests {
         let decoder_low = SpiDecoder::new(SpiMode::Mode0, 8, true, false);
         assert_eq!(decoder_low.cs_polarity, CsPolarity::ActiveLow);
 
-        let decoder_high = SpiDecoder::with_cs_polarity(SpiMode::Mode0, 8, true, false, CsPolarity::ActiveHigh);
+        let decoder_high =
+            SpiDecoder::with_cs_polarity(SpiMode::Mode0, 8, true, false, CsPolarity::ActiveHigh);
         assert_eq!(decoder_high.cs_polarity, CsPolarity::ActiveHigh);
     }
 }

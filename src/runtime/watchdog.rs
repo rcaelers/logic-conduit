@@ -39,7 +39,9 @@ impl WatchdogHandle {
     /// Mark the start of a blocking operation (stores current timestamp)
     #[inline(always)]
     pub fn start_operation(&self) {
-        self.state.last_op_start.store(now_millis(), Ordering::Relaxed);
+        self.state
+            .last_op_start
+            .store(now_millis(), Ordering::Relaxed);
         // Reset warning flag for new operation
         self.state.has_warned.store(false, Ordering::Relaxed);
     }
@@ -51,9 +53,7 @@ impl WatchdogHandle {
         if self.state.has_warned.load(Ordering::Relaxed) {
             info!(
                 "✅ UNBLOCKED: [{}] {} on port '{}'",
-                self.state.node_name,
-                self.state.operation,
-                self.state.port_name
+                self.state.node_name, self.state.operation, self.state.port_name
             );
             self.state.has_warned.store(false, Ordering::Relaxed);
         }
@@ -103,7 +103,7 @@ impl Watchdog {
         let threshold_ms = 5000; // 5 seconds
 
         let mut ports = self.ports.lock().unwrap();
-        
+
         // Remove dead weak references and check live ones
         ports.retain(|weak| {
             if let Some(state) = weak.upgrade() {
@@ -136,11 +136,11 @@ impl Watchdog {
         std::thread::spawn(move || {
             loop {
                 std::thread::sleep(Duration::from_secs(1));
-                
+
                 if !*watchdog.enabled.lock().unwrap() {
                     break;
                 }
-                
+
                 watchdog.check_for_blocked();
             }
         })
@@ -159,7 +159,7 @@ impl Default for Watchdog {
 }
 
 /// RAII guard for tracking an operation - near-zero cost (just atomic stores)
-/// 
+///
 /// Uses a reference to avoid Arc cloning overhead (no reference count manipulation).
 pub struct OperationGuard<'a> {
     handle: &'a WatchdogHandle,

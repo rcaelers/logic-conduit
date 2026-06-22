@@ -8,7 +8,7 @@ use std::any::TypeId;
 pub enum PortError {
     #[error("Port '{0}' not found on node '{1}'")]
     NotFound(String, String),
-    
+
     #[error("Port index {0} out of range for node '{1}'")]
     IndexOutOfRange(usize, String),
 }
@@ -16,7 +16,9 @@ pub enum PortError {
 /// Error type for connection operations
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectionError {
-    #[error("Type mismatch: {from_node}.{from_port} ({from_type:?}) -> {to_node}.{to_port} ({to_type:?})")]
+    #[error(
+        "Type mismatch: {from_node}.{from_port} ({from_type:?}) -> {to_node}.{to_port} ({to_type:?})"
+    )]
     TypeMismatch {
         from_node: String,
         from_port: String,
@@ -25,16 +27,13 @@ pub enum ConnectionError {
         to_port: String,
         to_type: TypeId,
     },
-    
+
     #[error("Node '{0}' not found")]
     NodeNotFound(String),
-    
+
     #[error("Port '{port}' not found on node '{node}'")]
-    PortNotFound {
-        node: String,
-        port: String,
-    },
-    
+    PortNotFound { node: String, port: String },
+
     #[error("{0}")]
     DuplicateConnection(String),
 }

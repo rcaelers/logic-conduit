@@ -165,19 +165,16 @@ fn width_from_tgck(offsets: &[usize]) -> Option<usize> {
     if offsets.len() < 2 {
         return None;
     }
-    let mut diffs: Vec<usize> = offsets.windows(2).map(|w| w[1].saturating_sub(w[0])).collect();
+    let mut diffs: Vec<usize> = offsets
+        .windows(2)
+        .map(|w| w[1].saturating_sub(w[0]))
+        .collect();
     diffs.sort_unstable();
     Some(diffs[diffs.len() / 2])
 }
 
 /// Read a raw 16-bit channel value at (row, col). ch: 0=G, 1=B, 2=R.
-fn read_channel_raw(
-    data: &[u8],
-    line_starts: &[usize],
-    row: usize,
-    col: usize,
-    ch: usize,
-) -> u16 {
+fn read_channel_raw(data: &[u8], line_starts: &[usize], row: usize, col: usize, ch: usize) -> u16 {
     let pixel_offset = line_starts[row] + col * BYTES_PER_PIXEL;
     let hi_offset = pixel_offset + 2 * ch + 1;
     let lo_offset = pixel_offset + 2 * ch;
@@ -290,10 +287,18 @@ fn find_channel_delta(
     }
 
     // Print correlation profile around the peak
-    println!("  Cross-correlation ch{}↔ch{} (top 5 near peak):", ch_a, ch_b);
+    println!(
+        "  Cross-correlation ch{}↔ch{} (top 5 near peak):",
+        ch_a, ch_b
+    );
     all_corrs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     for &(d, c) in all_corrs.iter().take(5) {
-        println!("    delta={:+4}: corr={:.6}{}", d, c, if d == best_delta { " ← best" } else { "" });
+        println!(
+            "    delta={:+4}: corr={:.6}{}",
+            d,
+            c,
+            if d == best_delta { " ← best" } else { "" }
+        );
     }
 
     (best_delta, best_corr)
@@ -664,8 +669,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Auto-detect deltas at startup if requested
     if args.auto_delta {
-        let (bg, bg_corr, gr, gr_corr) =
-            auto_detect_deltas(&data, &line_starts, pixel_width, 80);
+        let (bg, bg_corr, gr, gr_corr) = auto_detect_deltas(&data, &line_starts, pixel_width, 80);
         println!(
             "Auto-detected deltas: B–G={} (corr={:.4}), G–R={} (corr={:.4})",
             bg, bg_corr, gr, gr_corr
