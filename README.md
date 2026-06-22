@@ -58,6 +58,46 @@ scheduler.wait();
 
 See [examples/spi_controlled_decode.rs](examples/spi_controlled_decode.rs) for a complete example with multi-file output.
 
+### Live DSLogic U3Pro16 capture
+
+The U3Pro16 driver is a normal source node. Its `d0..dN` and `b0..bN` ports
+use the same types as `DslFileSource`, so they connect directly to the current
+SPI and parallel decoders. `dN` refers to the Nth enabled physical input (the
+enabled inputs are ordered by input number); `raw` exposes lossless packed
+`LogicChunk` values for consumers that need the original USB representation.
+
+```rust,no_run
+use dsl::{CaptureMode, ClockSource, DsLogicU3Pro16, LogicCaptureConfig, LogicEncodingRequest, LogicTrigger, Pipeline};
+
+let settings = LogicCaptureConfig {
+    mode: CaptureMode::Finite,
+    sample_rate_hz: 100_000_000,
+    input_mask: 0b11_0000_0000, // logical d0=physical input 8, d1=input 9
+    sample_limit: 1_000_000,
+    trigger_percent: 50,
+    threshold_volts: Some(1.65),
+    trigger: LogicTrigger::default(),
+    encoding: LogicEncodingRequest::Raw,
+    clock: ClockSource::Internal,
+    input_filter: false,
+};
+
+let mut analyzer = DsLogicU3Pro16::open_first()?;
+// Call this only when the FPGA is not already configured, with the exact
+// DSLogicU3Pro16.bin image:
+// analyzer.configure_fpga(&std::fs::read("DSLogicU3Pro16.bin")?)?;
+
+let mut pipeline = Pipeline::new();
+pipeline.add_process("source", analyzer.into_source(settings)?)?;
+// `source:d0` and `source:d1` can now connect to decoder inputs.
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`LogicCaptureConfig` and the `LogicAnalyzer` interface are driver-neutral;
+the U3Pro16 translates them to its private protocol packet. A future libsigrok
+bridge can implement that interface (or the lower-level `UsbTransport` seam)
+and immediately use `LogicAnalyzerSource`.
+
 ## Core Components
 
 ### Sample Type

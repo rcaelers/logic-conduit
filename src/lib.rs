@@ -34,7 +34,12 @@ pub use runtime::Sample;
 pub use runtime::SampleBlock;
 
 // Re-export streaming nodes - DslFileSource only (SpiCommandController is application-specific)
-pub use nodes::DslFileSource;
+pub use nodes::{
+    CaptureMode, ClockEdge, ClockSource, DsLogicU3Pro16, DsLogicU3Pro16Source, DslFileSource,
+    LinkSpeed, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo, LogicAnalyzerResult,
+    LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding, LogicEncodingRequest,
+    LogicTrigger, LogicTriggerStage, RusbTransport, TriggerCondition, TriggerLogic, UsbTransport,
+};
 
 // Re-export streaming decoders
 pub use nodes::decoders::ParallelDecoder;

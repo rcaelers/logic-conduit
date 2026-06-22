@@ -26,9 +26,20 @@
 
 pub mod decoders;
 mod dsl_file;
+mod dslogic_u3pro16;
+mod logic_analyzer;
 
 // Export DslFileSource and related types for file I/O
 pub use dsl_file::{DslFileSource, DslHeader};
+pub use dslogic_u3pro16::{DsLogicU3Pro16, LinkSpeed, RusbTransport, UsbTransport};
+pub use logic_analyzer::{
+    CaptureMode, ClockEdge, ClockSource, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
+    LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
+    LogicEncodingRequest, LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic,
+};
+
+/// Convenient name for the production DSLogic source node.
+pub type DsLogicU3Pro16Source = LogicAnalyzerSource<DsLogicU3Pro16<RusbTransport>>;
 
 // Re-export Sample from runtime
 pub use crate::runtime::Sample;

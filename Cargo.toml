@@ -21,3 +21,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 lazy_static = "1.5"
 memmap2 = "0.9"
 minifb = "0.28"
+rusb = "0.9"
