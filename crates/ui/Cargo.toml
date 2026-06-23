@@ -1,0 +1,16 @@
+[package]
+name = "dsl-ui"
+version = "0.1.0"
+edition = "2024"
+authors = ["Rob Caelers <rob.caelers@gmail.com>"]
+
+[[bin]]
+name = "dsl-ui"
+path = "src/main.rs"
+
+[dependencies]
+node-graph = { path = "../node_graph" }
+eframe = "0.34"
+egui = "0.34"
+typetag = "0.2"
+serde = { version = "1", features = ["derive"] }

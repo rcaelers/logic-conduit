@@ -1,0 +1,25 @@
+[package]
+name = "dsl"
+version = "0.1.0"
+edition = "2024"
+authors = ["Rob Caelers <rob.caelers@gmail.com>"]
+description = "A library for loading and parsing DSLogic .dsl files"
+readme = "README.md"
+repository = "https://github.com/rcaelers/dsl_loader"
+license = "MIT"
+
+[lib]
+name = "dsl"
+path = "src/lib.rs"
+
+[dependencies]
+zip = "8.0.0"
+thiserror = "2.0"
+clap = { version = "4.5", features = ["derive"] }
+crossbeam-channel = "0.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+lazy_static = "1.5"
+memmap2 = "0.9"
+minifb = "0.28"
+rusb = "0.9"

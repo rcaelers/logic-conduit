@@ -265,6 +265,7 @@ impl<A: LogicAnalyzer> LogicAnalyzerSource<A> {
         self
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run(
         mut analyzer: A,
         config: LogicCaptureConfig,
@@ -289,10 +290,8 @@ impl<A: LogicAnalyzer> LogicAnalyzerSource<A> {
                 if chunk.bit_len == 0 {
                     continue;
                 }
-                if let Some(sender) = &raw_sender {
-                    if sender.send(chunk.clone()).is_err() {
-                        // Other ports may still be connected; do not stop capture.
-                    }
+                if let Some(sender) = &raw_sender && sender.send(chunk.clone()).is_err() {
+                    // Other ports may still be connected; do not stop capture.
                 }
                 if chunk.encoding == LogicEncoding::Opaque {
                     continue;
@@ -469,13 +468,11 @@ impl Demux {
                 chunk.channel_count, self.channels
             )));
         }
-        if let Some(expected) = self.next_bit {
-            if chunk.start_bit != expected {
-                return Err(LogicAnalyzerError::Protocol(format!(
-                    "non-contiguous chunk: starts at bit {}, expected {expected}",
-                    chunk.start_bit
-                )));
-            }
+        if let Some(expected) = self.next_bit && chunk.start_bit != expected {
+            return Err(LogicAnalyzerError::Protocol(format!(
+                "non-contiguous chunk: starts at bit {}, expected {expected}",
+                chunk.start_bit
+            )));
         }
         self.next_bit = Some(
             chunk
@@ -501,7 +498,7 @@ impl Demux {
                     }
                     self.values[channel] = Some(value);
                 }
-                if samples % 8 == 0 {
+                if samples.is_multiple_of(8) {
                     packed[channel].push(0);
                 }
                 if value {

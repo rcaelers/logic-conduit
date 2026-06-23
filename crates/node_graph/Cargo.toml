@@ -1,0 +1,15 @@
+[package]
+name = "node-graph"
+version = "0.1.0"
+edition = "2024"
+authors = ["Rob Caelers <rob.caelers@gmail.com>"]
+
+[lib]
+name = "node_graph"
+path = "src/lib.rs"
+
+[dependencies]
+egui = { version = "0.34.3", features = ["serde"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+typetag = "0.2.22"

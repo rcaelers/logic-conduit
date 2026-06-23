@@ -381,7 +381,18 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         self.command_write(6, 0, &[0x80])?;
         self.poll_status(0x80)?;
         self.command_write(6, 0, &[0x7f])?;
-        self.poll_status(0x40)?;
+        // Some U3Pro16 firmware revisions leave the configured-status bit
+        // clear after a successful upload. The logic-version register is the
+        // authoritative compatibility check in that case.
+        if let Err(status_error) = self.poll_status_for(0x40, Duration::from_millis(500)) {
+            let logic_version = self.command_read_byte(15, 0x04)?;
+            if logic_version != 0x0e {
+                return Err(LogicAnalyzerError::Protocol(format!(
+                    "FPGA did not configure (logic version {logic_version:#04x}): {status_error}"
+                )));
+            }
+            tracing::warn!(%status_error, "FPGA configured despite a clear configured-status bit");
+        }
         self.command_write(5, 0, &[0x01])?;
         self.command_write(7, 0, &[0x01])?;
         Ok(())
@@ -478,7 +489,10 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         Ok(self.command_read(command, offset, 1)?[0])
     }
     fn poll_status(&mut self, required: u8) -> LogicAnalyzerResult<u8> {
-        let until = Instant::now() + STATUS_TIMEOUT;
+        self.poll_status_for(required, STATUS_TIMEOUT)
+    }
+    fn poll_status_for(&mut self, required: u8, timeout: Duration) -> LogicAnalyzerResult<u8> {
+        let until = Instant::now() + timeout;
         let mut status = 0;
         while Instant::now() < until {
             status = self.command_read_byte(2, 0)?;
@@ -505,6 +519,59 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
             data = &data[written..];
         }
         Ok(())
+    }
+
+    /// Ensure the capture FPGA is ready without exposing image management to
+    /// callers. A normal runtime device is already configured. After power-up
+    /// or a reset, the driver looks for the exact image in the environment or
+    /// well-known local locations.
+    fn ensure_fpga_configured(&mut self) -> LogicAnalyzerResult<()> {
+        let status = self.command_read_byte(2, 0)?;
+        if status & 0x40 != 0 && self.command_read_byte(15, 0x04)? == 0x0e {
+            return Ok(());
+        }
+
+        let mut candidates = vec![
+            std::path::PathBuf::from("DSLogicU3Pro16.bin"),
+            std::path::PathBuf::from("firmware/DSLogicU3Pro16.bin"),
+            std::path::PathBuf::from(
+                "/Applications/DSView.app/Contents/MacOS/res/DSLogicU3Pro16.bin",
+            ),
+            std::path::PathBuf::from(
+                "/Applications/DSView.app/Contents/Resources/driver/DSLogicU3Pro16.bin",
+            ),
+            std::path::PathBuf::from("/usr/share/DSView/driver/DSLogicU3Pro16.bin"),
+            std::path::PathBuf::from("/usr/local/share/DSView/driver/DSLogicU3Pro16.bin"),
+        ];
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = std::path::PathBuf::from(home);
+            candidates.push(home.join(".local/share/DSView/driver/DSLogicU3Pro16.bin"));
+            candidates
+                .push(home.join("Library/Application Support/DSView/driver/DSLogicU3Pro16.bin"));
+        }
+        // Explicit environment configuration is useful for non-standard
+        // installs, but is intentionally tried only after normal locations.
+        if let Some(path) = std::env::var_os("DSLOGIC_U3PRO16_FPGA_IMAGE") {
+            candidates.push(std::path::PathBuf::from(path));
+        }
+
+        for path in candidates {
+            if !path.is_file() {
+                continue;
+            }
+            let image = std::fs::read(&path).map_err(|error| {
+                LogicAnalyzerError::Transport(format!(
+                    "cannot read U3Pro16 FPGA image '{}': {error}",
+                    path.display()
+                ))
+            })?;
+            tracing::info!(path = %path.display(), "configuring DSLogic U3Pro16 FPGA");
+            return self.configure_fpga(&image);
+        }
+
+        Err(LogicAnalyzerError::Protocol(
+            "the U3Pro16 FPGA is absent or has an incompatible image, and DSLogicU3Pro16.bin was not found; set DSLOGIC_U3PRO16_FPGA_IMAGE to the exact image".into(),
+        ))
     }
     fn plan(&self) -> LogicAnalyzerResult<CapturePlan> {
         build_plan(self.transport.link_speed(), &self.settings)
@@ -554,12 +621,7 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
                 "capture already active".into(),
             ));
         }
-        let status = self.command_read_byte(2, 0)?;
-        if status & 0x40 == 0 {
-            return Err(LogicAnalyzerError::Protocol(
-                "FPGA is not configured; call configure_fpga with the U3Pro16 image".into(),
-            ));
-        }
+        self.ensure_fpga_configured()?;
         if self.command_read_byte(15, 0x04)? != 0x0e {
             return Err(LogicAnalyzerError::Protocol(
                 "unexpected FPGA logic version".into(),
