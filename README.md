@@ -82,10 +82,9 @@ let settings = LogicCaptureConfig {
     input_filter: false,
 };
 
-let mut analyzer = DsLogicU3Pro16::open_first()?;
-// Call this only when the FPGA is not already configured, with the exact
-// DSLogicU3Pro16.bin image:
-// analyzer.configure_fpga(&std::fs::read("DSLogicU3Pro16.bin")?)?;
+let analyzer = DsLogicU3Pro16::open_first()?;
+// FPGA configuration is automatic when `DSLOGIC_U3PRO16_FPGA_IMAGE` points
+// to the exact DSLogicU3Pro16.bin image (or it is in a standard local path).
 
 let mut pipeline = Pipeline::new();
 pipeline.add_process("source", analyzer.into_source(settings)?)?;

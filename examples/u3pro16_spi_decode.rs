@@ -17,7 +17,6 @@ use dsl::{
     WorkResult,
 };
 use std::collections::VecDeque;
-use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(about = "Capture SPI from a DSLogic U3Pro16")]
@@ -43,9 +42,6 @@ struct Args {
     /// Optional input threshold in volts.
     #[arg(long)]
     threshold: Option<f32>,
-    /// Configure the FPGA from this exact U3Pro16 .bin image before capture.
-    #[arg(long)]
-    fpga_image: Option<PathBuf>,
 }
 
 struct SpiPrinter;
@@ -107,10 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         input_filter: false,
     };
 
-    let mut analyzer = DsLogicU3Pro16::open_first()?;
-    if let Some(path) = args.fpga_image {
-        analyzer.configure_fpga(&std::fs::read(path)?)?;
-    }
+    let analyzer = DsLogicU3Pro16::open_first()?;
 
     let mut pipeline = Pipeline::new().with_default_buffer_size(100_000);
     pipeline.add_process("source", analyzer.into_source(config)?)?;
