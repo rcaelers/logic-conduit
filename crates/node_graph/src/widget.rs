@@ -91,6 +91,14 @@ pub struct NodeGraphWidget {
     /// frames); used to programmatically open that submenu when 'A' is pressed while the menu
     /// is already visible.
     add_btn_id: Option<egui::Id>,
+    /// Keyboard navigation for the right-click context menu (0 = first item top-to-bottom).
+    ctx_nav: Option<usize>,
+    /// True when keyboard nav has entered the `+ Add` submenu inside the context menu.
+    ctx_in_add_sub: bool,
+    /// Category button IDs captured from the `+ Add` submenu in the context menu (refreshed each frame).
+    ctx_add_cat_ids: Vec<egui::Id>,
+    /// Button ID of the "Show/Hide" SubMenuButton in the node context menu (captured each frame).
+    ctx_showhide_btn_id: Option<egui::Id>,
 }
 
 impl NodeGraphWidget {
@@ -113,6 +121,10 @@ impl NodeGraphWidget {
             add_cat_ids: Vec::new(),
             top_node: None,
             add_btn_id: None,
+            ctx_nav: None,
+            ctx_in_add_sub: false,
+            ctx_add_cat_ids: Vec::new(),
+            ctx_showhide_btn_id: None,
         }
     }
 
@@ -758,19 +770,221 @@ impl NodeGraphWidget {
         let mut do_delete = false;
         let mut do_toggle_hide = false;
 
+        // Reset context-menu keyboard nav when the menu is closed.
+        if !response.context_menu_opened() {
+            self.ctx_nav = None;
+            self.ctx_in_add_sub = false;
+        }
+
+        // Context-menu keyboard navigation.
+        // Toplevel — node ctx: 0=Delete, 1=Show/Hide;  canvas ctx: 0=+ Add
+        // Sub-level — when ctx_in_add_sub: navigates categories inside the + Add submenu.
+        let mut ctx_nav_delete = false;
+        let mut ctx_nav_toggle_hide = false;
+        let mut ctx_close = false; // close context menu (keyboard selection made)
+
+        if response.context_menu_opened() && !self.show_add_menu {
+            let n_cats = cats_and_items.len();
+            let popup_id = egui::Popup::default_response_id(response);
+
+            let down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
+            let up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
+            let right = ui.input(|i| i.key_pressed(egui::Key::ArrowRight));
+            let left = ui.input(|i| i.key_pressed(egui::Key::ArrowLeft));
+            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+
+            if self.ctx_in_add_sub {
+                // ── Navigating inside the + Add submenu ──────────────────────
+                let total = n_cats + 1; // categories + Reroute
+                if down {
+                    if self.add_nav_in_sub {
+                        let n = self
+                            .add_nav_cat
+                            .and_then(|ci| cats_and_items.get(ci))
+                            .map_or(0, |(_, v)| v.len());
+                        self.add_nav_sub_item =
+                            (self.add_nav_sub_item + 1).min(n.saturating_sub(1));
+                    } else {
+                        self.add_nav_cat =
+                            Some(self.add_nav_cat.map_or(0, |i| (i + 1).min(total - 1)));
+                    }
+                }
+                if up {
+                    if self.add_nav_in_sub {
+                        self.add_nav_sub_item = self.add_nav_sub_item.saturating_sub(1);
+                    } else {
+                        self.add_nav_cat = Some(
+                            self.add_nav_cat.map_or(total - 1, |i| i.saturating_sub(1)),
+                        );
+                    }
+                }
+                if right && !self.add_nav_in_sub {
+                    if let Some(i) = self.add_nav_cat {
+                        if i < n_cats {
+                            self.add_nav_in_sub = true;
+                            self.add_nav_sub_item = 0;
+                        }
+                    }
+                }
+                if left {
+                    if self.add_nav_in_sub {
+                        self.add_nav_in_sub = false;
+                    } else {
+                        // Return to the top-level context menu.
+                        self.ctx_in_add_sub = false;
+                        self.ctx_nav = Some(0);
+                    }
+                }
+                if enter {
+                    if self.add_nav_in_sub {
+                        if let Some(ci) = self.add_nav_cat
+                            && let Some((_, names)) = cats_and_items.get(ci)
+                            && let Some(name) = names.get(self.add_nav_sub_item)
+                        {
+                            add_kind = Some(name.clone());
+                            ctx_close = true;
+                        }
+                    } else if let Some(i) = self.add_nav_cat {
+                        if i == n_cats {
+                            add_kind = Some("Reroute".to_string());
+                            ctx_close = true;
+                        } else {
+                            self.add_nav_in_sub = true;
+                            self.add_nav_sub_item = 0;
+                        }
+                    }
+                }
+
+                // Drive MenuState: keep + Add submenu open and highlight category.
+                if let Some(btn_id) = self.add_btn_id {
+                    let add_sub_id =
+                        egui::containers::menu::SubMenu::id_from_widget_id(btn_id);
+                    egui::containers::menu::MenuState::mark_shown(ui.ctx(), add_sub_id);
+                    egui::containers::menu::MenuState::from_id(
+                        ui.ctx(),
+                        popup_id,
+                        |s| s.open_item = Some(add_sub_id),
+                    );
+                    // Open the highlighted category inside the + Add submenu.
+                    if let Some(cat_i) = self.add_nav_cat {
+                        if cat_i < n_cats {
+                            if let Some(&cat_btn_id) = self.ctx_add_cat_ids.get(cat_i) {
+                                let cat_sub_id = egui::containers::menu::SubMenu::id_from_widget_id(
+                                    cat_btn_id,
+                                );
+                                egui::containers::menu::MenuState::mark_shown(
+                                    ui.ctx(),
+                                    cat_sub_id,
+                                );
+                                egui::containers::menu::MenuState::mark_shown(
+                                    ui.ctx(),
+                                    add_sub_id,
+                                );
+                                egui::containers::menu::MenuState::from_id(
+                                    ui.ctx(),
+                                    add_sub_id,
+                                    |s| s.open_item = Some(cat_sub_id),
+                                );
+                            }
+                        } else {
+                            egui::containers::menu::MenuState::from_id(
+                                ui.ctx(),
+                                add_sub_id,
+                                |s| s.open_item = None,
+                            );
+                        }
+                    }
+                }
+            } else {
+                // ── Top-level context menu navigation ─────────────────────────
+                let total = if node_ctx { 2 } else { 1 };
+                if down {
+                    self.ctx_nav =
+                        Some(self.ctx_nav.map_or(0, |i| (i + 1).min(total - 1)));
+                }
+                if up {
+                    self.ctx_nav =
+                        Some(self.ctx_nav.map_or(total - 1, |i| i.saturating_sub(1)));
+                }
+                if left {
+                    egui::containers::menu::MenuState::from_id(
+                        ui.ctx(),
+                        popup_id,
+                        |s| s.open_item = None,
+                    );
+                }
+                if enter && node_ctx && self.ctx_nav == Some(0) {
+                    ctx_nav_delete = true;
+                }
+                if (right || enter) && node_ctx && self.ctx_nav == Some(1) {
+                    ctx_nav_toggle_hide = true;
+                }
+                if right && !node_ctx && self.ctx_nav == Some(0) {
+                    // Enter the + Add submenu with keyboard.
+                    self.ctx_in_add_sub = true;
+                    self.add_nav_cat = Some(0);
+                    self.add_nav_in_sub = false;
+                    self.add_nav_sub_item = 0;
+                }
+
+                // Open the highlighted SubMenuButton's submenu via MenuState.
+                match self.ctx_nav {
+                    Some(0) if !node_ctx => {
+                        if let Some(btn_id) = self.add_btn_id {
+                            let sub_id =
+                                egui::containers::menu::SubMenu::id_from_widget_id(btn_id);
+                            egui::containers::menu::MenuState::mark_shown(ui.ctx(), sub_id);
+                            egui::containers::menu::MenuState::from_id(
+                                ui.ctx(),
+                                popup_id,
+                                |s| s.open_item = Some(sub_id),
+                            );
+                        }
+                    }
+                    Some(1) if node_ctx => {
+                        if let Some(btn_id) = self.ctx_showhide_btn_id {
+                            let sub_id =
+                                egui::containers::menu::SubMenu::id_from_widget_id(btn_id);
+                            egui::containers::menu::MenuState::mark_shown(ui.ctx(), sub_id);
+                            egui::containers::menu::MenuState::from_id(
+                                ui.ctx(),
+                                popup_id,
+                                |s| s.open_item = Some(sub_id),
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let ctx_nav = self.ctx_nav;
+        let ctx_in_add_sub = self.ctx_in_add_sub;
+        let ctx_add_nav_cat = self.add_nav_cat;
+        let ctx_add_nav_in_sub = self.add_nav_in_sub;
+        let ctx_add_nav_sub = self.add_nav_sub_item;
+        let ctx_n_cats = cats_and_items.len();
+        let sel_bg = ui.visuals().selection.bg_fill;
+
         // Right-click context menu — uses egui's built-in mechanism for proper hover-to-open submenus.
         response.context_menu(|ui| {
             ui.set_min_width(200.0);
+            if ctx_close {
+                ui.close();
+            }
             if node_ctx {
+                let del_fill =
+                    if ctx_nav == Some(0) { sel_bg } else { egui::Color32::TRANSPARENT };
                 if ui
-                    .add(egui::Button::new("Delete").right_text("X"))
+                    .add(egui::Button::new("Delete").right_text("X").fill(del_fill))
                     .clicked()
+                    || ctx_nav_delete
                 {
                     do_delete = true;
                     ui.close();
                 }
                 let arrow = egui::containers::menu::SubMenuButton::RIGHT_ARROW;
-                let _ = egui::containers::menu::SubMenuButton::from_button(
+                let (sh_resp, _) = egui::containers::menu::SubMenuButton::from_button(
                     egui::Button::new("Show/Hide").right_text(arrow),
                 )
                 .ui(ui, |ui| {
@@ -781,38 +995,54 @@ impl NodeGraphWidget {
                                 .right_text("Ctrl+H"),
                         )
                         .clicked()
+                        || ctx_nav_toggle_hide
                     {
                         do_toggle_hide = true;
                         ui.close();
                     }
                 });
+                self.ctx_showhide_btn_id = Some(sh_resp.id);
             } else {
+                let mut new_ctx_add_cat_ids: Vec<egui::Id> = Vec::new();
                 let (add_resp, _) = egui::containers::menu::SubMenuButton::from_button(
                     egui::Button::new("+ Add").right_text("A  ⏵"),
                 )
                 .ui(ui, |ui| {
-                    for (cat, names) in &cats_and_items {
+                    for (cat_i, (cat, names)) in cats_and_items.iter().enumerate() {
                         let arrow = egui::containers::menu::SubMenuButton::RIGHT_ARROW;
-                        let _ = egui::containers::menu::SubMenuButton::from_button(
+                        let (cat_resp, _) = egui::containers::menu::SubMenuButton::from_button(
                             egui::Button::new(cat.as_str()).right_text(arrow),
                         )
                         .ui(ui, |ui| {
-                            for name in names {
-                                if ui.button(name.as_str()).clicked() {
+                            for (item_i, name) in names.iter().enumerate() {
+                                let selected = ctx_in_add_sub
+                                    && ctx_add_nav_in_sub
+                                    && ctx_add_nav_cat == Some(cat_i)
+                                    && item_i == ctx_add_nav_sub;
+                                let fill = if selected {
+                                    sel_bg
+                                } else {
+                                    egui::Color32::TRANSPARENT
+                                };
+                                if ui.add(egui::Button::new(name.as_str()).fill(fill)).clicked()
+                                {
                                     add_kind = Some(name.clone());
                                     ui.close();
                                 }
                             }
                         });
+                        new_ctx_add_cat_ids.push(cat_resp.id);
                     }
                     ui.separator();
-                    if ui.button("Reroute").clicked() {
+                    let reroute_sel = ctx_in_add_sub && ctx_add_nav_cat == Some(ctx_n_cats);
+                    let fill = if reroute_sel { sel_bg } else { egui::Color32::TRANSPARENT };
+                    if ui.add(egui::Button::new("Reroute").fill(fill)).clicked() {
                         add_kind = Some("Reroute".to_string());
                         ui.close();
                     }
                 });
                 self.add_btn_id = Some(add_resp.id);
-                // Paste (future)
+                self.ctx_add_cat_ids = new_ctx_add_cat_ids;
             }
         });
         // 'A' key: submenu-style add popup (same hierarchy as the right-click Add submenu)
