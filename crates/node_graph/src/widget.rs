@@ -4,11 +4,11 @@ use crate::{
         draw_connections, draw_frames, draw_grid, draw_knife_line, draw_node, draw_wire,
         to_screen_rect, wire_intersects_knife,
     },
-    definition::NodeDef,
-    graph::{Connection, GraphState, Node, NodeId, NodeKind, SocketDirection, SocketId},
+    graph::{Connection, GraphState, Node, NodeId, SocketDirection, SocketId},
     interaction::InteractionState,
     minimap,
-    runtime::{NodeInstance, NodeRuntime, RegisteredNodeType},
+    registry::NodeTypeRegistry,
+    runtime::{NodeInstance, NodeRuntime},
     socket::sockets_compatible,
     view::ViewState,
 };
@@ -24,46 +24,6 @@ static FRAME_COLORS: [Color32; 5] = [
     Color32::from_rgb(110, 60, 160),
     Color32::from_rgb(160, 60, 60),
 ];
-
-// ── Node type registry ────────────────────────────────────────────────────────
-
-#[derive(Default)]
-pub struct NodeTypeRegistry {
-    types: Vec<RegisteredNodeType>,
-}
-
-impl NodeTypeRegistry {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn register<T: NodeDef>(&mut self) -> &mut Self {
-        self.types.push(RegisteredNodeType::from_def::<T>());
-        self
-    }
-
-    pub(crate) fn all(&self) -> &[RegisteredNodeType] {
-        &self.types
-    }
-
-    pub(crate) fn find(&self, name: &str) -> Option<&RegisteredNodeType> {
-        self.types.iter().find(|d| d.name == name)
-    }
-
-    pub(crate) fn instantiate(&self, name: &str, id: NodeId, pos: Pos2) -> Option<NodeRuntime> {
-        let def = self.find(name)?;
-        Some((def.create)(id, pos))
-    }
-
-    pub(crate) fn restore_node(&self, node: &mut Node) -> Option<Box<dyn NodeInstance>> {
-        if node.kind == NodeKind::Regular
-            && let Some(definition) = self.find(&node.title)
-        {
-            return Some((definition.restore)(node));
-        }
-        None
-    }
-}
 
 // ── Main widget ───────────────────────────────────────────────────────────────
 

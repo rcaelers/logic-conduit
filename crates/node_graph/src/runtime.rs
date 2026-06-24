@@ -1,6 +1,6 @@
 use crate::definition::{InputDef, NodeDef, OutputDef, PropDef};
-use crate::graph::{Node, NodeId, NodeKind, Socket};
-use egui::{Pos2, Rect, Ui};
+use crate::graph::Socket;
+use egui::{Rect, Ui};
 use serde_json::Value;
 
 pub(crate) trait NodeInstance {
@@ -33,15 +33,15 @@ pub(crate) trait NodeInstance {
 }
 
 pub(crate) struct NodeRuntime {
-    pub node: Node,
+    pub node: crate::graph::Node,
     pub instance: Box<dyn NodeInstance>,
 }
 
-struct TypedNode<T: NodeDef> {
-    state: T::State,
-    inputs: Vec<InputDef<T::State>>,
-    outputs: Vec<OutputDef<T::State>>,
-    properties: Vec<PropDef<T::State>>,
+pub(crate) struct TypedNode<T: NodeDef> {
+    pub state: T::State,
+    pub inputs: Vec<InputDef<T::State>>,
+    pub outputs: Vec<OutputDef<T::State>>,
+    pub properties: Vec<PropDef<T::State>>,
 }
 
 impl<T: NodeDef> NodeInstance for TypedNode<T> {
@@ -94,134 +94,5 @@ impl<T: NodeDef> NodeInstance for TypedNode<T> {
 
     fn save_state(&self) -> Value {
         serde_json::to_value(&self.state).expect("node state must serialize")
-    }
-}
-
-fn build_node<T: NodeDef>(id: NodeId, pos: Pos2, state: T::State) -> NodeRuntime {
-    let inputs = T::inputs();
-    let outputs = T::outputs();
-    let properties = T::props();
-    let state_json = serde_json::to_value(&state).expect("node state must serialize");
-    let input_sockets = inputs
-        .iter()
-        .map(|input| Socket {
-            name: input.label.clone(),
-            type_name: input.type_name.to_owned(),
-            color: input.color,
-            shape: input.shape,
-            visible: true,
-            hidden: false,
-            has_control: input.control.is_some(),
-        })
-        .collect();
-    let output_sockets = outputs
-        .iter()
-        .map(|output| Socket {
-            name: output.label.clone(),
-            type_name: output.type_name.to_owned(),
-            color: output.color,
-            shape: output.shape,
-            visible: true,
-            hidden: false,
-            has_control: output.control.is_some(),
-        })
-        .collect();
-    let mut node = Node {
-        id,
-        kind: NodeKind::Regular,
-        title: T::name().to_owned(),
-        header_color: T::color(),
-        pos,
-        inputs: input_sockets,
-        outputs: output_sockets,
-        state: state_json,
-        property_count: properties.len(),
-        selected: false,
-    };
-    let mut instance: Box<dyn NodeInstance> = Box::new(TypedNode::<T> {
-        state,
-        inputs,
-        outputs,
-        properties,
-    });
-    instance.update(&mut node.inputs, &mut node.outputs);
-    node.state = instance.save_state();
-    NodeRuntime { node, instance }
-}
-
-fn create_node<T: NodeDef>(id: NodeId, pos: Pos2) -> NodeRuntime {
-    build_node::<T>(id, pos, T::state())
-}
-
-fn restore_node<T: NodeDef>(node: &mut Node) -> Box<dyn NodeInstance> {
-    let state = serde_json::from_value(node.state.clone()).unwrap_or_else(|_| T::state());
-    let inputs = T::inputs();
-    let outputs = T::outputs();
-    let properties = T::props();
-
-    if node.inputs.len() != inputs.len() {
-        node.inputs = inputs
-            .iter()
-            .map(|input| Socket {
-                name: input.label.clone(),
-                type_name: input.type_name.to_owned(),
-                color: input.color,
-                shape: input.shape,
-                visible: true,
-                hidden: false,
-                has_control: input.control.is_some(),
-            })
-            .collect();
-    } else {
-        for (socket, definition) in node.inputs.iter_mut().zip(&inputs) {
-            socket.has_control = definition.control.is_some();
-        }
-    }
-    if node.outputs.len() != outputs.len() {
-        node.outputs = outputs
-            .iter()
-            .map(|output| Socket {
-                name: output.label.clone(),
-                type_name: output.type_name.to_owned(),
-                color: output.color,
-                shape: output.shape,
-                visible: true,
-                hidden: false,
-                has_control: output.control.is_some(),
-            })
-            .collect();
-    } else {
-        for (socket, definition) in node.outputs.iter_mut().zip(&outputs) {
-            socket.has_control = definition.control.is_some();
-        }
-    }
-
-    node.property_count = properties.len();
-    let mut instance: Box<dyn NodeInstance> = Box::new(TypedNode::<T> {
-        state,
-        inputs,
-        outputs,
-        properties,
-    });
-    instance.update(&mut node.inputs, &mut node.outputs);
-    node.state = instance.save_state();
-    instance
-}
-
-pub(crate) struct RegisteredNodeType {
-    pub name: String,
-    pub category: String,
-    pub create: fn(NodeId, Pos2) -> NodeRuntime,
-    pub restore: fn(&mut Node) -> Box<dyn NodeInstance>,
-}
-
-impl RegisteredNodeType {
-    pub fn from_def<T: NodeDef>() -> Self {
-        Self {
-            name: T::name().to_owned(),
-            category: T::category().to_owned(),
-            create: create_node::<T>,
-            restore: restore_node::<T>,
-        }
     }
 }

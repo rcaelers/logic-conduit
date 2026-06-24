@@ -5,6 +5,7 @@ mod draw;
 mod graph;
 mod interaction;
 mod minimap;
+mod registry;
 mod runtime;
 mod socket;
 mod view;
@@ -21,4 +22,5 @@ pub use graph::{
 };
 pub use control::InlineControl;
 pub use socket::{SocketDef, SocketShape, SocketWithControlDef, sockets_compatible};
-pub use widget::{NodeGraphWidget, NodeTypeRegistry};
+pub use registry::NodeTypeRegistry;
+pub use widget::NodeGraphWidget;
