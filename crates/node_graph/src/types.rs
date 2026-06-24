@@ -7,6 +7,7 @@ pub enum SocketShape {
     Circle,
     Diamond,
     Square,
+    Triangle,
 }
 
 /// Trait for defining socket types — implement for custom types.

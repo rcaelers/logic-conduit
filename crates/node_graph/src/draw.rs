@@ -395,6 +395,14 @@ fn draw_socket(painter: &Painter, pos: Pos2, radius: f32, shape: SocketShape, co
                 color,
             );
         }
+        SocketShape::Triangle => {
+            let pts = vec![
+                Pos2::new(pos.x, pos.y - radius),
+                Pos2::new(pos.x + radius, pos.y + radius),
+                Pos2::new(pos.x - radius, pos.y + radius),
+            ];
+            painter.add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+        }
     }
 }
 
