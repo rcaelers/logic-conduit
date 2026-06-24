@@ -48,7 +48,7 @@ pub fn compute_node_layout(node: &Node) -> NodeLayout {
     let mut output_socket_pos = vec![None; node.outputs.len()];
     let mut vis_row = 0usize;
     for (i, s) in node.outputs.iter().enumerate() {
-        if !s.visible {
+        if !s.visible || s.hidden {
             continue;
         }
         let row_y = body_top + vis_row as f32 * SOCKET_ROW_HEIGHT;
@@ -81,7 +81,7 @@ pub fn compute_node_layout(node: &Node) -> NodeLayout {
     let mut input_widget_rects = vec![None; node.inputs.len()];
     vis_row = 0;
     for (i, s) in node.inputs.iter().enumerate() {
-        if !s.visible {
+        if !s.visible || s.hidden {
             continue;
         }
         let row_y = input_start_y + vis_row as f32 * SOCKET_ROW_HEIGHT;
@@ -277,19 +277,19 @@ pub fn draw_node(
     };
     painter.rect_filled(node_s, rounding, body_fill);
 
+    painter.rect_filled(header_s, header_rounding, node.header_color);
+
     let (bw, bc) = if node.selected {
         (2.0_f32, Color32::WHITE)
     } else {
-        (1.0_f32, Color32::from_rgb(75, 75, 75))
+        (1.5_f32, Color32::from_rgb(90, 90, 90))
     };
     painter.rect_stroke(
         node_s,
         rounding,
         Stroke::new(bw, bc),
-        egui::StrokeKind::Middle,
+        egui::StrokeKind::Outside,
     );
-
-    painter.rect_filled(header_s, header_rounding, node.header_color);
     let title_sz = (14.0 * view.zoom).clamp(8.0, 18.0);
     painter.text(
         header_s.center(),
@@ -448,9 +448,11 @@ pub fn draw_box_select(painter: &Painter, start: Pos2, end: Pos2) {
     );
 }
 
-pub fn draw_knife_line(painter: &Painter, from: Pos2, to: Pos2) {
-    painter.line_segment([from, to], Stroke::new(5.0_f32, Color32::from_rgba_premultiplied(255, 120, 30, 50)));
-    painter.line_segment([from, to], Stroke::new(1.5_f32, Color32::from_rgb(255, 170, 60)));
+pub fn draw_knife_line(painter: &Painter, points: &[Pos2]) {
+    for w in points.windows(2) {
+        painter.line_segment([w[0], w[1]], Stroke::new(5.0_f32, Color32::from_rgba_premultiplied(255, 120, 30, 50)));
+        painter.line_segment([w[0], w[1]], Stroke::new(1.5_f32, Color32::from_rgb(255, 170, 60)));
+    }
 }
 
 /// Returns true if the cubic bezier wire from `fp` to `tp` crosses the knife segment.

@@ -1045,8 +1045,10 @@ dependencies = [
  "memmap2",
  "minifb",
  "node-graph",
+ "serde",
  "tracing",
  "tracing-subscriber",
+ "typetag",
 ]
 
 [[package]]

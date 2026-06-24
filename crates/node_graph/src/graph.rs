@@ -23,7 +23,11 @@ pub struct InputSocket {
     pub type_name: String,
     pub color: Color32,
     pub shape: SocketShape,
+    /// Controlled by `on_update` — set false to suppress the socket entirely.
     pub visible: bool,
+    /// Set true by the user via "Hide Unused"; never touched by `on_update`.
+    #[serde(default)]
+    pub hidden: bool,
     pub value: Option<Box<dyn NodeValue>>,
 }
 
@@ -34,7 +38,11 @@ pub struct Socket {
     pub type_name: String,
     pub color: Color32,
     pub shape: SocketShape,
+    /// Controlled by `on_update`.
     pub visible: bool,
+    /// Set true by the user via "Hide Unused"; never touched by `on_update`.
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 /// A named property on a node instance (not connectable).
@@ -75,6 +83,7 @@ impl Node {
             color: Color32::from_rgb(150, 150, 150),
             shape: SocketShape::Circle,
             visible: true,
+            hidden: false,
             value: None,
         };
         let out = Socket {
@@ -83,6 +92,7 @@ impl Node {
             color: Color32::from_rgb(150, 150, 150),
             shape: SocketShape::Circle,
             visible: true,
+            hidden: false,
         };
         Self {
             id,
@@ -187,7 +197,7 @@ impl GraphState {
 // ── Node definition API ───────────────────────────────────────────────────────
 
 pub struct InputDef {
-    pub label: &'static str,
+    pub label: String,
     pub type_name: &'static str,
     pub color: Color32,
     pub shape: SocketShape,
@@ -195,9 +205,9 @@ pub struct InputDef {
 }
 
 impl InputDef {
-    pub fn new<T: SocketTypeDef>(label: &'static str) -> Self {
+    pub fn new<T: SocketTypeDef>(label: impl Into<String>) -> Self {
         Self {
-            label,
+            label: label.into(),
             type_name: T::type_name(),
             color: T::color(),
             shape: T::shape(),
@@ -205,9 +215,9 @@ impl InputDef {
         }
     }
 
-    pub fn with_value<T: SocketTypeDef>(label: &'static str, value: Box<dyn NodeValue>) -> Self {
+    pub fn with_value<T: SocketTypeDef>(label: impl Into<String>, value: Box<dyn NodeValue>) -> Self {
         Self {
-            label,
+            label: label.into(),
             type_name: T::type_name(),
             color: T::color(),
             shape: T::shape(),
@@ -217,16 +227,16 @@ impl InputDef {
 }
 
 pub struct OutputDef {
-    pub label: &'static str,
+    pub label: String,
     pub type_name: &'static str,
     pub color: Color32,
     pub shape: SocketShape,
 }
 
 impl OutputDef {
-    pub fn new<T: SocketTypeDef>(label: &'static str) -> Self {
+    pub fn new<T: SocketTypeDef>(label: impl Into<String>) -> Self {
         Self {
-            label,
+            label: label.into(),
             type_name: T::type_name(),
             color: T::color(),
             shape: T::shape(),
@@ -317,7 +327,7 @@ impl NodeClassDef {
         let inputs = T::inputs()
             .into_iter()
             .map(|d| SocketDecl {
-                name: d.label.to_owned(),
+                name: d.label,
                 type_name: d.type_name.to_owned(),
                 color: d.color,
                 shape: d.shape,
@@ -328,7 +338,7 @@ impl NodeClassDef {
         let outputs = T::outputs()
             .into_iter()
             .map(|d| OutputDecl {
-                name: d.label.to_owned(),
+                name: d.label,
                 type_name: d.type_name.to_owned(),
                 color: d.color,
                 shape: d.shape,

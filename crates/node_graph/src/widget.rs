@@ -63,6 +63,7 @@ impl NodeTypeRegistry {
                 color: d.color,
                 shape: d.shape,
                 visible: true,
+                hidden: false,
                 value: d.value.clone(),
             })
             .collect();
@@ -76,6 +77,7 @@ impl NodeTypeRegistry {
                 color: d.color,
                 shape: d.shape,
                 visible: true,
+                hidden: false,
             })
             .collect();
 
@@ -115,12 +117,22 @@ pub struct NodeGraphWidget {
     registry: NodeTypeRegistry,
     context_pos: Pos2,
     minimap_visible: bool,
-    show_search: bool,
-    search_text: String,
-    search_selected: usize,
-    search_insert_pos: Pos2,
-    search_just_opened: bool,
     status: Option<(String, f64)>,
+    /// Position where secondary button was pressed; used for custom tablet movement threshold.
+    sec_press_screen_pos: Option<Pos2>,
+    show_add_menu: bool,
+    add_menu_screen_pos: Pos2,
+    /// Keyboard navigation state for the standalone add popup.
+    add_nav_cat: Option<usize>,    // highlighted category; cats.len() = Reroute
+    add_nav_in_sub: bool,
+    add_nav_sub_item: usize,
+    add_cat_ids: Vec<egui::Id>,    // captured category SubMenuButton IDs (refreshed each frame)
+    /// Node that should always render on top (last moved/dragged).
+    top_node: Option<NodeId>,
+    /// Response ID of the "+ Add" SubMenuButton in the right-click context menu (stable across
+    /// frames); used to programmatically open that submenu when 'A' is pressed while the menu
+    /// is already visible.
+    add_btn_id: Option<egui::Id>,
 }
 
 impl NodeGraphWidget {
@@ -132,12 +144,16 @@ impl NodeGraphWidget {
             registry,
             context_pos: Pos2::ZERO,
             minimap_visible: true,
-            show_search: false,
-            search_text: String::new(),
-            search_selected: 0,
-            search_insert_pos: Pos2::ZERO,
-            search_just_opened: false,
             status: None,
+            sec_press_screen_pos: None,
+            show_add_menu: false,
+            add_menu_screen_pos: Pos2::ZERO,
+            add_nav_cat: None,
+            add_nav_in_sub: false,
+            add_nav_sub_item: 0,
+            add_cat_ids: Vec::new(),
+            top_node: None,
+            add_btn_id: None,
         }
     }
 
@@ -278,7 +294,19 @@ impl NodeGraphWidget {
             );
         }
 
-        for id in self.graph.sorted_node_ids() {
+        if let InteractionState::DraggingNode { node_id, .. } = self.interaction {
+            self.top_node = Some(node_id);
+        }
+        let mut sorted = self.graph.sorted_node_ids();
+        if let Some(top) = self.top_node {
+            if sorted.contains(&top) {
+                sorted.retain(|id| *id != top);
+                sorted.push(top);
+            } else {
+                self.top_node = None;
+            }
+        }
+        for id in sorted {
             if let (Some(layout), Some(node)) = (layouts.get(&id), self.graph.nodes.get(&id)) {
                 draw_node(&painter, node, layout, &self.view, origin);
             }
@@ -299,16 +327,13 @@ impl NodeGraphWidget {
             );
         }
 
-        if let InteractionState::CuttingWire {
-            start_canvas,
-            current_canvas,
-        } = &self.interaction
-        {
-            draw_knife_line(
-                &painter,
-                self.view.canvas_to_screen(origin, *start_canvas),
-                self.view.canvas_to_screen(origin, *current_canvas),
-            );
+        if let InteractionState::CuttingWire { path } = &self.interaction {
+            let screen_pts: Vec<egui::Pos2> = path.iter()
+                .map(|&p| self.view.canvas_to_screen(origin, p))
+                .collect();
+            if screen_pts.len() >= 2 {
+                draw_knife_line(&painter, &screen_pts);
+            }
         }
 
         self.handle_input(ui, &response, origin, &layouts, &socket_screen_pos, rect);
@@ -318,30 +343,10 @@ impl NodeGraphWidget {
             minimap::draw_minimap(&painter, &info, &self.graph, &layouts, &self.view, rect);
         }
 
-        self.draw_search_overlay(ui, origin);
         self.draw_status(&painter, rect, ui.ctx());
     }
 
     // ── Registry helpers ──────────────────────────────────────────────────────
-
-    fn filtered_types(&self, query: &str) -> Vec<(String, String)> {
-        let q = query.to_lowercase();
-        let mut result: Vec<(String, String)> = self
-            .registry
-            .all()
-            .iter()
-            .filter(|d| {
-                q.is_empty()
-                    || d.name.to_lowercase().contains(&q)
-                    || d.category.to_lowercase().contains(&q)
-            })
-            .map(|d| (d.name.clone(), d.category.clone()))
-            .collect();
-        if q.is_empty() || "reroute".contains(&q) || "utility".contains(&q) {
-            result.push(("Reroute".to_string(), "Utility".to_string()));
-        }
-        result
-    }
 
     fn add_from_registry(&mut self, name: &str, pos: Pos2) {
         self.add_node_at(name, pos);
@@ -385,8 +390,10 @@ impl NodeGraphWidget {
                 continue;
             };
 
-            let changed =
-                value.draw_widget(ui, &sock.name.clone(), ws, self.view.zoom, node_screen_rect);
+            let sock_name = sock.name.clone();
+            let changed = ui.push_id((id.0, i), |ui| {
+                value.draw_widget(ui, &sock_name, ws, self.view.zoom, node_screen_rect)
+            }).inner;
             if changed && let Some(node) = self.graph.nodes.get_mut(&id) {
                 node.run_update();
             }
@@ -408,9 +415,10 @@ impl NodeGraphWidget {
             let prop = &mut node.props[pi];
             let label = prop.label.clone();
 
-            let changed = prop
-                .value
-                .draw_widget(ui, &label, ws, self.view.zoom, node_screen_rect);
+            let changed = ui.push_id((id.0, pi), |ui| {
+                prop.value
+                    .draw_widget(ui, &label, ws, self.view.zoom, node_screen_rect)
+            }).inner;
             if changed {
                 any_changed = true;
             }
@@ -419,100 +427,6 @@ impl NodeGraphWidget {
         if any_changed && let Some(node) = self.graph.nodes.get_mut(&id) {
             node.run_update();
         }
-    }
-
-    // ── Search overlay ────────────────────────────────────────────────────────
-
-    fn draw_search_overlay(&mut self, ui: &mut Ui, origin: Pos2) {
-        if !self.show_search {
-            return;
-        }
-
-        let screen_pos = self.view.canvas_to_screen(origin, self.search_insert_pos);
-        let win_size = Vec2::new(230.0, 270.0);
-        let pos = Pos2::new(
-            screen_pos
-                .x
-                .min(origin.x + ui.available_width() - win_size.x - 10.0)
-                .max(origin.x + 10.0),
-            screen_pos
-                .y
-                .min(origin.y + ui.available_height() - win_size.y - 10.0)
-                .max(origin.y + 10.0),
-        );
-
-        let filtered = self.filtered_types(&self.search_text);
-        let count = filtered.len();
-        self.search_selected = self.search_selected.min(count.saturating_sub(1));
-
-        let mut select_idx: Option<usize> = None;
-        let mut close = false;
-
-        egui::Area::new(egui::Id::new("node_search_overlay"))
-            .fixed_pos(pos)
-            .order(egui::Order::Foreground)
-            .show(ui.ctx(), |ui| {
-                egui::Frame::window(ui.style()).show(ui, |ui| {
-                    ui.set_width(220.0);
-                    ui.label(egui::RichText::new("Add Node  (Shift+A)").strong());
-                    ui.separator();
-
-                    let te = ui.add(
-                        egui::TextEdit::singleline(&mut self.search_text)
-                            .hint_text("Search…")
-                            .desired_width(f32::INFINITY),
-                    );
-                    if self.search_just_opened {
-                        te.request_focus();
-                        self.search_just_opened = false;
-                    }
-                    ui.separator();
-
-                    egui::ScrollArea::vertical()
-                        .max_height(180.0)
-                        .show(ui, |ui| {
-                            for (i, (name, cat)) in filtered.iter().enumerate() {
-                                let selected = i == self.search_selected;
-                                let label = egui::RichText::new(format!("{name}  ({cat})"));
-                                let label = if selected {
-                                    label.strong().color(Color32::from_rgb(180, 210, 255))
-                                } else {
-                                    label
-                                };
-                                if ui.selectable_label(selected, label).clicked() {
-                                    select_idx = Some(i);
-                                    close = true;
-                                }
-                            }
-                            if count == 0 {
-                                ui.label(egui::RichText::new("No results").weak().italics());
-                            }
-                        });
-                });
-            });
-
-        if close {
-            self.show_search = false;
-            self.search_text.clear();
-            self.search_selected = 0;
-        }
-        if let Some(idx) = select_idx {
-            let (name, _) = filtered[idx].clone();
-            let pos = self.search_insert_pos;
-            self.add_from_registry(&name, pos);
-        }
-    }
-
-    fn commit_search(&mut self) {
-        let filtered = self.filtered_types(&self.search_text);
-        let idx = self.search_selected.min(filtered.len().saturating_sub(1));
-        if let Some((name, _)) = filtered.get(idx).cloned() {
-            let pos = self.search_insert_pos;
-            self.add_from_registry(&name, pos);
-        }
-        self.show_search = false;
-        self.search_text.clear();
-        self.search_selected = 0;
     }
 
     // ── Status display ────────────────────────────────────────────────────────
@@ -607,63 +521,19 @@ impl NodeGraphWidget {
             && let Some(pc) = pointer_canvas
         {
             self.context_pos = pc;
-        }
-
-        if self.show_search {
-            let count = self.filtered_types(&self.search_text).len();
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.show_search = false;
-                self.search_text.clear();
-                self.search_selected = 0;
-            } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                self.commit_search();
-            } else if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
-                self.search_selected = (self.search_selected + 1).min(count.saturating_sub(1));
-            } else if ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
-                self.search_selected = self.search_selected.saturating_sub(1);
-            }
-            let state = std::mem::replace(&mut self.interaction, InteractionState::Idle);
-            self.interaction = match state {
-                InteractionState::Panning { last_screen } => {
-                    self.update_panning(response, pointer, last_screen)
-                }
-                InteractionState::DraggingNode { node_id, offset } => {
-                    self.update_drag_node(response, pointer_canvas, node_id, offset, layouts)
-                }
-                InteractionState::DraggingWire {
-                    from,
-                    from_canvas,
-                    current_canvas,
-                } => self.update_drag_wire(
-                    response,
-                    pointer,
-                    pointer_canvas,
-                    socket_screen_pos,
-                    from,
-                    from_canvas,
-                    current_canvas,
-                ),
-                other => other,
-            };
-            return;
+            // Record the screen position so we can apply a custom movement threshold on release.
+            self.sec_press_screen_pos = pointer;
         }
 
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.interaction = InteractionState::Idle;
+            self.show_add_menu = false;
         }
         if ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
             self.delete_selected();
         }
         if ui.input(|i| i.key_pressed(egui::Key::D) && i.modifiers.shift) {
             self.duplicate_selected();
-        }
-
-        if ui.input(|i| i.key_pressed(egui::Key::A) && i.modifiers.shift) {
-            self.search_insert_pos = pointer_canvas.unwrap_or(self.context_pos);
-            self.show_search = true;
-            self.search_just_opened = true;
-            self.search_text.clear();
-            self.search_selected = 0;
         }
 
         if ui.input(|i| i.key_pressed(egui::Key::J) && i.modifiers.ctrl) {
@@ -694,9 +564,34 @@ impl NodeGraphWidget {
             self.load_graph(&ctx);
         }
 
-        if response.clicked() && !ui.ctx().egui_is_using_pointer() {
+        let no_focus = ui.ctx().memory(|m| m.focused().is_none());
+
+        // Ctrl+H: toggle hidden sockets on selected nodes
+        if no_focus && ui.input(|i| i.key_pressed(egui::Key::H) && i.modifiers.ctrl) {
+            let selected: Vec<NodeId> = self.graph.nodes.values()
+                .filter(|n| n.selected)
+                .map(|n| n.id)
+                .collect();
+            for id in selected {
+                self.toggle_hidden_sockets(id);
+            }
+        }
+
+        // X: delete selected nodes
+        if no_focus && ui.input(|i| i.key_pressed(egui::Key::X) && !i.modifiers.any()) {
+            self.delete_selected();
+        }
+
+        if response.clicked_by(egui::PointerButton::Primary) && !ui.ctx().egui_is_using_pointer() {
             self.handle_selection_click(ui, pointer, layouts, origin);
         }
+
+        let context_screen = self.view.canvas_to_screen(origin, self.context_pos);
+        let context_node = self.node_at_screen(context_screen, layouts, origin);
+        let context_node_hidden = context_node.is_some_and(|id| self.node_has_hidden_sockets(id));
+        let any_selected = self.graph.nodes.values().any(|n| n.selected);
+        // Show node-action items when the cursor was over a node or nodes are selected.
+        let node_ctx = context_node.is_some() || any_selected;
 
         let cats_and_items: Vec<(String, Vec<String>)> = {
             let mut cats: Vec<String> = Vec::new();
@@ -717,30 +612,363 @@ impl NodeGraphWidget {
                 .collect()
         };
 
-        let mut add_kind: Option<String> = None;
-        response.context_menu(|ui| {
-            ui.set_min_width(180.0);
-            ui.label(egui::RichText::new("Add Node").strong());
-            ui.separator();
-            for (cat, names) in &cats_and_items {
-                ui.label(egui::RichText::new(cat.as_str()).weak());
-                for name in names {
-                    if ui.button(name.as_str()).clicked() {
-                        add_kind = Some(name.clone());
-                        ui.close();
+        // 'a' key: open Add submenu inside the context menu, or open standalone popup.
+        let a_pressed = ui.input(|i| i.key_pressed(egui::Key::A) && i.modifiers.shift && !i.modifiers.ctrl && !i.modifiers.alt);
+        if a_pressed && !self.show_add_menu {
+            if response.context_menu_opened() {
+                // Don't require no_focus here — egui may mark the popup as focused internally.
+                if !node_ctx {
+                    if let Some(btn_id) = self.add_btn_id {
+                        let popup_id = egui::Popup::default_response_id(&response);
+                        let sub_id = egui::containers::menu::SubMenu::id_from_widget_id(btn_id);
+                        // MenuState::from_id resets open_item if the submenu wasn't shown last
+                        // frame.  Mark it shown first so the staleness check passes.
+                        egui::containers::menu::MenuState::mark_shown(ui.ctx(), sub_id);
+                        egui::containers::menu::MenuState::from_id(ui.ctx(), popup_id, |state| {
+                            state.open_item = Some(sub_id);
+                        });
                     }
                 }
-                ui.separator();
+            } else if no_focus {
+                // Only open standalone popup when no text widget has focus.
+                let pos = pointer.unwrap_or_else(|| canvas_rect.center());
+                self.add_menu_screen_pos = pos;
+                self.context_pos = self.view.screen_to_canvas(origin, pos);
+                self.show_add_menu = true;
+                self.add_nav_cat = None;
+                self.add_nav_in_sub = false;
+                self.add_nav_sub_item = 0;
             }
-            ui.label(egui::RichText::new("Utility").weak());
-            if ui.button("Reroute").clicked() {
-                add_kind = Some("Reroute".to_string());
-                ui.close();
+        }
+
+        let mut add_kind: Option<String> = None;
+        let mut close_add_menu = false;
+
+        // Keyboard navigation for the standalone add-node popup.
+        if self.show_add_menu {
+            let n_cats = cats_and_items.len();
+            let total = n_cats + 1; // categories + Reroute
+
+            if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+                if self.add_nav_in_sub {
+                    let n = self.add_nav_cat
+                        .and_then(|ci| cats_and_items.get(ci))
+                        .map_or(0, |(_, v)| v.len());
+                    self.add_nav_sub_item = (self.add_nav_sub_item + 1).min(n.saturating_sub(1));
+                } else {
+                    self.add_nav_cat = Some(match self.add_nav_cat {
+                        None => 0,
+                        Some(i) => (i + 1).min(total - 1),
+                    });
+                }
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+                if self.add_nav_in_sub {
+                    self.add_nav_sub_item = self.add_nav_sub_item.saturating_sub(1);
+                } else {
+                    self.add_nav_cat = Some(match self.add_nav_cat {
+                        None => total - 1,
+                        Some(i) => i.saturating_sub(1),
+                    });
+                }
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::ArrowRight)) && !self.add_nav_in_sub {
+                if let Some(i) = self.add_nav_cat {
+                    if i < n_cats {
+                        self.add_nav_in_sub = true;
+                        self.add_nav_sub_item = 0;
+                    }
+                }
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
+                if self.add_nav_in_sub {
+                    self.add_nav_in_sub = false;
+                } else {
+                    close_add_menu = true;
+                }
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if self.add_nav_in_sub {
+                    if let Some(ci) = self.add_nav_cat {
+                        if let Some((_, names)) = cats_and_items.get(ci) {
+                            if let Some(name) = names.get(self.add_nav_sub_item) {
+                                add_kind = Some(name.clone());
+                                close_add_menu = true;
+                            }
+                        }
+                    }
+                } else if let Some(i) = self.add_nav_cat {
+                    if i == n_cats {
+                        add_kind = Some("Reroute".to_string());
+                        close_add_menu = true;
+                    } else {
+                        self.add_nav_in_sub = true;
+                        self.add_nav_sub_item = 0;
+                    }
+                }
+            }
+
+            // Programmatically open the keyboard-selected category submenu.
+            if let Some(cat_i) = self.add_nav_cat {
+                let menu_id = egui::Id::new("dsl_add_node_popup");
+                if cat_i < n_cats {
+                    if let Some(&btn_id) = self.add_cat_ids.get(cat_i) {
+                        let sub_id = egui::containers::menu::SubMenu::id_from_widget_id(btn_id);
+                        egui::containers::menu::MenuState::mark_shown(ui.ctx(), sub_id);
+                        egui::containers::menu::MenuState::mark_shown(ui.ctx(), menu_id);
+                        egui::containers::menu::MenuState::from_id(ui.ctx(), menu_id, |state| {
+                            state.open_item = Some(sub_id);
+                        });
+                    }
+                } else {
+                    // Reroute highlighted — close any open submenu.
+                    egui::containers::menu::MenuState::from_id(ui.ctx(), menu_id, |state| {
+                        state.open_item = None;
+                    });
+                }
+            }
+        }
+
+        // Needed for tablet trigger below and for direct button handling.
+        let ctrl_held = ui.input(|i| i.modifiers.ctrl);
+
+        // Close the 'A' add-menu whenever the user presses the secondary button (context menu about
+        // to open) so both can't be visible at the same time.
+        if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
+            self.show_add_menu = false;
+        }
+
+        // Tablet: egui's secondary_clicked() has a ~6 px movement threshold.
+        // On secondary release, if movement is within our larger threshold AND egui didn't
+        // already open the menu, open the Popup directly so response.context_menu() renders it.
+        let sec_released = ui.input(|i| i.pointer.button_released(egui::PointerButton::Secondary));
+        if sec_released
+            && !ctrl_held
+            && !matches!(self.interaction, InteractionState::CuttingWire { .. })
+            && !response.secondary_clicked()
+        {
+            if let Some(press) = self.sec_press_screen_pos
+                && let Some(curr) = pointer
+                && press.distance(curr) < 30.0
+            {
+                let popup_id = egui::Popup::default_response_id(&response);
+                #[allow(deprecated)]
+                ui.ctx().memory_mut(|mem| mem.open_popup_at(popup_id, curr));
+            }
+        }
+        if sec_released {
+            self.sec_press_screen_pos = None;
+        }
+
+        let mut do_delete = false;
+        let mut do_toggle_hide = false;
+
+        // Right-click context menu — uses egui's built-in mechanism for proper hover-to-open submenus.
+        response.context_menu(|ui| {
+            ui.set_min_width(200.0);
+            if node_ctx {
+                if ui.add(egui::Button::new("Delete").right_text("X")).clicked() {
+                    do_delete = true;
+                    ui.close();
+                }
+                let arrow = egui::containers::menu::SubMenuButton::RIGHT_ARROW;
+                let _ = egui::containers::menu::SubMenuButton::from_button(
+                    egui::Button::new("Show/Hide").right_text(arrow),
+                )
+                .ui(ui, |ui| {
+                    let chk = if context_node_hidden { "✓  " } else { "    " };
+                    if ui
+                        .add(
+                            egui::Button::new(format!("{chk}Unconnected Sockets"))
+                                .right_text("Ctrl+H"),
+                        )
+                        .clicked()
+                    {
+                        do_toggle_hide = true;
+                        ui.close();
+                    }
+                });
+            } else {
+                let (add_resp, _) = egui::containers::menu::SubMenuButton::from_button(
+                    egui::Button::new("+ Add").right_text("A  ⏵"),
+                )
+                .ui(ui, |ui| {
+                    for (cat, names) in &cats_and_items {
+                        let arrow = egui::containers::menu::SubMenuButton::RIGHT_ARROW;
+                        let _ = egui::containers::menu::SubMenuButton::from_button(
+                            egui::Button::new(cat.as_str()).right_text(arrow),
+                        )
+                        .ui(ui, |ui| {
+                            for name in names {
+                                if ui.button(name.as_str()).clicked() {
+                                    add_kind = Some(name.clone());
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
+                    ui.separator();
+                    if ui.button("Reroute").clicked() {
+                        add_kind = Some("Reroute".to_string());
+                        ui.close();
+                    }
+                });
+                self.add_btn_id = Some(add_resp.id);
+                // Paste (future)
             }
         });
+        // 'A' key: submenu-style add popup (same hierarchy as the right-click Add submenu)
+        if self.show_add_menu {
+            // Snapshot nav state so closures stay borrow-clean.
+            let nav_cat = self.add_nav_cat;
+            let nav_in_sub = self.add_nav_in_sub;
+            let nav_sub = self.add_nav_sub_item;
+            let n_cats = cats_and_items.len();
+            let sel_bg = ui.visuals().selection.bg_fill;
+            let mut new_cat_ids: Vec<egui::Id> = Vec::new();
+
+            let area_resp = egui::Area::new(egui::Id::new("dsl_add_node_popup"))
+                .fixed_pos(self.add_menu_screen_pos)
+                .order(egui::Order::Foreground)
+                .layout(egui::Layout::top_down_justified(egui::Align::Min))
+                .info(
+                    egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(
+                        egui::containers::menu::MenuConfig::MENU_CONFIG_TAG,
+                        egui::containers::menu::MenuConfig::new(),
+                    ),
+                )
+                .show(ui.ctx(), |ui| {
+                    egui::containers::menu::menu_style(ui.style_mut());
+                    egui::Frame::menu(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(150.0);
+                        for (cat_i, (cat, names)) in cats_and_items.iter().enumerate() {
+                            let arrow = egui::containers::menu::SubMenuButton::RIGHT_ARROW;
+                            let (cat_resp, _) = egui::containers::menu::SubMenuButton::from_button(
+                                egui::Button::new(cat.as_str()).right_text(arrow),
+                            )
+                            .ui(ui, |ui| {
+                                for (item_i, name) in names.iter().enumerate() {
+                                    let selected = nav_in_sub
+                                        && nav_cat == Some(cat_i)
+                                        && item_i == nav_sub;
+                                    let resp = ui.add(
+                                        egui::Button::new(name.as_str())
+                                            .fill(if selected { sel_bg } else { egui::Color32::TRANSPARENT }),
+                                    );
+                                    if resp.clicked() {
+                                        add_kind = Some(name.clone());
+                                        close_add_menu = true;
+                                    }
+                                }
+                            });
+                            new_cat_ids.push(cat_resp.id);
+                        }
+                        ui.separator();
+                        let reroute_selected = nav_cat == Some(n_cats);
+                        let resp = ui.add(
+                            egui::Button::new("Reroute")
+                                .fill(if reroute_selected { sel_bg } else { egui::Color32::TRANSPARENT }),
+                        );
+                        if resp.clicked() {
+                            add_kind = Some("Reroute".to_string());
+                            close_add_menu = true;
+                        }
+                    });
+                });
+
+            self.add_cat_ids = new_cat_ids;
+
+            if !close_add_menu {
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    close_add_menu = true;
+                } else if ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary))
+                    && !area_resp.response.hovered()
+                {
+                    close_add_menu = true;
+                }
+            }
+        }
+        if close_add_menu {
+            self.show_add_menu = false;
+        }
+
+        if do_delete {
+            if let Some(id) = context_node {
+                self.graph.remove_node(id);
+                self.graph.cleanup_frames();
+            }
+            self.delete_selected();
+        }
+        if do_toggle_hide {
+            if let Some(id) = context_node {
+                self.toggle_hidden_sockets(id);
+            } else {
+                let selected: Vec<NodeId> = self.graph.nodes.values()
+                    .filter(|n| n.selected).map(|n| n.id).collect();
+                for id in selected {
+                    self.toggle_hidden_sockets(id);
+                }
+            }
+        }
         if let Some(kind) = add_kind {
             let pos = self.context_pos;
             self.add_from_registry(&kind, pos);
+        }
+
+        // ── Direct non-primary button handling ────────────────────────────────────
+        // drag_started() is Primary-only in egui, so middle/secondary must be
+        // detected via button_down() every frame instead of through the state machine.
+        // ctrl_held is already computed above.
+
+        let middle_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
+        let right_down  = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary));
+
+        if middle_down {
+            if let Some(pp) = pointer {
+                let delta = if let InteractionState::Panning { last_screen } = self.interaction {
+                    pp - last_screen
+                } else {
+                    Vec2::ZERO
+                };
+                if ctrl_held {
+                    // Ctrl+middle: zoom around cursor using vertical mouse movement.
+                    // Moving up (negative delta.y) zooms in; moving down zooms out.
+                    let factor = (1.0_f32 - delta.y * 0.005).clamp(0.5, 2.0);
+                    if delta.y.abs() > 0.1 {
+                        self.view.zoom_around(pp, origin, factor);
+                    }
+                } else {
+                    self.view.pan += delta;
+                }
+                self.interaction = InteractionState::Panning { last_screen: pp };
+            }
+            return;
+        }
+        if matches!(self.interaction, InteractionState::Panning { .. }) {
+            self.interaction = InteractionState::Idle;
+        }
+
+        if right_down && ctrl_held {
+            // Ctrl+right: grow the knife-cut path every frame
+            if let Some(pc) = pointer_canvas {
+                match &mut self.interaction {
+                    InteractionState::CuttingWire { path } => {
+                        let min_step = 4.0 / self.view.zoom;
+                        if path.last().is_none_or(|&last| last.distance(pc) > min_step) {
+                            path.push(pc);
+                        }
+                    }
+                    _ => self.interaction = InteractionState::CuttingWire { path: vec![pc] },
+                }
+            }
+            return;
+        }
+        if matches!(self.interaction, InteractionState::CuttingWire { .. }) {
+            // Ctrl or right released: apply the cut
+            let state = std::mem::replace(&mut self.interaction, InteractionState::Idle);
+            if let InteractionState::CuttingWire { path } = state {
+                self.apply_knife_cut(&path, layouts);
+            }
         }
 
         if matches!(self.interaction, InteractionState::Idle)
@@ -797,10 +1025,8 @@ impl NodeGraphWidget {
                 start_canvas,
                 current_canvas,
             ),
-            InteractionState::CuttingWire {
-                start_canvas,
-                current_canvas,
-            } => self.update_cut_wire(response, pointer_canvas, layouts, start_canvas, current_canvas),
+            InteractionState::CuttingWire { path } =>
+                self.update_cut_wire(response, pointer_canvas, layouts, path),
         };
     }
 
@@ -872,6 +1098,43 @@ impl NodeGraphWidget {
             })
             .collect();
         self.graph.connections.extend(new_conns);
+    }
+
+    fn node_has_hidden_sockets(&self, node_id: NodeId) -> bool {
+        self.graph.nodes.get(&node_id).is_some_and(|n| {
+            n.inputs.iter().any(|s| s.hidden) || n.outputs.iter().any(|s| s.hidden)
+        })
+    }
+
+    fn toggle_hidden_sockets(&mut self, node_id: NodeId) {
+        if self.node_has_hidden_sockets(node_id) {
+            if let Some(node) = self.graph.nodes.get_mut(&node_id) {
+                for inp in node.inputs.iter_mut() { inp.hidden = false; }
+                for out in node.outputs.iter_mut() { out.hidden = false; }
+            }
+        } else {
+            use std::collections::HashSet;
+            let connected_in: HashSet<usize> = self.graph.connections.iter()
+                .filter(|c| c.to.node == node_id)
+                .map(|c| c.to.index)
+                .collect();
+            let connected_out: HashSet<usize> = self.graph.connections.iter()
+                .filter(|c| c.from.node == node_id)
+                .map(|c| c.from.index)
+                .collect();
+            if let Some(node) = self.graph.nodes.get_mut(&node_id) {
+                for (i, inp) in node.inputs.iter_mut().enumerate() {
+                    if inp.value.is_none() && !connected_in.contains(&i) {
+                        inp.hidden = true;
+                    }
+                }
+                for (i, out) in node.outputs.iter_mut().enumerate() {
+                    if !connected_out.contains(&i) {
+                        out.hidden = true;
+                    }
+                }
+            }
+        }
     }
 
     // ── Click / selection ─────────────────────────────────────────────────────
@@ -1031,12 +1294,15 @@ impl NodeGraphWidget {
             return InteractionState::Idle;
         };
 
-        let middle = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Middle));
-        let right = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary));
-        if middle || right {
-            return InteractionState::Panning { last_screen: pp };
+        // Middle and Ctrl+right are handled in handle_input directly.
+        // Guard: if the secondary button somehow triggers drag_started(), don't box-select.
+        let right_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary));
+        if right_down {
+            return InteractionState::Idle;
         }
+        let ctrl = ui.input(|i| i.modifiers.ctrl);
 
+        // Primary button from here on — check socket then node header, then box-select
         let hit_r = SOCKET_RADIUS * self.view.zoom + 5.0;
         for (&sid, &spos) in socket_screen_pos {
             if pp.distance(spos) >= hit_r {
@@ -1065,7 +1331,6 @@ impl NodeGraphWidget {
         for (&id, layout) in layouts {
             if to_screen_rect(layout.header_rect, &self.view, origin).contains(pp) {
                 let node_pos = self.graph.nodes[&id].pos.to_vec2();
-                let ctrl = ui.input(|i| i.modifiers.ctrl);
                 if ctrl {
                     self.graph.nodes.get_mut(&id).unwrap().selected = true;
                 } else if !self.graph.nodes[&id].selected {
@@ -1081,17 +1346,10 @@ impl NodeGraphWidget {
             }
         }
 
-        let ctrl = ui.input(|i| i.modifiers.ctrl);
-        if ctrl {
-            InteractionState::BoxSelecting {
-                start_canvas: pc,
-                current_canvas: pc,
-            }
-        } else {
-            InteractionState::CuttingWire {
-                start_canvas: pc,
-                current_canvas: pc,
-            }
+        // Primary drag on empty canvas → box select; modifiers read at release
+        InteractionState::BoxSelecting {
+            start_canvas: pc,
+            current_canvas: pc,
         }
     }
 
@@ -1287,8 +1545,9 @@ impl NodeGraphWidget {
             };
         }
         let select_rect = Rect::from_two_pos(start_canvas, current_canvas);
-        let ctrl = ui.input(|i| i.modifiers.ctrl);
-        if !ctrl {
+        let shift = ui.input(|i| i.modifiers.shift);
+        let ctrl  = ui.input(|i| i.modifiers.ctrl);
+        if !shift && !ctrl {
             for n in self.graph.nodes.values_mut() {
                 n.selected = false;
             }
@@ -1297,28 +1556,15 @@ impl NodeGraphWidget {
             if select_rect.intersects(layout.node_rect)
                 && let Some(n) = self.graph.nodes.get_mut(&id)
             {
-                n.selected = true;
+                n.selected = !ctrl; // ctrl = remove mode, shift/none = add/replace mode
             }
         }
         InteractionState::Idle
     }
 
-    fn update_cut_wire(
-        &mut self,
-        response: &egui::Response,
-        pointer_canvas: Option<Pos2>,
-        layouts: &HashMap<NodeId, NodeLayout>,
-        start_canvas: Pos2,
-        mut current_canvas: Pos2,
-    ) -> InteractionState {
-        if response.dragged() {
-            if let Some(pc) = pointer_canvas {
-                current_canvas = pc;
-            }
-            return InteractionState::CuttingWire {
-                start_canvas,
-                current_canvas,
-            };
+    fn apply_knife_cut(&mut self, path: &[Pos2], layouts: &HashMap<NodeId, NodeLayout>) {
+        if path.len() < 2 {
+            return;
         }
         let to_remove: Vec<usize> = self
             .graph
@@ -1332,12 +1578,35 @@ impl NodeGraphWidget {
                 let tp = layouts
                     .get(&conn.to.node)
                     .and_then(|l| l.input_socket_pos.get(conn.to.index).and_then(|p| *p))?;
-                wire_intersects_knife(fp, tp, start_canvas, current_canvas).then_some(idx)
+                path.windows(2)
+                    .any(|w| wire_intersects_knife(fp, tp, w[0], w[1]))
+                    .then_some(idx)
             })
             .collect();
         for idx in to_remove.into_iter().rev() {
             self.graph.connections.remove(idx);
         }
+    }
+
+    fn update_cut_wire(
+        &mut self,
+        response: &egui::Response,
+        pointer_canvas: Option<Pos2>,
+        layouts: &HashMap<NodeId, NodeLayout>,
+        mut path: Vec<Pos2>,
+    ) -> InteractionState {
+        // This is a fallback path for systems where drag_started() fires for Secondary.
+        // The normal path is handled directly in handle_input via button_down.
+        if response.dragged() {
+            if let Some(pc) = pointer_canvas {
+                let min_step = 4.0 / self.view.zoom;
+                if path.last().is_none_or(|&last| last.distance(pc) > min_step) {
+                    path.push(pc);
+                }
+            }
+            return InteractionState::CuttingWire { path };
+        }
+        self.apply_knife_cut(&path, layouts);
         InteractionState::Idle
     }
 }

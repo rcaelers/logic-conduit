@@ -66,12 +66,25 @@ impl NodeDef for DslFileSource {
     fn inputs() -> Vec<InputDef> {
         vec![
             InputDef::with_value::<node_graph::StrSocket>("File", StringValue::new("").into()),
-            InputDef::with_value::<node_graph::IntSocket>("Channel Mask", IntValue::plain(0xFF)),
+            InputDef::with_value::<node_graph::IntSocket>("Channels", IntValue::new(8, 1, 32).into()),
         ]
     }
 
     fn outputs() -> Vec<OutputDef> {
-        vec![OutputDef::new::<Signal>("Signal")]
+        (0..32_usize).map(|i| OutputDef::new::<Signal>(format!("Ch {i}"))).collect()
+    }
+
+    fn on_update() -> Option<fn(&mut [InputSocket], &mut [Socket], &[Prop])> {
+        Some(|inputs, outputs, _| {
+            let ch = inputs.get(1)
+                .and_then(|s| s.value.as_ref())
+                .and_then(|v| v.as_any().downcast_ref::<node_graph::IntValue>())
+                .map_or(8, |v| v.value as usize)
+                .clamp(1, 32);
+            for (i, out) in outputs.iter_mut().enumerate() {
+                out.visible = i < ch;
+            }
+        })
     }
 }
 
@@ -95,7 +108,20 @@ impl NodeDef for UsbLogicAnalyzer {
     }
 
     fn outputs() -> Vec<OutputDef> {
-        vec![OutputDef::new::<Signal>("Signal")]
+        (0..32_usize).map(|i| OutputDef::new::<Signal>(format!("Ch {i}"))).collect()
+    }
+
+    fn on_update() -> Option<fn(&mut [InputSocket], &mut [Socket], &[Prop])> {
+        Some(|inputs, outputs, _| {
+            let ch = inputs.get(1)
+                .and_then(|s| s.value.as_ref())
+                .and_then(|v| v.as_any().downcast_ref::<node_graph::IntValue>())
+                .map_or(16, |v| v.value as usize)
+                .clamp(1, 32);
+            for (i, out) in outputs.iter_mut().enumerate() {
+                out.visible = i < ch;
+            }
+        })
     }
 }
 
@@ -113,11 +139,10 @@ impl NodeDef for SpiDecoder {
 
     fn inputs() -> Vec<InputDef> {
         vec![
-            InputDef::new::<Signal>("Signal"),
-            InputDef::with_value::<node_graph::IntSocket>("CLK Chan",  IntValue::new(0, 0, 31).into()),
-            InputDef::with_value::<node_graph::IntSocket>("MOSI Chan", IntValue::new(1, 0, 31).into()),
-            InputDef::with_value::<node_graph::IntSocket>("MISO Chan", IntValue::new(2, 0, 31).into()),
-            InputDef::with_value::<node_graph::IntSocket>("CS Chan",   IntValue::new(3, 0, 31).into()),
+            InputDef::new::<Signal>("CLK"),
+            InputDef::new::<Signal>("MOSI"),
+            InputDef::new::<Signal>("MISO"),
+            InputDef::new::<Signal>("CS"),
         ]
     }
 
@@ -158,9 +183,8 @@ impl NodeDef for I2cDecoder {
 
     fn inputs() -> Vec<InputDef> {
         vec![
-            InputDef::new::<Signal>("Signal"),
-            InputDef::with_value::<node_graph::IntSocket>("SCL Chan", IntValue::new(0, 0, 31).into()),
-            InputDef::with_value::<node_graph::IntSocket>("SDA Chan", IntValue::new(1, 0, 31).into()),
+            InputDef::new::<Signal>("SCL"),
+            InputDef::new::<Signal>("SDA"),
         ]
     }
 
@@ -183,9 +207,8 @@ impl NodeDef for UartDecoder {
 
     fn inputs() -> Vec<InputDef> {
         vec![
-            InputDef::new::<Signal>("Signal"),
-            InputDef::with_value::<node_graph::IntSocket>("TX Chan",   IntValue::new(0, 0, 31).into()),
-            InputDef::with_value::<node_graph::IntSocket>("RX Chan",   IntValue::new(1, 0, 31).into()),
+            InputDef::new::<Signal>("TX"),
+            InputDef::new::<Signal>("RX"),
             InputDef::with_value::<node_graph::IntSocket>("Baud Rate", IntValue::new(115200, 300, 4_000_000).into()),
         ]
     }
@@ -216,9 +239,8 @@ impl NodeDef for ParallelDecoder {
 
     fn inputs() -> Vec<InputDef> {
         vec![
-            InputDef::new::<Signal>("Signal"),
-            InputDef::with_value::<node_graph::IntSocket>("Channels", IntValue::new(8, 1, 32).into()),
-            InputDef::with_value::<node_graph::IntSocket>("CLK Chan", IntValue::new(0, 0, 31).into()),
+            InputDef::new::<Signal>("CLK"),
+            InputDef::with_value::<node_graph::IntSocket>("Width", IntValue::new(8, 1, 32).into()),
         ]
     }
 
@@ -335,40 +357,19 @@ fn populate_demo(widget: &mut NodeGraphWidget) {
         .unwrap();
 
     let g = widget.graph_mut();
+    // Ch 0→CLK, Ch 1→MOSI, Ch 2→MISO, Ch 3→CS
+    for (ch, input_idx) in [(0, 0), (1, 1), (2, 2), (3, 3)] {
+        g.add_connection(
+            SocketId { node: id0, index: ch, is_output: true },
+            SocketId { node: id1, index: input_idx, is_output: false },
+        );
+    }
     g.add_connection(
-        SocketId {
-            node: id0,
-            index: 0,
-            is_output: true,
-        },
-        SocketId {
-            node: id1,
-            index: 0,
-            is_output: false,
-        },
+        SocketId { node: id1, index: 0, is_output: true },
+        SocketId { node: id2, index: 0, is_output: false },
     );
     g.add_connection(
-        SocketId {
-            node: id1,
-            index: 0,
-            is_output: true,
-        },
-        SocketId {
-            node: id2,
-            index: 0,
-            is_output: false,
-        },
-    );
-    g.add_connection(
-        SocketId {
-            node: id2,
-            index: 0,
-            is_output: true,
-        },
-        SocketId {
-            node: id3,
-            index: 0,
-            is_output: false,
-        },
+        SocketId { node: id2, index: 0, is_output: true },
+        SocketId { node: id3, index: 0, is_output: false },
     );
 }
