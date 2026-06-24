@@ -8,8 +8,8 @@ use crate::{
     graph::{Connection, GraphState, Node, NodeId, NodeKind, SocketDirection, SocketId},
     interaction::InteractionState,
     minimap,
-    runtime::RegisteredNodeType,
-    types::sockets_compatible,
+    runtime::{NodeInstance, NodeRuntime, RegisteredNodeType},
+    socket::sockets_compatible,
     view::ViewState,
 };
 use egui::{Color32, Pos2, Rect, Sense, Ui, Vec2};
@@ -50,17 +50,18 @@ impl NodeTypeRegistry {
         self.types.iter().find(|d| d.name == name)
     }
 
-    pub fn instantiate(&self, name: &str, id: NodeId, pos: Pos2) -> Option<Node> {
+    pub(crate) fn instantiate(&self, name: &str, id: NodeId, pos: Pos2) -> Option<NodeRuntime> {
         let def = self.find(name)?;
         Some((def.create)(id, pos))
     }
 
-    pub(crate) fn restore_node(&self, node: &mut Node) {
+    pub(crate) fn restore_node(&self, node: &mut Node) -> Option<Box<dyn NodeInstance>> {
         if node.kind == NodeKind::Regular
             && let Some(definition) = self.find(&node.title)
         {
-            (definition.restore)(node);
+            return Some((definition.restore)(node));
         }
+        None
     }
 }
 
@@ -68,6 +69,7 @@ impl NodeTypeRegistry {
 
 pub struct NodeGraphWidget {
     graph: GraphState,
+    runtime: HashMap<NodeId, Box<dyn NodeInstance>>,
     view: ViewState,
     interaction: InteractionState,
     registry: NodeTypeRegistry,
@@ -95,6 +97,7 @@ impl NodeGraphWidget {
     pub fn new(registry: NodeTypeRegistry) -> Self {
         Self {
             graph: GraphState::default(),
+            runtime: HashMap::new(),
             view: ViewState::default(),
             interaction: InteractionState::default(),
             registry,
@@ -120,6 +123,21 @@ impl NodeGraphWidget {
         &mut self.graph
     }
 
+    fn run_update(&mut self, id: NodeId) {
+        let (runtime, graph) = (&mut self.runtime, &mut self.graph);
+        if let (Some(instance), Some(node)) = (runtime.get_mut(&id), graph.nodes.get_mut(&id)) {
+            instance.update(&mut node.inputs, &mut node.outputs);
+            node.state = instance.save_state();
+        }
+    }
+
+    fn sync_state(&mut self, id: NodeId) {
+        let (runtime, graph) = (&mut self.runtime, &mut self.graph);
+        if let (Some(instance), Some(node)) = (runtime.get(&id), graph.nodes.get_mut(&id)) {
+            node.state = instance.save_state();
+        }
+    }
+
     pub fn add_node_at(&mut self, name: &str, pos: Pos2) -> Option<NodeId> {
         let id = self.graph.next_id();
         if name == "Reroute" {
@@ -128,8 +146,9 @@ impl NodeGraphWidget {
             self.graph.add_node(n);
             return Some(nid);
         }
-        if let Some(node) = self.registry.instantiate(name, id, pos) {
+        if let Some(NodeRuntime { node, instance }) = self.registry.instantiate(name, id, pos) {
             let nid = node.id;
+            self.runtime.insert(nid, instance);
             self.graph.add_node(node);
             Some(nid)
         } else {
@@ -339,17 +358,15 @@ impl NodeGraphWidget {
                 continue;
             }
 
-            let node = self.graph.nodes.get_mut(&id).unwrap();
             let changed = ui
                 .push_id((id.0, i), |ui| {
-                    node.instance.as_mut().is_some_and(|instance| {
+                    self.runtime.get_mut(&id).is_some_and(|instance| {
                         instance.draw_input_control(i, ui, ws, self.view.zoom, node_screen_rect)
                     })
                 })
                 .inner;
             if changed {
-                node.run_update();
-                node.sync_state();
+                self.run_update(id);
             }
         }
 
@@ -364,17 +381,15 @@ impl NodeGraphWidget {
                 continue;
             }
 
-            let node = self.graph.nodes.get_mut(&id).unwrap();
             let changed = ui
                 .push_id(("output", id.0, i), |ui| {
-                    node.instance.as_mut().is_some_and(|instance| {
+                    self.runtime.get_mut(&id).is_some_and(|instance| {
                         instance.draw_output_control(i, ui, ws, self.view.zoom, node_screen_rect)
                     })
                 })
                 .inner;
             if changed {
-                node.run_update();
-                node.sync_state();
+                self.run_update(id);
             }
         }
 
@@ -390,10 +405,9 @@ impl NodeGraphWidget {
                 continue;
             }
 
-            let node = self.graph.nodes.get_mut(&id).unwrap();
             let changed = ui
                 .push_id((id.0, pi), |ui| {
-                    node.instance.as_mut().is_some_and(|instance| {
+                    self.runtime.get_mut(&id).is_some_and(|instance| {
                         instance.draw_property(pi, ui, ws, self.view.zoom, node_screen_rect)
                     })
                 })
@@ -403,9 +417,8 @@ impl NodeGraphWidget {
             }
         }
 
-        if any_changed && let Some(node) = self.graph.nodes.get_mut(&id) {
-            node.run_update();
-            node.sync_state();
+        if any_changed {
+            self.run_update(id);
         }
     }
 
@@ -437,8 +450,8 @@ impl NodeGraphWidget {
 
     fn save_graph(&mut self, ctx: &egui::Context) {
         let t = ctx.input(|i| i.time);
-        for node in self.graph.nodes.values_mut() {
-            node.sync_state();
+        for id in self.graph.sorted_node_ids() {
+            self.sync_state(id);
         }
         match serde_json::to_string_pretty(&self.graph) {
             Ok(json) => match std::fs::write("pipeline.json", &json) {
@@ -455,8 +468,11 @@ impl NodeGraphWidget {
             Ok(json) => match serde_json::from_str(&json) {
                 Ok(graph) => {
                     self.graph = graph;
+                    self.runtime.clear();
                     for node in self.graph.nodes.values_mut() {
-                        self.registry.restore_node(node);
+                        if let Some(instance) = self.registry.restore_node(node) {
+                            self.runtime.insert(node.id, instance);
+                        }
                     }
                     self.interaction = InteractionState::Idle;
                     self.status = Some(("Loaded  pipeline.json".to_string(), t));
@@ -1029,6 +1045,7 @@ impl NodeGraphWidget {
             .collect();
         for id in to_delete {
             self.graph.remove_node(id);
+            self.runtime.remove(&id);
         }
         self.graph.cleanup_frames();
     }
@@ -1046,7 +1063,7 @@ impl NodeGraphWidget {
         }
 
         let mut id_map: HashMap<NodeId, NodeId> = HashMap::new();
-        let clones: Vec<Node> = selected
+        let clones: Vec<(Node, Option<Box<dyn NodeInstance>>)> = selected
             .iter()
             .map(|&old| {
                 let new_id = self.graph.next_id();
@@ -1055,8 +1072,8 @@ impl NodeGraphWidget {
                 node.id = new_id;
                 node.pos += Vec2::new(30.0, 30.0);
                 node.selected = true;
-                self.registry.restore_node(&mut node);
-                node
+                let instance = self.registry.restore_node(&mut node);
+                (node, instance)
             })
             .collect();
 
@@ -1065,7 +1082,10 @@ impl NodeGraphWidget {
                 n.selected = false;
             }
         }
-        for node in clones {
+        for (node, instance) in clones {
+            if let Some(instance) = instance {
+                self.runtime.insert(node.id, instance);
+            }
             self.graph.add_node(node);
         }
 

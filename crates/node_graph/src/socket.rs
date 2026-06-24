@@ -1,4 +1,4 @@
-use crate::value::InlineControl;
+use crate::control::InlineControl;
 use egui::Color32;
 use serde::{Deserialize, Serialize};
 
@@ -11,10 +11,7 @@ pub enum SocketShape {
     Triangle,
 }
 
-/// Trait for defining socket types — implement for custom types.
-/// Built-in types (`BoolSocket`, `IntSocket`, etc.) use this same API.
 pub trait SocketDef: 'static + Send + Sync {
-    /// Concrete data carried by connections of this socket type.
     type Value: 'static + Send + Sync;
 
     fn type_name() -> &'static str
@@ -31,7 +28,6 @@ pub trait SocketDef: 'static + Send + Sync {
     }
 }
 
-/// A socket definition that supports an editable inline control when unconnected.
 pub trait SocketWithControlDef: SocketDef {
     type Control: InlineControl;
 }

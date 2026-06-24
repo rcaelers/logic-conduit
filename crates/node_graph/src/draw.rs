@@ -1,6 +1,6 @@
 use crate::{
     graph::{GraphState, Node, NodeId, NodeKind, SocketId},
-    types::SocketShape,
+    socket::SocketShape,
     view::ViewState,
 };
 use egui::epaint::CubicBezierShape;

@@ -1,5 +1,5 @@
-use crate::types::{SocketDef, SocketShape, SocketWithControlDef};
-use crate::value::InlineControl;
+use crate::control::InlineControl;
+use crate::socket::{SocketDef, SocketShape, SocketWithControlDef};
 use egui::{Align, Align2, Color32, CornerRadius, FontId, Layout, Pos2, Rect, Sense, Ui, Vec2};
 use serde::{Deserialize, Serialize};
 

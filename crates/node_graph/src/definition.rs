@@ -1,6 +1,6 @@
 use crate::graph::Socket;
-use crate::types::{SocketDef, SocketShape, SocketWithControlDef};
-use crate::value::InlineControl;
+use crate::control::InlineControl;
+use crate::socket::{SocketDef, SocketShape, SocketWithControlDef};
 use egui::{Color32, Rect, Ui};
 use serde::de::DeserializeOwned;
 use serde::Serialize;

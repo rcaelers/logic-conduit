@@ -1,5 +1,4 @@
-use crate::runtime::NodeInstance;
-use crate::types::SocketShape;
+use crate::socket::SocketShape;
 use egui::{Color32, Pos2};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -58,8 +57,6 @@ pub struct Node {
     #[serde(skip)]
     pub(crate) property_count: usize,
     pub selected: bool,
-    #[serde(skip)]
-    pub(crate) instance: Option<Box<dyn NodeInstance>>,
 }
 
 impl Clone for Node {
@@ -75,7 +72,6 @@ impl Clone for Node {
             state: self.state.clone(),
             property_count: self.property_count,
             selected: self.selected,
-            instance: None,
         }
     }
 }
@@ -111,21 +107,9 @@ impl Node {
             state: Value::Null,
             property_count: 0,
             selected: false,
-            instance: None,
         }
     }
 
-    pub fn run_update(&mut self) {
-        if let Some(instance) = self.instance.as_mut() {
-            instance.update(&mut self.inputs, &mut self.outputs);
-        }
-    }
-
-    pub(crate) fn sync_state(&mut self) {
-        if let Some(instance) = self.instance.as_ref() {
-            self.state = instance.save_state();
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

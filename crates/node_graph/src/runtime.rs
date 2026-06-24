@@ -32,6 +32,11 @@ pub(crate) trait NodeInstance {
     fn save_state(&self) -> Value;
 }
 
+pub(crate) struct NodeRuntime {
+    pub node: Node,
+    pub instance: Box<dyn NodeInstance>,
+}
+
 struct TypedNode<T: NodeDef> {
     state: T::State,
     inputs: Vec<InputDef<T::State>>,
@@ -92,7 +97,7 @@ impl<T: NodeDef> NodeInstance for TypedNode<T> {
     }
 }
 
-fn build_node<T: NodeDef>(id: NodeId, pos: Pos2, state: T::State) -> Node {
+fn build_node<T: NodeDef>(id: NodeId, pos: Pos2, state: T::State) -> NodeRuntime {
     let inputs = T::inputs();
     let outputs = T::outputs();
     let properties = T::props();
@@ -132,23 +137,23 @@ fn build_node<T: NodeDef>(id: NodeId, pos: Pos2, state: T::State) -> Node {
         state: state_json,
         property_count: properties.len(),
         selected: false,
-        instance: Some(Box::new(TypedNode::<T> {
-            state,
-            inputs,
-            outputs,
-            properties,
-        })),
     };
-    node.run_update();
-    node.sync_state();
-    node
+    let mut instance: Box<dyn NodeInstance> = Box::new(TypedNode::<T> {
+        state,
+        inputs,
+        outputs,
+        properties,
+    });
+    instance.update(&mut node.inputs, &mut node.outputs);
+    node.state = instance.save_state();
+    NodeRuntime { node, instance }
 }
 
-fn create_node<T: NodeDef>(id: NodeId, pos: Pos2) -> Node {
+fn create_node<T: NodeDef>(id: NodeId, pos: Pos2) -> NodeRuntime {
     build_node::<T>(id, pos, T::state())
 }
 
-fn restore_node<T: NodeDef>(node: &mut Node) {
+fn restore_node<T: NodeDef>(node: &mut Node) -> Box<dyn NodeInstance> {
     let state = serde_json::from_value(node.state.clone()).unwrap_or_else(|_| T::state());
     let inputs = T::inputs();
     let outputs = T::outputs();
@@ -192,21 +197,22 @@ fn restore_node<T: NodeDef>(node: &mut Node) {
     }
 
     node.property_count = properties.len();
-    node.instance = Some(Box::new(TypedNode::<T> {
+    let mut instance: Box<dyn NodeInstance> = Box::new(TypedNode::<T> {
         state,
         inputs,
         outputs,
         properties,
-    }));
-    node.run_update();
-    node.sync_state();
+    });
+    instance.update(&mut node.inputs, &mut node.outputs);
+    node.state = instance.save_state();
+    instance
 }
 
 pub(crate) struct RegisteredNodeType {
     pub name: String,
     pub category: String,
-    pub create: fn(NodeId, Pos2) -> Node,
-    pub restore: fn(&mut Node),
+    pub create: fn(NodeId, Pos2) -> NodeRuntime,
+    pub restore: fn(&mut Node) -> Box<dyn NodeInstance>,
 }
 
 impl RegisteredNodeType {
