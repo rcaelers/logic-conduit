@@ -1,10 +1,9 @@
-use crate::types::{SocketShape, SocketTypeDef};
-use crate::value::NodeValue;
+use crate::runtime::NodeInstance;
+use crate::types::SocketShape;
 use egui::{Color32, Pos2};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-
-pub type UpdateFn = fn(&mut [InputSocket], &mut [Socket], &[Prop]);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(pub u32);
@@ -13,12 +12,18 @@ pub struct NodeId(pub u32);
 pub struct SocketId {
     pub node: NodeId,
     pub index: usize,
-    pub is_output: bool,
+    pub direction: SocketDirection,
 }
 
-/// An input socket on a node instance. May carry an inline default value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SocketDirection {
+    Input,
+    Output,
+}
+
+/// A socket on a node instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InputSocket {
+pub struct Socket {
     pub name: String,
     pub type_name: String,
     pub color: Color32,
@@ -28,29 +33,8 @@ pub struct InputSocket {
     /// Set true by the user via "Hide Unused"; never touched by `on_update`.
     #[serde(default)]
     pub hidden: bool,
-    pub value: Option<Box<dyn NodeValue>>,
-}
-
-/// An output socket on a node instance.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Socket {
-    pub name: String,
-    pub type_name: String,
-    pub color: Color32,
-    pub shape: SocketShape,
-    /// Controlled by `on_update`.
-    pub visible: bool,
-    /// Set true by the user via "Hide Unused"; never touched by `on_update`.
     #[serde(default)]
-    pub hidden: bool,
-}
-
-/// A named property on a node instance (not connectable).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Prop {
-    pub id: String,
-    pub label: String,
-    pub value: Box<dyn NodeValue>,
+    pub has_control: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -60,39 +44,61 @@ pub enum NodeKind {
     Reroute,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Node {
     pub id: NodeId,
     pub kind: NodeKind,
     pub title: String,
     pub header_color: Color32,
     pub pos: Pos2,
-    pub inputs: Vec<InputSocket>,
+    pub inputs: Vec<Socket>,
     pub outputs: Vec<Socket>,
-    pub props: Vec<Prop>,
+    #[serde(default)]
+    pub state: Value,
+    #[serde(skip)]
+    pub(crate) property_count: usize,
     pub selected: bool,
     #[serde(skip)]
-    pub update_fn: Option<UpdateFn>,
+    pub(crate) instance: Option<Box<dyn NodeInstance>>,
+}
+
+impl Clone for Node {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            kind: self.kind.clone(),
+            title: self.title.clone(),
+            header_color: self.header_color,
+            pos: self.pos,
+            inputs: self.inputs.clone(),
+            outputs: self.outputs.clone(),
+            state: self.state.clone(),
+            property_count: self.property_count,
+            selected: self.selected,
+            instance: None,
+        }
+    }
 }
 
 impl Node {
     pub fn new_reroute(id: NodeId, pos: Pos2) -> Self {
-        let any = |name: &str| InputSocket {
-            name: name.to_string(),
-            type_name: "Any".to_string(),
-            color: Color32::from_rgb(150, 150, 150),
-            shape: SocketShape::Circle,
-            visible: true,
-            hidden: false,
-            value: None,
-        };
-        let out = Socket {
+        let input = Socket {
             name: String::new(),
             type_name: "Any".to_string(),
             color: Color32::from_rgb(150, 150, 150),
             shape: SocketShape::Circle,
             visible: true,
             hidden: false,
+            has_control: false,
+        };
+        let output = Socket {
+            name: String::new(),
+            type_name: "Any".to_string(),
+            color: Color32::from_rgb(150, 150, 150),
+            shape: SocketShape::Circle,
+            visible: true,
+            hidden: false,
+            has_control: false,
         };
         Self {
             id,
@@ -100,17 +106,24 @@ impl Node {
             title: String::new(),
             header_color: Color32::from_rgb(80, 80, 80),
             pos,
-            inputs: vec![any("")],
-            outputs: vec![out],
-            props: vec![],
+            inputs: vec![input],
+            outputs: vec![output],
+            state: Value::Null,
+            property_count: 0,
             selected: false,
-            update_fn: None,
+            instance: None,
         }
     }
 
     pub fn run_update(&mut self) {
-        if let Some(f) = self.update_fn {
-            f(&mut self.inputs, &mut self.outputs, &self.props);
+        if let Some(instance) = self.instance.as_mut() {
+            instance.update(&mut self.inputs, &mut self.outputs);
+        }
+    }
+
+    pub(crate) fn sync_state(&mut self) {
+        if let Some(instance) = self.instance.as_ref() {
+            self.state = instance.save_state();
         }
     }
 }
@@ -155,16 +168,16 @@ impl GraphState {
     pub fn remove_node(&mut self, id: NodeId) {
         self.nodes.remove(&id);
         self.connections
-            .retain(|c| c.from.node != id && c.to.node != id);
+            .retain(|connection| connection.from.node != id && connection.to.node != id);
     }
 
     pub fn add_connection(&mut self, from: SocketId, to: SocketId) {
-        self.connections.retain(|c| c.to != to);
+        self.connections.retain(|connection| connection.to != to);
         self.connections.push(Connection { from, to });
     }
 
     pub fn is_input_connected(&self, socket: SocketId) -> bool {
-        self.connections.iter().any(|c| c.to == socket)
+        self.connections.iter().any(|connection| connection.to == socket)
     }
 
     pub fn sorted_node_ids(&self) -> Vec<NodeId> {
@@ -187,181 +200,26 @@ impl GraphState {
 
     pub fn cleanup_frames(&mut self) {
         let alive: HashSet<NodeId> = self.nodes.keys().copied().collect();
-        for f in &mut self.frames {
-            f.node_ids.retain(|id| alive.contains(id));
+        for frame in &mut self.frames {
+            frame.node_ids.retain(|id| alive.contains(id));
         }
-        self.frames.retain(|f| !f.node_ids.is_empty());
+        self.frames.retain(|frame| !frame.node_ids.is_empty());
     }
 }
 
-// ── Node definition API ───────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-pub struct InputDef {
-    pub label: String,
-    pub type_name: &'static str,
-    pub color: Color32,
-    pub shape: SocketShape,
-    pub value: Option<Box<dyn NodeValue>>,
-}
+    #[test]
+    fn graph_round_trips_node_data() {
+        let mut graph = GraphState::default();
+        let id = graph.next_id();
+        graph.add_node(Node::new_reroute(id, Pos2::ZERO));
 
-impl InputDef {
-    pub fn new<T: SocketTypeDef>(label: impl Into<String>) -> Self {
-        Self {
-            label: label.into(),
-            type_name: T::type_name(),
-            color: T::color(),
-            shape: T::shape(),
-            value: None,
-        }
-    }
+        let json = serde_json::to_string(&graph).expect("graph state should serialize");
+        let loaded: GraphState = serde_json::from_str(&json).expect("graph state should deserialize");
 
-    pub fn with_value<T: SocketTypeDef>(label: impl Into<String>, value: Box<dyn NodeValue>) -> Self {
-        Self {
-            label: label.into(),
-            type_name: T::type_name(),
-            color: T::color(),
-            shape: T::shape(),
-            value: Some(value),
-        }
-    }
-}
-
-pub struct OutputDef {
-    pub label: String,
-    pub type_name: &'static str,
-    pub color: Color32,
-    pub shape: SocketShape,
-}
-
-impl OutputDef {
-    pub fn new<T: SocketTypeDef>(label: impl Into<String>) -> Self {
-        Self {
-            label: label.into(),
-            type_name: T::type_name(),
-            color: T::color(),
-            shape: T::shape(),
-        }
-    }
-}
-
-pub struct PropDef {
-    pub id: &'static str,
-    pub label: &'static str,
-    pub value: Box<dyn NodeValue>,
-}
-
-impl PropDef {
-    pub fn new(id: &'static str, label: &'static str, value: Box<dyn NodeValue>) -> Self {
-        Self { id, label, value }
-    }
-}
-
-pub trait NodeDef {
-    fn name() -> &'static str
-    where
-        Self: Sized;
-    fn category() -> &'static str
-    where
-        Self: Sized;
-    fn color() -> Color32
-    where
-        Self: Sized,
-    {
-        Color32::from_rgb(80, 80, 80)
-    }
-    fn inputs() -> Vec<InputDef>
-    where
-        Self: Sized;
-    fn outputs() -> Vec<OutputDef>
-    where
-        Self: Sized;
-    fn props() -> Vec<PropDef>
-    where
-        Self: Sized,
-    {
-        vec![]
-    }
-    fn on_update() -> Option<UpdateFn>
-    where
-        Self: Sized,
-    {
-        None
-    }
-}
-
-// ── Internal class definition (used by NodeTypeRegistry) ─────────────────────
-
-pub(crate) struct SocketDecl {
-    pub name: String,
-    pub type_name: String,
-    pub color: Color32,
-    pub shape: SocketShape,
-    pub value: Option<Box<dyn NodeValue>>,
-}
-
-pub(crate) struct OutputDecl {
-    pub name: String,
-    pub type_name: String,
-    pub color: Color32,
-    pub shape: SocketShape,
-}
-
-pub(crate) struct PropDecl {
-    pub id: String,
-    pub label: String,
-    pub value: Box<dyn NodeValue>,
-}
-
-pub(crate) struct NodeClassDef {
-    pub name: String,
-    pub category: String,
-    pub header_color: Color32,
-    pub inputs: Vec<SocketDecl>,
-    pub outputs: Vec<OutputDecl>,
-    pub props: Vec<PropDecl>,
-    pub update_fn: Option<UpdateFn>,
-}
-
-impl NodeClassDef {
-    pub fn from_def<T: NodeDef>() -> Self {
-        let inputs = T::inputs()
-            .into_iter()
-            .map(|d| SocketDecl {
-                name: d.label,
-                type_name: d.type_name.to_owned(),
-                color: d.color,
-                shape: d.shape,
-                value: d.value,
-            })
-            .collect();
-
-        let outputs = T::outputs()
-            .into_iter()
-            .map(|d| OutputDecl {
-                name: d.label,
-                type_name: d.type_name.to_owned(),
-                color: d.color,
-                shape: d.shape,
-            })
-            .collect();
-
-        let props = T::props()
-            .into_iter()
-            .map(|p| PropDecl {
-                id: p.id.to_owned(),
-                label: p.label.to_owned(),
-                value: p.value,
-            })
-            .collect();
-
-        Self {
-            name: T::name().to_owned(),
-            category: T::category().to_owned(),
-            header_color: T::color(),
-            inputs,
-            outputs,
-            props,
-            update_fn: T::on_update(),
-        }
+        assert_eq!(loaded.nodes[&id].kind, NodeKind::Reroute);
     }
 }

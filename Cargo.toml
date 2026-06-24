@@ -26,7 +26,6 @@ minifb = "0.28"
 node-graph = { path = "crates/node_graph" }
 eframe = "0.34"
 egui = "0.34"
-typetag = "0.2"
 serde = { version = "1", features = ["derive"] }
 
 [profile.release]

@@ -22,7 +22,8 @@ pub struct NodeLayout {
     pub header_rect: Rect,
     pub input_socket_pos: Vec<Option<Pos2>>, // None for hidden sockets
     pub output_socket_pos: Vec<Option<Pos2>>,
-    pub input_widget_rects: Vec<Option<Rect>>, // Some only for inputs with a non-None default
+    pub input_widget_rects: Vec<Option<Rect>>,
+    pub output_widget_rects: Vec<Option<Rect>>,
     pub prop_rects: Vec<Rect>,
     pub section_sep_y: Vec<f32>, // canvas Y of dividers between output/prop/input sections
 }
@@ -37,6 +38,7 @@ pub fn compute_node_layout(node: &Node) -> NodeLayout {
             input_socket_pos: vec![Some(Pos2::new(node.pos.x, cy))],
             output_socket_pos: vec![Some(Pos2::new(node.pos.x + REROUTE_SIZE, cy))],
             input_widget_rects: vec![],
+            output_widget_rects: vec![],
             prop_rects: vec![],
             section_sep_y: vec![],
         };
@@ -46,6 +48,7 @@ pub fn compute_node_layout(node: &Node) -> NodeLayout {
 
     // == Output sockets — top section, right side ==
     let mut output_socket_pos = vec![None; node.outputs.len()];
+    let mut output_widget_rects = vec![None; node.outputs.len()];
     let mut vis_row = 0usize;
     for (i, s) in node.outputs.iter().enumerate() {
         if !s.visible || s.hidden {
@@ -56,13 +59,19 @@ pub fn compute_node_layout(node: &Node) -> NodeLayout {
             node.pos.x + NODE_WIDTH,
             row_y + SOCKET_ROW_HEIGHT * 0.5,
         ));
+        if s.has_control {
+            output_widget_rects[i] = Some(Rect::from_min_size(
+                Pos2::new(node.pos.x + 4.0, row_y + 2.0),
+                Vec2::new(NODE_WIDTH - SOCKET_AREA - 4.0, SOCKET_ROW_HEIGHT - 4.0),
+            ));
+        }
         vis_row += 1;
     }
     let vis_outputs = vis_row;
     let output_h = vis_outputs as f32 * SOCKET_ROW_HEIGHT;
 
     // == Properties — middle section ==
-    let prop_count = node.props.len();
+    let prop_count = node.property_count;
     let prop_start_y = body_top + output_h;
     let prop_h = prop_count as f32 * PROP_ROW_HEIGHT;
     let prop_rects: Vec<Rect> = (0..prop_count)
@@ -86,9 +95,9 @@ pub fn compute_node_layout(node: &Node) -> NodeLayout {
         }
         let row_y = input_start_y + vis_row as f32 * SOCKET_ROW_HEIGHT;
         input_socket_pos[i] = Some(Pos2::new(node.pos.x, row_y + SOCKET_ROW_HEIGHT * 0.5));
-        // Number-button rect spans from after the socket circle to the right edge
-        let has_default = node.inputs.get(i).is_some_and(|s| s.value.is_some());
-        if has_default {
+        // Control rect spans from after the socket circle to the right edge.
+        let has_control = node.inputs.get(i).is_some_and(|s| s.has_control);
+        if has_control {
             input_widget_rects[i] = Some(Rect::from_min_size(
                 Pos2::new(node.pos.x + SOCKET_AREA, row_y + 2.0),
                 Vec2::new(NODE_WIDTH - SOCKET_AREA - 4.0, SOCKET_ROW_HEIGHT - 4.0),
@@ -118,6 +127,7 @@ pub fn compute_node_layout(node: &Node) -> NodeLayout {
         input_socket_pos,
         output_socket_pos,
         input_widget_rects,
+        output_widget_rects,
         prop_rects,
         section_sep_y,
     }
@@ -313,32 +323,33 @@ pub fn draw_node(
     let lf = FontId::proportional((11.0 * view.zoom).clamp(7.0, 14.0));
     let label_color = Color32::from_rgb(190, 190, 190);
 
-    // Output sockets — right side, label left-of-socket (right-aligned into node body)
+    // Output sockets — right side; labels are replaced by inline controls when present.
     for (i, sock) in node.outputs.iter().enumerate() {
         let Some(pos) = layout.output_socket_pos[i] else {
             continue;
         };
         let sp = s(pos);
         draw_socket(painter, sp, sz(SOCKET_RADIUS), sock.shape, sock.color);
-        painter.text(
-            Pos2::new(sp.x - sz(SOCKET_RADIUS + 4.0), sp.y),
-            egui::Align2::RIGHT_CENTER,
-            &sock.name,
-            lf.clone(),
-            label_color,
-        );
+        if !sock.has_control {
+            painter.text(
+                Pos2::new(sp.x - sz(SOCKET_RADIUS + 4.0), sp.y),
+                egui::Align2::RIGHT_CENTER,
+                &sock.name,
+                lf.clone(),
+                label_color,
+            );
+        }
     }
 
-    // Input sockets — left side; label shown only when there is no default value
-    // (sockets with defaults get a number-button drawn by draw_inline_widgets instead)
+    // Input sockets — left side; label shown only when there is no inline control.
     for (i, sock) in node.inputs.iter().enumerate() {
         let Some(pos) = layout.input_socket_pos[i] else {
             continue;
         };
         let sp = s(pos);
         draw_socket(painter, sp, sz(SOCKET_RADIUS), sock.shape, sock.color);
-        let has_default = node.inputs.get(i).is_some_and(|s| s.value.is_some());
-        if !has_default {
+        let has_control = node.inputs.get(i).is_some_and(|s| s.has_control);
+        if !has_control {
             painter.text(
                 Pos2::new(sp.x + sz(SOCKET_RADIUS + 4.0), sp.y),
                 egui::Align2::LEFT_CENTER,

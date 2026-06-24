@@ -12,5 +12,4 @@ path = "src/main.rs"
 node-graph = { path = "../node_graph" }
 eframe = "0.34"
 egui = "0.34"
-typetag = "0.2"
 serde = { version = "1", features = ["derive"] }

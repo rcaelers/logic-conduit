@@ -1,8 +1,7 @@
-use crate::types::{SocketShape, SocketTypeDef};
-use crate::value::NodeValue;
+use crate::types::{SocketDef, SocketShape, SocketWithControlDef};
+use crate::value::InlineControl;
 use egui::{Align, Align2, Color32, CornerRadius, FontId, Layout, Pos2, Rect, Sense, Ui, Vec2};
 use serde::{Deserialize, Serialize};
-use std::any::Any;
 
 // ── Built-in socket types ─────────────────────────────────────────────────────
 
@@ -10,9 +9,10 @@ pub struct BoolSocket;
 pub struct IntSocket;
 pub struct FloatSocket;
 pub struct StrSocket;
-pub struct AnySocket;
 
-impl SocketTypeDef for BoolSocket {
+impl SocketDef for BoolSocket {
+    type Value = bool;
+
     fn type_name() -> &'static str {
         "Bool"
     }
@@ -24,7 +24,9 @@ impl SocketTypeDef for BoolSocket {
     }
 }
 
-impl SocketTypeDef for IntSocket {
+impl SocketDef for IntSocket {
+    type Value = i32;
+
     fn type_name() -> &'static str {
         "Int"
     }
@@ -36,7 +38,9 @@ impl SocketTypeDef for IntSocket {
     }
 }
 
-impl SocketTypeDef for FloatSocket {
+impl SocketDef for FloatSocket {
+    type Value = f32;
+
     fn type_name() -> &'static str {
         "Float"
     }
@@ -45,7 +49,9 @@ impl SocketTypeDef for FloatSocket {
     }
 }
 
-impl SocketTypeDef for StrSocket {
+impl SocketDef for StrSocket {
+    type Value = String;
+
     fn type_name() -> &'static str {
         "String"
     }
@@ -54,13 +60,20 @@ impl SocketTypeDef for StrSocket {
     }
 }
 
-impl SocketTypeDef for AnySocket {
-    fn type_name() -> &'static str {
-        "Any"
-    }
-    fn color() -> Color32 {
-        Color32::from_rgb(150, 150, 150)
-    }
+impl SocketWithControlDef for BoolSocket {
+    type Control = BoolValue;
+}
+
+impl SocketWithControlDef for IntSocket {
+    type Control = IntValue;
+}
+
+impl SocketWithControlDef for FloatSocket {
+    type Control = FloatValue;
+}
+
+impl SocketWithControlDef for StrSocket {
+    type Control = StringValue;
 }
 
 // ── Built-in value types ──────────────────────────────────────────────────────
@@ -76,23 +89,16 @@ impl IntValue {
     pub fn new(value: i32, min: i32, max: i32) -> Self {
         Self { value, min, max }
     }
-    pub fn plain(value: i32) -> Box<dyn NodeValue> {
-        Box::new(Self {
+    pub fn plain(value: i32) -> Self {
+        Self {
             value,
             min: i32::MIN,
             max: i32::MAX,
-        })
+        }
     }
 }
 
-impl From<IntValue> for Box<dyn NodeValue> {
-    fn from(v: IntValue) -> Self {
-        Box::new(v)
-    }
-}
-
-#[typetag::serde]
-impl NodeValue for IntValue {
+impl InlineControl for IntValue {
     fn draw_widget(
         &mut self,
         ui: &mut Ui,
@@ -129,12 +135,6 @@ impl NodeValue for IntValue {
         );
         self.value != old
     }
-    fn clone_box(&self) -> Box<dyn NodeValue> {
-        Box::new(self.clone())
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,33 +154,26 @@ impl FloatValue {
             speed,
         }
     }
-    pub fn with_range(value: f32, min: f32, max: f32) -> Box<dyn NodeValue> {
+    pub fn with_range(value: f32, min: f32, max: f32) -> Self {
         let speed = if max > min { (max - min) / 100.0 } else { 0.01 };
-        Box::new(Self {
+        Self {
             value,
             min,
             max,
             speed,
-        })
+        }
     }
-    pub fn plain(value: f32) -> Box<dyn NodeValue> {
-        Box::new(Self {
+    pub fn plain(value: f32) -> Self {
+        Self {
             value,
             min: f32::NEG_INFINITY,
             max: f32::INFINITY,
             speed: 0.01,
-        })
+        }
     }
 }
 
-impl From<FloatValue> for Box<dyn NodeValue> {
-    fn from(v: FloatValue) -> Self {
-        Box::new(v)
-    }
-}
-
-#[typetag::serde]
-impl NodeValue for FloatValue {
+impl InlineControl for FloatValue {
     fn draw_widget(
         &mut self,
         ui: &mut Ui,
@@ -217,12 +210,6 @@ impl NodeValue for FloatValue {
         );
         self.value.to_bits() != old
     }
-    fn clone_box(&self) -> Box<dyn NodeValue> {
-        Box::new(self.clone())
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -236,14 +223,7 @@ impl BoolValue {
     }
 }
 
-impl From<BoolValue> for Box<dyn NodeValue> {
-    fn from(v: BoolValue) -> Self {
-        Box::new(v)
-    }
-}
-
-#[typetag::serde]
-impl NodeValue for BoolValue {
+impl InlineControl for BoolValue {
     fn draw_widget(
         &mut self,
         ui: &mut Ui,
@@ -267,12 +247,6 @@ impl NodeValue for BoolValue {
         );
         self.value != old
     }
-    fn clone_box(&self) -> Box<dyn NodeValue> {
-        Box::new(self.clone())
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -288,14 +262,7 @@ impl StringValue {
     }
 }
 
-impl From<StringValue> for Box<dyn NodeValue> {
-    fn from(v: StringValue) -> Self {
-        Box::new(v)
-    }
-}
-
-#[typetag::serde]
-impl NodeValue for StringValue {
+impl InlineControl for StringValue {
     fn draw_widget(
         &mut self,
         ui: &mut Ui,
@@ -321,12 +288,6 @@ impl NodeValue for StringValue {
         );
         self.value != old
     }
-    fn clone_box(&self) -> Box<dyn NodeValue> {
-        Box::new(self.clone())
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -344,14 +305,7 @@ impl EnumValue {
     }
 }
 
-impl From<EnumValue> for Box<dyn NodeValue> {
-    fn from(v: EnumValue) -> Self {
-        Box::new(v)
-    }
-}
-
-#[typetag::serde]
-impl NodeValue for EnumValue {
+impl InlineControl for EnumValue {
     fn draw_widget(
         &mut self,
         ui: &mut Ui,
@@ -387,12 +341,6 @@ impl NodeValue for EnumValue {
             },
         );
         self.index != old
-    }
-    fn clone_box(&self) -> Box<dyn NodeValue> {
-        Box::new(self.clone())
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

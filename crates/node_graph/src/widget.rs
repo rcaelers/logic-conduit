@@ -4,12 +4,11 @@ use crate::{
         draw_connections, draw_frames, draw_grid, draw_knife_line, draw_node, draw_wire,
         to_screen_rect, wire_intersects_knife,
     },
-    graph::{
-        Connection, GraphState, InputSocket, Node, NodeClassDef, NodeDef, NodeId, NodeKind, Prop,
-        Socket, SocketId,
-    },
+    definition::NodeDef,
+    graph::{Connection, GraphState, Node, NodeId, NodeKind, SocketDirection, SocketId},
     interaction::InteractionState,
     minimap,
+    runtime::RegisteredNodeType,
     types::sockets_compatible,
     view::ViewState,
 };
@@ -30,7 +29,7 @@ static FRAME_COLORS: [Color32; 5] = [
 
 #[derive(Default)]
 pub struct NodeTypeRegistry {
-    types: Vec<NodeClassDef>,
+    types: Vec<RegisteredNodeType>,
 }
 
 impl NodeTypeRegistry {
@@ -39,72 +38,29 @@ impl NodeTypeRegistry {
     }
 
     pub fn register<T: NodeDef>(&mut self) -> &mut Self {
-        self.types.push(NodeClassDef::from_def::<T>());
+        self.types.push(RegisteredNodeType::from_def::<T>());
         self
     }
 
-    pub(crate) fn all(&self) -> &[NodeClassDef] {
+    pub(crate) fn all(&self) -> &[RegisteredNodeType] {
         &self.types
     }
 
-    pub(crate) fn find(&self, name: &str) -> Option<&NodeClassDef> {
+    pub(crate) fn find(&self, name: &str) -> Option<&RegisteredNodeType> {
         self.types.iter().find(|d| d.name == name)
     }
 
     pub fn instantiate(&self, name: &str, id: NodeId, pos: Pos2) -> Option<Node> {
         let def = self.find(name)?;
+        Some((def.create)(id, pos))
+    }
 
-        let inputs = def
-            .inputs
-            .iter()
-            .map(|d| InputSocket {
-                name: d.name.clone(),
-                type_name: d.type_name.clone(),
-                color: d.color,
-                shape: d.shape,
-                visible: true,
-                hidden: false,
-                value: d.value.clone(),
-            })
-            .collect();
-
-        let outputs = def
-            .outputs
-            .iter()
-            .map(|d| Socket {
-                name: d.name.clone(),
-                type_name: d.type_name.clone(),
-                color: d.color,
-                shape: d.shape,
-                visible: true,
-                hidden: false,
-            })
-            .collect();
-
-        let props = def
-            .props
-            .iter()
-            .map(|p| Prop {
-                id: p.id.clone(),
-                label: p.label.clone(),
-                value: p.value.clone(),
-            })
-            .collect();
-
-        let mut node = Node {
-            id,
-            kind: NodeKind::Regular,
-            title: def.name.clone(),
-            header_color: def.header_color,
-            pos,
-            inputs,
-            outputs,
-            props,
-            selected: false,
-            update_fn: def.update_fn,
-        };
-        node.run_update();
-        Some(node)
+    pub(crate) fn restore_node(&self, node: &mut Node) {
+        if node.kind == NodeKind::Regular
+            && let Some(definition) = self.find(&node.title)
+        {
+            (definition.restore)(node);
+        }
     }
 }
 
@@ -123,10 +79,10 @@ pub struct NodeGraphWidget {
     show_add_menu: bool,
     add_menu_screen_pos: Pos2,
     /// Keyboard navigation state for the standalone add popup.
-    add_nav_cat: Option<usize>,    // highlighted category; cats.len() = Reroute
+    add_nav_cat: Option<usize>, // highlighted category; cats.len() = Reroute
     add_nav_in_sub: bool,
     add_nav_sub_item: usize,
-    add_cat_ids: Vec<egui::Id>,    // captured category SubMenuButton IDs (refreshed each frame)
+    add_cat_ids: Vec<egui::Id>, // captured category SubMenuButton IDs (refreshed each frame)
     /// Node that should always render on top (last moved/dragged).
     top_node: Option<NodeId>,
     /// Response ID of the "+ Add" SubMenuButton in the right-click context menu (stable across
@@ -205,7 +161,7 @@ impl NodeGraphWidget {
                         SocketId {
                             node: id,
                             index: i,
-                            is_output: false,
+                            direction: SocketDirection::Input,
                         },
                         self.view.canvas_to_screen(origin, pos),
                     );
@@ -217,7 +173,7 @@ impl NodeGraphWidget {
                         SocketId {
                             node: id,
                             index: i,
-                            is_output: true,
+                            direction: SocketDirection::Output,
                         },
                         self.view.canvas_to_screen(origin, pos),
                     );
@@ -278,7 +234,7 @@ impl NodeGraphWidget {
                 .nodes
                 .get(&from.node)
                 .and_then(|n| {
-                    if from.is_output {
+                    if from.direction == SocketDirection::Output {
                         n.outputs.get(from.index).map(|s| s.color)
                     } else {
                         n.inputs.get(from.index).map(|s| s.color)
@@ -328,7 +284,8 @@ impl NodeGraphWidget {
         }
 
         if let InteractionState::CuttingWire { path } = &self.interaction {
-            let screen_pts: Vec<egui::Pos2> = path.iter()
+            let screen_pts: Vec<egui::Pos2> = path
+                .iter()
                 .map(|&p| self.view.canvas_to_screen(origin, p))
                 .collect();
             if screen_pts.len() >= 2 {
@@ -363,13 +320,13 @@ impl NodeGraphWidget {
     ) {
         let node_screen_rect = to_screen_rect(layouts[&id].node_rect, &self.view, origin);
 
-        // Input socket default-value widgets
+        // Input socket inline controls
         let n_inputs = self.graph.nodes[&id].inputs.len();
         for i in 0..n_inputs {
             let sid = SocketId {
                 node: id,
                 index: i,
-                is_output: false,
+                direction: SocketDirection::Input,
             };
             if self.graph.is_input_connected(sid) {
                 continue;
@@ -383,24 +340,46 @@ impl NodeGraphWidget {
             }
 
             let node = self.graph.nodes.get_mut(&id).unwrap();
-            let Some(sock) = node.inputs.get_mut(i) else {
-                continue;
-            };
-            let Some(value) = sock.value.as_mut() else {
-                continue;
-            };
-
-            let sock_name = sock.name.clone();
-            let changed = ui.push_id((id.0, i), |ui| {
-                value.draw_widget(ui, &sock_name, ws, self.view.zoom, node_screen_rect)
-            }).inner;
-            if changed && let Some(node) = self.graph.nodes.get_mut(&id) {
+            let changed = ui
+                .push_id((id.0, i), |ui| {
+                    node.instance.as_mut().is_some_and(|instance| {
+                        instance.draw_input_control(i, ui, ws, self.view.zoom, node_screen_rect)
+                    })
+                })
+                .inner;
+            if changed {
                 node.run_update();
+                node.sync_state();
+            }
+        }
+
+        // Output socket inline controls
+        let n_outputs = self.graph.nodes[&id].outputs.len();
+        for i in 0..n_outputs {
+            let Some(wr) = layouts[&id].output_widget_rects.get(i).and_then(|r| *r) else {
+                continue;
+            };
+            let ws = to_screen_rect(wr, &self.view, origin);
+            if ws.width() < 30.0 {
+                continue;
+            }
+
+            let node = self.graph.nodes.get_mut(&id).unwrap();
+            let changed = ui
+                .push_id(("output", id.0, i), |ui| {
+                    node.instance.as_mut().is_some_and(|instance| {
+                        instance.draw_output_control(i, ui, ws, self.view.zoom, node_screen_rect)
+                    })
+                })
+                .inner;
+            if changed {
+                node.run_update();
+                node.sync_state();
             }
         }
 
         // Node property widgets
-        let n_props = self.graph.nodes[&id].props.len();
+        let n_props = self.graph.nodes[&id].property_count;
         let mut any_changed = false;
         for pi in 0..n_props {
             let Some(pr) = layouts[&id].prop_rects.get(pi).copied() else {
@@ -412,13 +391,13 @@ impl NodeGraphWidget {
             }
 
             let node = self.graph.nodes.get_mut(&id).unwrap();
-            let prop = &mut node.props[pi];
-            let label = prop.label.clone();
-
-            let changed = ui.push_id((id.0, pi), |ui| {
-                prop.value
-                    .draw_widget(ui, &label, ws, self.view.zoom, node_screen_rect)
-            }).inner;
+            let changed = ui
+                .push_id((id.0, pi), |ui| {
+                    node.instance.as_mut().is_some_and(|instance| {
+                        instance.draw_property(pi, ui, ws, self.view.zoom, node_screen_rect)
+                    })
+                })
+                .inner;
             if changed {
                 any_changed = true;
             }
@@ -426,6 +405,7 @@ impl NodeGraphWidget {
 
         if any_changed && let Some(node) = self.graph.nodes.get_mut(&id) {
             node.run_update();
+            node.sync_state();
         }
     }
 
@@ -457,6 +437,9 @@ impl NodeGraphWidget {
 
     fn save_graph(&mut self, ctx: &egui::Context) {
         let t = ctx.input(|i| i.time);
+        for node in self.graph.nodes.values_mut() {
+            node.sync_state();
+        }
         match serde_json::to_string_pretty(&self.graph) {
             Ok(json) => match std::fs::write("pipeline.json", &json) {
                 Ok(_) => self.status = Some(("Saved  pipeline.json".to_string(), t)),
@@ -472,17 +455,8 @@ impl NodeGraphWidget {
             Ok(json) => match serde_json::from_str(&json) {
                 Ok(graph) => {
                     self.graph = graph;
-                    let names: Vec<(NodeId, String)> = self
-                        .graph
-                        .nodes
-                        .values()
-                        .map(|n| (n.id, n.title.clone()))
-                        .collect();
-                    for (node_id, title) in names {
-                        let update_fn = self.registry.find(&title).and_then(|d| d.update_fn);
-                        if let Some(n) = self.graph.nodes.get_mut(&node_id) {
-                            n.update_fn = update_fn;
-                        }
+                    for node in self.graph.nodes.values_mut() {
+                        self.registry.restore_node(node);
                     }
                     self.interaction = InteractionState::Idle;
                     self.status = Some(("Loaded  pipeline.json".to_string(), t));
@@ -509,7 +483,8 @@ impl NodeGraphWidget {
             && let Some(cursor) = ui.input(|i| i.pointer.hover_pos())
             && canvas_rect.contains(cursor)
         {
-            self.view.zoom_around(cursor, origin, (1.0_f32 + scroll * 0.003).clamp(0.5, 2.0));
+            self.view
+                .zoom_around(cursor, origin, (1.0_f32 + scroll * 0.003).clamp(0.5, 2.0));
         }
 
         let pointer = response
@@ -568,7 +543,10 @@ impl NodeGraphWidget {
 
         // Ctrl+H: toggle hidden sockets on selected nodes
         if no_focus && ui.input(|i| i.key_pressed(egui::Key::H) && i.modifiers.ctrl) {
-            let selected: Vec<NodeId> = self.graph.nodes.values()
+            let selected: Vec<NodeId> = self
+                .graph
+                .nodes
+                .values()
                 .filter(|n| n.selected)
                 .map(|n| n.id)
                 .collect();
@@ -613,21 +591,24 @@ impl NodeGraphWidget {
         };
 
         // 'a' key: open Add submenu inside the context menu, or open standalone popup.
-        let a_pressed = ui.input(|i| i.key_pressed(egui::Key::A) && i.modifiers.shift && !i.modifiers.ctrl && !i.modifiers.alt);
+        let a_pressed = ui.input(|i| {
+            i.key_pressed(egui::Key::A)
+                && i.modifiers.shift
+                && !i.modifiers.ctrl
+                && !i.modifiers.alt
+        });
         if a_pressed && !self.show_add_menu {
             if response.context_menu_opened() {
                 // Don't require no_focus here — egui may mark the popup as focused internally.
-                if !node_ctx {
-                    if let Some(btn_id) = self.add_btn_id {
-                        let popup_id = egui::Popup::default_response_id(&response);
-                        let sub_id = egui::containers::menu::SubMenu::id_from_widget_id(btn_id);
-                        // MenuState::from_id resets open_item if the submenu wasn't shown last
-                        // frame.  Mark it shown first so the staleness check passes.
-                        egui::containers::menu::MenuState::mark_shown(ui.ctx(), sub_id);
-                        egui::containers::menu::MenuState::from_id(ui.ctx(), popup_id, |state| {
-                            state.open_item = Some(sub_id);
-                        });
-                    }
+                if !node_ctx && let Some(btn_id) = self.add_btn_id {
+                    let popup_id = egui::Popup::default_response_id(response);
+                    let sub_id = egui::containers::menu::SubMenu::id_from_widget_id(btn_id);
+                    // MenuState::from_id resets open_item if the submenu wasn't shown last
+                    // frame.  Mark it shown first so the staleness check passes.
+                    egui::containers::menu::MenuState::mark_shown(ui.ctx(), sub_id);
+                    egui::containers::menu::MenuState::from_id(ui.ctx(), popup_id, |state| {
+                        state.open_item = Some(sub_id);
+                    });
                 }
             } else if no_focus {
                 // Only open standalone popup when no text widget has focus.
@@ -651,7 +632,8 @@ impl NodeGraphWidget {
 
             if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
                 if self.add_nav_in_sub {
-                    let n = self.add_nav_cat
+                    let n = self
+                        .add_nav_cat
                         .and_then(|ci| cats_and_items.get(ci))
                         .map_or(0, |(_, v)| v.len());
                     self.add_nav_sub_item = (self.add_nav_sub_item + 1).min(n.saturating_sub(1));
@@ -672,13 +654,13 @@ impl NodeGraphWidget {
                     });
                 }
             }
-            if ui.input(|i| i.key_pressed(egui::Key::ArrowRight)) && !self.add_nav_in_sub {
-                if let Some(i) = self.add_nav_cat {
-                    if i < n_cats {
-                        self.add_nav_in_sub = true;
-                        self.add_nav_sub_item = 0;
-                    }
-                }
+            if ui.input(|i| i.key_pressed(egui::Key::ArrowRight))
+                && !self.add_nav_in_sub
+                && let Some(i) = self.add_nav_cat
+                && i < n_cats
+            {
+                self.add_nav_in_sub = true;
+                self.add_nav_sub_item = 0;
             }
             if ui.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
                 if self.add_nav_in_sub {
@@ -689,13 +671,12 @@ impl NodeGraphWidget {
             }
             if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 if self.add_nav_in_sub {
-                    if let Some(ci) = self.add_nav_cat {
-                        if let Some((_, names)) = cats_and_items.get(ci) {
-                            if let Some(name) = names.get(self.add_nav_sub_item) {
-                                add_kind = Some(name.clone());
-                                close_add_menu = true;
-                            }
-                        }
+                    if let Some(ci) = self.add_nav_cat
+                        && let Some((_, names)) = cats_and_items.get(ci)
+                        && let Some(name) = names.get(self.add_nav_sub_item)
+                    {
+                        add_kind = Some(name.clone());
+                        close_add_menu = true;
                     }
                 } else if let Some(i) = self.add_nav_cat {
                     if i == n_cats {
@@ -746,15 +727,13 @@ impl NodeGraphWidget {
             && !ctrl_held
             && !matches!(self.interaction, InteractionState::CuttingWire { .. })
             && !response.secondary_clicked()
+            && let Some(press) = self.sec_press_screen_pos
+            && let Some(curr) = pointer
+            && press.distance(curr) < 30.0
         {
-            if let Some(press) = self.sec_press_screen_pos
-                && let Some(curr) = pointer
-                && press.distance(curr) < 30.0
-            {
-                let popup_id = egui::Popup::default_response_id(&response);
-                #[allow(deprecated)]
-                ui.ctx().memory_mut(|mem| mem.open_popup_at(popup_id, curr));
-            }
+            let popup_id = egui::Popup::default_response_id(response);
+            #[allow(deprecated)]
+            ui.ctx().memory_mut(|mem| mem.open_popup_at(popup_id, curr));
         }
         if sec_released {
             self.sec_press_screen_pos = None;
@@ -767,7 +746,10 @@ impl NodeGraphWidget {
         response.context_menu(|ui| {
             ui.set_min_width(200.0);
             if node_ctx {
-                if ui.add(egui::Button::new("Delete").right_text("X")).clicked() {
+                if ui
+                    .add(egui::Button::new("Delete").right_text("X"))
+                    .clicked()
+                {
                     do_delete = true;
                     ui.close();
                 }
@@ -831,12 +813,10 @@ impl NodeGraphWidget {
                 .fixed_pos(self.add_menu_screen_pos)
                 .order(egui::Order::Foreground)
                 .layout(egui::Layout::top_down_justified(egui::Align::Min))
-                .info(
-                    egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(
-                        egui::containers::menu::MenuConfig::MENU_CONFIG_TAG,
-                        egui::containers::menu::MenuConfig::new(),
-                    ),
-                )
+                .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(
+                    egui::containers::menu::MenuConfig::MENU_CONFIG_TAG,
+                    egui::containers::menu::MenuConfig::new(),
+                ))
                 .show(ui.ctx(), |ui| {
                     egui::containers::menu::menu_style(ui.style_mut());
                     egui::Frame::menu(ui.style()).show(ui, |ui| {
@@ -848,13 +828,15 @@ impl NodeGraphWidget {
                             )
                             .ui(ui, |ui| {
                                 for (item_i, name) in names.iter().enumerate() {
-                                    let selected = nav_in_sub
-                                        && nav_cat == Some(cat_i)
-                                        && item_i == nav_sub;
-                                    let resp = ui.add(
-                                        egui::Button::new(name.as_str())
-                                            .fill(if selected { sel_bg } else { egui::Color32::TRANSPARENT }),
-                                    );
+                                    let selected =
+                                        nav_in_sub && nav_cat == Some(cat_i) && item_i == nav_sub;
+                                    let resp = ui.add(egui::Button::new(name.as_str()).fill(
+                                        if selected {
+                                            sel_bg
+                                        } else {
+                                            egui::Color32::TRANSPARENT
+                                        },
+                                    ));
                                     if resp.clicked() {
                                         add_kind = Some(name.clone());
                                         close_add_menu = true;
@@ -865,10 +847,11 @@ impl NodeGraphWidget {
                         }
                         ui.separator();
                         let reroute_selected = nav_cat == Some(n_cats);
-                        let resp = ui.add(
-                            egui::Button::new("Reroute")
-                                .fill(if reroute_selected { sel_bg } else { egui::Color32::TRANSPARENT }),
-                        );
+                        let resp = ui.add(egui::Button::new("Reroute").fill(if reroute_selected {
+                            sel_bg
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        }));
                         if resp.clicked() {
                             add_kind = Some("Reroute".to_string());
                             close_add_menu = true;
@@ -878,14 +861,12 @@ impl NodeGraphWidget {
 
             self.add_cat_ids = new_cat_ids;
 
-            if !close_add_menu {
-                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                    close_add_menu = true;
-                } else if ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary))
-                    && !area_resp.response.hovered()
-                {
-                    close_add_menu = true;
-                }
+            if !close_add_menu
+                && (ui.input(|i| i.key_pressed(egui::Key::Escape))
+                    || (ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary))
+                        && !area_resp.response.hovered()))
+            {
+                close_add_menu = true;
             }
         }
         if close_add_menu {
@@ -903,8 +884,13 @@ impl NodeGraphWidget {
             if let Some(id) = context_node {
                 self.toggle_hidden_sockets(id);
             } else {
-                let selected: Vec<NodeId> = self.graph.nodes.values()
-                    .filter(|n| n.selected).map(|n| n.id).collect();
+                let selected: Vec<NodeId> = self
+                    .graph
+                    .nodes
+                    .values()
+                    .filter(|n| n.selected)
+                    .map(|n| n.id)
+                    .collect();
                 for id in selected {
                     self.toggle_hidden_sockets(id);
                 }
@@ -921,7 +907,7 @@ impl NodeGraphWidget {
         // ctrl_held is already computed above.
 
         let middle_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
-        let right_down  = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary));
+        let right_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary));
 
         if middle_down {
             if let Some(pp) = pointer {
@@ -1025,8 +1011,9 @@ impl NodeGraphWidget {
                 start_canvas,
                 current_canvas,
             ),
-            InteractionState::CuttingWire { path } =>
-                self.update_cut_wire(response, pointer_canvas, layouts, path),
+            InteractionState::CuttingWire { path } => {
+                self.update_cut_wire(response, pointer_canvas, layouts, path)
+            }
         };
     }
 
@@ -1068,6 +1055,7 @@ impl NodeGraphWidget {
                 node.id = new_id;
                 node.pos += Vec2::new(30.0, 30.0);
                 node.selected = true;
+                self.registry.restore_node(&mut node);
                 node
             })
             .collect();
@@ -1109,22 +1097,32 @@ impl NodeGraphWidget {
     fn toggle_hidden_sockets(&mut self, node_id: NodeId) {
         if self.node_has_hidden_sockets(node_id) {
             if let Some(node) = self.graph.nodes.get_mut(&node_id) {
-                for inp in node.inputs.iter_mut() { inp.hidden = false; }
-                for out in node.outputs.iter_mut() { out.hidden = false; }
+                for inp in node.inputs.iter_mut() {
+                    inp.hidden = false;
+                }
+                for out in node.outputs.iter_mut() {
+                    out.hidden = false;
+                }
             }
         } else {
             use std::collections::HashSet;
-            let connected_in: HashSet<usize> = self.graph.connections.iter()
+            let connected_in: HashSet<usize> = self
+                .graph
+                .connections
+                .iter()
                 .filter(|c| c.to.node == node_id)
                 .map(|c| c.to.index)
                 .collect();
-            let connected_out: HashSet<usize> = self.graph.connections.iter()
+            let connected_out: HashSet<usize> = self
+                .graph
+                .connections
+                .iter()
                 .filter(|c| c.from.node == node_id)
                 .map(|c| c.from.index)
                 .collect();
             if let Some(node) = self.graph.nodes.get_mut(&node_id) {
                 for (i, inp) in node.inputs.iter_mut().enumerate() {
-                    if inp.value.is_none() && !connected_in.contains(&i) {
+                    if !inp.has_control && !connected_in.contains(&i) {
                         inp.hidden = true;
                     }
                 }
@@ -1309,8 +1307,13 @@ impl NodeGraphWidget {
                 continue;
             }
 
-            if !sid.is_output
-                && let Some(src) = self.graph.connections.iter().find(|c| c.to == sid).map(|c| c.from)
+            if sid.direction == SocketDirection::Input
+                && let Some(src) = self
+                    .graph
+                    .connections
+                    .iter()
+                    .find(|c| c.to == sid)
+                    .map(|c| c.from)
                 && let Some(&src_spos) = socket_screen_pos.get(&src)
             {
                 self.graph.connections.retain(|c| c.to != sid);
@@ -1359,7 +1362,9 @@ impl NodeGraphWidget {
         pointer: Option<Pos2>,
         last_screen: Pos2,
     ) -> InteractionState {
-        if response.dragged() && let Some(pp) = pointer {
+        if response.dragged()
+            && let Some(pp) = pointer
+        {
             self.view.pan += pp - last_screen;
             return InteractionState::Panning { last_screen: pp };
         }
@@ -1457,14 +1462,14 @@ impl NodeGraphWidget {
                 SocketId {
                     node: node_id,
                     index: ii,
-                    is_output: false,
+                    direction: SocketDirection::Input,
                 },
             );
             self.graph.add_connection(
                 SocketId {
                     node: node_id,
                     index: oi,
-                    is_output: true,
+                    direction: SocketDirection::Output,
                 },
                 conn.to,
             );
@@ -1498,12 +1503,14 @@ impl NodeGraphWidget {
                 if sid == from || pp.distance(spos) >= hit_r {
                     continue;
                 }
-                let (output, input) = if from.is_output {
+                let (output, input) = if from.direction == SocketDirection::Output {
                     (from, sid)
                 } else {
                     (sid, from)
                 };
-                if output.is_output && !input.is_output {
+                if output.direction == SocketDirection::Output
+                    && input.direction == SocketDirection::Input
+                {
                     let out_type = self
                         .graph
                         .nodes
@@ -1516,7 +1523,9 @@ impl NodeGraphWidget {
                         .get(&input.node)
                         .and_then(|n| n.inputs.get(input.index))
                         .map(|s| s.type_name.as_str());
-                    if let (Some(ot), Some(it)) = (out_type, in_type) && sockets_compatible(ot, it) {
+                    if let (Some(ot), Some(it)) = (out_type, in_type)
+                        && sockets_compatible(ot, it)
+                    {
                         self.graph.add_connection(output, input);
                     }
                 }
@@ -1546,7 +1555,7 @@ impl NodeGraphWidget {
         }
         let select_rect = Rect::from_two_pos(start_canvas, current_canvas);
         let shift = ui.input(|i| i.modifiers.shift);
-        let ctrl  = ui.input(|i| i.modifiers.ctrl);
+        let ctrl = ui.input(|i| i.modifiers.ctrl);
         if !shift && !ctrl {
             for n in self.graph.nodes.values_mut() {
                 n.selected = false;

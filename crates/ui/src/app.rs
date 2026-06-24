@@ -1,9 +1,9 @@
 use egui::Color32;
 use node_graph::{
-    EnumValue, FloatValue, InputDef, InputSocket, IntValue, NodeDef, NodeGraphWidget,
-    NodeTypeRegistry, OutputDef, Prop, PropDef, Socket, SocketId, SocketShape, SocketTypeDef,
-    StringValue,
+    EnumValue, FloatValue, InputDef, IntValue, NodeDef, NodeGraphWidget, NodeTypeRegistry,
+    OutputDef, PropDef, Socket, SocketDef, SocketDirection, SocketId, SocketShape, StringValue,
 };
+use serde::{Deserialize, Serialize};
 
 pub struct App {
     node_graph: NodeGraphWidget,
@@ -27,7 +27,9 @@ impl eframe::App for App {
 // ── Custom socket types ───────────────────────────────────────────────────────
 
 struct Signal;
-impl SocketTypeDef for Signal {
+impl SocketDef for Signal {
+    type Value = bool;
+
     fn type_name() -> &'static str {
         "Signal"
     }
@@ -37,7 +39,9 @@ impl SocketTypeDef for Signal {
 }
 
 struct Protocol;
-impl SocketTypeDef for Protocol {
+impl SocketDef for Protocol {
+    type Value = bool;
+
     fn type_name() -> &'static str {
         "Protocol"
     }
@@ -49,10 +53,61 @@ impl SocketTypeDef for Protocol {
     }
 }
 
+// ── Node state ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DslFileSourceState {
+    file: StringValue,
+    channels: IntValue,
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UsbLogicAnalyzerState {
+    sample_rate: IntValue,
+    channels: IntValue,
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SpiDecoderState {
+    mode: EnumValue,
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UartDecoderState {
+    baud_rate: IntValue,
+    parity: EnumValue,
+    stop_bits: EnumValue,
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ParallelDecoderState {
+    width: IntValue,
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProtocolFilterState {
+    pattern: StringValue,
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TimeWindowState {
+    start_ms: FloatValue,
+    end_ms: FloatValue,
+}
+
+
 // ── Node type definitions ─────────────────────────────────────────────────────
 
 struct DslFileSource;
 impl NodeDef for DslFileSource {
+    type State = DslFileSourceState;
+
     fn name() -> &'static str {
         "DSL File Source"
     }
@@ -63,33 +118,40 @@ impl NodeDef for DslFileSource {
         Color32::from_rgb(100, 75, 140)
     }
 
-    fn inputs() -> Vec<InputDef> {
+    fn inputs() -> Vec<InputDef<Self::State>> {
         vec![
-            InputDef::with_value::<node_graph::StrSocket>("File", StringValue::new("").into()),
-            InputDef::with_value::<node_graph::IntSocket>("Channels", IntValue::new(8, 1, 32).into()),
+            InputDef::control::<node_graph::StrSocket>("File", |state| &mut state.file),
+            InputDef::control::<node_graph::IntSocket>("Channels", |state| &mut state.channels),
         ]
     }
 
-    fn outputs() -> Vec<OutputDef> {
+    fn outputs() -> Vec<OutputDef<Self::State>> {
         (0..32_usize).map(|i| OutputDef::new::<Signal>(format!("Ch {i}"))).collect()
     }
 
-    fn on_update() -> Option<fn(&mut [InputSocket], &mut [Socket], &[Prop])> {
-        Some(|inputs, outputs, _| {
-            let ch = inputs.get(1)
-                .and_then(|s| s.value.as_ref())
-                .and_then(|v| v.as_any().downcast_ref::<node_graph::IntValue>())
-                .map_or(8, |v| v.value as usize)
-                .clamp(1, 32);
-            for (i, out) in outputs.iter_mut().enumerate() {
-                out.visible = i < ch;
-            }
-        })
+    fn state() -> Self::State {
+        DslFileSourceState {
+            file: StringValue::new(""),
+            channels: IntValue::new(8, 1, 32),
+        }
+    }
+
+    fn on_update(
+        state: &mut Self::State,
+        _inputs: &mut [Socket],
+        outputs: &mut [Socket],
+    ) {
+        let channels = (state.channels.value as usize).clamp(1, 32);
+        for (index, output) in outputs.iter_mut().enumerate() {
+            output.visible = index < channels;
+        }
     }
 }
 
 struct UsbLogicAnalyzer;
 impl NodeDef for UsbLogicAnalyzer {
+    type State = UsbLogicAnalyzerState;
+
     fn name() -> &'static str {
         "USB Logic Analyzer"
     }
@@ -100,33 +162,40 @@ impl NodeDef for UsbLogicAnalyzer {
         Color32::from_rgb(100, 75, 140)
     }
 
-    fn inputs() -> Vec<InputDef> {
+    fn inputs() -> Vec<InputDef<Self::State>> {
         vec![
-            InputDef::with_value::<node_graph::IntSocket>("Sample Rate", IntValue::new(100, 1, 1000).into()),
-            InputDef::with_value::<node_graph::IntSocket>("Channels",    IntValue::new(16,  1,  32).into()),
+            InputDef::control::<node_graph::IntSocket>("Sample Rate", |state| &mut state.sample_rate),
+            InputDef::control::<node_graph::IntSocket>("Channels", |state| &mut state.channels),
         ]
     }
 
-    fn outputs() -> Vec<OutputDef> {
+    fn outputs() -> Vec<OutputDef<Self::State>> {
         (0..32_usize).map(|i| OutputDef::new::<Signal>(format!("Ch {i}"))).collect()
     }
 
-    fn on_update() -> Option<fn(&mut [InputSocket], &mut [Socket], &[Prop])> {
-        Some(|inputs, outputs, _| {
-            let ch = inputs.get(1)
-                .and_then(|s| s.value.as_ref())
-                .and_then(|v| v.as_any().downcast_ref::<node_graph::IntValue>())
-                .map_or(16, |v| v.value as usize)
-                .clamp(1, 32);
-            for (i, out) in outputs.iter_mut().enumerate() {
-                out.visible = i < ch;
-            }
-        })
+    fn state() -> Self::State {
+        UsbLogicAnalyzerState {
+            sample_rate: IntValue::new(100, 1, 1000),
+            channels: IntValue::new(16, 1, 32),
+        }
+    }
+
+    fn on_update(
+        state: &mut Self::State,
+        _inputs: &mut [Socket],
+        outputs: &mut [Socket],
+    ) {
+        let channels = (state.channels.value as usize).clamp(1, 32);
+        for (index, output) in outputs.iter_mut().enumerate() {
+            output.visible = index < channels;
+        }
     }
 }
 
 struct SpiDecoder;
 impl NodeDef for SpiDecoder {
+    type State = SpiDecoderState;
+
     fn name() -> &'static str {
         "SPI Decoder"
     }
@@ -137,7 +206,7 @@ impl NodeDef for SpiDecoder {
         Color32::from_rgb(60, 100, 160)
     }
 
-    fn inputs() -> Vec<InputDef> {
+    fn inputs() -> Vec<InputDef<Self::State>> {
         vec![
             InputDef::new::<Signal>("CLK"),
             InputDef::new::<Signal>("MOSI"),
@@ -146,31 +215,38 @@ impl NodeDef for SpiDecoder {
         ]
     }
 
-    fn outputs() -> Vec<OutputDef> {
+    fn outputs() -> Vec<OutputDef<Self::State>> {
         vec![
             OutputDef::new::<Protocol>("MOSI"),
             OutputDef::new::<Protocol>("MISO"),
         ]
     }
 
-    fn props() -> Vec<PropDef> {
-        vec![PropDef::new("mode", "Mode", EnumValue::new(0, &["Full Duplex", "Half Duplex"]).into())]
+    fn state() -> Self::State {
+        SpiDecoderState {
+            mode: EnumValue::new(0, &["Full Duplex", "Half Duplex"]),
+        }
     }
 
-    fn on_update() -> Option<fn(&mut [InputSocket], &mut [Socket], &[Prop])> {
-        Some(|_, outputs, props| {
-            let full_duplex = props[0].value.as_any()
-                .downcast_ref::<node_graph::EnumValue>()
-                .is_none_or(|e| e.index == 0);
-            if let Some(miso) = outputs.get_mut(1) {
-                miso.visible = full_duplex;
-            }
-        })
+    fn props() -> Vec<PropDef<Self::State>> {
+        vec![PropDef::control("mode", "Mode", |state| &mut state.mode)]
+    }
+
+    fn on_update(
+        state: &mut Self::State,
+        _inputs: &mut [Socket],
+        outputs: &mut [Socket],
+    ) {
+        if let Some(miso) = outputs.get_mut(1) {
+            miso.visible = state.mode.index == 0;
+        }
     }
 }
 
 struct I2cDecoder;
 impl NodeDef for I2cDecoder {
+    type State = ();
+
     fn name() -> &'static str {
         "I2C Decoder"
     }
@@ -181,20 +257,26 @@ impl NodeDef for I2cDecoder {
         Color32::from_rgb(60, 100, 160)
     }
 
-    fn inputs() -> Vec<InputDef> {
+    fn inputs() -> Vec<InputDef<Self::State>> {
         vec![
             InputDef::new::<Signal>("SCL"),
             InputDef::new::<Signal>("SDA"),
         ]
     }
 
-    fn outputs() -> Vec<OutputDef> {
+    fn outputs() -> Vec<OutputDef<Self::State>> {
         vec![OutputDef::new::<Protocol>("Data")]
+    }
+
+    fn state() -> Self::State {
+        ()
     }
 }
 
 struct UartDecoder;
 impl NodeDef for UartDecoder {
+    type State = UartDecoderState;
+
     fn name() -> &'static str {
         "UART Decoder"
     }
@@ -205,28 +287,38 @@ impl NodeDef for UartDecoder {
         Color32::from_rgb(60, 100, 160)
     }
 
-    fn inputs() -> Vec<InputDef> {
+    fn inputs() -> Vec<InputDef<Self::State>> {
         vec![
             InputDef::new::<Signal>("TX"),
             InputDef::new::<Signal>("RX"),
-            InputDef::with_value::<node_graph::IntSocket>("Baud Rate", IntValue::new(115200, 300, 4_000_000).into()),
+            InputDef::control::<node_graph::IntSocket>("Baud Rate", |state| &mut state.baud_rate),
         ]
     }
 
-    fn outputs() -> Vec<OutputDef> {
+    fn outputs() -> Vec<OutputDef<Self::State>> {
         vec![OutputDef::new::<Protocol>("Data")]
     }
 
-    fn props() -> Vec<PropDef> {
+    fn state() -> Self::State {
+        UartDecoderState {
+            baud_rate: IntValue::new(115200, 300, 4_000_000),
+            parity: EnumValue::new(0, &["None", "Even", "Odd"]),
+            stop_bits: EnumValue::new(0, &["1", "1.5", "2"]),
+        }
+    }
+
+    fn props() -> Vec<PropDef<Self::State>> {
         vec![
-            PropDef::new("parity",    "Parity",    EnumValue::new(0, &["None", "Even", "Odd"]).into()),
-            PropDef::new("stop_bits", "Stop Bits", EnumValue::new(0, &["1", "1.5", "2"]).into()),
+            PropDef::control("parity", "Parity", |state| &mut state.parity),
+            PropDef::control("stop_bits", "Stop Bits", |state| &mut state.stop_bits),
         ]
     }
 }
 
 struct ParallelDecoder;
 impl NodeDef for ParallelDecoder {
+    type State = ParallelDecoderState;
+
     fn name() -> &'static str {
         "Parallel Decoder"
     }
@@ -237,20 +329,28 @@ impl NodeDef for ParallelDecoder {
         Color32::from_rgb(60, 100, 160)
     }
 
-    fn inputs() -> Vec<InputDef> {
+    fn inputs() -> Vec<InputDef<Self::State>> {
         vec![
             InputDef::new::<Signal>("CLK"),
-            InputDef::with_value::<node_graph::IntSocket>("Width", IntValue::new(8, 1, 32).into()),
+            InputDef::control::<node_graph::IntSocket>("Width", |state| &mut state.width),
         ]
     }
 
-    fn outputs() -> Vec<OutputDef> {
+    fn outputs() -> Vec<OutputDef<Self::State>> {
         vec![OutputDef::new::<Protocol>("Data")]
+    }
+
+    fn state() -> Self::State {
+        ParallelDecoderState {
+            width: IntValue::new(8, 1, 32),
+        }
     }
 }
 
 struct ProtocolFilter;
 impl NodeDef for ProtocolFilter {
+    type State = ProtocolFilterState;
+
     fn name() -> &'static str {
         "Protocol Filter"
     }
@@ -261,20 +361,28 @@ impl NodeDef for ProtocolFilter {
         Color32::from_rgb(60, 140, 100)
     }
 
-    fn inputs() -> Vec<InputDef> {
+    fn inputs() -> Vec<InputDef<Self::State>> {
         vec![
             InputDef::new::<Protocol>("Input"),
-            InputDef::with_value::<node_graph::StrSocket>("Pattern", StringValue::new("").into()),
+            InputDef::control::<node_graph::StrSocket>("Pattern", |state| &mut state.pattern),
         ]
     }
 
-    fn outputs() -> Vec<OutputDef> {
+    fn outputs() -> Vec<OutputDef<Self::State>> {
         vec![OutputDef::new::<Protocol>("Output")]
+    }
+
+    fn state() -> Self::State {
+        ProtocolFilterState {
+            pattern: StringValue::new(""),
+        }
     }
 }
 
 struct TimeWindow;
 impl NodeDef for TimeWindow {
+    type State = TimeWindowState;
+
     fn name() -> &'static str {
         "Time Window"
     }
@@ -285,24 +393,33 @@ impl NodeDef for TimeWindow {
         Color32::from_rgb(60, 140, 100)
     }
 
-    fn inputs() -> Vec<InputDef> {
+    fn inputs() -> Vec<InputDef<Self::State>> {
         vec![InputDef::new::<Protocol>("Input")]
     }
 
-    fn outputs() -> Vec<OutputDef> {
+    fn outputs() -> Vec<OutputDef<Self::State>> {
         vec![OutputDef::new::<Protocol>("Output")]
     }
 
-    fn props() -> Vec<PropDef> {
+    fn state() -> Self::State {
+        TimeWindowState {
+            start_ms: FloatValue::new(0.0, 0.0, 1e9, 0.1),
+            end_ms: FloatValue::new(100.0, 0.0, 1e9, 0.1),
+        }
+    }
+
+    fn props() -> Vec<PropDef<Self::State>> {
         vec![
-            PropDef::new("start_ms", "Start ms", FloatValue::new(0.0,   0.0, 1e9, 0.1).into()),
-            PropDef::new("end_ms",   "End ms",   FloatValue::new(100.0, 0.0, 1e9, 0.1).into()),
+            PropDef::control("start_ms", "Start ms", |state| &mut state.start_ms),
+            PropDef::control("end_ms", "End ms", |state| &mut state.end_ms),
         ]
     }
 }
 
 struct Viewer;
 impl NodeDef for Viewer {
+    type State = ();
+
     fn name() -> &'static str {
         "Viewer"
     }
@@ -313,12 +430,16 @@ impl NodeDef for Viewer {
         Color32::from_rgb(160, 80, 60)
     }
 
-    fn inputs() -> Vec<InputDef> {
+    fn inputs() -> Vec<InputDef<Self::State>> {
         vec![InputDef::new::<Protocol>("Input")]
     }
 
-    fn outputs() -> Vec<OutputDef> {
+    fn outputs() -> Vec<OutputDef<Self::State>> {
         vec![]
+    }
+
+    fn state() -> Self::State {
+        ()
     }
 }
 
@@ -360,16 +481,16 @@ fn populate_demo(widget: &mut NodeGraphWidget) {
     // Ch 0→CLK, Ch 1→MOSI, Ch 2→MISO, Ch 3→CS
     for (ch, input_idx) in [(0, 0), (1, 1), (2, 2), (3, 3)] {
         g.add_connection(
-            SocketId { node: id0, index: ch, is_output: true },
-            SocketId { node: id1, index: input_idx, is_output: false },
+            SocketId { node: id0, index: ch, direction: SocketDirection::Output },
+            SocketId { node: id1, index: input_idx, direction: SocketDirection::Input },
         );
     }
     g.add_connection(
-        SocketId { node: id1, index: 0, is_output: true },
-        SocketId { node: id2, index: 0, is_output: false },
+        SocketId { node: id1, index: 0, direction: SocketDirection::Output },
+        SocketId { node: id2, index: 0, direction: SocketDirection::Input },
     );
     g.add_connection(
-        SocketId { node: id2, index: 0, is_output: true },
-        SocketId { node: id3, index: 0, is_output: false },
+        SocketId { node: id2, index: 0, direction: SocketDirection::Output },
+        SocketId { node: id3, index: 0, direction: SocketDirection::Input },
     );
 }
