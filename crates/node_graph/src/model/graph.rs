@@ -3,7 +3,7 @@ use egui::Color32;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct GraphState {
     pub nodes: HashMap<NodeId, Node>,
     pub connections: Vec<Connection>,

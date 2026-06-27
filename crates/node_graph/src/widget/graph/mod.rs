@@ -32,6 +32,8 @@ pub struct NodeGraphWidget {
     io_status: Option<(String, f64)>,
     hotkeys: HotkeyRegistry,
     clipboard_cache: Option<String>,
+    undo_stack: Vec<GraphState>,
+    redo_stack: Vec<GraphState>,
 }
 
 impl NodeGraphWidget {
@@ -48,6 +50,8 @@ impl NodeGraphWidget {
             io_status: None,
             hotkeys: HotkeyRegistry::graph_defaults(),
             clipboard_cache: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -83,6 +87,39 @@ impl NodeGraphWidget {
         {
             instance.update(&mut node.inputs, &mut node.outputs);
             node.state = instance.save_state();
+        }
+    }
+
+    fn sync_all_node_state(&mut self) {
+        for id in self.graph.sorted_node_ids() {
+            if let (Some(instance), Some(node)) =
+                (self.runtime.get(&id), self.graph.nodes.get_mut(&id))
+            {
+                node.state = instance.save_state();
+            }
+        }
+    }
+
+    pub(super) fn push_undo_snapshot(&mut self) {
+        self.sync_all_node_state();
+        self.undo_stack.push(self.graph.clone());
+        self.redo_stack.clear();
+    }
+
+    pub(super) fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+
+    pub(super) fn can_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
+
+    pub(super) fn restore_runtime(&mut self) {
+        self.runtime.clear();
+        for node in self.graph.nodes.values_mut() {
+            if let Some(instance) = self.registry.restore_node(node) {
+                self.runtime.insert(node.id, instance);
+            }
         }
     }
 

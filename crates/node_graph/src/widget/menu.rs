@@ -31,6 +31,12 @@ impl Shortcut {
             key,
         }
     }
+    pub fn command_shift(key: egui::Key) -> Self {
+        Self {
+            modifiers: egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
+            key,
+        }
+    }
     pub fn shift(key: egui::Key) -> Self {
         Self {
             modifiers: egui::Modifiers {

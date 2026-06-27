@@ -153,6 +153,7 @@ impl NodeGraphWidget {
             (to, from)
         };
         if self.compatible_wire_target(from, to) {
+            self.push_undo_snapshot();
             self.graph.add_connection(output, input);
         }
     }
@@ -267,6 +268,7 @@ impl NodeGraphWidget {
                     .map(|c| c.from)
                 && let Some(&src_spos) = layout.socket_screen_pos.get(&src)
             {
+                self.push_undo_snapshot();
                 self.graph.connections.retain(|c| c.to != sid);
                 return InteractionState::DraggingWire {
                     from: src,
@@ -283,6 +285,7 @@ impl NodeGraphWidget {
 
         for (&id, response) in &responses.collapse_toggles {
             if response.clicked() {
+                self.push_undo_snapshot();
                 self.toggle_collapsed_for_node(id);
                 return InteractionState::Idle;
             }
@@ -299,6 +302,7 @@ impl NodeGraphWidget {
                     if !node.selected || ctrl {
                         self.select_node(id, ctrl);
                     }
+                    self.push_undo_snapshot();
                     return InteractionState::DraggingNode {
                         node_id: id,
                         offset: pc.to_vec2() - node_pos,
@@ -423,6 +427,7 @@ impl NodeGraphWidget {
         });
 
         if let (Some(ii), Some(oi)) = (in_idx, out_idx) {
+            self.push_undo_snapshot();
             self.graph.connections.remove(idx);
             self.graph.add_connection(
                 conn.from,
@@ -540,6 +545,9 @@ impl NodeGraphWidget {
                     .then_some(idx)
             })
             .collect();
+        if !to_remove.is_empty() {
+            self.push_undo_snapshot();
+        }
         for idx in to_remove.into_iter().rev() {
             self.graph.connections.remove(idx);
         }
@@ -676,6 +684,8 @@ impl NodeGraphWidget {
                 self.menu_collapsed_state(None),
                 any_selected,
                 self.can_paste_nodes(),
+                self.can_undo(),
+                self.can_redo(),
             );
             if let Some(action) = dispatch_menu_shortcut(ui, &shortcut_entries) {
                 let effect = self.execute_action(action, ui.ctx());
@@ -705,6 +715,8 @@ impl NodeGraphWidget {
                 node_collapsed,
                 any_selected,
                 can_paste,
+                self.can_undo(),
+                self.can_redo(),
             );
             self.menu.on_context_opened(entries);
         }
@@ -721,7 +733,13 @@ impl NodeGraphWidget {
             let canvas_pos = self.view.screen_to_canvas(origin, screen_pos);
             self.menu.open_popup(
                 screen_pos,
-                build_empty_canvas_entries(&self.registry, canvas_pos, self.can_paste_nodes()),
+                build_empty_canvas_entries(
+                    &self.registry,
+                    canvas_pos,
+                    self.can_paste_nodes(),
+                    self.can_undo(),
+                    self.can_redo(),
+                ),
             );
         }
 

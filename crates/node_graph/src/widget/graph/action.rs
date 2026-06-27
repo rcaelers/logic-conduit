@@ -31,6 +31,8 @@ pub(super) enum ActionEffect {
 
 #[derive(Clone)]
 pub(super) enum GraphAction {
+    Undo,
+    Redo,
     AddNode { name: String, pos: Pos2 },
     Cut { target: Option<NodeId> },
     Copy { target: Option<NodeId> },
@@ -105,12 +107,22 @@ impl NodeGraphWidget {
         egui_ctx: &egui::Context,
     ) -> ActionEffect {
         match action {
+            GraphAction::Undo => {
+                self.undo();
+                ActionEffect::ResetInteraction
+            }
+            GraphAction::Redo => {
+                self.redo();
+                ActionEffect::ResetInteraction
+            }
             GraphAction::AddNode { name, pos } => {
+                self.push_undo_snapshot();
                 self.add_node_at(&name, pos);
                 ActionEffect::None
             }
             GraphAction::Cut { target } => {
                 if self.copy_nodes(target, egui_ctx) {
+                    self.push_undo_snapshot();
                     self.delete_nodes(target);
                 }
                 ActionEffect::None
@@ -120,30 +132,39 @@ impl NodeGraphWidget {
                 ActionEffect::None
             }
             GraphAction::Paste { text, pos } => {
+                if self.can_paste_nodes() || text.is_some() {
+                    self.push_undo_snapshot();
+                }
                 self.paste_nodes(text.as_deref(), pos, egui_ctx);
                 ActionEffect::None
             }
             GraphAction::Delete { target } => {
+                self.push_undo_snapshot();
                 self.delete_nodes(target);
                 ActionEffect::None
             }
             GraphAction::DuplicateSelected => {
+                self.push_undo_snapshot();
                 self.duplicate_selected();
                 ActionEffect::None
             }
             GraphAction::AddFrame { target } => {
+                self.push_undo_snapshot();
                 self.add_frame(target);
                 ActionEffect::None
             }
             GraphAction::RemoveFromFrame { target } => {
+                self.push_undo_snapshot();
                 self.remove_from_frame(target);
                 ActionEffect::None
             }
             GraphAction::ToggleHidden { target } => {
+                self.push_undo_snapshot();
                 self.toggle_hidden_sockets(target);
                 ActionEffect::None
             }
             GraphAction::ToggleCollapsed { target } => {
+                self.push_undo_snapshot();
                 self.toggle_collapsed(target);
                 ActionEffect::None
             }
@@ -156,10 +177,31 @@ impl NodeGraphWidget {
                 ActionEffect::None
             }
             GraphAction::Load => {
+                self.push_undo_snapshot();
                 self.load_graph(egui_ctx);
                 ActionEffect::ResetInteraction
             }
         }
+    }
+
+    fn undo(&mut self) {
+        let Some(previous) = self.undo_stack.pop() else {
+            return;
+        };
+        self.sync_all_node_state();
+        self.redo_stack.push(self.graph.clone());
+        self.graph = previous;
+        self.restore_runtime();
+    }
+
+    fn redo(&mut self) {
+        let Some(next) = self.redo_stack.pop() else {
+            return;
+        };
+        self.sync_all_node_state();
+        self.undo_stack.push(self.graph.clone());
+        self.graph = next;
+        self.restore_runtime();
     }
 
     fn delete_nodes(&mut self, target: Option<NodeId>) {

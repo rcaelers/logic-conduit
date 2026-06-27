@@ -70,8 +70,11 @@ pub(super) fn build_empty_canvas_entries(
     registry: &NodeTypeRegistry,
     canvas_pos: Pos2,
     can_paste: bool,
+    can_undo: bool,
+    can_redo: bool,
 ) -> Vec<MenuEntry<GraphAction>> {
     let mut entries = Vec::new();
+    add_undo_redo_entries(&mut entries, can_undo, can_redo);
     if can_paste {
         entries.push(paste_entry(canvas_pos));
         entries.push(MenuEntry::separator());
@@ -88,11 +91,15 @@ pub(super) fn build_context_entries(
     node_collapsed: bool,
     any_selected: bool,
     can_paste: bool,
+    can_undo: bool,
+    can_redo: bool,
 ) -> Vec<MenuEntry<GraphAction>> {
     if context_node.is_some() || any_selected {
         let hidden_chk = if node_hidden { "✓  " } else { "    " };
         let collapsed_chk = if node_collapsed { "✓  " } else { "    " };
-        let mut entries = vec![
+        let mut entries = Vec::new();
+        add_undo_redo_entries(&mut entries, can_undo, can_redo);
+        entries.extend([
             MenuEntry::action(
                 "Cut",
                 GraphAction::Cut {
@@ -109,7 +116,7 @@ pub(super) fn build_context_entries(
             )
             .with_icon("⧉")
             .with_shortcut(Shortcut::command(egui::Key::C)),
-        ];
+        ]);
         if can_paste {
             entries.push(paste_entry(canvas_pos));
         }
@@ -165,7 +172,31 @@ pub(super) fn build_context_entries(
         ]);
         entries
     } else {
-        build_empty_canvas_entries(registry, canvas_pos, can_paste)
+        build_empty_canvas_entries(registry, canvas_pos, can_paste, can_undo, can_redo)
+    }
+}
+
+fn add_undo_redo_entries(
+    entries: &mut Vec<MenuEntry<GraphAction>>,
+    can_undo: bool,
+    can_redo: bool,
+) {
+    if can_undo {
+        entries.push(
+            MenuEntry::action("Undo", GraphAction::Undo)
+                .with_icon("↶")
+                .with_shortcut(Shortcut::command(egui::Key::Z)),
+        );
+    }
+    if can_redo {
+        entries.push(
+            MenuEntry::action("Redo", GraphAction::Redo)
+                .with_icon("↷")
+                .with_shortcut(Shortcut::command_shift(egui::Key::Z)),
+        );
+    }
+    if can_undo || can_redo {
+        entries.push(MenuEntry::separator());
     }
 }
 
