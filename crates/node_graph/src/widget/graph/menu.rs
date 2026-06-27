@@ -251,8 +251,7 @@ impl MenuController {
             && press.distance(curr) < 30.0
         {
             let popup_id = egui::Popup::default_response_id(response);
-            #[allow(deprecated)]
-            ui.ctx().memory_mut(|mem| mem.open_popup_at(popup_id, curr));
+            egui::Popup::open_id(ui.ctx(), popup_id);
         }
         if released {
             self.sec_press = None;

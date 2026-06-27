@@ -10,6 +10,6 @@ path = "src/main.rs"
 
 [dependencies]
 node-graph = { path = "../node_graph" }
-eframe = "0.34"
-egui = "0.34"
+eframe = "0.35"
+egui = "0.35"
 serde = { version = "1", features = ["derive"] }
