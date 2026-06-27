@@ -54,6 +54,32 @@ pub(super) fn build_add_entries(
     entries
 }
 
+fn paste_entry(canvas_pos: Pos2) -> MenuEntry<GraphAction> {
+    MenuEntry::action(
+        "Paste",
+        GraphAction::Paste {
+            text: None,
+            pos: canvas_pos,
+        },
+    )
+    .with_icon("▣")
+    .with_shortcut(Shortcut::command(egui::Key::V))
+}
+
+pub(super) fn build_empty_canvas_entries(
+    registry: &NodeTypeRegistry,
+    canvas_pos: Pos2,
+    can_paste: bool,
+) -> Vec<MenuEntry<GraphAction>> {
+    let mut entries = Vec::new();
+    if can_paste {
+        entries.push(paste_entry(canvas_pos));
+        entries.push(MenuEntry::separator());
+    }
+    entries.push(MenuEntry::submenu("Add", build_add_entries(registry, canvas_pos)).with_icon("+"));
+    entries
+}
+
 pub(super) fn build_context_entries(
     registry: &NodeTypeRegistry,
     canvas_pos: Pos2,
@@ -85,17 +111,7 @@ pub(super) fn build_context_entries(
             .with_shortcut(Shortcut::command(egui::Key::C)),
         ];
         if can_paste {
-            entries.push(
-                MenuEntry::action(
-                    "Paste",
-                    GraphAction::Paste {
-                        text: None,
-                        pos: canvas_pos,
-                    },
-                )
-                .with_icon("▣")
-                .with_shortcut(Shortcut::command(egui::Key::V)),
-            );
+            entries.push(paste_entry(canvas_pos));
         }
         if any_selected {
             entries.push(
@@ -149,25 +165,7 @@ pub(super) fn build_context_entries(
         ]);
         entries
     } else {
-        let mut entries = Vec::new();
-        if can_paste {
-            entries.push(
-                MenuEntry::action(
-                    "Paste",
-                    GraphAction::Paste {
-                        text: None,
-                        pos: canvas_pos,
-                    },
-                )
-                .with_icon("▣")
-                .with_shortcut(Shortcut::command(egui::Key::V)),
-            );
-            entries.push(MenuEntry::separator());
-        }
-        entries.push(
-            MenuEntry::submenu("Add", build_add_entries(registry, canvas_pos)).with_icon("+"),
-        );
-        entries
+        build_empty_canvas_entries(registry, canvas_pos, can_paste)
     }
 }
 

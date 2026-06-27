@@ -41,16 +41,31 @@ impl Shortcut {
         }
     }
 
-    pub fn matches(&self, key: egui::Key, modifiers: egui::Modifiers) -> bool {
-        if key != self.key {
+    fn consume(&self, ui: &mut egui::Ui) -> bool {
+        if ui.input_mut(|input| {
+            input.consume_shortcut(&egui::KeyboardShortcut::new(self.modifiers, self.key))
+        }) {
+            return true;
+        }
+
+        if !self.modifiers.command || self.modifiers.shift || self.modifiers.alt {
             return false;
         }
-        if self.modifiers.command {
-            return modifiers.command
-                && modifiers.shift == self.modifiers.shift
-                && modifiers.alt == self.modifiers.alt;
-        }
-        modifiers == self.modifiers
+
+        ui.input_mut(|input| {
+            let mut consumed = false;
+            input.events.retain(|event| {
+                let matches = matches!(
+                    (self.key, event),
+                    (egui::Key::C, egui::Event::Copy)
+                        | (egui::Key::X, egui::Event::Cut)
+                        | (egui::Key::V, egui::Event::Paste(_))
+                );
+                consumed |= matches;
+                !matches
+            });
+            consumed
+        })
     }
 }
 
@@ -146,6 +161,30 @@ impl<T> MenuEntry<T> {
     }
 }
 
+pub(crate) fn dispatch_menu_shortcut<T: Clone>(
+    ui: &mut egui::Ui,
+    entries: &[MenuEntry<T>],
+) -> Option<T> {
+    for entry in entries {
+        match &entry.kind {
+            MenuKind::Action(action) => {
+                if let Some(shortcut) = entry.shortcut
+                    && shortcut.consume(ui)
+                {
+                    return Some(action.clone());
+                }
+            }
+            MenuKind::SubMenu(children) => {
+                if let Some(action) = dispatch_menu_shortcut(ui, children) {
+                    return Some(action);
+                }
+            }
+            MenuKind::Separator => {}
+        }
+    }
+    None
+}
+
 // ── Menu widget ───────────────────────────────────────────────────────────────
 
 /// Stateful multi-level menu widget.  `T` is the caller-defined action type.
@@ -217,6 +256,12 @@ impl<T: Clone> Menu<T> {
 
         if self.entries.is_empty() {
             return None;
+        }
+
+        if let Some(action) = dispatch_menu_shortcut(ui, &self.entries) {
+            self.sel.clear();
+            self.pending_close = true;
+            return Some(action);
         }
 
         let down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));

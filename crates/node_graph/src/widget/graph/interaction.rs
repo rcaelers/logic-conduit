@@ -2,14 +2,14 @@ use super::{
     NodeGraphWidget,
     action::ActionEffect,
     layout::GraphWidgetLayout,
-    menu::{build_add_entries, build_context_entries},
+    menu::{build_context_entries, build_empty_canvas_entries},
     minimap,
 };
 use crate::{
     api::sockets_compatible,
     model::{NodeId, SocketDirection, SocketId},
     support::paint::{bezier_wire_distance, wire_intersects_knife},
-    widget::node::NodeWidget,
+    widget::{menu::dispatch_menu_shortcut, node::NodeWidget},
 };
 use egui::{Pos2, Rect, Vec2};
 use std::collections::HashMap;
@@ -666,44 +666,19 @@ impl NodeGraphWidget {
             .unwrap_or_else(|| self.view.screen_to_canvas(origin, canvas_rect.center()));
         let no_focus = ui.ctx().memory(|m| m.focused().is_none());
 
-        let pasted_texts: Vec<String> = ui.input(|i| {
-            i.events
-                .iter()
-                .filter_map(|event| match event {
-                    egui::Event::Paste(text) => Some(text.clone()),
-                    _ => None,
-                })
-                .collect()
-        });
-        let mut handled_paste = false;
         if no_focus {
-            for text in pasted_texts {
-                let effect = self.execute_action(
-                    super::action::GraphAction::Paste {
-                        text: Some(text),
-                        pos: fallback_paste_pos,
-                    },
-                    ui.ctx(),
-                );
-                self.apply_effect(effect);
-                handled_paste = true;
-            }
-
-            if !handled_paste
-                && ui.input(|i| {
-                    i.key_pressed(egui::Key::V)
-                        && i.modifiers.command
-                        && !i.modifiers.shift
-                        && !i.modifiers.alt
-                })
-            {
-                let effect = self.execute_action(
-                    super::action::GraphAction::Paste {
-                        text: None,
-                        pos: fallback_paste_pos,
-                    },
-                    ui.ctx(),
-                );
+            let any_selected = self.graph.nodes.values().any(|node| node.selected);
+            let shortcut_entries = build_context_entries(
+                &self.registry,
+                fallback_paste_pos,
+                None,
+                false,
+                self.menu_collapsed_state(None),
+                any_selected,
+                self.can_paste_nodes(),
+            );
+            if let Some(action) = dispatch_menu_shortcut(ui, &shortcut_entries) {
+                let effect = self.execute_action(action, ui.ctx());
                 self.apply_effect(effect);
             }
         }
@@ -744,8 +719,10 @@ impl NodeGraphWidget {
         {
             let screen_pos = pointer.unwrap_or(canvas_rect.center());
             let canvas_pos = self.view.screen_to_canvas(origin, screen_pos);
-            self.menu
-                .open_popup(screen_pos, build_add_entries(&self.registry, canvas_pos));
+            self.menu.open_popup(
+                screen_pos,
+                build_empty_canvas_entries(&self.registry, canvas_pos, self.can_paste_nodes()),
+            );
         }
 
         if let Some(action) = self.menu.update(ui, response, pointer, !cutting) {

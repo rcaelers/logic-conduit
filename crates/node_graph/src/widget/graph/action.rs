@@ -67,33 +67,9 @@ impl HotkeyRegistry {
             Shortcut::key(egui::Key::Backspace),
             GraphAction::Delete { target: None },
         );
-        r.bind(
-            Shortcut::key(egui::Key::X),
-            GraphAction::Delete { target: None },
-        );
-        r.bind(
-            Shortcut::command(egui::Key::X),
-            GraphAction::Cut { target: None },
-        );
-        r.bind(
-            Shortcut::command(egui::Key::C),
-            GraphAction::Copy { target: None },
-        );
-        r.bind(
-            Shortcut::shift(egui::Key::D),
-            GraphAction::DuplicateSelected,
-        );
-        r.bind(
-            Shortcut::ctrl(egui::Key::J),
-            GraphAction::AddFrame { target: None },
-        );
         r.bind(Shortcut::key(egui::Key::M), GraphAction::ToggleMinimap);
         r.bind(Shortcut::ctrl(egui::Key::S), GraphAction::Save);
         r.bind(Shortcut::ctrl(egui::Key::O), GraphAction::Load);
-        r.bind(
-            Shortcut::ctrl(egui::Key::H),
-            GraphAction::ToggleHidden { target: None },
-        );
         r
     }
 
@@ -110,9 +86,12 @@ impl HotkeyRegistry {
         self.bindings
             .iter()
             .filter_map(|(shortcut, action)| {
-                ui.input(|i| {
-                    (i.key_pressed(shortcut.key) && shortcut.matches(shortcut.key, i.modifiers))
-                        .then(|| action.clone())
+                ui.input_mut(|i| {
+                    i.consume_shortcut(&egui::KeyboardShortcut::new(
+                        shortcut.modifiers,
+                        shortcut.key,
+                    ))
+                    .then(|| action.clone())
                 })
             })
             .collect()
