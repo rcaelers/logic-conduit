@@ -1,5 +1,5 @@
-use crate::definition::{InputDef, NodeDef, OutputDef, PropDef};
-use crate::graph::Socket;
+use crate::api::{InputDef, NodeDef, OutputDef, PropDef};
+use crate::model::{Node, Socket};
 use egui::{Rect, Ui};
 use serde_json::Value;
 
@@ -33,7 +33,7 @@ pub(crate) trait NodeInstance {
 }
 
 pub(crate) struct NodeRuntime {
-    pub node: crate::graph::Node,
+    pub node: Node,
     pub instance: Box<dyn NodeInstance>,
 }
 

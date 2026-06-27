@@ -1,7 +1,6 @@
 use crate::{
-    draw::NodeLayout,
-    graph::{GraphState, NodeId},
-    view::ViewState,
+    model::{GraphState, NodeId},
+    support::ViewState,
 };
 use egui::{Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 use std::collections::HashMap;
@@ -44,7 +43,7 @@ impl MinimapInfo {
 }
 
 pub fn compute_minimap(
-    layouts: &HashMap<NodeId, NodeLayout>,
+    node_rects: impl Iterator<Item = Rect>,
     canvas_rect: Rect,
 ) -> (MinimapInfo, Rect) {
     let mini_rect = Rect::from_min_max(
@@ -53,11 +52,8 @@ pub fn compute_minimap(
     );
 
     let mut bounds: Option<Rect> = None;
-    for layout in layouts.values() {
-        bounds = Some(match bounds {
-            None => layout.node_rect,
-            Some(b) => b.union(layout.node_rect),
-        });
+    for nr in node_rects {
+        bounds = Some(bounds.map_or(nr, |b| b.union(nr)));
     }
     let canvas_bounds = bounds
         .unwrap_or_else(|| Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0)))
@@ -71,7 +67,7 @@ pub fn draw_minimap(
     painter: &Painter,
     info: &MinimapInfo,
     graph: &GraphState,
-    layouts: &HashMap<NodeId, NodeLayout>,
+    node_rects: &HashMap<NodeId, Rect>,
     view: &ViewState,
     canvas_rect: Rect,
 ) {
@@ -89,12 +85,11 @@ pub fn draw_minimap(
         egui::StrokeKind::Middle,
     );
 
-    for (id, layout) in layouts {
-        let node = &graph.nodes[id];
-        let mn = info.canvas_to_mini(layout.node_rect.min);
-        let mx = info.canvas_to_mini(layout.node_rect.max);
-        let nr = Rect::from_min_max(mn, mx);
-        let clamped = nr.intersect(mini_rect);
+    for (&id, &nr) in node_rects {
+        let node = &graph.nodes[&id];
+        let mn = info.canvas_to_mini(nr.min);
+        let mx = info.canvas_to_mini(nr.max);
+        let clamped = Rect::from_min_max(mn, mx).intersect(mini_rect);
         if clamped.area() < 0.3 {
             continue;
         }

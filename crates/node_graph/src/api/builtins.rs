@@ -1,5 +1,6 @@
-use crate::control::InlineControl;
-use crate::socket::{SocketDef, SocketShape, SocketWithControlDef};
+use super::control::InlineControl;
+use super::socket::{SocketDef, SocketWithControlDef};
+use crate::model::SocketShape;
 use egui::{Align, Align2, Color32, CornerRadius, FontId, Layout, Pos2, Rect, Sense, Ui, Vec2};
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +32,7 @@ impl SocketDef for IntSocket {
         "Int"
     }
     fn color() -> Color32 {
-        Color32::from_rgb(100, 180, 100)
+        Color32::from_rgb(110, 155, 110)
     }
     fn shape() -> SocketShape {
         SocketShape::Diamond

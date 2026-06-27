@@ -1,6 +1,6 @@
-use crate::definition::NodeDef;
-use crate::graph::{Node, NodeId, NodeKind, Socket};
-use crate::runtime::{NodeInstance, NodeRuntime, TypedNode};
+use super::{NodeInstance, NodeRuntime, TypedNode};
+use crate::api::NodeDef;
+use crate::model::{Node, NodeId, NodeKind, Socket};
 use egui::Pos2;
 
 // ── Low-level node construction ───────────────────────────────────────────────
@@ -42,6 +42,7 @@ fn build_node<T: NodeDef>(id: NodeId, pos: Pos2, state: T::State) -> NodeRuntime
         pos,
         inputs: input_sockets,
         outputs: output_sockets,
+        collapsed: false,
         state: state_json,
         property_count: properties.len(),
         selected: false,

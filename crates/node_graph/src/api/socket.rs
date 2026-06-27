@@ -1,15 +1,6 @@
-use crate::control::InlineControl;
+use super::control::InlineControl;
+use crate::model::SocketShape;
 use egui::Color32;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum SocketShape {
-    #[default]
-    Circle,
-    Diamond,
-    Square,
-    Triangle,
-}
 
 pub trait SocketDef: 'static + Send + Sync {
     type Value: 'static + Send + Sync;

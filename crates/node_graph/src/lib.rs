@@ -1,26 +1,17 @@
-mod builtins;
-mod control;
-mod definition;
-mod draw;
-mod graph;
-mod interaction;
-mod minimap;
-mod registry;
+mod api;
+mod model;
 mod runtime;
-mod socket;
-mod view;
+mod support;
 mod widget;
 
-pub use builtins::{
-    BoolSocket, BoolValue, EnumValue, FloatSocket, FloatValue, IntSocket, IntValue, StrSocket,
-    StringValue,
+pub use api::{
+    BoolSocket, BoolValue, EnumValue, FloatSocket, FloatValue, InlineControl, InputDef, IntSocket,
+    IntValue, NodeDef, OutputDef, PropDef, SocketDef, SocketWithControlDef, StrSocket, StringValue,
+    sockets_compatible,
 };
-pub use definition::{InputDef, NodeDef, OutputDef, PropDef};
-pub use graph::{
+pub use model::{
     Connection, Frame, FrameId, GraphState, Node, NodeId, NodeKind, Socket, SocketDirection,
-    SocketId,
+    SocketId, SocketShape,
 };
-pub use control::InlineControl;
-pub use socket::{SocketDef, SocketShape, SocketWithControlDef, sockets_compatible};
-pub use registry::NodeTypeRegistry;
+pub use runtime::NodeTypeRegistry;
 pub use widget::NodeGraphWidget;

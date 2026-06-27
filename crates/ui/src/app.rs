@@ -34,7 +34,7 @@ impl SocketDef for Signal {
         "Signal"
     }
     fn color() -> Color32 {
-        Color32::from_rgb(80, 200, 80)
+        Color32::from_rgb(95, 155, 95)
     }
 }
 
@@ -61,19 +61,16 @@ struct DslFileSourceState {
     channels: IntValue,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct UsbLogicAnalyzerState {
     sample_rate: IntValue,
     channels: IntValue,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SpiDecoderState {
     mode: EnumValue,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct UartDecoderState {
@@ -82,25 +79,21 @@ struct UartDecoderState {
     stop_bits: EnumValue,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ParallelDecoderState {
     width: IntValue,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProtocolFilterState {
     pattern: StringValue,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TimeWindowState {
     start_ms: FloatValue,
     end_ms: FloatValue,
 }
-
 
 // ── Node type definitions ─────────────────────────────────────────────────────
 
@@ -126,7 +119,9 @@ impl NodeDef for DslFileSource {
     }
 
     fn outputs() -> Vec<OutputDef<Self::State>> {
-        (0..32_usize).map(|i| OutputDef::new::<Signal>(format!("Ch {i}"))).collect()
+        (0..32_usize)
+            .map(|i| OutputDef::new::<Signal>(format!("Ch {i}")))
+            .collect()
     }
 
     fn state() -> Self::State {
@@ -136,11 +131,7 @@ impl NodeDef for DslFileSource {
         }
     }
 
-    fn on_update(
-        state: &mut Self::State,
-        _inputs: &mut [Socket],
-        outputs: &mut [Socket],
-    ) {
+    fn on_update(state: &mut Self::State, _inputs: &mut [Socket], outputs: &mut [Socket]) {
         let channels = (state.channels.value as usize).clamp(1, 32);
         for (index, output) in outputs.iter_mut().enumerate() {
             output.visible = index < channels;
@@ -164,13 +155,17 @@ impl NodeDef for UsbLogicAnalyzer {
 
     fn inputs() -> Vec<InputDef<Self::State>> {
         vec![
-            InputDef::control::<node_graph::IntSocket>("Sample Rate", |state| &mut state.sample_rate),
+            InputDef::control::<node_graph::IntSocket>("Sample Rate", |state| {
+                &mut state.sample_rate
+            }),
             InputDef::control::<node_graph::IntSocket>("Channels", |state| &mut state.channels),
         ]
     }
 
     fn outputs() -> Vec<OutputDef<Self::State>> {
-        (0..32_usize).map(|i| OutputDef::new::<Signal>(format!("Ch {i}"))).collect()
+        (0..32_usize)
+            .map(|i| OutputDef::new::<Signal>(format!("Ch {i}")))
+            .collect()
     }
 
     fn state() -> Self::State {
@@ -180,11 +175,7 @@ impl NodeDef for UsbLogicAnalyzer {
         }
     }
 
-    fn on_update(
-        state: &mut Self::State,
-        _inputs: &mut [Socket],
-        outputs: &mut [Socket],
-    ) {
+    fn on_update(state: &mut Self::State, _inputs: &mut [Socket], outputs: &mut [Socket]) {
         let channels = (state.channels.value as usize).clamp(1, 32);
         for (index, output) in outputs.iter_mut().enumerate() {
             output.visible = index < channels;
@@ -232,11 +223,7 @@ impl NodeDef for SpiDecoder {
         vec![PropDef::control("mode", "Mode", |state| &mut state.mode)]
     }
 
-    fn on_update(
-        state: &mut Self::State,
-        _inputs: &mut [Socket],
-        outputs: &mut [Socket],
-    ) {
+    fn on_update(state: &mut Self::State, _inputs: &mut [Socket], outputs: &mut [Socket]) {
         if let Some(miso) = outputs.get_mut(1) {
             miso.visible = state.mode.index == 0;
         }
@@ -481,16 +468,40 @@ fn populate_demo(widget: &mut NodeGraphWidget) {
     // Ch 0→CLK, Ch 1→MOSI, Ch 2→MISO, Ch 3→CS
     for (ch, input_idx) in [(0, 0), (1, 1), (2, 2), (3, 3)] {
         g.add_connection(
-            SocketId { node: id0, index: ch, direction: SocketDirection::Output },
-            SocketId { node: id1, index: input_idx, direction: SocketDirection::Input },
+            SocketId {
+                node: id0,
+                index: ch,
+                direction: SocketDirection::Output,
+            },
+            SocketId {
+                node: id1,
+                index: input_idx,
+                direction: SocketDirection::Input,
+            },
         );
     }
     g.add_connection(
-        SocketId { node: id1, index: 0, direction: SocketDirection::Output },
-        SocketId { node: id2, index: 0, direction: SocketDirection::Input },
+        SocketId {
+            node: id1,
+            index: 0,
+            direction: SocketDirection::Output,
+        },
+        SocketId {
+            node: id2,
+            index: 0,
+            direction: SocketDirection::Input,
+        },
     );
     g.add_connection(
-        SocketId { node: id2, index: 0, direction: SocketDirection::Output },
-        SocketId { node: id3, index: 0, direction: SocketDirection::Input },
+        SocketId {
+            node: id2,
+            index: 0,
+            direction: SocketDirection::Output,
+        },
+        SocketId {
+            node: id3,
+            index: 0,
+            direction: SocketDirection::Input,
+        },
     );
 }

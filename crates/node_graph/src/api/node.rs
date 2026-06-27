@@ -1,9 +1,9 @@
-use crate::graph::Socket;
-use crate::control::InlineControl;
-use crate::socket::{SocketDef, SocketShape, SocketWithControlDef};
+use super::control::InlineControl;
+use super::socket::{SocketDef, SocketWithControlDef};
+use crate::model::{Socket, SocketShape};
 use egui::{Color32, Rect, Ui};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::fmt;
 
 pub struct InputDef<S> {
@@ -77,14 +77,7 @@ impl<S: 'static> OutputDef<S> {
 type ControlAccessor<S, T> = for<'a> fn(&'a mut S) -> &'a mut T;
 
 pub(crate) trait ControlBinding<S> {
-    fn draw(
-        &self,
-        state: &mut S,
-        ui: &mut Ui,
-        rect: Rect,
-        zoom: f32,
-        clip_rect: Rect,
-    ) -> bool;
+    fn draw(&self, state: &mut S, ui: &mut Ui, rect: Rect, zoom: f32, clip_rect: Rect) -> bool;
 }
 
 struct ControlBindingRenderer<S, T> {
@@ -93,14 +86,7 @@ struct ControlBindingRenderer<S, T> {
 }
 
 impl<S, T: InlineControl> ControlBinding<S> for ControlBindingRenderer<S, T> {
-    fn draw(
-        &self,
-        state: &mut S,
-        ui: &mut Ui,
-        rect: Rect,
-        zoom: f32,
-        clip_rect: Rect,
-    ) -> bool {
+    fn draw(&self, state: &mut S, ui: &mut Ui, rect: Rect, zoom: f32, clip_rect: Rect) -> bool {
         (self.accessor)(state).draw_widget(ui, &self.label, rect, zoom, clip_rect)
     }
 }
@@ -159,11 +145,7 @@ pub trait NodeDef: 'static {
     {
         vec![]
     }
-    fn on_update(
-        _state: &mut Self::State,
-        _inputs: &mut [Socket],
-        _outputs: &mut [Socket],
-    )
+    fn on_update(_state: &mut Self::State, _inputs: &mut [Socket], _outputs: &mut [Socket])
     where
         Self: Sized,
     {
