@@ -1,7 +1,8 @@
 use egui::Color32;
 use node_graph::{
-    EnumValue, FloatValue, InputDef, IntValue, NodeDef, NodeGraphWidget, NodeTypeRegistry,
-    OutputDef, PropDef, Socket, SocketDef, SocketDirection, SocketId, SocketShape, StringValue,
+    EnumValue, FileValue, FloatValue, InputDef, IntValue, NodeDef, NodeGraphWidget,
+    NodeTypeRegistry, OutputDef, PropDef, Socket, SocketDef, SocketDirection, SocketId,
+    SocketShape, StringValue,
 };
 use serde::{Deserialize, Serialize};
 
@@ -57,7 +58,7 @@ impl SocketDef for Protocol {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DslFileSourceState {
-    file: StringValue,
+    file: FileValue,
     channels: IntValue,
 }
 
@@ -113,7 +114,7 @@ impl NodeDef for DslFileSource {
 
     fn inputs() -> Vec<InputDef<Self::State>> {
         vec![
-            InputDef::control::<node_graph::StrSocket>("File", |state| &mut state.file),
+            InputDef::control::<node_graph::FileSocket>("File", |state| &mut state.file),
             InputDef::control::<node_graph::IntSocket>("Channels", |state| &mut state.channels),
         ]
     }
@@ -126,7 +127,12 @@ impl NodeDef for DslFileSource {
 
     fn state() -> Self::State {
         DslFileSourceState {
-            file: StringValue::new(""),
+            file: FileValue::with_filter(
+                "",
+                "Select DSLogic capture",
+                "DSLogic captures",
+                &["dsl"],
+            ),
             channels: IntValue::new(8, 1, 32),
         }
     }

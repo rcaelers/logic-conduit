@@ -10,6 +10,7 @@ pub struct BoolSocket;
 pub struct IntSocket;
 pub struct FloatSocket;
 pub struct StrSocket;
+pub struct FileSocket;
 
 impl SocketDef for BoolSocket {
     type Value = bool;
@@ -61,6 +62,20 @@ impl SocketDef for StrSocket {
     }
 }
 
+impl SocketDef for FileSocket {
+    type Value = String;
+
+    fn type_name() -> &'static str {
+        "File"
+    }
+    fn color() -> Color32 {
+        Color32::from_rgb(170, 145, 95)
+    }
+    fn shape() -> SocketShape {
+        SocketShape::Square
+    }
+}
+
 impl SocketWithControlDef for BoolSocket {
     type Control = BoolValue;
 }
@@ -75,6 +90,10 @@ impl SocketWithControlDef for FloatSocket {
 
 impl SocketWithControlDef for StrSocket {
     type Control = StringValue;
+}
+
+impl SocketWithControlDef for FileSocket {
+    type Control = FileValue;
 }
 
 // ── Built-in value types ──────────────────────────────────────────────────────
@@ -285,6 +304,93 @@ impl InlineControl for StringValue {
                         .hint_text(label)
                         .desired_width(rect.width() - 4.0),
                 );
+            },
+        );
+        self.value != old
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileFilter {
+    pub name: String,
+    pub extensions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileValue {
+    pub value: String,
+    #[serde(default)]
+    pub dialog_title: String,
+    #[serde(default)]
+    pub filters: Vec<FileFilter>,
+}
+
+impl FileValue {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            dialog_title: "Select file".to_string(),
+            filters: Vec::new(),
+        }
+    }
+
+    pub fn with_filter(
+        value: impl Into<String>,
+        dialog_title: impl Into<String>,
+        filter_name: impl Into<String>,
+        extensions: &[&str],
+    ) -> Self {
+        Self {
+            value: value.into(),
+            dialog_title: dialog_title.into(),
+            filters: vec![FileFilter {
+                name: filter_name.into(),
+                extensions: extensions
+                    .iter()
+                    .map(|extension| extension.to_string())
+                    .collect(),
+            }],
+        }
+    }
+}
+
+impl InlineControl for FileValue {
+    fn draw_widget(
+        &mut self,
+        ui: &mut Ui,
+        label: &str,
+        rect: Rect,
+        _zoom: f32,
+        clip_rect: Rect,
+    ) -> bool {
+        let old = self.value.clone();
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(rect)
+                .layout(Layout::left_to_right(Align::Center)),
+            |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(clip_rect));
+                ui.style_mut().spacing.item_spacing = Vec2::splat(2.0);
+                let button_width = 28.0;
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.value)
+                        .hint_text(label)
+                        .desired_width((rect.width() - button_width - 6.0).max(24.0)),
+                );
+                if ui.button("…").clicked() {
+                    let mut dialog = rfd::FileDialog::new();
+                    if !self.dialog_title.is_empty() {
+                        dialog = dialog.set_title(&self.dialog_title);
+                    }
+                    for filter in &self.filters {
+                        let extensions: Vec<&str> =
+                            filter.extensions.iter().map(String::as_str).collect();
+                        dialog = dialog.add_filter(&filter.name, &extensions);
+                    }
+                    if let Some(path) = dialog.pick_file() {
+                        self.value = path.display().to_string();
+                    }
+                }
             },
         );
         self.value != old
