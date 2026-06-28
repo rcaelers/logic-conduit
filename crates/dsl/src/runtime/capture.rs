@@ -108,7 +108,7 @@ pub trait CaptureSource {
         let mut sampled_channels = Vec::with_capacity(channels.len());
         for &channel in channels {
             if channel >= metadata.total_probes {
-                return Err(crate::DslError::InvalidProbe(channel));
+                return Err(crate::Error::InvalidProbe(channel));
             }
 
             let name = metadata
@@ -156,10 +156,20 @@ pub trait BlockCaptureSource: CaptureSource {
     fn read_packed_block(&mut self, channel: usize, block: u64) -> Result<Arc<[u8]>>;
 }
 
-pub trait CaptureSourceFactory: Clone + Send + Sync + 'static {
-    type Source: BlockCaptureSource + Send + 'static;
+/// Reloadable provider for capture data.
+///
+/// File formats, live captures, and generated/test data should implement this
+/// boundary. The indexer only uses this trait; it does not know how the source
+/// is opened, reloaded, or backed.
+pub trait CaptureDataSource: Clone + Send + Sync + 'static {
+    type Reader: BlockCaptureSource + Send + 'static;
 
-    fn open(&self) -> Result<Self::Source>;
+    /// Open a fresh reader for the current source revision.
+    ///
+    /// For finite files this usually opens the file. For live sources this can
+    /// return a reader over the latest immutable snapshot or a reloadable
+    /// source-specific view.
+    fn open_reader(&self) -> Result<Self::Reader>;
     fn metadata(&self) -> &CaptureMetadata;
     fn fingerprint(&self) -> CaptureFingerprint;
     fn index_path(&self) -> Option<PathBuf>;

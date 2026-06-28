@@ -21,8 +21,6 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use thiserror::Error;
-
 pub mod nodes;
 pub mod runtime;
 
@@ -35,15 +33,18 @@ pub use runtime::SampleBlock;
 
 // Re-export streaming nodes - DslFileSource only (SpiCommandController is application-specific)
 pub use nodes::{
-    BlockCaptureSource, CaptureActivity, CaptureBucket, CaptureFingerprint, CaptureMetadata,
-    CaptureMode, CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureSourceFactory,
-    CaptureTransition, ClockEdge, ClockSource, DsLogicU3Pro16, DsLogicU3Pro16Source, DslActivity,
-    DslBucket, DslCaptureReader, DslChunkedCaptureReader, DslFileCaptureFactory, DslFileSource,
-    DslHeader, DslIndexProgress, DslSampledChannel, DslSampledWindow, DslTransition,
-    IndexedCaptureReader, LinkSpeed, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
-    LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
-    LogicEncodingRequest, LogicTrigger, LogicTriggerStage, RusbTransport, TriggerCondition,
-    TriggerLogic, UsbTransport,
+    CaptureMode, ClockEdge, ClockSource, DsLogicU3Pro16, DsLogicU3Pro16Source, DslCaptureReader,
+    DslChunkedCaptureReader, DslFileCaptureDataSource, DslFileSource, LinkSpeed, LogicAnalyzer,
+    LogicAnalyzerError, LogicAnalyzerInfo, LogicAnalyzerResult, LogicAnalyzerSource,
+    LogicCaptureConfig, LogicChunk, LogicEncoding, LogicEncodingRequest, LogicTrigger,
+    LogicTriggerStage, RusbTransport, TriggerCondition, TriggerLogic, UsbTransport,
+};
+
+pub use runtime::{
+    BlockCaptureSource, CaptureActivity, CaptureBucket, CaptureDataSource, CaptureFingerprint,
+    CaptureIndexProgress, CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow,
+    CaptureSource, CaptureTransition, DslActivity, DslBucket, DslHeader, DslSampledChannel,
+    DslSampledWindow, DslTransition, IndexedCaptureReader,
 };
 
 // Re-export streaming decoders
@@ -57,8 +58,8 @@ pub use runtime::{
     register_type,
 };
 
-#[derive(Error, Debug)]
-pub enum DslError {
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -84,4 +85,6 @@ pub enum DslError {
     OutOfBounds(u64),
 }
 
-pub type Result<T> = std::result::Result<T, DslError>;
+pub type DslError = Error;
+
+pub type Result<T> = std::result::Result<T, Error>;

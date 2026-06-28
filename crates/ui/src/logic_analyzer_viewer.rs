@@ -1,6 +1,6 @@
 use dsl::{
-    CaptureMetadata, CaptureSampledWindow, CaptureSource, CaptureSourceFactory,
-    DslFileCaptureFactory, DslIndexProgress, IndexedCaptureReader,
+    CaptureDataSource, CaptureIndexProgress, CaptureMetadata, CaptureSampledWindow, CaptureSource,
+    DslFileCaptureDataSource, IndexedCaptureReader,
 };
 use egui::{Align2, Color32, FontId, Painter, PointerButton, Pos2, Rect, Sense, Stroke, Ui, vec2};
 use std::path::{Path, PathBuf};
@@ -100,7 +100,7 @@ enum WorkerResponse {
     },
     IndexProgress {
         path: PathBuf,
-        progress: DslIndexProgress,
+        progress: CaptureIndexProgress,
     },
     IndexReady {
         path: PathBuf,
@@ -173,8 +173,8 @@ impl LogicAnalyzerViewer {
         }
 
         let path = path.to_path_buf();
-        let factory = match DslFileCaptureFactory::open(&path) {
-            Ok(factory) => factory,
+        let data_source = match DslFileCaptureDataSource::open(&path) {
+            Ok(data_source) => data_source,
             Err(err) => {
                 self.capture_path = Some(path.clone());
                 self.capture_info = None;
@@ -186,12 +186,12 @@ impl LogicAnalyzerViewer {
                 return;
             }
         };
-        self.set_capture_factory(path, factory);
+        self.set_capture_data_source(path, data_source);
     }
 
-    pub fn set_capture_factory<F>(&mut self, identity: PathBuf, factory: F)
+    pub fn set_capture_data_source<S>(&mut self, identity: PathBuf, data_source: S)
     where
-        F: CaptureSourceFactory,
+        S: CaptureDataSource,
     {
         if self.capture_path.as_deref() == Some(identity.as_path()) {
             return;
@@ -204,11 +204,11 @@ impl LogicAnalyzerViewer {
         self.pending_window = None;
         self.index_progress = None;
         self.fit_to_capture = true;
-        self.status = format!("Opening {}", factory.display_name());
+        self.status = format!("Opening {}", data_source.display_name());
 
         let (request_tx, request_rx) = mpsc::channel();
         let (response_tx, response_rx) = mpsc::channel();
-        spawn_capture_worker(identity, factory, request_rx, response_tx);
+        spawn_capture_worker(identity, data_source, request_rx, response_tx);
         self.worker_requests = Some(request_tx);
         self.worker_responses = Some(response_rx);
     }
@@ -793,12 +793,26 @@ impl LogicAnalyzerViewer {
                 .max(x0 + 1.0);
 
             if bucket.toggle {
-                let x = (x0 + x1) * 0.5;
                 let y0 = if current { high_y } else { low_y };
                 let y1 = if bucket.last { high_y } else { low_y };
-                painter.line_segment([Pos2::new(x0, y0), Pos2::new(x, y0)], flat_stroke);
-                painter.line_segment([Pos2::new(x, low_y), Pos2::new(x, high_y)], edge_stroke);
-                painter.line_segment([Pos2::new(x, y1), Pos2::new(x1, y1)], flat_stroke);
+                if current == bucket.last {
+                    let xa = x0 + (x1 - x0) * 0.35;
+                    let xb = x0 + (x1 - x0) * 0.65;
+                    let pulse_y = if current { low_y } else { high_y };
+                    painter.line_segment([Pos2::new(x0, y0), Pos2::new(xa, y0)], flat_stroke);
+                    painter.line_segment([Pos2::new(xa, y0), Pos2::new(xa, pulse_y)], edge_stroke);
+                    painter.line_segment(
+                        [Pos2::new(xa, pulse_y), Pos2::new(xb, pulse_y)],
+                        flat_stroke,
+                    );
+                    painter.line_segment([Pos2::new(xb, pulse_y), Pos2::new(xb, y0)], edge_stroke);
+                    painter.line_segment([Pos2::new(xb, y0), Pos2::new(x1, y0)], flat_stroke);
+                } else {
+                    let x = (x0 + x1) * 0.5;
+                    painter.line_segment([Pos2::new(x0, y0), Pos2::new(x, y0)], flat_stroke);
+                    painter.line_segment([Pos2::new(x, low_y), Pos2::new(x, high_y)], edge_stroke);
+                    painter.line_segment([Pos2::new(x, y1), Pos2::new(x1, y1)], flat_stroke);
+                }
             } else {
                 let y = if bucket.last { high_y } else { low_y };
                 painter.line_segment([Pos2::new(x0, y), Pos2::new(x1, y)], flat_stroke);
@@ -815,14 +829,14 @@ impl LogicAnalyzerViewer {
 
 fn spawn_capture_worker(
     identity: PathBuf,
-    factory: impl CaptureSourceFactory,
+    data_source: impl CaptureDataSource,
     requests: Receiver<WorkerRequest>,
     responses: Sender<WorkerResponse>,
 ) {
     std::thread::Builder::new()
         .name("dsl_capture_viewer".to_string())
         .spawn(move || {
-            let header = factory.metadata().clone();
+            let header = data_source.metadata().clone();
             let samplerate_hz = header.samplerate_hz;
             let duration_us = header.duration_us();
             if responses
@@ -836,7 +850,7 @@ fn spawn_capture_worker(
                 return;
             }
 
-            match factory.open() {
+            match data_source.open_reader() {
                 Ok(mut source) => {
                     let channel_count = header.total_probes.min(16);
                     let channels: Vec<usize> = (0..channel_count).collect();
@@ -886,8 +900,9 @@ fn spawn_capture_worker(
                 .checked_sub(std::time::Duration::from_millis(100))
                 .unwrap_or_else(std::time::Instant::now);
             let mut last_progress_completed = 0_usize;
-            let mut reader =
-                match IndexedCaptureReader::open_factory_with_progress(factory, |progress| {
+            let mut reader = match IndexedCaptureReader::open_data_source_with_progress(
+                data_source,
+                |progress| {
                     let now = std::time::Instant::now();
                     let is_first = progress.completed_roots == 0;
                     let is_done = progress.completed_roots >= progress.total_roots;
@@ -905,18 +920,19 @@ fn spawn_capture_worker(
                             progress,
                         });
                     }
-                })
-                .map(|reader| reader.with_max_cached_roots(8))
-                {
-                    Ok(reader) => reader,
-                    Err(err) => {
-                        let _ = responses.send(WorkerResponse::Error {
-                            path: identity,
-                            message: format!("Could not open capture: {err}"),
-                        });
-                        return;
-                    }
-                };
+                },
+            )
+            .map(|reader| reader.with_max_cached_roots(8))
+            {
+                Ok(reader) => reader,
+                Err(err) => {
+                    let _ = responses.send(WorkerResponse::Error {
+                        path: identity,
+                        message: format!("Could not open capture: {err}"),
+                    });
+                    return;
+                }
+            };
 
             if responses
                 .send(WorkerResponse::IndexReady {

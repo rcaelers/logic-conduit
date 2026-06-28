@@ -1,9 +1,8 @@
 use super::capture::{
-    BlockCaptureSource, CaptureActivity, CaptureBucket, CaptureMetadata, CaptureSampledChannel,
-    CaptureSampledWindow, CaptureSource, CaptureSourceFactory, CaptureTransition, packed_bit,
+    BlockCaptureSource, CaptureActivity, CaptureBucket, CaptureDataSource, CaptureMetadata,
+    CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition, packed_bit,
 };
-use super::dsl_file::DslFileCaptureFactory;
-use crate::{DslError, Result};
+use crate::{Error, Result};
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -17,13 +16,13 @@ const L2_GROUP_SAMPLES: u64 = 4_096;
 const L3_GROUP_SAMPLES: u64 = 262_144;
 const L1_WORDS: usize = 4_096;
 const L2_WORDS: usize = 64;
-const MAGIC: &[u8; 8] = b"DSLIDX03";
+const MAGIC: &[u8; 8] = b"CAPIDX03";
 const HEADER_SIZE: u64 = 96;
 const DIR_ENTRY_SIZE: u64 = 48;
 
 #[derive(Debug, Clone, Copy)]
 struct IndexHeader {
-    source_len: u64,
+    source_revision: u64,
     total_samples: u64,
     total_blocks: u64,
     samples_per_block: u64,
@@ -75,12 +74,12 @@ struct GroupSummary {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DslIndexProgress {
+pub struct CaptureIndexProgress {
     pub completed_roots: usize,
     pub total_roots: usize,
 }
 
-impl DslIndexProgress {
+impl CaptureIndexProgress {
     pub fn fraction(self) -> f32 {
         if self.total_roots == 0 {
             1.0
@@ -92,13 +91,13 @@ impl DslIndexProgress {
 
 /// Chunked, sidecar-backed capture reader for interactive waveform viewing.
 ///
-/// This reader builds/loads a `.dsl.idx` sidecar containing per-channel root chunks.
-/// Each root chunk covers up to 64 raw DSL blocks and contains toggle + last-value
+/// This reader builds/loads a persistent waveform sidecar containing per-channel root chunks.
+/// Each root chunk covers up to 64 packed capture blocks and contains toggle + last-value
 /// summaries. Zoomed-out windows are served from the sidecar index without reading
-/// raw ZIP blocks. Deep zoom below 64 samples per display point falls back to the
+/// packed source blocks. Deep zoom below 64 samples per display point falls back to the
 /// existing raw reader, still on the worker thread.
-pub struct IndexedCaptureReader<F: CaptureSourceFactory> {
-    factory: F,
+pub struct IndexedCaptureReader<S: CaptureDataSource> {
+    data_source: S,
     index_path: PathBuf,
     header: CaptureMetadata,
     index_file: File,
@@ -106,50 +105,32 @@ pub struct IndexedCaptureReader<F: CaptureSourceFactory> {
     root_cache: HashMap<(usize, usize), Arc<RootChunk>>,
     root_cache_order: VecDeque<(usize, usize)>,
     max_cached_roots: usize,
-    raw_reader: F::Source,
+    raw_reader: S::Reader,
 }
 
-pub type DslChunkedCaptureReader = IndexedCaptureReader<DslFileCaptureFactory>;
-
-impl IndexedCaptureReader<DslFileCaptureFactory> {
-    pub fn open<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
-        let factory = DslFileCaptureFactory::open(path)?;
-        Self::open_factory_with_progress(factory, |_| {})
-    }
-
-    pub fn open_with_progress<P, C>(path: P, progress: C) -> Result<Self>
-    where
-        P: AsRef<std::path::Path>,
-        C: FnMut(DslIndexProgress),
-    {
-        let factory = DslFileCaptureFactory::open(path)?;
-        Self::open_factory_with_progress(factory, progress)
-    }
-}
-
-impl<F> IndexedCaptureReader<F>
+impl<S> IndexedCaptureReader<S>
 where
-    F: CaptureSourceFactory,
+    S: CaptureDataSource,
 {
     const DEFAULT_MAX_CACHED_ROOTS: usize = 8;
 
-    pub fn open_factory(factory: F) -> Result<Self> {
-        Self::open_factory_with_progress(factory, |_| {})
+    pub fn open_data_source(data_source: S) -> Result<Self> {
+        Self::open_data_source_with_progress(data_source, |_| {})
     }
 
-    pub fn open_factory_with_progress<C>(factory: F, progress: C) -> Result<Self>
+    pub fn open_data_source_with_progress<C>(data_source: S, progress: C) -> Result<Self>
     where
-        C: FnMut(DslIndexProgress),
+        C: FnMut(CaptureIndexProgress),
     {
-        let header = factory.metadata().clone();
-        let fingerprint = factory.fingerprint();
-        let index_path = factory
+        let header = data_source.metadata().clone();
+        let fingerprint = data_source.fingerprint();
+        let index_path = data_source
             .index_path()
-            .ok_or_else(|| DslError::ParseError("capture source is not indexable".to_string()))?;
+            .ok_or_else(|| Error::ParseError("capture source is not indexable".to_string()))?;
 
         if !valid_index(&index_path, &header, fingerprint.revision)? {
             build_index(
-                &factory,
+                &data_source,
                 &index_path,
                 &header,
                 fingerprint.revision,
@@ -167,10 +148,10 @@ where
             header.total_probes,
             roots_per_channel,
         )?;
-        let raw_reader = factory.open()?;
+        let raw_reader = data_source.open_reader()?;
 
         Ok(Self {
-            factory,
+            data_source,
             index_path,
             header,
             index_file,
@@ -189,7 +170,7 @@ where
     }
 
     pub fn display_name(&self) -> String {
-        self.factory.display_name()
+        self.data_source.display_name()
     }
 
     pub fn index_path(&self) -> &Path {
@@ -264,7 +245,7 @@ where
         group_samples: u64,
     ) -> Result<CaptureSampledChannel> {
         if channel >= self.header.total_probes {
-            return Err(DslError::InvalidProbe(channel));
+            return Err(Error::InvalidProbe(channel));
         }
 
         let name = self
@@ -465,7 +446,7 @@ where
             .get(channel)
             .and_then(|roots| roots.get(root_index))
             .copied()
-            .ok_or_else(|| DslError::ParseError("root chunk index out of bounds".to_string()))?;
+            .ok_or_else(|| Error::ParseError("root chunk index out of bounds".to_string()))?;
         self.index_file.seek(SeekFrom::Start(entry.offset))?;
         let mut data = vec![0_u8; entry.len as usize];
         self.index_file.read_exact(&mut data)?;
@@ -503,22 +484,22 @@ where
     }
 }
 
-fn valid_index(path: &Path, header: &CaptureMetadata, source_len: u64) -> Result<bool> {
+fn valid_index(path: &Path, header: &CaptureMetadata, source_revision: u64) -> Result<bool> {
     let Ok(mut file) = File::open(path) else {
         return Ok(false);
     };
     let Ok(index_header) = read_index_header(&mut file) else {
         return Ok(false);
     };
-    Ok(validate_index_header(&index_header, header, source_len).is_ok())
+    Ok(validate_index_header(&index_header, header, source_revision).is_ok())
 }
 
 fn validate_index_header(
     index_header: &IndexHeader,
     header: &CaptureMetadata,
-    source_len: u64,
+    source_revision: u64,
 ) -> Result<()> {
-    if index_header.source_len != source_len
+    if index_header.source_revision != source_revision
         || index_header.total_samples != header.total_samples
         || index_header.total_blocks != header.total_blocks
         || index_header.samples_per_block != header.samples_per_block
@@ -527,9 +508,7 @@ fn validate_index_header(
         || index_header.roots_per_channel
             != (header.total_blocks as usize).div_ceil(BLOCKS_PER_ROOT) as u32
     {
-        return Err(DslError::ParseError(
-            "waveform sidecar is stale".to_string(),
-        ));
+        return Err(Error::ParseError("waveform sidecar is stale".to_string()));
     }
     Ok(())
 }
@@ -542,16 +521,16 @@ struct BuildJob {
     block_count: u32,
 }
 
-fn build_index<C, P>(
-    factory: &C,
+fn build_index<S, P>(
+    data_source: &S,
     index_path: &Path,
     header: &CaptureMetadata,
-    source_len: u64,
+    source_revision: u64,
     mut progress: P,
 ) -> Result<()>
 where
-    C: CaptureSourceFactory,
-    P: FnMut(DslIndexProgress),
+    S: CaptureDataSource,
+    P: FnMut(CaptureIndexProgress),
 {
     let temp_path = index_path.with_extension("idx.tmp");
     let roots_per_channel = (header.total_blocks as usize).div_ceil(BLOCKS_PER_ROOT);
@@ -583,12 +562,12 @@ where
     }
 
     let total_jobs = jobs.len();
-    progress(DslIndexProgress {
+    progress(CaptureIndexProgress {
         completed_roots: 0,
         total_roots: total_jobs,
     });
 
-    let mut roots = build_roots_parallel(factory.clone(), header, jobs, &mut progress)?;
+    let mut roots = build_roots_parallel(data_source.clone(), header, jobs, &mut progress)?;
     for channel_roots in roots.iter_mut().take(header.total_probes) {
         let mut previous_last = None;
         for root in channel_roots.iter_mut().flatten() {
@@ -607,7 +586,7 @@ where
     }
 
     let index_header = IndexHeader {
-        source_len,
+        source_revision,
         total_samples: header.total_samples,
         total_blocks: header.total_blocks,
         samples_per_block: header.samples_per_block,
@@ -631,14 +610,14 @@ where
     Ok(())
 }
 
-fn build_roots_parallel<F>(
-    factory: F,
+fn build_roots_parallel<S>(
+    data_source: S,
     header: &CaptureMetadata,
     jobs: VecDeque<BuildJob>,
-    progress: &mut impl FnMut(DslIndexProgress),
+    progress: &mut impl FnMut(CaptureIndexProgress),
 ) -> Result<Vec<Vec<Option<RootChunk>>>>
 where
-    F: CaptureSourceFactory,
+    S: CaptureDataSource,
 {
     let total_jobs = jobs.len();
     let roots_per_channel = (header.total_blocks as usize).div_ceil(BLOCKS_PER_ROOT);
@@ -663,11 +642,11 @@ where
     for _ in 0..worker_count {
         let jobs = Arc::clone(&jobs);
         let header = Arc::clone(&header);
-        let factory = factory.clone();
+        let data_source = data_source.clone();
         let result_tx = result_tx.clone();
         workers.push(thread::spawn(move || {
             let worker_result = || -> Result<()> {
-                let mut source = factory.open()?;
+                let mut source = data_source.open_reader()?;
                 loop {
                     let Some(job) = jobs.lock().unwrap().pop_front() else {
                         break;
@@ -703,7 +682,7 @@ where
             Ok(Ok((job, root))) => {
                 roots[job.channel][job.root_index] = Some(root);
                 received += 1;
-                progress(DslIndexProgress {
+                progress(CaptureIndexProgress {
                     completed_roots: received,
                     total_roots: total_jobs,
                 });
@@ -718,7 +697,7 @@ where
 
     for worker in workers {
         if worker.join().is_err() && first_error.is_none() {
-            first_error = Some(DslError::ParseError(
+            first_error = Some(Error::ParseError(
                 "waveform index worker panicked".to_string(),
             ));
         }
@@ -728,7 +707,7 @@ where
         return Err(err);
     }
     if received != total_jobs {
-        return Err(DslError::ParseError(
+        return Err(Error::ParseError(
             "waveform index build did not complete".to_string(),
         ));
     }
@@ -1000,18 +979,18 @@ fn read_index_header(file: &mut File) -> Result<IndexHeader> {
     let mut magic = [0_u8; 8];
     file.read_exact(&mut magic)?;
     if &magic != MAGIC {
-        return Err(DslError::ParseError(
+        return Err(Error::ParseError(
             "invalid waveform sidecar magic".to_string(),
         ));
     }
     let version = read_u32(file)?;
     if version != 3 {
-        return Err(DslError::ParseError(
+        return Err(Error::ParseError(
             "unsupported waveform sidecar version".to_string(),
         ));
     }
     let _header_size = read_u32(file)?;
-    let source_len = read_u64(file)?;
+    let source_revision = read_u64(file)?;
     let total_samples = read_u64(file)?;
     let total_blocks = read_u64(file)?;
     let samples_per_block = read_u64(file)?;
@@ -1021,7 +1000,7 @@ fn read_index_header(file: &mut File) -> Result<IndexHeader> {
     let dir_offset = read_u64(file)?;
     let payload_offset = read_u64(file)?;
     Ok(IndexHeader {
-        source_len,
+        source_revision,
         total_samples,
         total_blocks,
         samples_per_block,
@@ -1037,7 +1016,7 @@ fn write_index_header(file: &mut File, header: &IndexHeader) -> Result<()> {
     file.write_all(MAGIC)?;
     write_u32(file, 3)?;
     write_u32(file, HEADER_SIZE as u32)?;
-    write_u64(file, header.source_len)?;
+    write_u64(file, header.source_revision)?;
     write_u64(file, header.total_samples)?;
     write_u64(file, header.total_blocks)?;
     write_u64(file, header.samples_per_block)?;
@@ -1108,16 +1087,14 @@ impl<'a> Cursor<'a> {
         let byte = *self
             .data
             .get(self.pos)
-            .ok_or_else(|| DslError::ParseError("truncated waveform sidecar".to_string()))?;
+            .ok_or_else(|| Error::ParseError("truncated waveform sidecar".to_string()))?;
         self.pos += 1;
         Ok(byte)
     }
 
     fn skip(&mut self, count: usize) -> Result<()> {
         if self.pos + count > self.data.len() {
-            return Err(DslError::ParseError(
-                "truncated waveform sidecar".to_string(),
-            ));
+            return Err(Error::ParseError("truncated waveform sidecar".to_string()));
         }
         self.pos += count;
         Ok(())
@@ -1145,9 +1122,7 @@ impl<'a> Cursor<'a> {
 
     fn read_exact(&mut self, buf: &mut [u8]) -> Result<()> {
         if self.pos + buf.len() > self.data.len() {
-            return Err(DslError::ParseError(
-                "truncated waveform sidecar".to_string(),
-            ));
+            return Err(Error::ParseError("truncated waveform sidecar".to_string()));
         }
         buf.copy_from_slice(&self.data[self.pos..self.pos + buf.len()]);
         self.pos += buf.len();
@@ -1203,7 +1178,119 @@ fn set_bit(word: &mut u64, index: usize) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::capture::CaptureFingerprint;
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[derive(Clone)]
+    struct MemoryCaptureDataSource {
+        metadata: CaptureMetadata,
+        blocks: Arc<Vec<Vec<Arc<[u8]>>>>,
+        index_path: PathBuf,
+        revision: u64,
+    }
+
+    struct MemoryCaptureReader {
+        metadata: CaptureMetadata,
+        blocks: Arc<Vec<Vec<Arc<[u8]>>>>,
+    }
+
+    impl MemoryCaptureDataSource {
+        fn new(total_samples: u64, samples_per_block: u64, blocks: Vec<Vec<Vec<u8>>>) -> Self {
+            let id = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let total_probes = blocks.len();
+            let total_blocks = blocks.first().map_or(0, Vec::len) as u64;
+            let blocks = blocks
+                .into_iter()
+                .map(|channel_blocks| {
+                    channel_blocks
+                        .into_iter()
+                        .map(Arc::<[u8]>::from)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+
+            Self {
+                metadata: CaptureMetadata {
+                    total_probes,
+                    samplerate: "1 MHz".to_string(),
+                    samplerate_hz: 1_000_000.0,
+                    sample_period: 0.000_001,
+                    total_samples,
+                    total_blocks,
+                    samples_per_block,
+                    probe_names: (0..total_probes)
+                        .map(|channel| channel.to_string())
+                        .collect(),
+                },
+                blocks: Arc::new(blocks),
+                index_path: std::env::temp_dir().join(format!("capture-index-test-{id}.idx")),
+                revision: id as u64,
+            }
+        }
+
+        fn remove_index(&self) {
+            let _ = fs::remove_file(&self.index_path);
+        }
+    }
+
+    impl CaptureDataSource for MemoryCaptureDataSource {
+        type Reader = MemoryCaptureReader;
+
+        fn open_reader(&self) -> Result<Self::Reader> {
+            Ok(MemoryCaptureReader {
+                metadata: self.metadata.clone(),
+                blocks: Arc::clone(&self.blocks),
+            })
+        }
+
+        fn metadata(&self) -> &CaptureMetadata {
+            &self.metadata
+        }
+
+        fn fingerprint(&self) -> CaptureFingerprint {
+            CaptureFingerprint {
+                revision: self.revision,
+            }
+        }
+
+        fn index_path(&self) -> Option<PathBuf> {
+            Some(self.index_path.clone())
+        }
+
+        fn display_name(&self) -> String {
+            "memory-capture".to_string()
+        }
+    }
+
+    impl CaptureSource for MemoryCaptureReader {
+        fn metadata(&self) -> &CaptureMetadata {
+            &self.metadata
+        }
+
+        fn read_sample(&mut self, channel: usize, position: u64) -> Result<bool> {
+            if position >= self.metadata.total_samples {
+                return Err(Error::OutOfBounds(position));
+            }
+            let block = position / self.metadata.samples_per_block;
+            let sample_in_block = (position % self.metadata.samples_per_block) as usize;
+            let data = self.read_packed_block(channel, block)?;
+            Ok(packed_bit(&data, sample_in_block))
+        }
+    }
+
+    impl BlockCaptureSource for MemoryCaptureReader {
+        fn read_packed_block(&mut self, channel: usize, block: u64) -> Result<Arc<[u8]>> {
+            self.blocks
+                .get(channel)
+                .and_then(|channel_blocks| channel_blocks.get(block as usize))
+                .cloned()
+                .ok_or(Error::InvalidBlock(block))
+        }
+    }
 
     #[test]
     fn constant_leaf_stores_only_root_values() {
@@ -1281,30 +1368,11 @@ mod tests {
 
     #[test]
     fn chunked_reader_builds_sidecar_and_samples_window() -> Result<()> {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        use zip::write::SimpleFileOptions;
-        use zip::{CompressionMethod, ZipWriter};
-
-        let id = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("dsl-index-test-{id}.dsl"));
-        let file = File::create(&path)?;
-        let mut zip = ZipWriter::new(file);
-        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-
-        zip.start_file("header", options)?;
-        zip.write_all(
-            b"[version]\nversion = 3\n[header]\ntotal samples = 128\ntotal probes = 1\ntotal blocks = 1\nsamplerate = 1 MHz\nprobe0 = 0\n",
-        )?;
-        zip.start_file("L-0/0", options)?;
         let mut samples = [0_u8; 16];
         samples[8..16].fill(0xff);
-        zip.write_all(&samples)?;
-        zip.finish()?;
 
-        let mut reader = DslChunkedCaptureReader::open(&path)?;
+        let source = MemoryCaptureDataSource::new(128, 128, vec![vec![samples.to_vec()]]);
+        let mut reader = IndexedCaptureReader::open_data_source(source.clone())?;
         assert!(reader.index_path().exists());
         let window = reader.sampled_window(&[0], 0, 128, 2)?;
         assert_eq!(window.channels.len(), 1);
@@ -1316,37 +1384,21 @@ mod tests {
         assert_eq!(window.channels[0].transitions[0].sample, 96);
         assert!(window.channels[0].transitions[0].value);
 
-        let _ = fs::remove_file(reader.index_path());
-        let _ = fs::remove_file(path);
+        source.remove_index();
         Ok(())
     }
 
     #[test]
     fn full_file_sampling_uses_block_level_when_zoomed_out() -> Result<()> {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        use zip::write::SimpleFileOptions;
-        use zip::{CompressionMethod, ZipWriter};
-
-        let id = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("dsl-index-zoomed-out-{id}.dsl"));
-        let file = File::create(&path)?;
-        let mut zip = ZipWriter::new(file);
-        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-
-        zip.start_file("header", options)?;
-        zip.write_all(
-            b"[version]\nversion = 3\n[header]\ntotal samples = 33554432\ntotal probes = 1\ntotal blocks = 2\nsamplerate = 1 MHz\nprobe0 = 0\n",
-        )?;
-        zip.start_file("L-0/0", options)?;
-        zip.write_all(&vec![0_u8; 2 * 1024 * 1024])?;
-        zip.start_file("L-0/1", options)?;
-        zip.write_all(&vec![0xff_u8; 2 * 1024 * 1024])?;
-        zip.finish()?;
-
-        let mut reader = DslChunkedCaptureReader::open(&path)?;
+        let source = MemoryCaptureDataSource::new(
+            33_554_432,
+            16_777_216,
+            vec![vec![
+                vec![0_u8; 2 * 1024 * 1024],
+                vec![0xff_u8; 2 * 1024 * 1024],
+            ]],
+        );
+        let mut reader = IndexedCaptureReader::open_data_source(source.clone())?;
         let window = reader.sampled_window(&[0], 0, 33_554_432, 2)?;
 
         assert_eq!(window.sample_step, 16_777_216);
@@ -1362,8 +1414,7 @@ mod tests {
         assert_eq!(window.channels[0].transitions.len(), 1);
         assert!(window.channels[0].transitions[0].sample >= 16_777_216);
 
-        let _ = fs::remove_file(reader.index_path());
-        let _ = fs::remove_file(path);
+        source.remove_index();
         Ok(())
     }
 }

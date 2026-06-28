@@ -7,14 +7,14 @@
 //! on one destination never blocks other destinations. All threads share a single ZipArchive
 //! and block cache via `Arc<Mutex<..>>`.
 
-use super::capture::{
-    BlockCaptureSource, CaptureFingerprint, CaptureSource, CaptureSourceFactory, DslHeader,
-    DslSampledWindow,
-};
-use crate::runtime::Sender;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkResult};
 use crate::runtime::sample::{Sample, SampleBlock};
-use crate::{DslError, Result};
+use crate::runtime::{
+    BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureSource, DslHeader,
+    DslSampledWindow, Sender,
+};
+use crate::runtime::{CaptureIndexProgress, IndexedCaptureReader};
+use crate::{Error, Result};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fs::{self, File};
@@ -91,12 +91,12 @@ impl DslCaptureReader {
 
     fn read_bit_cached(&mut self, channel: usize, position: u64) -> Result<bool> {
         if position >= self.header.total_samples {
-            return Err(DslError::OutOfBounds(position));
+            return Err(Error::OutOfBounds(position));
         }
 
         let block_num = position / self.header.samples_per_block;
         if block_num >= self.header.total_blocks {
-            return Err(DslError::OutOfBounds(position));
+            return Err(Error::OutOfBounds(position));
         }
 
         let sample_in_block = (position % self.header.samples_per_block) as usize;
@@ -117,7 +117,7 @@ impl DslCaptureReader {
             let mut file = self
                 .archive
                 .by_name(&block_name)
-                .map_err(|_| DslError::InvalidBlock(block_num))?;
+                .map_err(|_| Error::InvalidBlock(block_num))?;
             let mut data = Vec::new();
             file.read_to_end(&mut data)?;
             Arc::<[u8]>::from(data)
@@ -169,14 +169,14 @@ impl BlockCaptureSource for DslCaptureReader {
 }
 
 #[derive(Debug, Clone)]
-pub struct DslFileCaptureFactory {
+pub struct DslFileCaptureDataSource {
     path: PathBuf,
     header: DslHeader,
     source_len: u64,
     index_path: PathBuf,
 }
 
-impl DslFileCaptureFactory {
+impl DslFileCaptureDataSource {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let source_len = fs::metadata(&path)?.len();
@@ -198,10 +198,10 @@ impl DslFileCaptureFactory {
     }
 }
 
-impl CaptureSourceFactory for DslFileCaptureFactory {
-    type Source = DslCaptureReader;
+impl CaptureDataSource for DslFileCaptureDataSource {
+    type Reader = DslCaptureReader;
 
-    fn open(&self) -> Result<Self::Source> {
+    fn open_reader(&self) -> Result<Self::Reader> {
         DslCaptureReader::open(&self.path)
     }
 
@@ -225,6 +225,24 @@ impl CaptureSourceFactory for DslFileCaptureFactory {
             .and_then(|name| name.to_str())
             .unwrap_or("capture")
             .to_string()
+    }
+}
+
+pub type DslChunkedCaptureReader = IndexedCaptureReader<DslFileCaptureDataSource>;
+
+impl IndexedCaptureReader<DslFileCaptureDataSource> {
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let source = DslFileCaptureDataSource::open(path)?;
+        Self::open_data_source_with_progress(source, |_| {})
+    }
+
+    pub fn open_with_progress<P, C>(path: P, progress: C) -> Result<Self>
+    where
+        P: AsRef<Path>,
+        C: FnMut(CaptureIndexProgress),
+    {
+        let source = DslFileCaptureDataSource::open(path)?;
+        Self::open_data_source_with_progress(source, progress)
     }
 }
 
@@ -298,7 +316,7 @@ impl DslFileSource {
     /// Create a new DSL file source from a file path
     pub fn new<P: AsRef<Path>>(path: P, num_channels: u8) -> Result<Self> {
         if !(1..=16).contains(&num_channels) {
-            return Err(DslError::ParseError(format!(
+            return Err(Error::ParseError(format!(
                 "num_channels must be 1-16, got {}",
                 num_channels
             )));
@@ -309,7 +327,7 @@ impl DslFileSource {
         let header = Self::parse_header(&mut archive)?;
 
         if header.total_probes < num_channels as usize {
-            return Err(DslError::ParseError(format!(
+            return Err(Error::ParseError(format!(
                 "File has only {} channels, need at least {}",
                 header.total_probes, num_channels
             )));
@@ -333,7 +351,7 @@ impl DslFileSource {
     pub(crate) fn parse_header(archive: &mut ZipArchive<File>) -> Result<DslHeader> {
         let mut header_file = archive
             .by_name("header")
-            .map_err(|e| DslError::ParseHeader(format!("Cannot find header file: {}", e)))?;
+            .map_err(|e| Error::ParseHeader(format!("Cannot find header file: {}", e)))?;
 
         let mut header_content = String::new();
         header_file.read_to_string(&mut header_content)?;
@@ -369,16 +387,15 @@ impl DslFileSource {
         }
 
         let total_probes =
-            total_probes.ok_or_else(|| DslError::MissingField("total probes".to_string()))?;
-        let samplerate =
-            samplerate.ok_or_else(|| DslError::MissingField("samplerate".to_string()))?;
+            total_probes.ok_or_else(|| Error::MissingField("total probes".to_string()))?;
+        let samplerate = samplerate.ok_or_else(|| Error::MissingField("samplerate".to_string()))?;
         let total_samples =
-            total_samples.ok_or_else(|| DslError::MissingField("total samples".to_string()))?;
+            total_samples.ok_or_else(|| Error::MissingField("total samples".to_string()))?;
         let total_blocks =
-            total_blocks.ok_or_else(|| DslError::MissingField("total blocks".to_string()))?;
+            total_blocks.ok_or_else(|| Error::MissingField("total blocks".to_string()))?;
 
         let samplerate_hz = Self::parse_sample_rate(&samplerate)
-            .ok_or_else(|| DslError::ParseHeader(format!("Invalid sample rate: {}", samplerate)))?;
+            .ok_or_else(|| Error::ParseHeader(format!("Invalid sample rate: {}", samplerate)))?;
         let sample_period = 1.0 / samplerate_hz;
 
         // Determine actual block size by reading the first block (blocks are fixed-size except last)
@@ -386,11 +403,10 @@ impl DslFileSource {
             let block_name = "L-0/0";
             let mut file = archive
                 .by_name(block_name)
-                .map_err(|_| DslError::ParseHeader("Could not read first block".to_string()))?;
+                .map_err(|_| Error::ParseHeader("Could not read first block".to_string()))?;
             let mut buf = Vec::new();
-            file.read_to_end(&mut buf).map_err(|_| {
-                DslError::ParseHeader("Could not read first block data".to_string())
-            })?;
+            file.read_to_end(&mut buf)
+                .map_err(|_| Error::ParseHeader("Could not read first block data".to_string()))?;
             (buf.len() * 8) as u64 // Convert bytes to bits/samples
         };
 
@@ -453,17 +469,17 @@ impl DslFileSource {
     /// Read a single bit from a specific channel at a specific position
     pub fn read_bit(&self, channel: usize, position: u64) -> Result<bool> {
         if channel >= self.header.total_probes {
-            return Err(DslError::InvalidProbe(channel));
+            return Err(Error::InvalidProbe(channel));
         }
         if position >= self.header.total_samples {
-            return Err(DslError::OutOfBounds(position));
+            return Err(Error::OutOfBounds(position));
         }
 
         let block_num = position / self.header.samples_per_block;
 
         // Additional safety check: ensure block number is valid
         if block_num >= self.header.total_blocks {
-            return Err(DslError::OutOfBounds(position));
+            return Err(Error::OutOfBounds(position));
         }
 
         let sample_in_block = (position % self.header.samples_per_block) as usize;
@@ -483,7 +499,7 @@ impl DslFileSource {
             let mut archive_guard = self.archive.lock().unwrap();
             let mut file = archive_guard
                 .by_name(&block_name)
-                .map_err(|_| DslError::InvalidBlock(block_num))?;
+                .map_err(|_| Error::InvalidBlock(block_num))?;
 
             let mut data = Vec::new();
             file.read_to_end(&mut data)?;
@@ -1229,7 +1245,7 @@ mod tests {
 
             if let Err(e) = bit_result {
                 match e {
-                    DslError::InvalidProbe(_) => {}
+                    Error::InvalidProbe(_) => {}
                     _ => panic!("Expected InvalidProbe error, got {:?}", e),
                 }
             }
@@ -1248,7 +1264,7 @@ mod tests {
 
             if let Err(e) = bit_result {
                 match e {
-                    DslError::OutOfBounds(_) => {}
+                    Error::OutOfBounds(_) => {}
                     _ => panic!("Expected OutOfBounds error, got {:?}", e),
                 }
             }
