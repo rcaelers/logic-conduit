@@ -4,6 +4,7 @@ use super::capture::{
 };
 use crate::{Error, Result};
 use std::collections::{HashMap, VecDeque};
+use std::env;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -626,14 +627,7 @@ where
         return Ok(roots);
     }
 
-    let worker_count = thread::available_parallelism()
-        .map(|count| count.get())
-        .unwrap_or(1)
-        .saturating_sub(2)
-        .max(1)
-        .min(4)
-        .min(total_jobs)
-        .max(1);
+    let worker_count = index_worker_count(total_jobs);
     let jobs = Arc::new(Mutex::new(jobs));
     let header = Arc::new(header.clone());
     let (result_tx, result_rx) = mpsc::channel();
@@ -787,25 +781,22 @@ fn build_leaf_summary(data: &[u8], valid_samples: u64, previous_last: Option<boo
     let mut l1_toggle = vec![0_u64; L1_WORDS];
     let mut l1_last = vec![0_u64; L1_WORDS];
 
-    for group in 0..l1_groups {
-        let start = group * 64;
-        let end = ((group + 1) * 64).min(valid_samples as usize);
-        let mut has_toggle = false;
-        let mut prev = entering;
-        for bit_index in start..end {
-            let value = packed_bit(data, bit_index);
-            if value != prev {
-                has_toggle = true;
-            }
-            prev = value;
-        }
-        entering = prev;
-        if has_toggle {
-            set_bit(&mut l1_toggle[group / 64], group % 64);
-        }
-        if entering {
-            set_bit(&mut l1_last[group / 64], group % 64);
-        }
+    let full_l1_groups = valid_samples as usize / 64;
+    for (group, chunk) in data[..full_l1_groups * 8].chunks_exact(8).enumerate() {
+        let word = u64::from_le_bytes(chunk.try_into().expect("L1 chunks are exactly 8 bytes"));
+        record_l1_group(&mut l1_toggle, &mut l1_last, group, word, 64, &mut entering);
+    }
+
+    if full_l1_groups < l1_groups {
+        let (word, valid_bits) = partial_l1_word(data, full_l1_groups, valid_samples as usize);
+        record_l1_group(
+            &mut l1_toggle,
+            &mut l1_last,
+            full_l1_groups,
+            word,
+            valid_bits,
+            &mut entering,
+        );
     }
 
     let mut l2_toggle = [0_u64; L2_WORDS];
@@ -851,6 +842,68 @@ fn build_leaf_summary(data: &[u8], valid_samples: u64, previous_last: Option<boo
         l3_toggle,
         l3_last,
     }
+}
+
+fn index_worker_count(total_jobs: usize) -> usize {
+    let available = thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1);
+    let configured = env::var("DSL_INDEX_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0);
+
+    configured.unwrap_or(available).min(total_jobs).max(1)
+}
+
+fn record_l1_group(
+    l1_toggle: &mut [u64],
+    l1_last: &mut [u64],
+    group: usize,
+    word: u64,
+    valid_bits: usize,
+    entering: &mut bool,
+) {
+    let first_bit = (word & 1) != 0;
+    let boundary_toggle = first_bit != *entering;
+    let internal_toggle = l1_word_has_internal_toggle(word, valid_bits);
+    if boundary_toggle || internal_toggle {
+        set_bit(&mut l1_toggle[group / 64], group % 64);
+    }
+
+    *entering = bit(word, valid_bits - 1);
+    if *entering {
+        set_bit(&mut l1_last[group / 64], group % 64);
+    }
+}
+
+fn partial_l1_word(data: &[u8], group: usize, valid_samples: usize) -> (u64, usize) {
+    let sample_start = group * 64;
+    let valid_bits = (valid_samples - sample_start).min(64);
+    let byte_start = group * 8;
+    let mut bytes = [0_u8; 8];
+    let available = data.len().saturating_sub(byte_start).min(8);
+    if available > 0 {
+        bytes[..available].copy_from_slice(&data[byte_start..byte_start + available]);
+    }
+    let mut word = u64::from_le_bytes(bytes);
+    if valid_bits < 64 {
+        word &= (1_u64 << valid_bits) - 1;
+    }
+    (word, valid_bits)
+}
+
+fn l1_word_has_internal_toggle(word: u64, valid_bits: usize) -> bool {
+    if valid_bits <= 1 {
+        return false;
+    }
+    let valid_mask = if valid_bits == 64 {
+        u64::MAX
+    } else {
+        (1_u64 << valid_bits) - 1
+    };
+    let internal_mask = valid_mask & !1_u64;
+    (word ^ (word << 1)) & internal_mask != 0
 }
 
 fn apply_boundary_transition(root: &mut RootChunk, previous_last: Option<bool>) {
@@ -1364,6 +1417,26 @@ mod tests {
         assert!(decoded.leaves[0].active);
         assert!(!decoded.leaves[1].active);
         assert!(bit(decoded.leaves[0].l1_toggle[0], 0));
+    }
+
+    #[test]
+    fn word_toggle_detection_handles_boundaries_and_partial_groups() {
+        assert!(!l1_word_has_internal_toggle(0, 64));
+        assert!(!l1_word_has_internal_toggle(u64::MAX, 64));
+        assert!(l1_word_has_internal_toggle(0b10, 2));
+        assert!(!l1_word_has_internal_toggle(0b10, 1));
+
+        let data = [0b0000_1111_u8];
+        let leaf = build_leaf_summary(&data, 8, Some(false));
+        assert!(leaf.active);
+        assert!(bit(leaf.l1_toggle[0], 0));
+        assert!(!bit(leaf.l1_last[0], 0));
+
+        let leaf = build_leaf_summary(&[0xff], 1, Some(false));
+        assert!(leaf.first);
+        assert!(leaf.last);
+        assert!(leaf.active);
+        assert!(bit(leaf.l1_toggle[0], 0));
     }
 
     #[test]
