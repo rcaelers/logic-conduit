@@ -47,6 +47,14 @@ pub struct CaptureActivity {
     pub end_sample: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CaptureBucket {
+    pub start_sample: u64,
+    pub end_sample: u64,
+    pub toggle: bool,
+    pub last: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureSampledChannel {
     pub channel: usize,
@@ -54,6 +62,7 @@ pub struct CaptureSampledChannel {
     pub initial: bool,
     pub transitions: Vec<CaptureTransition>,
     pub activities: Vec<CaptureActivity>,
+    pub buckets: Vec<CaptureBucket>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +139,7 @@ pub trait CaptureSource {
                 initial,
                 transitions,
                 activities: Vec::new(),
+                buckets: Vec::new(),
             });
         }
 
@@ -166,5 +176,6 @@ pub fn packed_bit(data: &[u8], bit_index: usize) -> bool {
 pub type DslHeader = CaptureMetadata;
 pub type DslTransition = CaptureTransition;
 pub type DslActivity = CaptureActivity;
+pub type DslBucket = CaptureBucket;
 pub type DslSampledChannel = CaptureSampledChannel;
 pub type DslSampledWindow = CaptureSampledWindow;

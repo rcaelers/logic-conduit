@@ -6,6 +6,8 @@ use egui::{Align2, Color32, FontId, Painter, PointerButton, Pos2, Rect, Sense, S
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 
+const SCROLL_INPUT_EPSILON: f32 = 0.5;
+
 pub struct LogicAnalyzerViewer {
     channels: Vec<LogicChannel>,
     visible_start_us: f64,
@@ -18,6 +20,7 @@ pub struct LogicAnalyzerViewer {
     last_window: Option<WindowKey>,
     pending_window: Option<WindowKey>,
     index_progress: Option<IndexBuildProgress>,
+    fit_to_capture: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -27,12 +30,21 @@ pub struct LogicChannel {
     color: Color32,
     initial: bool,
     transitions: Vec<Transition>,
+    buckets: Vec<Bucket>,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct Transition {
     time_us: f64,
     value: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Bucket {
+    start_us: f64,
+    end_us: f64,
+    toggle: bool,
+    last: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,6 +158,7 @@ impl LogicAnalyzerViewer {
             last_window: None,
             pending_window: None,
             index_progress: None,
+            fit_to_capture: false,
         }
     }
 
@@ -190,6 +203,7 @@ impl LogicAnalyzerViewer {
         self.last_window = None;
         self.pending_window = None;
         self.index_progress = None;
+        self.fit_to_capture = true;
         self.status = format!("Opening {}", factory.display_name());
 
         let (request_tx, request_rx) = mpsc::channel();
@@ -220,10 +234,12 @@ impl LogicAnalyzerViewer {
         self.draw(&painter, rect, response.hover_pos());
         if self.pending_window.is_some()
             || (self.capture_path.is_some() && self.capture_info.is_none())
-            || self.index_progress.is_some()
         {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(16));
+        } else if self.index_progress.is_some() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
 
@@ -238,6 +254,9 @@ impl LogicAnalyzerViewer {
         }
 
         if dragging {
+            if self.capture_info.is_some() {
+                self.fit_to_capture = false;
+            }
             let delta = ui.input(|input| input.pointer.delta());
             self.visible_start_us -=
                 delta.x as f64 / wave_rect.width() as f64 * self.visible_span_us;
@@ -247,13 +266,19 @@ impl LogicAnalyzerViewer {
 
         if hovered {
             let scroll_delta = ui.input(|input| input.smooth_scroll_delta);
-            if scroll_delta.x.abs() > f32::EPSILON {
+            if scroll_delta.x.abs() > SCROLL_INPUT_EPSILON {
+                if self.capture_info.is_some() {
+                    self.fit_to_capture = false;
+                }
                 self.visible_start_us -=
                     scroll_delta.x as f64 / wave_rect.width() as f64 * self.visible_span_us;
                 self.visible_start_us = self.visible_start_us.max(0.0);
                 self.clamp_to_capture_duration();
             }
-            if scroll_delta.y.abs() > f32::EPSILON {
+            if scroll_delta.y.abs() > SCROLL_INPUT_EPSILON {
+                if self.capture_info.is_some() {
+                    self.fit_to_capture = false;
+                }
                 let pointer_x = ui
                     .input(|input| input.pointer.hover_pos())
                     .map_or(0.5, |pos| {
@@ -279,6 +304,7 @@ impl LogicAnalyzerViewer {
         if let Some(capture) = self.capture_info.as_ref() {
             self.visible_start_us = 0.0;
             self.visible_span_us = capture.duration_us.max(1.0);
+            self.fit_to_capture = true;
         }
     }
 
@@ -315,6 +341,7 @@ impl LogicAnalyzerViewer {
                     });
                     self.visible_start_us = 0.0;
                     self.visible_span_us = duration_us.max(1.0);
+                    self.fit_to_capture = true;
                     if let Some(capture) = self.capture_info.as_ref() {
                         self.status = capture_status(capture);
                     }
@@ -328,6 +355,14 @@ impl LogicAnalyzerViewer {
                     window,
                 } => {
                     if self.capture_path.as_deref() != Some(key.path.as_path()) {
+                        continue;
+                    }
+                    let Some(capture) = self.capture_info.as_ref() else {
+                        continue;
+                    };
+                    let (visible_start, visible_end) =
+                        visible_sample_range(capture, self.visible_start_us, self.visible_span_us);
+                    if key.start_sample > visible_start || key.end_sample < visible_end {
                         continue;
                     }
                     self.channels = channels_from_window(&window, samplerate_hz);
@@ -356,6 +391,9 @@ impl LogicAnalyzerViewer {
                 WorkerResponse::IndexReady { path } => {
                     if self.capture_path.as_deref() == Some(path.as_path()) {
                         self.index_progress = None;
+                        if self.fit_to_capture {
+                            self.fit_capture();
+                        }
                         self.status = self
                             .capture_info
                             .as_ref()
@@ -383,13 +421,10 @@ impl LogicAnalyzerViewer {
 
         let left_width = 145.0_f32.min(rect.width() * 0.35);
         let target_points = (rect.width() - left_width).max(1.0).round() as usize;
-        let samplerate_hz = capture.header.samplerate_hz;
         let total_samples = capture.header.total_samples;
         let channel_count = capture.header.total_probes.min(16);
-        let visible_start =
-            us_to_sample(self.visible_start_us, samplerate_hz).min(total_samples.saturating_sub(1));
-        let visible_end = us_to_sample(self.visible_start_us + self.visible_span_us, samplerate_hz)
-            .clamp(visible_start + 1, total_samples);
+        let (visible_start, visible_end) =
+            visible_sample_range(capture, self.visible_start_us, self.visible_span_us);
         let visible_samples = visible_end - visible_start;
         let path = capture.path.clone();
 
@@ -691,10 +726,16 @@ impl LogicAnalyzerViewer {
         let low_y = y_top + row_height * 0.72;
         let start = self.visible_start_us;
         let end = start + self.visible_span_us;
+        let stroke = Stroke::new(1.4, muted);
+
+        if !channel.buckets.is_empty() {
+            self.draw_bucket_waveform(painter, wave_rect, high_y, low_y, channel, muted);
+            return;
+        }
+
         let mut value = channel.value_at(start);
         let mut prev_x = wave_rect.left();
         let mut y = if value { high_y } else { low_y };
-        let stroke = Stroke::new(1.4, muted);
 
         for transition in channel
             .transitions
@@ -716,6 +757,54 @@ impl LogicAnalyzerViewer {
             [Pos2::new(prev_x, y), Pos2::new(wave_rect.right(), y)],
             stroke,
         );
+    }
+
+    fn draw_bucket_waveform(
+        &self,
+        painter: &Painter,
+        wave_rect: Rect,
+        high_y: f32,
+        low_y: f32,
+        channel: &LogicChannel,
+        muted: Color32,
+    ) {
+        let start = self.visible_start_us;
+        let end = start + self.visible_span_us;
+        let flat_stroke = Stroke::new(1.15, muted);
+        let edge_stroke = Stroke::new(1.0, muted);
+        let mut current = channel.initial;
+
+        for bucket in channel
+            .buckets
+            .iter()
+            .take_while(|bucket| bucket.end_us < start)
+        {
+            current = bucket.last;
+        }
+
+        for bucket in channel
+            .buckets
+            .iter()
+            .filter(|bucket| bucket.end_us >= start && bucket.start_us <= end)
+        {
+            let x0 = self.time_to_x(wave_rect, bucket.start_us.max(start));
+            let x1 = self
+                .time_to_x(wave_rect, bucket.end_us.min(end))
+                .max(x0 + 1.0);
+
+            if bucket.toggle {
+                let x = (x0 + x1) * 0.5;
+                let y0 = if current { high_y } else { low_y };
+                let y1 = if bucket.last { high_y } else { low_y };
+                painter.line_segment([Pos2::new(x0, y0), Pos2::new(x, y0)], flat_stroke);
+                painter.line_segment([Pos2::new(x, low_y), Pos2::new(x, high_y)], edge_stroke);
+                painter.line_segment([Pos2::new(x, y1), Pos2::new(x1, y1)], flat_stroke);
+            } else {
+                let y = if bucket.last { high_y } else { low_y };
+                painter.line_segment([Pos2::new(x0, y), Pos2::new(x1, y)], flat_stroke);
+            }
+            current = bucket.last;
+        }
     }
 
     fn time_to_x(&self, rect: Rect, time_us: f64) -> f32 {
@@ -793,12 +882,29 @@ fn spawn_capture_worker(
 
             let progress_path = identity.clone();
             let progress_responses = responses.clone();
+            let mut last_progress_sent = std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_millis(100))
+                .unwrap_or_else(std::time::Instant::now);
+            let mut last_progress_completed = 0_usize;
             let mut reader =
                 match IndexedCaptureReader::open_factory_with_progress(factory, |progress| {
-                    let _ = progress_responses.send(WorkerResponse::IndexProgress {
-                        path: progress_path.clone(),
-                        progress,
-                    });
+                    let now = std::time::Instant::now();
+                    let is_first = progress.completed_roots == 0;
+                    let is_done = progress.completed_roots >= progress.total_roots;
+                    let enough_time = now.duration_since(last_progress_sent)
+                        >= std::time::Duration::from_millis(100);
+                    let enough_work = progress
+                        .completed_roots
+                        .saturating_sub(last_progress_completed)
+                        >= 64;
+                    if is_first || is_done || enough_time || enough_work {
+                        last_progress_sent = now;
+                        last_progress_completed = progress.completed_roots;
+                        let _ = progress_responses.send(WorkerResponse::IndexProgress {
+                            path: progress_path.clone(),
+                            progress,
+                        });
+                    }
                 })
                 .map(|reader| reader.with_max_cached_roots(8))
                 {
@@ -908,6 +1014,7 @@ impl LogicChannel {
             color,
             initial,
             transitions,
+            buckets: Vec::new(),
         }
     }
 
@@ -940,6 +1047,16 @@ fn channels_from_window(window: &CaptureSampledWindow, samplerate_hz: f64) -> Ve
                     value: transition.value,
                 })
                 .collect(),
+            buckets: channel
+                .buckets
+                .iter()
+                .map(|bucket| Bucket {
+                    start_us: sample_to_us(bucket.start_sample, samplerate_hz),
+                    end_us: sample_to_us(bucket.end_sample, samplerate_hz),
+                    toggle: bucket.toggle,
+                    last: bucket.last,
+                })
+                .collect(),
         })
         .collect()
 }
@@ -964,6 +1081,15 @@ fn us_to_sample(time_us: f64, samplerate_hz: f64) -> u64 {
 
 fn sample_to_us(sample: u64, samplerate_hz: f64) -> f64 {
     sample as f64 * 1_000_000.0 / samplerate_hz
+}
+
+fn visible_sample_range(capture: &CaptureInfo, start_us: f64, span_us: f64) -> (u64, u64) {
+    let samplerate_hz = capture.header.samplerate_hz;
+    let total_samples = capture.header.total_samples;
+    let visible_start = us_to_sample(start_us, samplerate_hz).min(total_samples.saturating_sub(1));
+    let visible_end =
+        us_to_sample(start_us + span_us, samplerate_hz).clamp(visible_start + 1, total_samples);
+    (visible_start, visible_end)
 }
 
 fn waveform_rect(rect: Rect) -> Rect {

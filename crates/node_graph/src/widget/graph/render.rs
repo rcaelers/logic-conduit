@@ -18,10 +18,12 @@ impl NodeGraphWidget {
         layout: &GraphWidgetLayout,
     ) {
         let pointer_canvas = pointer.map(|p| self.view.screen_to_canvas(origin, p));
+        let fast_interaction = self.interaction_state.use_fast_rendering();
 
         let hovered_wire =
             if let InteractionState::DraggingNode { node_id, .. } = self.interaction_state {
-                let has_io = !self.graph.nodes[&node_id].inputs.is_empty()
+                let has_io = !fast_interaction
+                    && !self.graph.nodes[&node_id].inputs.is_empty()
                     && !self.graph.nodes[&node_id].outputs.is_empty();
                 if has_io {
                     self.compute_insert_candidate_wire(node_id, &layout.nodes)
@@ -122,7 +124,7 @@ impl NodeGraphWidget {
             if let (Some(widget), Some(node)) = (layout.nodes.get(&id), self.graph.nodes.get(&id)) {
                 widget.draw(painter, node, &self.view, origin);
             }
-            if self.view.zoom >= 0.6 {
+            if self.view.zoom >= 0.6 && !fast_interaction {
                 let changed = if let (Some(widget), Some(node), Some(instance)) = (
                     layout.nodes.get(&id),
                     self.graph.nodes.get(&id),
@@ -179,7 +181,7 @@ impl NodeGraphWidget {
             }
         }
 
-        if self.minimap_visible {
+        if self.minimap_visible && !fast_interaction {
             let (info, _) = minimap::compute_minimap(layout.node_rects.values().copied(), rect);
             minimap::draw_minimap(
                 painter,

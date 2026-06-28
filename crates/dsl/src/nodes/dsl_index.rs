@@ -1,5 +1,5 @@
 use super::capture::{
-    BlockCaptureSource, CaptureActivity, CaptureMetadata, CaptureSampledChannel,
+    BlockCaptureSource, CaptureActivity, CaptureBucket, CaptureMetadata, CaptureSampledChannel,
     CaptureSampledWindow, CaptureSource, CaptureSourceFactory, CaptureTransition, packed_bit,
 };
 use super::dsl_file::DslFileCaptureFactory;
@@ -226,7 +226,9 @@ where
             );
         }
 
-        let group_samples = if sample_step >= L3_GROUP_SAMPLES {
+        let group_samples = if sample_step >= self.header.samples_per_block {
+            self.header.samples_per_block
+        } else if sample_step >= L3_GROUP_SAMPLES {
             L3_GROUP_SAMPLES
         } else if sample_step >= L2_GROUP_SAMPLES {
             L2_GROUP_SAMPLES
@@ -240,6 +242,7 @@ where
                 channel,
                 start_sample,
                 end_sample,
+                target_points as usize,
                 group_samples,
             )?);
         }
@@ -257,6 +260,7 @@ where
         channel: usize,
         start_sample: u64,
         end_sample: u64,
+        target_points: usize,
         group_samples: u64,
     ) -> Result<CaptureSampledChannel> {
         if channel >= self.header.total_probes {
@@ -273,16 +277,32 @@ where
         let mut current = initial;
         let mut transitions = Vec::new();
         let mut activities = Vec::new();
-        let mut group_start = (start_sample / group_samples) * group_samples;
+        let mut buckets = Vec::new();
 
-        while group_start < end_sample {
-            let group_end = group_start
-                .saturating_add(group_samples)
-                .min(self.header.total_samples);
-            let summary = self.group_summary(channel, group_start, group_samples)?;
-            if group_end > start_sample && summary.toggle {
-                let visible_start = group_start.max(start_sample);
-                let visible_end = group_end.min(end_sample);
+        let samples = end_sample - start_sample;
+        let target_points = target_points.max(1) as u64;
+        let mut previous_end = start_sample;
+
+        for point in 0..target_points {
+            let visible_start = start_sample + samples.saturating_mul(point) / target_points;
+            let visible_end = if point + 1 == target_points {
+                end_sample
+            } else {
+                start_sample + samples.saturating_mul(point + 1) / target_points
+            };
+            if visible_end <= visible_start || visible_start < previous_end {
+                continue;
+            }
+            previous_end = visible_end;
+
+            let summary = self.range_summary(channel, visible_start, visible_end, group_samples)?;
+            buckets.push(CaptureBucket {
+                start_sample: visible_start,
+                end_sample: visible_end,
+                toggle: summary.toggle,
+                last: summary.last,
+            });
+            if summary.toggle {
                 activities.push(CaptureActivity {
                     start_sample: visible_start,
                     end_sample: visible_end,
@@ -296,10 +316,6 @@ where
                 }
             }
             current = summary.last;
-            if group_end <= group_start {
-                break;
-            }
-            group_start = group_end;
         }
 
         Ok(CaptureSampledChannel {
@@ -308,6 +324,7 @@ where
             initial,
             transitions,
             activities,
+            buckets,
         })
     }
 
@@ -337,6 +354,35 @@ where
             .map(|g| g.last)
     }
 
+    fn range_summary(
+        &mut self,
+        channel: usize,
+        start_sample: u64,
+        end_sample: u64,
+        group_samples: u64,
+    ) -> Result<GroupSummary> {
+        let mut group_start = (start_sample / group_samples) * group_samples;
+        let mut toggle = false;
+        let mut last = self.value_at_group_start(channel, start_sample, group_samples)?;
+
+        while group_start < end_sample {
+            let group_end = group_start
+                .saturating_add(group_samples)
+                .min(self.header.total_samples);
+            if group_end > start_sample {
+                let summary = self.group_summary(channel, group_start, group_samples)?;
+                toggle |= summary.toggle;
+                last = summary.last;
+            }
+            if group_end <= group_start {
+                break;
+            }
+            group_start = group_end;
+        }
+
+        Ok(GroupSummary { toggle, last })
+    }
+
     fn group_summary(
         &mut self,
         channel: usize,
@@ -363,36 +409,43 @@ where
             });
         }
 
-        let summary = match group_samples {
-            L3_GROUP_SAMPLES => {
-                let idx = (local / L3_GROUP_SAMPLES).min(63) as usize;
-                GroupSummary {
-                    toggle: bit(leaf.l3_toggle, idx),
-                    last: bit(leaf.l3_last, idx),
-                }
+        let summary = if group_samples >= self.header.samples_per_block {
+            GroupSummary {
+                toggle: leaf.active,
+                last: leaf.last,
             }
-            L2_GROUP_SAMPLES => {
-                let group = (local / L2_GROUP_SAMPLES).min(4095) as usize;
-                let word = group / 64;
-                let bit_idx = group % 64;
-                GroupSummary {
-                    toggle: bit(leaf.l2_toggle[word], bit_idx),
-                    last: bit(leaf.l2_last[word], bit_idx),
+        } else {
+            match group_samples {
+                L3_GROUP_SAMPLES => {
+                    let idx = (local / L3_GROUP_SAMPLES).min(63) as usize;
+                    GroupSummary {
+                        toggle: bit(leaf.l3_toggle, idx),
+                        last: bit(leaf.l3_last, idx),
+                    }
                 }
-            }
-            _ => {
-                let group = (local / L1_GROUP_SAMPLES).min(262_143) as usize;
-                let word = group / 64;
-                let bit_idx = group % 64;
-                GroupSummary {
-                    toggle: leaf
-                        .l1_toggle
-                        .get(word)
-                        .is_some_and(|word| bit(*word, bit_idx)),
-                    last: leaf
-                        .l1_last
-                        .get(word)
-                        .is_some_and(|word| bit(*word, bit_idx)),
+                L2_GROUP_SAMPLES => {
+                    let group = (local / L2_GROUP_SAMPLES).min(4095) as usize;
+                    let word = group / 64;
+                    let bit_idx = group % 64;
+                    GroupSummary {
+                        toggle: bit(leaf.l2_toggle[word], bit_idx),
+                        last: bit(leaf.l2_last[word], bit_idx),
+                    }
+                }
+                _ => {
+                    let group = (local / L1_GROUP_SAMPLES).min(262_143) as usize;
+                    let word = group / 64;
+                    let bit_idx = group % 64;
+                    GroupSummary {
+                        toggle: leaf
+                            .l1_toggle
+                            .get(word)
+                            .is_some_and(|word| bit(*word, bit_idx)),
+                        last: leaf
+                            .l1_last
+                            .get(word)
+                            .is_some_and(|word| bit(*word, bit_idx)),
+                    }
                 }
             }
         };
@@ -597,6 +650,9 @@ where
     let worker_count = thread::available_parallelism()
         .map(|count| count.get())
         .unwrap_or(1)
+        .saturating_sub(2)
+        .max(1)
+        .min(4)
         .min(total_jobs)
         .max(1);
     let jobs = Arc::new(Mutex::new(jobs));
@@ -1259,6 +1315,52 @@ mod tests {
         assert_eq!(window.channels[0].transitions.len(), 1);
         assert_eq!(window.channels[0].transitions[0].sample, 96);
         assert!(window.channels[0].transitions[0].value);
+
+        let _ = fs::remove_file(reader.index_path());
+        let _ = fs::remove_file(path);
+        Ok(())
+    }
+
+    #[test]
+    fn full_file_sampling_uses_block_level_when_zoomed_out() -> Result<()> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        use zip::write::SimpleFileOptions;
+        use zip::{CompressionMethod, ZipWriter};
+
+        let id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("dsl-index-zoomed-out-{id}.dsl"));
+        let file = File::create(&path)?;
+        let mut zip = ZipWriter::new(file);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+
+        zip.start_file("header", options)?;
+        zip.write_all(
+            b"[version]\nversion = 3\n[header]\ntotal samples = 33554432\ntotal probes = 1\ntotal blocks = 2\nsamplerate = 1 MHz\nprobe0 = 0\n",
+        )?;
+        zip.start_file("L-0/0", options)?;
+        zip.write_all(&vec![0_u8; 2 * 1024 * 1024])?;
+        zip.start_file("L-0/1", options)?;
+        zip.write_all(&vec![0xff_u8; 2 * 1024 * 1024])?;
+        zip.finish()?;
+
+        let mut reader = DslChunkedCaptureReader::open(&path)?;
+        let window = reader.sampled_window(&[0], 0, 33_554_432, 2)?;
+
+        assert_eq!(window.sample_step, 16_777_216);
+        assert_eq!(window.channels[0].buckets.len(), 2);
+        assert_eq!(window.channels[0].buckets[0].start_sample, 0);
+        assert_eq!(window.channels[0].buckets[0].end_sample, 16_777_216);
+        assert!(!window.channels[0].buckets[0].toggle);
+        assert!(!window.channels[0].buckets[0].last);
+        assert_eq!(window.channels[0].buckets[1].start_sample, 16_777_216);
+        assert_eq!(window.channels[0].buckets[1].end_sample, 33_554_432);
+        assert!(window.channels[0].buckets[1].toggle);
+        assert!(window.channels[0].buckets[1].last);
+        assert_eq!(window.channels[0].transitions.len(), 1);
+        assert!(window.channels[0].transitions[0].sample >= 16_777_216);
 
         let _ = fs::remove_file(reader.index_path());
         let _ = fs::remove_file(path);

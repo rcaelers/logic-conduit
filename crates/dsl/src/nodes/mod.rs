@@ -32,9 +32,10 @@ mod dslogic_u3pro16;
 mod logic_analyzer;
 
 pub use capture::{
-    BlockCaptureSource, CaptureActivity, CaptureFingerprint, CaptureMetadata,
+    BlockCaptureSource, CaptureActivity, CaptureBucket, CaptureFingerprint, CaptureMetadata,
     CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureSourceFactory,
-    CaptureTransition, DslActivity, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
+    CaptureTransition, DslActivity, DslBucket, DslHeader, DslSampledChannel, DslSampledWindow,
+    DslTransition,
 };
 // Export DslFileSource and related types for file I/O
 pub use dsl_file::{DslCaptureReader, DslFileCaptureFactory, DslFileSource};

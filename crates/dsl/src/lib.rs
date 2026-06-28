@@ -35,14 +35,15 @@ pub use runtime::SampleBlock;
 
 // Re-export streaming nodes - DslFileSource only (SpiCommandController is application-specific)
 pub use nodes::{
-    BlockCaptureSource, CaptureActivity, CaptureFingerprint, CaptureMetadata, CaptureMode,
-    CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureSourceFactory,
+    BlockCaptureSource, CaptureActivity, CaptureBucket, CaptureFingerprint, CaptureMetadata,
+    CaptureMode, CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureSourceFactory,
     CaptureTransition, ClockEdge, ClockSource, DsLogicU3Pro16, DsLogicU3Pro16Source, DslActivity,
-    DslCaptureReader, DslChunkedCaptureReader, DslFileCaptureFactory, DslFileSource, DslHeader,
-    DslIndexProgress, DslSampledChannel, DslSampledWindow, DslTransition, IndexedCaptureReader,
-    LinkSpeed, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo, LogicAnalyzerResult,
-    LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding, LogicEncodingRequest,
-    LogicTrigger, LogicTriggerStage, RusbTransport, TriggerCondition, TriggerLogic, UsbTransport,
+    DslBucket, DslCaptureReader, DslChunkedCaptureReader, DslFileCaptureFactory, DslFileSource,
+    DslHeader, DslIndexProgress, DslSampledChannel, DslSampledWindow, DslTransition,
+    IndexedCaptureReader, LinkSpeed, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
+    LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
+    LogicEncodingRequest, LogicTrigger, LogicTriggerStage, RusbTransport, TriggerCondition,
+    TriggerLogic, UsbTransport,
 };
 
 // Re-export streaming decoders

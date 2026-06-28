@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 pub struct App {
     node_graph: NodeGraphWidget,
     logic_analyzer: LogicAnalyzerViewer,
+    analyzer_split: f32,
 }
 
 impl App {
@@ -20,6 +21,7 @@ impl App {
         Self {
             node_graph: widget,
             logic_analyzer: LogicAnalyzerViewer::demo(),
+            analyzer_split: 0.42,
         }
     }
 }
@@ -27,18 +29,63 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let available = ui.available_size();
-        let analyzer_height = (available.y * 0.35).clamp(220.0, 360.0);
-        let graph_height = (available.y - analyzer_height - ui.spacing().item_spacing.y).max(160.0);
+        let splitter_hit_height = 7.0;
+        let splitter_visual_height = 2.0;
+        let usable_height = (available.y - splitter_hit_height).max(0.0);
+        let analyzer_min = 160.0;
+        let graph_min = 160.0;
+        let mut analyzer_height = usable_height * self.analyzer_split;
+        if usable_height >= analyzer_min + graph_min {
+            analyzer_height = analyzer_height.clamp(analyzer_min, usable_height - graph_min);
+        }
 
-        ui.allocate_ui(egui::vec2(available.x, graph_height), |ui| {
-            self.node_graph.show(ui);
-        });
         if let Some(file) = self.dsl_file_source_path() {
             self.logic_analyzer.set_capture_path(file);
         }
-        ui.add_space(ui.spacing().item_spacing.y);
+
+        let origin = ui.cursor().min;
+        let splitter_rect = egui::Rect::from_min_size(
+            egui::pos2(origin.x, origin.y + analyzer_height),
+            egui::vec2(available.x, splitter_hit_height),
+        );
+        let splitter_id = ui.id().with("logic_analyzer_node_graph_splitter");
+        let splitter_response =
+            ui.interact(splitter_rect, splitter_id, egui::Sense::click_and_drag());
+        if splitter_response.hovered() || splitter_response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+        }
+        if splitter_response.dragged() && usable_height > 0.0 {
+            analyzer_height = (splitter_response
+                .interact_pointer_pos()
+                .map_or(analyzer_height, |pos| {
+                    pos.y - origin.y - splitter_hit_height * 0.5
+                }))
+            .clamp(0.0, usable_height);
+            if usable_height >= analyzer_min + graph_min {
+                analyzer_height = analyzer_height.clamp(analyzer_min, usable_height - graph_min);
+            }
+            self.analyzer_split = (analyzer_height / usable_height).clamp(0.05, 0.95);
+        }
+        let graph_height = (usable_height - analyzer_height).max(0.0);
+
         ui.allocate_ui(egui::vec2(available.x, analyzer_height), |ui| {
             self.logic_analyzer.show(ui);
+        });
+
+        ui.allocate_space(egui::vec2(available.x, splitter_hit_height));
+        let splitter_color = if splitter_response.dragged() || splitter_response.hovered() {
+            egui::Color32::from_rgb(90, 90, 90)
+        } else {
+            egui::Color32::from_rgb(58, 58, 58)
+        };
+        let visual_rect = egui::Rect::from_center_size(
+            splitter_rect.center(),
+            egui::vec2(splitter_rect.width(), splitter_visual_height),
+        );
+        ui.painter().rect_filled(visual_rect, 0.0, splitter_color);
+
+        ui.allocate_ui(egui::vec2(available.x, graph_height), |ui| {
+            self.node_graph.show(ui);
         });
     }
 }

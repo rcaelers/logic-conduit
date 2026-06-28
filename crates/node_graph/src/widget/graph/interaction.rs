@@ -43,6 +43,16 @@ pub(super) enum InteractionState {
     },
 }
 
+impl InteractionState {
+    pub(super) fn is_active(&self) -> bool {
+        !matches!(self, Self::Idle)
+    }
+
+    pub(super) fn use_fast_rendering(&self) -> bool {
+        matches!(self, Self::Panning { .. } | Self::DraggingNode { .. })
+    }
+}
+
 pub(super) struct NodeResponses {
     pub body: egui::Response,
     pub header: egui::Response,
@@ -59,6 +69,18 @@ pub(super) struct GraphResponses {
     pub collapse_toggles: HashMap<NodeId, egui::Response>,
     pub sockets: HashMap<SocketId, egui::Response>,
     pub minimap: Option<MinimapResponse>,
+}
+
+impl GraphResponses {
+    pub(super) fn canvas_only(canvas: egui::Response) -> Self {
+        Self {
+            canvas,
+            nodes: HashMap::new(),
+            collapse_toggles: HashMap::new(),
+            sockets: HashMap::new(),
+            minimap: None,
+        }
+    }
 }
 
 impl NodeGraphWidget {
@@ -757,6 +779,10 @@ impl NodeGraphWidget {
             canvas_rect,
             layout,
         );
+        if self.interaction_state.is_active() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(16));
+        }
     }
 
     pub(super) fn compute_hovered_wire(

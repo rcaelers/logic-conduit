@@ -6,7 +6,7 @@ mod minimap;
 mod render;
 
 use action::HotkeyRegistry;
-use interaction::InteractionState;
+use interaction::{GraphResponses, InteractionState};
 use menu::MenuController;
 
 use crate::{
@@ -136,7 +136,11 @@ impl NodeGraphWidget {
             .or_else(|| ui.input(|i| i.pointer.hover_pos()));
 
         let layout = self.build_layout(origin);
-        let responses = self.allocate_responses(ui, response, &layout, rect);
+        let responses = if self.interaction_state.use_fast_rendering() {
+            GraphResponses::canvas_only(response)
+        } else {
+            self.allocate_responses(ui, response, &layout, rect)
+        };
         self.handle_input(ui, &responses, origin, &layout, rect);
 
         let layout = self.build_layout(origin);
