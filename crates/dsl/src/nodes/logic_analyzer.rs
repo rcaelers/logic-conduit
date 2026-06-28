@@ -290,7 +290,9 @@ impl<A: LogicAnalyzer> LogicAnalyzerSource<A> {
                 if chunk.bit_len == 0 {
                     continue;
                 }
-                if let Some(sender) = &raw_sender && sender.send(chunk.clone()).is_err() {
+                if let Some(sender) = &raw_sender
+                    && sender.send(chunk.clone()).is_err()
+                {
                     // Other ports may still be connected; do not stop capture.
                 }
                 if chunk.encoding == LogicEncoding::Opaque {
@@ -468,7 +470,9 @@ impl Demux {
                 chunk.channel_count, self.channels
             )));
         }
-        if let Some(expected) = self.next_bit && chunk.start_bit != expected {
+        if let Some(expected) = self.next_bit
+            && chunk.start_bit != expected
+        {
             return Err(LogicAnalyzerError::Protocol(format!(
                 "non-contiguous chunk: starts at bit {}, expected {expected}",
                 chunk.start_bit

@@ -1,3 +1,4 @@
+use crate::logic_analyzer_viewer::LogicAnalyzerViewer;
 use egui::Color32;
 use node_graph::{
     EnumValue, FileValue, FloatValue, InputDef, IntValue, NodeDef, NodeGraphWidget,
@@ -8,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 pub struct App {
     node_graph: NodeGraphWidget,
+    logic_analyzer: LogicAnalyzerViewer,
 }
 
 impl App {
@@ -15,13 +17,44 @@ impl App {
         let registry = build_registry();
         let mut widget = NodeGraphWidget::new(registry);
         populate_demo(&mut widget);
-        Self { node_graph: widget }
+        Self {
+            node_graph: widget,
+            logic_analyzer: LogicAnalyzerViewer::demo(),
+        }
     }
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.node_graph.show(ui);
+        let available = ui.available_size();
+        let analyzer_height = (available.y * 0.35).clamp(220.0, 360.0);
+        let graph_height = (available.y - analyzer_height - ui.spacing().item_spacing.y).max(160.0);
+
+        ui.allocate_ui(egui::vec2(available.x, graph_height), |ui| {
+            self.node_graph.show(ui);
+        });
+        if let Some(file) = self.dsl_file_source_path() {
+            self.logic_analyzer.set_capture_path(file);
+        }
+        ui.add_space(ui.spacing().item_spacing.y);
+        ui.allocate_ui(egui::vec2(available.x, analyzer_height), |ui| {
+            self.logic_analyzer.show(ui);
+        });
+    }
+}
+
+impl App {
+    fn dsl_file_source_path(&self) -> Option<String> {
+        self.node_graph
+            .graph()
+            .nodes
+            .values()
+            .filter(|node| node.title == DslFileSource::name())
+            .filter_map(|node| {
+                serde_json::from_value::<DslFileSourceState>(node.state.clone()).ok()
+            })
+            .map(|state| state.file.value)
+            .find(|path| !path.is_empty())
     }
 }
 
@@ -128,12 +161,12 @@ impl NodeDef for DslFileSource {
     fn state() -> Self::State {
         DslFileSourceState {
             file: FileValue::with_filter(
-                "",
+                "_captures/wipneus5.dsl",
                 "Select DSLogic capture",
                 "DSLogic captures",
                 &["dsl"],
             ),
-            channels: IntValue::new(8, 1, 32),
+            channels: IntValue::new(11, 1, 32),
         }
     }
 

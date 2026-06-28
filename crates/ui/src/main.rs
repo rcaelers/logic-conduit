@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod logic_analyzer_viewer;
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {

@@ -7,42 +7,236 @@
 //! on one destination never blocks other destinations. All threads share a single ZipArchive
 //! and block cache via `Arc<Mutex<..>>`.
 
+use super::capture::{
+    BlockCaptureSource, CaptureFingerprint, CaptureSource, CaptureSourceFactory, DslHeader,
+    DslSampledWindow,
+};
 use crate::runtime::Sender;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkResult};
 use crate::runtime::sample::{Sample, SampleBlock};
 use crate::{DslError, Result};
 use std::collections::HashMap;
-use std::fs::File;
+use std::collections::VecDeque;
+use std::fs::{self, File};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use tracing::{debug, info};
 use zip::ZipArchive;
 
-/// Header information from a DSL file
-#[derive(Debug, Clone)]
-pub struct DslHeader {
-    /// Total number of probes/channels
-    pub total_probes: usize,
-    /// Sample rate as a string (e.g., "50 MHz")
-    pub samplerate: String,
-    /// Sample rate in Hz
-    pub samplerate_hz: f64,
-    /// Sample period in seconds (1 / sample_rate)
-    pub sample_period: f64,
-    /// Total number of samples captured
-    pub total_samples: u64,
-    /// Total number of data blocks
-    pub total_blocks: u64,
-    /// Samples per block (calculated)
-    pub samples_per_block: u64,
-    /// Probe names indexed by probe number (0-based)
-    pub probe_names: Vec<String>,
+type BlockCache = Arc<Mutex<HashMap<(usize, u64), Arc<[u8]>>>>;
+
+/// Windowed DSLogic capture reader for interactive viewers.
+///
+/// Unlike [`DslFileSource`], this reader is not a streaming graph source. It is
+/// optimized for repeated random-access viewport reads and keeps only a bounded
+/// number of packed-bit ZIP blocks in memory.
+pub struct DslCaptureReader {
+    path: PathBuf,
+    archive: ZipArchive<File>,
+    header: DslHeader,
+    cache: HashMap<(usize, u64), Arc<[u8]>>,
+    cache_order: VecDeque<(usize, u64)>,
+    max_cached_blocks: usize,
 }
 
-type BlockCache = Arc<Mutex<HashMap<(usize, u64), Arc<[u8]>>>>;
+impl DslCaptureReader {
+    const DEFAULT_MAX_CACHED_BLOCKS: usize = 32;
+
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let file = File::open(&path)?;
+        let mut archive = ZipArchive::new(file)?;
+        let header = DslFileSource::parse_header(&mut archive)?;
+
+        Ok(Self {
+            path,
+            archive,
+            header,
+            cache: HashMap::new(),
+            cache_order: VecDeque::new(),
+            max_cached_blocks: Self::DEFAULT_MAX_CACHED_BLOCKS,
+        })
+    }
+
+    pub fn with_max_cached_blocks(mut self, max_cached_blocks: usize) -> Self {
+        self.max_cached_blocks = max_cached_blocks.max(1);
+        self.trim_cache();
+        self
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn header(&self) -> &DslHeader {
+        &self.header
+    }
+
+    pub fn capture_duration_us(&self) -> f64 {
+        self.header.duration_us()
+    }
+
+    pub fn sampled_window(
+        &mut self,
+        channels: &[usize],
+        start_sample: u64,
+        end_sample: u64,
+        target_points: usize,
+    ) -> Result<DslSampledWindow> {
+        CaptureSource::sampled_window(self, channels, start_sample, end_sample, target_points)
+    }
+
+    fn read_bit_cached(&mut self, channel: usize, position: u64) -> Result<bool> {
+        if position >= self.header.total_samples {
+            return Err(DslError::OutOfBounds(position));
+        }
+
+        let block_num = position / self.header.samples_per_block;
+        if block_num >= self.header.total_blocks {
+            return Err(DslError::OutOfBounds(position));
+        }
+
+        let sample_in_block = (position % self.header.samples_per_block) as usize;
+        let key = (channel, block_num);
+        let data = self.read_block_cached(key)?;
+        Ok(DslFileSource::get_bit(&data, sample_in_block))
+    }
+
+    fn read_block_cached(&mut self, key: (usize, u64)) -> Result<Arc<[u8]>> {
+        if let Some(data) = self.cache.get(&key).cloned() {
+            self.touch_cache_key(key);
+            return Ok(data);
+        }
+
+        let (channel, block_num) = key;
+        let block_name = format!("L-{}/{}", channel, block_num);
+        let data = {
+            let mut file = self
+                .archive
+                .by_name(&block_name)
+                .map_err(|_| DslError::InvalidBlock(block_num))?;
+            let mut data = Vec::new();
+            file.read_to_end(&mut data)?;
+            Arc::<[u8]>::from(data)
+        };
+
+        self.cache.insert(key, Arc::clone(&data));
+        self.cache_order.push_back(key);
+        self.trim_cache();
+        Ok(data)
+    }
+
+    fn touch_cache_key(&mut self, key: (usize, u64)) {
+        if self
+            .cache_order
+            .back()
+            .is_some_and(|existing| *existing == key)
+        {
+            return;
+        }
+        self.cache_order.retain(|existing| *existing != key);
+        self.cache_order.push_back(key);
+    }
+
+    fn trim_cache(&mut self) {
+        while self.cache.len() > self.max_cached_blocks {
+            if let Some(key) = self.cache_order.pop_front() {
+                self.cache.remove(&key);
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+impl CaptureSource for DslCaptureReader {
+    fn metadata(&self) -> &DslHeader {
+        &self.header
+    }
+
+    fn read_sample(&mut self, channel: usize, position: u64) -> Result<bool> {
+        self.read_bit_cached(channel, position)
+    }
+}
+
+impl BlockCaptureSource for DslCaptureReader {
+    fn read_packed_block(&mut self, channel: usize, block: u64) -> Result<Arc<[u8]>> {
+        self.read_block_cached((channel, block))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DslFileCaptureFactory {
+    path: PathBuf,
+    header: DslHeader,
+    source_len: u64,
+    index_path: PathBuf,
+}
+
+impl DslFileCaptureFactory {
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let source_len = fs::metadata(&path)?.len();
+        let file = File::open(&path)?;
+        let mut archive = ZipArchive::new(file)?;
+        let header = DslFileSource::parse_header(&mut archive)?;
+        let index_path = dsl_sidecar_path(&path);
+
+        Ok(Self {
+            path,
+            header,
+            source_len,
+            index_path,
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl CaptureSourceFactory for DslFileCaptureFactory {
+    type Source = DslCaptureReader;
+
+    fn open(&self) -> Result<Self::Source> {
+        DslCaptureReader::open(&self.path)
+    }
+
+    fn metadata(&self) -> &DslHeader {
+        &self.header
+    }
+
+    fn fingerprint(&self) -> CaptureFingerprint {
+        CaptureFingerprint {
+            revision: self.source_len,
+        }
+    }
+
+    fn index_path(&self) -> Option<PathBuf> {
+        Some(self.index_path.clone())
+    }
+
+    fn display_name(&self) -> String {
+        self.path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("capture")
+            .to_string()
+    }
+}
+
+fn dsl_sidecar_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("capture.dsl")
+        .to_string();
+    name.push_str(".idx");
+    path.with_file_name(name)
+}
 
 /// Source node that reads from a DSLogic .dsl capture file and outputs Sample streams
 ///
@@ -136,7 +330,7 @@ impl DslFileSource {
         })
     }
 
-    fn parse_header(archive: &mut ZipArchive<File>) -> Result<DslHeader> {
+    pub(crate) fn parse_header(archive: &mut ZipArchive<File>) -> Result<DslHeader> {
         let mut header_file = archive
             .by_name("header")
             .map_err(|e| DslError::ParseHeader(format!("Cannot find header file: {}", e)))?;
@@ -326,7 +520,7 @@ impl DslFileSource {
 
     /// Extract a single bit from a byte array at the given bit index
     #[inline]
-    fn get_bit(data: &[u8], bit_index: usize) -> bool {
+    pub(crate) fn get_bit(data: &[u8], bit_index: usize) -> bool {
         let byte_index = bit_index / 8;
         let bit_offset = bit_index % 8;
 
@@ -881,6 +1075,29 @@ mod tests {
         // Out of bounds
         assert!(!DslFileSource::get_bit(&data, 16));
         assert!(!DslFileSource::get_bit(&data, 100));
+    }
+
+    #[test]
+    fn test_capture_reader_wipneus5_window_if_present() {
+        let path = Path::new("_captures/wipneus5.dsl");
+        if !path.exists() {
+            return;
+        }
+
+        let mut reader = DslCaptureReader::open(path)
+            .expect("wipneus5.dsl should open with the windowed reader")
+            .with_max_cached_blocks(4);
+        assert!(reader.header().total_samples > 0);
+        assert!(reader.header().total_probes > 0);
+
+        let channel_count = reader.header().total_probes.min(4);
+        let channels: Vec<usize> = (0..channel_count).collect();
+        let window = reader
+            .sampled_window(&channels, 0, 100_000, 800)
+            .expect("small wipneus5.dsl viewport should read");
+
+        assert_eq!(window.channels.len(), channel_count);
+        assert!(window.sample_step > 0);
     }
 
     #[test]

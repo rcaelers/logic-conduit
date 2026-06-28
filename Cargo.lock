@@ -1048,6 +1048,7 @@ dependencies = [
  "minifb",
  "node-graph",
  "serde",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1056,10 +1057,12 @@ dependencies = [
 name = "dsl-ui"
 version = "0.1.0"
 dependencies = [
+ "dsl",
  "eframe",
  "egui",
  "node-graph",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

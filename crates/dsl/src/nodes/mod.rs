@@ -24,13 +24,21 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+mod capture;
 pub mod decoders;
 mod dsl_file;
+mod dsl_index;
 mod dslogic_u3pro16;
 mod logic_analyzer;
 
+pub use capture::{
+    BlockCaptureSource, CaptureActivity, CaptureFingerprint, CaptureMetadata,
+    CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureSourceFactory,
+    CaptureTransition, DslActivity, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
+};
 // Export DslFileSource and related types for file I/O
-pub use dsl_file::{DslFileSource, DslHeader};
+pub use dsl_file::{DslCaptureReader, DslFileCaptureFactory, DslFileSource};
+pub use dsl_index::{DslChunkedCaptureReader, DslIndexProgress, IndexedCaptureReader};
 pub use dslogic_u3pro16::{DsLogicU3Pro16, LinkSpeed, RusbTransport, UsbTransport};
 pub use logic_analyzer::{
     CaptureMode, ClockEdge, ClockSource, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
