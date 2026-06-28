@@ -18,6 +18,7 @@ pub use capture::{
     BlockCaptureSource, CaptureActivity, CaptureBucket, CaptureDataSource, CaptureFingerprint,
     CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,
     DslActivity, DslBucket, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
+    packed_bit,
 };
 pub use errors::{ConnectionError, PortError, WorkError, WorkResult};
 pub use graph::{Connection, GraphBuilder, NodeId};
