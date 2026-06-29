@@ -829,15 +829,17 @@ impl LogicAnalyzerViewer {
             let x1 = self.time_to_x(wave_rect, bucket.end_us);
 
             if bucket.toggle {
-                let x = ((x0 + x1) * 0.5).clamp(wave_rect.left(), wave_rect.right());
-                painter.line_segment([Pos2::new(x, high_y), Pos2::new(x, low_y)], activity_stroke);
+                let x_mid = ((x0 + x1) * 0.5).clamp(wave_rect.left(), wave_rect.right());
+                let y_first = if bucket.first { high_y } else { low_y };
+                let y_last = if bucket.last { high_y } else { low_y };
+                Self::draw_clipped_horizontal(painter, wave_rect, x0, x_mid, y_first, flat_stroke);
+                painter.line_segment(
+                    [Pos2::new(x_mid, high_y), Pos2::new(x_mid, low_y)],
+                    activity_stroke,
+                );
+                Self::draw_clipped_horizontal(painter, wave_rect, x_mid, x1, y_last, flat_stroke);
             } else {
-                let level = if bucket.first == bucket.last {
-                    bucket.last
-                } else {
-                    bucket.first
-                };
-                let y = if level { high_y } else { low_y };
+                let y = if bucket.last { high_y } else { low_y };
                 Self::draw_clipped_horizontal(painter, wave_rect, x0, x1, y, flat_stroke);
             }
         }
