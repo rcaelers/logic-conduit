@@ -1,14 +1,9 @@
-use super::storage::IndexStorage;
-use super::types::{
-    BLOCKS_PER_ROOT, CaptureIndexProgress, DIR_ENTRY_SIZE, HEADER_SIZE, IndexHeader,
-    L1_GROUP_SAMPLES, L1_WORDS, L2_WORDS, LeafSummary, RootChunk, RootDirEntry, bit, set_bit,
-};
+use super::storage::IndexWriter;
+use super::types::{BlockIndex, BlockLevels, CaptureIndexProgress, SAMPLES_PER_L1_BIT, bit, set_bit};
 use crate::runtime::{BlockCaptureSource, CaptureDataSource, CaptureMetadata, packed_bit};
 use crate::{Error, Result};
 use std::collections::VecDeque;
 use std::env;
-use std::fs::{self, File};
-use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -16,9 +11,7 @@ use std::thread;
 #[derive(Debug, Clone, Copy)]
 struct BuildJob {
     channel: usize,
-    root_index: usize,
-    first_block: u64,
-    block_count: u32,
+    block: u64,
 }
 
 pub(super) struct IndexBuilder<'a, S: CaptureDataSource> {
@@ -38,113 +31,59 @@ where
         header: &'a CaptureMetadata,
         source_revision: u64,
     ) -> Self {
-        Self {
-            data_source,
-            index_path,
-            header,
-            source_revision,
-        }
+        Self { data_source, index_path, header, source_revision }
     }
 
     pub(super) fn build<P>(&self, mut progress: P) -> Result<()>
     where
         P: FnMut(CaptureIndexProgress),
     {
-        let temp_path = self.index_path.with_extension("idx.tmp");
-        let roots_per_channel = (self.header.total_blocks as usize).div_ceil(BLOCKS_PER_ROOT);
-        let root_count = self.header.total_probes * roots_per_channel;
-        let dir_offset = HEADER_SIZE;
-        let payload_offset = dir_offset + root_count as u64 * DIR_ENTRY_SIZE;
-        let mut directory =
-            vec![vec![RootDirEntry::default(); roots_per_channel]; self.header.total_probes];
-        let mut output = File::create(&temp_path)?;
+        let total_blocks = self.header.total_blocks as usize;
+        let job_count = self.header.total_probes * total_blocks;
 
-        output.write_all(&vec![0_u8; payload_offset as usize])?;
-        output.seek(SeekFrom::Start(payload_offset))?;
-
-        let mut jobs = VecDeque::with_capacity(root_count);
+        let mut jobs = VecDeque::with_capacity(job_count);
         for channel in 0..self.header.total_probes {
-            for root_index in 0..roots_per_channel {
-                let first_block = (root_index * BLOCKS_PER_ROOT) as u64;
-                if first_block >= self.header.total_blocks {
-                    continue;
-                }
-                let block_count =
-                    (self.header.total_blocks - first_block).min(BLOCKS_PER_ROOT as u64) as u32;
-                jobs.push_back(BuildJob {
-                    channel,
-                    root_index,
-                    first_block,
-                    block_count,
-                });
+            for block in 0..self.header.total_blocks {
+                jobs.push_back(BuildJob { channel, block });
             }
         }
 
-        let total_jobs = jobs.len();
-        progress(CaptureIndexProgress {
-            completed_roots: 0,
-            total_roots: total_jobs,
-        });
+        progress(CaptureIndexProgress { completed_roots: 0, total_roots: job_count });
 
-        let mut roots = Self::build_roots_parallel(
+        let mut chunks = Self::build_chunks_parallel(
             (*self.data_source).clone(),
             self.header,
             jobs,
             &mut progress,
         )?;
-        for channel_roots in roots.iter_mut().take(self.header.total_probes) {
+
+        let mut writer =
+            IndexWriter::create(self.index_path, self.header, self.source_revision)?;
+
+        for (channel, channel_chunks) in chunks.iter_mut().enumerate() {
             let mut previous_last = None;
-            for root in channel_roots.iter_mut().flatten() {
-                Self::apply_boundary_transition(root, previous_last);
-                previous_last = root.leaves.last().map(|leaf| leaf.last);
-                let offset = output.stream_position()?;
-                let payload = IndexStorage::serialize_root_chunk(root);
-                output.write_all(&payload)?;
-                directory[root.channel][root.root_index] = RootDirEntry {
-                    first_block: root.first_block,
-                    block_count: root.block_count,
-                    offset,
-                    len: payload.len() as u64,
-                };
+            for (block_idx, maybe_leaf) in channel_chunks.iter_mut().enumerate() {
+                let Some(leaf) = maybe_leaf else { continue };
+                Self::apply_boundary_transition(leaf, previous_last);
+                previous_last = Some(leaf.last);
+                writer.write_block(channel, block_idx, leaf)?;
             }
         }
 
-        let index_header = IndexHeader {
-            source_revision: self.source_revision,
-            total_samples: self.header.total_samples,
-            total_blocks: self.header.total_blocks,
-            samples_per_block: self.header.samples_per_block,
-            samplerate_bits: self.header.samplerate_hz.to_bits(),
-            total_channels: self.header.total_probes as u32,
-            roots_per_channel: roots_per_channel as u32,
-            dir_offset,
-            payload_offset,
-        };
-        output.seek(SeekFrom::Start(0))?;
-        IndexStorage::write_index_header(&mut output, &index_header)?;
-        output.seek(SeekFrom::Start(dir_offset))?;
-        for channel_dir in &directory {
-            for entry in channel_dir {
-                IndexStorage::write_dir_entry(&mut output, entry)?;
-            }
-        }
-        output.sync_all()?;
-        drop(output);
-        fs::rename(temp_path, self.index_path)?;
-        Ok(())
+        writer.finish()
     }
 
-    fn build_roots_parallel(
+    fn build_chunks_parallel(
         data_source: S,
         header: &CaptureMetadata,
         jobs: VecDeque<BuildJob>,
         progress: &mut impl FnMut(CaptureIndexProgress),
-    ) -> Result<Vec<Vec<Option<RootChunk>>>> {
+    ) -> Result<Vec<Vec<Option<BlockIndex>>>> {
         let total_jobs = jobs.len();
-        let roots_per_channel = (header.total_blocks as usize).div_ceil(BLOCKS_PER_ROOT);
-        let mut roots = vec![vec![None; roots_per_channel]; header.total_probes];
+        let total_blocks = header.total_blocks as usize;
+        let mut chunks = vec![vec![None; total_blocks]; header.total_probes];
         if total_jobs == 0 {
-            return Ok(roots);
+            return Ok(chunks);
         }
 
         let worker_count = Self::index_worker_count(total_jobs);
@@ -162,20 +101,10 @@ where
                 let worker_result = || -> Result<()> {
                     let mut source = data_source.open_reader()?;
                     loop {
-                        let Some(job) = jobs.lock().unwrap().pop_front() else {
-                            break;
-                        };
-                        let mut previous_last = None;
-                        let root = Self::build_root_chunk(
-                            &mut source,
-                            &header,
-                            job.channel,
-                            job.root_index,
-                            job.first_block,
-                            job.block_count,
-                            &mut previous_last,
-                        )?;
-                        if result_tx.send(Ok((job, root))).is_err() {
+                        let Some(job) = jobs.lock().unwrap().pop_front() else { break };
+                        let leaf =
+                            Self::build_block_chunk(&mut source, &header, job.channel, job.block)?;
+                        if result_tx.send(Ok((job, leaf))).is_err() {
                             break;
                         }
                     }
@@ -193,8 +122,8 @@ where
         let mut first_error = None;
         while received < total_jobs {
             match result_rx.recv() {
-                Ok(Ok((job, root))) => {
-                    roots[job.channel][job.root_index] = Some(root);
+                Ok(Ok((job, leaf))) => {
+                    chunks[job.channel][job.block as usize] = Some(leaf);
                     received += 1;
                     progress(CaptureIndexProgress {
                         completed_roots: received,
@@ -225,98 +154,61 @@ where
                 "waveform index build did not complete".to_string(),
             ));
         }
-        Ok(roots)
+        Ok(chunks)
     }
 
-    fn build_root_chunk<R>(
+    fn build_block_chunk<R>(
         source: &mut R,
         header: &CaptureMetadata,
         channel: usize,
-        root_index: usize,
-        first_block: u64,
-        block_count: u32,
-        previous_last: &mut Option<bool>,
-    ) -> Result<RootChunk>
+        block: u64,
+    ) -> Result<BlockIndex>
     where
         R: BlockCaptureSource,
     {
-        let mut root_toggle = 0_u64;
-        let mut root_first = 0_u64;
-        let mut root_last = 0_u64;
-        let mut leaves = Vec::with_capacity(block_count as usize);
-
-        for leaf_index in 0..block_count as usize {
-            let block = first_block + leaf_index as u64;
-            let data = source.read_packed_block(channel, block)?;
-            let block_start = block * header.samples_per_block;
-            let remaining = header.total_samples.saturating_sub(block_start);
-            let valid_samples = ((data.len() as u64) * 8).min(remaining);
-            let leaf = Self::build_leaf_summary(&data, valid_samples, *previous_last);
-            if leaf.active {
-                root_toggle |= 1_u64 << leaf_index;
-            }
-            if leaf.first {
-                root_first |= 1_u64 << leaf_index;
-            }
-            if leaf.last {
-                root_last |= 1_u64 << leaf_index;
-            }
-            *previous_last = Some(leaf.last);
-            leaves.push(leaf);
-        }
-
-        Ok(RootChunk {
-            channel,
-            root_index,
-            first_block,
-            block_count,
-            root_toggle,
-            root_first,
-            root_last,
-            leaves,
-        })
+        let data = source.read_packed_block(channel, block)?;
+        let block_start = block * header.samples_per_block;
+        let remaining = header.total_samples.saturating_sub(block_start);
+        let valid_samples = ((data.len() as u64) * 8).min(remaining);
+        Ok(Self::build_leaf_summary(&data, valid_samples, None))
     }
 
     fn build_leaf_summary(
         data: &[u8],
         valid_samples: u64,
         previous_last: Option<bool>,
-    ) -> LeafSummary {
+    ) -> BlockIndex {
         let valid_samples = valid_samples.min(u32::MAX as u64) as u32;
         if valid_samples == 0 {
-            return LeafSummary {
-                valid_samples,
-                first: false,
-                last: false,
-                active: false,
-                l1_toggle: Vec::new(),
-                l1_last: Vec::new(),
-                l2_toggle: [0; L2_WORDS],
-                l2_last: [0; L2_WORDS],
-                l3_toggle: 0,
-                l3_last: 0,
-            };
+            return BlockIndex { valid_samples, first: false, last: false, levels: None };
         }
 
         let first = packed_bit(data, 0);
         let last = packed_bit(data, valid_samples as usize - 1);
         let mut entering = previous_last.unwrap_or(first);
-        let l1_groups = (valid_samples as usize).div_ceil(64);
-        let mut l1_toggle = vec![0_u64; L1_WORDS];
-        let mut l1_last = vec![0_u64; L1_WORDS];
 
+        // Allocate directly on the heap to avoid a large stack frame.
+        let mut lvl = BlockLevels::zeroed();
+
+        let l1_groups = (valid_samples as usize).div_ceil(64);
         let full_l1_groups = valid_samples as usize / 64;
         for (group, chunk) in data[..full_l1_groups * 8].chunks_exact(8).enumerate() {
             let word = u64::from_le_bytes(chunk.try_into().expect("L1 chunks are exactly 8 bytes"));
-            Self::record_l1_group(&mut l1_toggle, &mut l1_last, group, word, 64, &mut entering);
+            Self::record_l1_group(
+                &mut lvl.l1_toggle,
+                &mut lvl.l1_last,
+                group,
+                word,
+                64,
+                &mut entering,
+            );
         }
-
         if full_l1_groups < l1_groups {
             let (word, valid_bits) =
                 Self::partial_l1_word(data, full_l1_groups, valid_samples as usize);
             Self::record_l1_group(
-                &mut l1_toggle,
-                &mut l1_last,
+                &mut lvl.l1_toggle,
+                &mut lvl.l1_last,
                 full_l1_groups,
                 word,
                 valid_bits,
@@ -324,48 +216,33 @@ where
             );
         }
 
-        let mut l2_toggle = [0_u64; L2_WORDS];
-        let mut l2_last = [0_u64; L2_WORDS];
         let l2_groups = l1_groups.div_ceil(64);
         for group in 0..l2_groups {
-            let l1_word = l1_toggle[group];
-            if l1_word != 0 {
-                set_bit(&mut l2_toggle[group / 64], group % 64);
+            if lvl.l1_toggle[group] != 0 {
+                set_bit(&mut lvl.l2_toggle[group / 64], group % 64);
             }
             let last_l1_group = ((group + 1) * 64).min(l1_groups).saturating_sub(1);
-            if bit(l1_last[last_l1_group / 64], last_l1_group % 64) {
-                set_bit(&mut l2_last[group / 64], group % 64);
+            if bit(lvl.l1_last[last_l1_group / 64], last_l1_group % 64) {
+                set_bit(&mut lvl.l2_last[group / 64], group % 64);
             }
         }
 
-        let mut l3_toggle = 0_u64;
-        let mut l3_last = 0_u64;
         let l3_groups = l2_groups.div_ceil(64);
         for group in 0..l3_groups {
-            if l2_toggle[group] != 0 {
-                set_bit(&mut l3_toggle, group);
+            if lvl.l2_toggle[group] != 0 {
+                set_bit(&mut lvl.l3_toggle, group);
             }
             let last_l2_group = ((group + 1) * 64).min(l2_groups).saturating_sub(1);
-            if bit(l2_last[last_l2_group / 64], last_l2_group % 64) {
-                set_bit(&mut l3_last, group);
+            if bit(lvl.l2_last[last_l2_group / 64], last_l2_group % 64) {
+                set_bit(&mut lvl.l3_last, group);
             }
         }
 
-        LeafSummary {
+        BlockIndex {
             valid_samples,
             first,
             last,
-            active: l3_toggle != 0,
-            l1_toggle: if l3_toggle != 0 {
-                l1_toggle
-            } else {
-                Vec::new()
-            },
-            l1_last: if l3_toggle != 0 { l1_last } else { Vec::new() },
-            l2_toggle,
-            l2_last,
-            l3_toggle,
-            l3_last,
+            levels: if lvl.l3_toggle != 0 { Some(lvl) } else { None },
         }
     }
 
@@ -423,57 +300,47 @@ where
         if valid_bits <= 1 {
             return false;
         }
-        let valid_mask = if valid_bits == 64 {
-            u64::MAX
-        } else {
-            (1_u64 << valid_bits) - 1
-        };
+        let valid_mask = if valid_bits == 64 { u64::MAX } else { (1_u64 << valid_bits) - 1 };
         let internal_mask = valid_mask & !1_u64;
         (word ^ (word << 1)) & internal_mask != 0
     }
 
-    fn apply_boundary_transition(root: &mut RootChunk, previous_last: Option<bool>) {
-        let Some(leaf) = root.leaves.first_mut() else {
-            return;
-        };
-        let Some(previous_last) = previous_last else {
-            return;
-        };
+    fn apply_boundary_transition(leaf: &mut BlockIndex, previous_last: Option<bool>) {
+        let Some(previous_last) = previous_last else { return };
         if leaf.valid_samples == 0 || previous_last == leaf.first {
             return;
         }
 
-        if !leaf.active {
-            leaf.l1_toggle = vec![0_u64; L1_WORDS];
-            leaf.l1_last = vec![0_u64; L1_WORDS];
-            Self::fill_constant_last_summaries(leaf);
-            leaf.active = true;
+        if leaf.levels.is_none() {
+            let mut lvl = BlockLevels::zeroed();
+            Self::fill_constant_last_summaries_into(&mut lvl, leaf.first, leaf.valid_samples);
+            leaf.levels = Some(lvl);
         }
 
-        set_bit(&mut leaf.l1_toggle[0], 0);
-        set_bit(&mut leaf.l2_toggle[0], 0);
-        set_bit(&mut leaf.l3_toggle, 0);
-        set_bit(&mut root.root_toggle, 0);
+        let levels = leaf.levels.as_mut().unwrap();
+        set_bit(&mut levels.l1_toggle[0], 0);
+        set_bit(&mut levels.l2_toggle[0], 0);
+        set_bit(&mut levels.l3_toggle, 0);
     }
 
-    fn fill_constant_last_summaries(leaf: &mut LeafSummary) {
-        if !leaf.first || leaf.valid_samples == 0 {
+    fn fill_constant_last_summaries_into(lvl: &mut BlockLevels, first: bool, valid_samples: u32) {
+        if !first || valid_samples == 0 {
             return;
         }
 
-        let l1_groups = (leaf.valid_samples as usize).div_ceil(L1_GROUP_SAMPLES as usize);
+        let l1_groups = (valid_samples as usize).div_ceil(SAMPLES_PER_L1_BIT as usize);
         for group in 0..l1_groups {
-            set_bit(&mut leaf.l1_last[group / 64], group % 64);
+            set_bit(&mut lvl.l1_last[group / 64], group % 64);
         }
 
         let l2_groups = l1_groups.div_ceil(64);
         for group in 0..l2_groups {
-            set_bit(&mut leaf.l2_last[group / 64], group % 64);
+            set_bit(&mut lvl.l2_last[group / 64], group % 64);
         }
 
         let l3_groups = l2_groups.div_ceil(64);
         for group in 0..l3_groups {
-            set_bit(&mut leaf.l3_last, group);
+            set_bit(&mut lvl.l3_last, group);
         }
     }
 }
@@ -481,6 +348,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::storage::{IndexStorage, serialize_leaf};
     use crate::runtime::{
         BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureMetadata, CaptureSource,
     };
@@ -543,10 +411,7 @@ mod tests {
 
         assert!(!leaf.first);
         assert!(!leaf.last);
-        assert!(!leaf.active);
-        assert!(leaf.l1_toggle.is_empty());
-        assert!(leaf.l1_last.is_empty());
-        assert_eq!(leaf.l3_toggle, 0);
+        assert!(leaf.levels.is_none());
     }
 
     #[test]
@@ -556,13 +421,13 @@ mod tests {
 
         assert!(leaf.first);
         assert!(leaf.last);
-        assert!(leaf.active);
-        assert!(bit(leaf.l1_toggle[0], 0));
-        assert!(bit(leaf.l1_last[0], 0));
-        assert!(bit(leaf.l2_toggle[0], 0));
-        assert!(bit(leaf.l2_last[0], 0));
-        assert!(bit(leaf.l3_toggle, 0));
-        assert!(bit(leaf.l3_last, 0));
+        let lvl = leaf.levels.as_ref().unwrap();
+        assert!(bit(lvl.l1_toggle[0], 0));
+        assert!(bit(lvl.l1_last[0], 0));
+        assert!(bit(lvl.l2_toggle[0], 0));
+        assert!(bit(lvl.l2_last[0], 0));
+        assert!(bit(lvl.l3_toggle, 0));
+        assert!(bit(lvl.l3_last, 0));
     }
 
     #[test]
@@ -573,42 +438,34 @@ mod tests {
         }
         let leaf = TestBuilder::build_leaf_summary(&data, 128, Some(false));
 
-        assert!(!bit(leaf.l1_toggle[0], 0));
-        assert!(!bit(leaf.l1_last[0], 0));
-        assert!(bit(leaf.l1_toggle[0], 1));
-        assert!(bit(leaf.l1_last[0], 1));
-        assert!(bit(leaf.l2_toggle[0], 0));
-        assert!(bit(leaf.l2_last[0], 0));
-        assert!(bit(leaf.l3_toggle, 0));
-        assert!(bit(leaf.l3_last, 0));
+        let lvl = leaf.levels.as_ref().unwrap();
+        assert!(!bit(lvl.l1_toggle[0], 0));
+        assert!(!bit(lvl.l1_last[0], 0));
+        assert!(bit(lvl.l1_toggle[0], 1));
+        assert!(bit(lvl.l1_last[0], 1));
+        assert!(bit(lvl.l2_toggle[0], 0));
+        assert!(bit(lvl.l2_last[0], 0));
+        assert!(bit(lvl.l3_toggle, 0));
+        assert!(bit(lvl.l3_last, 0));
     }
 
     #[test]
-    fn root_chunk_round_trips_active_and_constant_leaves() {
-        let active = TestBuilder::build_leaf_summary(&[0_u8, 0xff], 16, Some(false));
-        let constant = TestBuilder::build_leaf_summary(&[0xff_u8; 8], 64, Some(true));
-        let root = RootChunk {
-            channel: 2,
-            root_index: 3,
-            first_block: 192,
-            block_count: 2,
-            root_toggle: 0b01,
-            root_first: 0b10,
-            root_last: 0b11,
-            leaves: vec![active, constant],
-        };
+    fn chunk_round_trips_active_leaf() {
+        let leaf = TestBuilder::build_leaf_summary(&[0_u8, 0xff], 16, Some(false));
+        let data = serialize_leaf(&leaf);
+        let decoded = IndexStorage::decode_leaf_for_test(&data).expect("leaf should decode");
+        let lvl = decoded.levels.as_ref().expect("decoded leaf should be active");
+        assert!(bit(lvl.l1_toggle[0], 0));
+    }
 
-        let data = IndexStorage::serialize_root_chunk(&root);
-        let decoded =
-            IndexStorage::decode_root_chunk_for_test(&data).expect("root chunk should decode");
-
-        assert_eq!(decoded.channel, 2);
-        assert_eq!(decoded.root_index, 3);
-        assert_eq!(decoded.first_block, 192);
-        assert_eq!(decoded.leaves.len(), 2);
-        assert!(decoded.leaves[0].active);
-        assert!(!decoded.leaves[1].active);
-        assert!(bit(decoded.leaves[0].l1_toggle[0], 0));
+    #[test]
+    fn chunk_round_trips_constant_leaf() {
+        let leaf = TestBuilder::build_leaf_summary(&[0xff_u8; 8], 64, Some(true));
+        let data = serialize_leaf(&leaf);
+        let decoded = IndexStorage::decode_leaf_for_test(&data).expect("leaf should decode");
+        assert!(decoded.levels.is_none());
+        assert!(decoded.first);
+        assert!(decoded.last);
     }
 
     #[test]
@@ -620,14 +477,14 @@ mod tests {
 
         let data = [0b0000_1111_u8];
         let leaf = TestBuilder::build_leaf_summary(&data, 8, Some(false));
-        assert!(leaf.active);
-        assert!(bit(leaf.l1_toggle[0], 0));
-        assert!(!bit(leaf.l1_last[0], 0));
+        let lvl = leaf.levels.as_ref().unwrap();
+        assert!(bit(lvl.l1_toggle[0], 0));
+        assert!(!bit(lvl.l1_last[0], 0));
 
         let leaf = TestBuilder::build_leaf_summary(&[0xff], 1, Some(false));
         assert!(leaf.first);
         assert!(leaf.last);
-        assert!(leaf.active);
-        assert!(bit(leaf.l1_toggle[0], 0));
+        let lvl = leaf.levels.as_ref().unwrap();
+        assert!(bit(lvl.l1_toggle[0], 0));
     }
 }

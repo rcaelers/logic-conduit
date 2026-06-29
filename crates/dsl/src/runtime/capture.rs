@@ -51,6 +51,7 @@ pub struct CaptureActivity {
 pub struct CaptureBucket {
     pub start_sample: u64,
     pub end_sample: u64,
+    pub first: bool,
     pub toggle: bool,
     pub last: bool,
 }

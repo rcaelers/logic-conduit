@@ -1,27 +1,214 @@
+//! # Terminology
+//!
+//! - **Sample**: a single 1-bit logic level reading at one point in time, on one channel.
+//! - **Block**: the unit of raw capture data. The capture source divides the sample stream into
+//!   fixed-size blocks (e.g. 16 M samples each). One block = one packed bit-array from the source.
+//! - **Chunk**: the serialized index payload for one (channel, block) pair written into the index
+//!   file. A chunk contains `valid_samples`, flags, and — when the block is active — the mipmap
+//!   bitmaps (`BlockLevels`). The directory maps each (channel, block) to its chunk's byte offset
+//!   and length.
+//! - **Payload**: the region of the index file that holds all the chunks, after the header and
+//!   directory. Chunks are written in channel-major order.
+//!
+//! # Index file format  (magic `CAPIDX06`, version 6)
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────┐
+//! │  HEADER  (96 bytes, offset 0)                       │
+//! │    magic            [u8; 8]  = b"CAPIDX06"          │
+//! │    version          u32      = 6                    │
+//! │    header_size      u32      = 96                   │
+//! │    source_revision  u64                             │
+//! │    total_samples    u64                             │
+//! │    total_blocks     u64                             │
+//! │    samples_per_block u64                            │
+//! │    samplerate_bits  u64  (f64::to_bits of Hz)       │
+//! │    total_channels   u32                             │
+//! │    blocks_per_channel u32                           │
+//! │    dir_offset       u64  = 96                       │
+//! │    payload_offset   u64  = 96 + channels            │
+//! │                               * blocks * 40         │
+//! │    _padding         to fill 96 bytes                │
+//! ├─────────────────────────────────────────────────────┤
+//! │  DIRECTORY  (channels × blocks × 40 bytes)          │
+//! │  channel-major order; one entry per (channel,block) │
+//! │    offset     u64  (byte offset of chunk in file)   │
+//! │    len        u64  (byte length of chunk)           │
+//! │    flags      u8   bit0=toggle  bit1=first          │
+//! │                        bit2=last                    │
+//! │    _padding   [u8; 7]                               │
+//! │    l3_toggle  u64  (1 bit per 262 144-sample group: │
+//! │                     any transition in group?)        │
+//! │    l3_last    u64  (last sample value of group)     │
+//! ├─────────────────────────────────────────────────────┤
+//! │  PAYLOAD  (all chunks, channel-major order)         │
+//! │  Each chunk covers one (channel, block) pair:       │
+//! │    valid_samples  u32                               │
+//! │    flags          u8  bit0=first  bit1=last         │
+//! │                           bit2=active               │
+//! │    _padding       [u8; 3]                           │
+//! │    [only when active:]                              │
+//! │      l1_toggle  [u64; 4096]  (1 bit per 64 samples) │
+//! │      l1_last    [u64; 4096]                         │
+//! │      l2_toggle  [u64;   64]  (1 bit per 4 096 smp)  │
+//! │      l2_last    [u64;   64]                         │
+//! │      l3_toggle  u64          (1 bit per 262 144 smp)│
+//! │      l3_last    u64                                 │
+//! └─────────────────────────────────────────────────────┘
+//! ```
+
 use super::types::{
-    DIR_ENTRY_SIZE, HEADER_SIZE, IndexHeader, L1_WORDS, L2_WORDS, LeafSummary, MAGIC, RootChunk,
-    RootDirEntry,
+    DIR_ENTRY_SIZE, HEADER_SIZE, IndexHeader, BlockIndex, BlockLevels, MAGIC, RootDirEntry,
 };
 use crate::runtime::CaptureMetadata;
 use crate::{Error, Result};
 use std::collections::{HashMap, VecDeque};
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+// ---------------------------------------------------------------------------
+// IndexWriter — create and populate a new index file
+// ---------------------------------------------------------------------------
+
+/// Writes a new index file for one capture source.
+///
+/// Call [`IndexWriter::create`] to open the file, [`IndexWriter::write_block`] once per
+/// (channel, block) pair in channel-major order, then [`IndexWriter::finish`] to flush
+/// and atomically rename the temp file into place.
+pub(super) struct IndexWriter {
+    temp_path: PathBuf,
+    final_path: PathBuf,
+    file: File,
+    directory: Vec<Vec<RootDirEntry>>,
+    index_header: IndexHeader,
+}
+
+impl IndexWriter {
+    /// Create a new index file at `path` (written via a `.idx.tmp` sibling until [`finish`]).
+    pub(super) fn create(
+        path: &Path,
+        capture_header: &CaptureMetadata,
+        source_revision: u64,
+    ) -> Result<Self> {
+        let temp_path = path.with_extension("idx.tmp");
+        let channels = capture_header.total_probes;
+        let total_blocks = capture_header.total_blocks as usize;
+        let dir_offset = HEADER_SIZE;
+        let payload_offset = dir_offset + (channels * total_blocks) as u64 * DIR_ENTRY_SIZE;
+
+        let index_header = IndexHeader {
+            source_revision,
+            total_samples: capture_header.total_samples,
+            total_blocks: capture_header.total_blocks,
+            samples_per_block: capture_header.samples_per_block,
+            samplerate_bits: capture_header.samplerate_hz.to_bits(),
+            total_channels: channels as u32,
+            blocks_per_channel: total_blocks as u32,
+            dir_offset,
+            payload_offset,
+        };
+
+        let mut file = File::create(&temp_path)?;
+        // Reserve space for header + directory; filled in during finish().
+        file.write_all(&vec![0_u8; payload_offset as usize])?;
+        file.seek(SeekFrom::Start(payload_offset))?;
+
+        Ok(Self {
+            temp_path,
+            final_path: path.to_path_buf(),
+            file,
+            directory: vec![vec![RootDirEntry::default(); total_blocks]; channels],
+            index_header,
+        })
+    }
+
+    /// Serialize `leaf` and append its chunk to the payload; record the directory entry.
+    pub(super) fn write_block(
+        &mut self,
+        channel: usize,
+        block: usize,
+        leaf: &BlockIndex,
+    ) -> Result<()> {
+        let offset = self.file.stream_position()?;
+        let payload = serialize_leaf(leaf);
+        self.file.write_all(&payload)?;
+        self.directory[channel][block] = RootDirEntry {
+            offset,
+            len: payload.len() as u64,
+            toggle: leaf.levels.is_some(),
+            first: leaf.first,
+            last: leaf.last,
+            l3_toggle: leaf.levels.as_ref().map_or(0, |l| l.l3_toggle),
+            l3_last: leaf.levels.as_ref().map_or(0, |l| l.l3_last),
+        };
+        Ok(())
+    }
+
+    /// Write the header and directory, sync, and atomically rename into place.
+    pub(super) fn finish(mut self) -> Result<()> {
+        self.file.seek(SeekFrom::Start(0))?;
+        Self::write_header(&mut self.file, &self.index_header)?;
+        self.file.seek(SeekFrom::Start(self.index_header.dir_offset))?;
+        for channel_dir in &self.directory {
+            for entry in channel_dir {
+                Self::write_dir_entry(&mut self.file, entry)?;
+            }
+        }
+        self.file.sync_all()?;
+        drop(self.file);
+        fs::rename(&self.temp_path, &self.final_path)?;
+        Ok(())
+    }
+
+    fn write_header(file: &mut File, header: &IndexHeader) -> Result<()> {
+        file.write_all(MAGIC)?;
+        write_u32(file, 6)?;
+        write_u32(file, HEADER_SIZE as u32)?;
+        write_u64(file, header.source_revision)?;
+        write_u64(file, header.total_samples)?;
+        write_u64(file, header.total_blocks)?;
+        write_u64(file, header.samples_per_block)?;
+        write_u64(file, header.samplerate_bits)?;
+        write_u32(file, header.total_channels)?;
+        write_u32(file, header.blocks_per_channel)?;
+        write_u64(file, header.dir_offset)?;
+        write_u64(file, header.payload_offset)?;
+        let written = 8 + 4 + 4 + 8 * 7 + 4 * 2;
+        file.write_all(&vec![0_u8; HEADER_SIZE as usize - written])?;
+        Ok(())
+    }
+
+    fn write_dir_entry(file: &mut File, entry: &RootDirEntry) -> Result<()> {
+        debug_assert_eq!(DIR_ENTRY_SIZE, 40);
+        write_u64(file, entry.offset)?;
+        write_u64(file, entry.len)?;
+        let flags =
+            (entry.toggle as u8) | ((entry.first as u8) << 1) | ((entry.last as u8) << 2);
+        file.write_all(&[flags, 0, 0, 0, 0, 0, 0, 0])?;
+        write_u64(file, entry.l3_toggle)?;
+        write_u64(file, entry.l3_last)?;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IndexStorage — read an existing index file
+// ---------------------------------------------------------------------------
 
 pub(super) struct IndexStorage {
     path: PathBuf,
     header: CaptureMetadata,
     file: File,
     directory: Vec<Vec<RootDirEntry>>,
-    root_cache: HashMap<(usize, usize), Arc<RootChunk>>,
-    root_cache_order: VecDeque<(usize, usize)>,
-    max_cached_roots: usize,
+    leaf_cache: HashMap<(usize, usize), Arc<BlockIndex>>,
+    leaf_cache_order: VecDeque<(usize, usize)>,
+    max_cached_leaves: usize,
 }
 
 impl IndexStorage {
-    const DEFAULT_MAX_CACHED_ROOTS: usize = 8;
+    const DEFAULT_MAX_CACHED_LEAVES: usize = 8;
 
     pub(super) fn is_valid(
         path: &Path,
@@ -31,10 +218,10 @@ impl IndexStorage {
         let Ok(mut file) = File::open(path) else {
             return Ok(false);
         };
-        let Ok(index_header) = Self::read_index_header(&mut file) else {
+        let Ok(index_header) = Self::read_header(&mut file) else {
             return Ok(false);
         };
-        Ok(Self::validate_index_header(&index_header, header, source_revision).is_ok())
+        Ok(Self::validate_header(&index_header, header, source_revision).is_ok())
     }
 
     pub(super) fn open(
@@ -43,14 +230,14 @@ impl IndexStorage {
         source_revision: u64,
     ) -> Result<Self> {
         let mut file = File::open(&path)?;
-        let index_header = Self::read_index_header(&mut file)?;
-        Self::validate_index_header(&index_header, &header, source_revision)?;
-        let roots_per_channel = index_header.roots_per_channel as usize;
+        let index_header = Self::read_header(&mut file)?;
+        Self::validate_header(&index_header, &header, source_revision)?;
+        let blocks_per_channel = index_header.blocks_per_channel as usize;
         let directory = Self::read_directory(
             &mut file,
             &index_header,
             header.total_probes,
-            roots_per_channel,
+            blocks_per_channel,
         )?;
 
         Ok(Self {
@@ -58,9 +245,9 @@ impl IndexStorage {
             header,
             file,
             directory,
-            root_cache: HashMap::new(),
-            root_cache_order: VecDeque::new(),
-            max_cached_roots: Self::DEFAULT_MAX_CACHED_ROOTS,
+            leaf_cache: HashMap::new(),
+            leaf_cache_order: VecDeque::new(),
+            max_cached_leaves: Self::DEFAULT_MAX_CACHED_LEAVES,
         })
     }
 
@@ -72,95 +259,48 @@ impl IndexStorage {
         &self.header
     }
 
-    pub(super) fn set_max_cached_roots(&mut self, max_cached_roots: usize) {
-        self.max_cached_roots = max_cached_roots.max(1);
-        self.trim_root_cache();
+    pub(super) fn set_max_cached_leaves(&mut self, max: usize) {
+        self.max_cached_leaves = max.max(1);
+        self.trim_leaf_cache();
     }
 
-    pub(super) fn load_root(
-        &mut self,
-        channel: usize,
-        root_index: usize,
-    ) -> Result<Arc<RootChunk>> {
-        let key = (channel, root_index);
-        if let Some(root) = self.root_cache.get(&key).cloned() {
-            self.touch_root_cache_key(key);
-            return Ok(root);
+    pub(super) fn load_leaf(&mut self, channel: usize, block: usize) -> Result<Arc<BlockIndex>> {
+        let key = (channel, block);
+        if let Some(leaf) = self.leaf_cache.get(&key).cloned() {
+            self.touch_leaf_cache_key(key);
+            return Ok(leaf);
         }
 
         let entry = self
             .directory
             .get(channel)
-            .and_then(|roots| roots.get(root_index))
+            .and_then(|blocks| blocks.get(block))
             .copied()
-            .ok_or_else(|| Error::ParseError("root chunk index out of bounds".to_string()))?;
+            .ok_or_else(|| Error::ParseError("block index out of bounds".to_string()))?;
         self.file.seek(SeekFrom::Start(entry.offset))?;
         let mut data = vec![0_u8; entry.len as usize];
         self.file.read_exact(&mut data)?;
-        let root = Arc::new(Self::deserialize_root_chunk(&data)?);
-        self.root_cache.insert(key, Arc::clone(&root));
-        self.root_cache_order.push_back(key);
-        self.trim_root_cache();
-        Ok(root)
+        let leaf = Arc::new(deserialize_leaf(&data)?);
+        self.leaf_cache.insert(key, Arc::clone(&leaf));
+        self.leaf_cache_order.push_back(key);
+        self.trim_leaf_cache();
+        Ok(leaf)
     }
 
-    pub(super) fn serialize_root_chunk(root: &RootChunk) -> Vec<u8> {
-        let mut out = Vec::new();
-        Self::push_u32(&mut out, root.channel as u32);
-        Self::push_u32(&mut out, root.root_index as u32);
-        Self::push_u64(&mut out, root.first_block);
-        Self::push_u32(&mut out, root.block_count);
-        Self::push_u32(&mut out, root.leaves.len() as u32);
-        Self::push_u64(&mut out, root.root_toggle);
-        Self::push_u64(&mut out, root.root_first);
-        Self::push_u64(&mut out, root.root_last);
-        for leaf in &root.leaves {
-            Self::push_u32(&mut out, leaf.valid_samples);
-            out.push((leaf.first as u8) | ((leaf.last as u8) << 1) | ((leaf.active as u8) << 2));
-            out.extend_from_slice(&[0, 0, 0]);
-            if leaf.active {
-                Self::push_u64_slice(&mut out, &leaf.l1_toggle);
-                Self::push_u64_slice(&mut out, &leaf.l1_last);
-                Self::push_u64_slice(&mut out, &leaf.l2_toggle);
-                Self::push_u64_slice(&mut out, &leaf.l2_last);
-                Self::push_u64(&mut out, leaf.l3_toggle);
-                Self::push_u64(&mut out, leaf.l3_last);
-            }
-        }
-        out
+    pub(super) fn load_root_summary(&self, channel: usize, block: usize) -> Result<RootDirEntry> {
+        self.directory
+            .get(channel)
+            .and_then(|blocks| blocks.get(block))
+            .copied()
+            .ok_or_else(|| Error::ParseError("block index out of bounds".to_string()))
     }
 
-    pub(super) fn write_index_header(file: &mut File, header: &IndexHeader) -> Result<()> {
-        file.write_all(MAGIC)?;
-        Self::write_u32(file, 3)?;
-        Self::write_u32(file, HEADER_SIZE as u32)?;
-        Self::write_u64(file, header.source_revision)?;
-        Self::write_u64(file, header.total_samples)?;
-        Self::write_u64(file, header.total_blocks)?;
-        Self::write_u64(file, header.samples_per_block)?;
-        Self::write_u64(file, header.samplerate_bits)?;
-        Self::write_u32(file, header.total_channels)?;
-        Self::write_u32(file, header.roots_per_channel)?;
-        Self::write_u64(file, header.dir_offset)?;
-        Self::write_u64(file, header.payload_offset)?;
-        let written = 8 + 4 + 4 + 8 * 7 + 4 * 2;
-        file.write_all(&vec![0_u8; HEADER_SIZE as usize - written])?;
-        Ok(())
+    #[cfg(test)]
+    pub(super) fn decode_leaf_for_test(data: &[u8]) -> Result<BlockIndex> {
+        deserialize_leaf(data)
     }
 
-    pub(super) fn write_dir_entry(file: &mut File, entry: &RootDirEntry) -> Result<()> {
-        debug_assert_eq!(DIR_ENTRY_SIZE, 48);
-        Self::write_u64(file, entry.first_block)?;
-        Self::write_u32(file, entry.block_count)?;
-        Self::write_u32(file, 0)?;
-        Self::write_u64(file, entry.offset)?;
-        Self::write_u64(file, entry.len)?;
-        Self::write_u64(file, 0)?;
-        Self::write_u64(file, 0)?;
-        Ok(())
-    }
-
-    fn validate_index_header(
+    fn validate_header(
         index_header: &IndexHeader,
         header: &CaptureMetadata,
         source_revision: u64,
@@ -171,15 +311,14 @@ impl IndexStorage {
             || index_header.samples_per_block != header.samples_per_block
             || index_header.samplerate_bits != header.samplerate_hz.to_bits()
             || index_header.total_channels != header.total_probes as u32
-            || index_header.roots_per_channel
-                != (header.total_blocks as usize).div_ceil(super::types::BLOCKS_PER_ROOT) as u32
+            || index_header.blocks_per_channel != header.total_blocks as u32
         {
             return Err(Error::ParseError("waveform sidecar is stale".to_string()));
         }
         Ok(())
     }
 
-    fn read_index_header(file: &mut File) -> Result<IndexHeader> {
+    fn read_header(file: &mut File) -> Result<IndexHeader> {
         file.seek(SeekFrom::Start(0))?;
         let mut magic = [0_u8; 8];
         file.read_exact(&mut magic)?;
@@ -188,32 +327,23 @@ impl IndexStorage {
                 "invalid waveform sidecar magic".to_string(),
             ));
         }
-        let version = Self::read_u32(file)?;
-        if version != 3 {
+        let version = read_u32(file)?;
+        if version != 6 {
             return Err(Error::ParseError(
                 "unsupported waveform sidecar version".to_string(),
             ));
         }
-        let _header_size = Self::read_u32(file)?;
-        let source_revision = Self::read_u64(file)?;
-        let total_samples = Self::read_u64(file)?;
-        let total_blocks = Self::read_u64(file)?;
-        let samples_per_block = Self::read_u64(file)?;
-        let samplerate_bits = Self::read_u64(file)?;
-        let total_channels = Self::read_u32(file)?;
-        let roots_per_channel = Self::read_u32(file)?;
-        let dir_offset = Self::read_u64(file)?;
-        let payload_offset = Self::read_u64(file)?;
+        let _header_size = read_u32(file)?;
         Ok(IndexHeader {
-            source_revision,
-            total_samples,
-            total_blocks,
-            samples_per_block,
-            samplerate_bits,
-            total_channels,
-            roots_per_channel,
-            dir_offset,
-            payload_offset,
+            source_revision: read_u64(file)?,
+            total_samples: read_u64(file)?,
+            total_blocks: read_u64(file)?,
+            samples_per_block: read_u64(file)?,
+            samplerate_bits: read_u64(file)?,
+            total_channels: read_u32(file)?,
+            blocks_per_channel: read_u32(file)?,
+            dir_offset: read_u64(file)?,
+            payload_offset: read_u64(file)?,
         })
     }
 
@@ -221,10 +351,10 @@ impl IndexStorage {
         file: &mut File,
         header: &IndexHeader,
         channels: usize,
-        roots_per_channel: usize,
+        blocks_per_channel: usize,
     ) -> Result<Vec<Vec<RootDirEntry>>> {
         file.seek(SeekFrom::Start(header.dir_offset))?;
-        let mut directory = vec![vec![RootDirEntry::default(); roots_per_channel]; channels];
+        let mut directory = vec![vec![RootDirEntry::default(); blocks_per_channel]; channels];
         for channel_dir in &mut directory {
             for entry in channel_dir {
                 *entry = Self::read_dir_entry(file)?;
@@ -234,134 +364,132 @@ impl IndexStorage {
     }
 
     fn read_dir_entry(file: &mut File) -> Result<RootDirEntry> {
-        let first_block = Self::read_u64(file)?;
-        let block_count = Self::read_u32(file)?;
-        let _reserved = Self::read_u32(file)?;
-        let offset = Self::read_u64(file)?;
-        let len = Self::read_u64(file)?;
-        let _reserved0 = Self::read_u64(file)?;
-        let _reserved1 = Self::read_u64(file)?;
+        let offset = read_u64(file)?;
+        let len = read_u64(file)?;
+        let mut flags_buf = [0_u8; 8];
+        file.read_exact(&mut flags_buf)?;
+        let flags = flags_buf[0];
+        let l3_toggle = read_u64(file)?;
+        let l3_last = read_u64(file)?;
         Ok(RootDirEntry {
-            first_block,
-            block_count,
             offset,
             len,
+            toggle: flags & 0b001 != 0,
+            first: flags & 0b010 != 0,
+            last: flags & 0b100 != 0,
+            l3_toggle,
+            l3_last,
         })
     }
 
-    fn deserialize_root_chunk(data: &[u8]) -> Result<RootChunk> {
-        let mut cursor = Cursor::new(data);
-        let channel = cursor.u32()? as usize;
-        let root_index = cursor.u32()? as usize;
-        let first_block = cursor.u64()?;
-        let block_count = cursor.u32()?;
-        let leaf_count = cursor.u32()? as usize;
-        let root_toggle = cursor.u64()?;
-        let root_first = cursor.u64()?;
-        let root_last = cursor.u64()?;
-        let mut leaves = Vec::with_capacity(leaf_count);
-        for _ in 0..leaf_count {
-            let valid_samples = cursor.u32()?;
-            let flags = cursor.byte()?;
-            cursor.skip(3)?;
-            let active = flags & 0b100 != 0;
-            let mut leaf = LeafSummary {
-                valid_samples,
-                first: flags & 0b001 != 0,
-                last: flags & 0b010 != 0,
-                active,
-                l1_toggle: Vec::new(),
-                l1_last: Vec::new(),
-                l2_toggle: [0; L2_WORDS],
-                l2_last: [0; L2_WORDS],
-                l3_toggle: 0,
-                l3_last: 0,
-            };
-            if active {
-                leaf.l1_toggle = cursor.u64_vec(L1_WORDS)?;
-                leaf.l1_last = cursor.u64_vec(L1_WORDS)?;
-                leaf.l2_toggle.copy_from_slice(&cursor.u64_vec(L2_WORDS)?);
-                leaf.l2_last.copy_from_slice(&cursor.u64_vec(L2_WORDS)?);
-                leaf.l3_toggle = cursor.u64()?;
-                leaf.l3_last = cursor.u64()?;
-            }
-            leaves.push(leaf);
-        }
-        Ok(RootChunk {
-            channel,
-            root_index,
-            first_block,
-            block_count,
-            root_toggle,
-            root_first,
-            root_last,
-            leaves,
-        })
-    }
-
-    #[cfg(test)]
-    pub(super) fn decode_root_chunk_for_test(data: &[u8]) -> Result<RootChunk> {
-        Self::deserialize_root_chunk(data)
-    }
-
-    fn touch_root_cache_key(&mut self, key: (usize, usize)) {
-        if self
-            .root_cache_order
-            .back()
-            .is_some_and(|existing| *existing == key)
-        {
+    fn touch_leaf_cache_key(&mut self, key: (usize, usize)) {
+        if self.leaf_cache_order.back().is_some_and(|existing| *existing == key) {
             return;
         }
-        self.root_cache_order.retain(|existing| *existing != key);
-        self.root_cache_order.push_back(key);
+        self.leaf_cache_order.retain(|existing| *existing != key);
+        self.leaf_cache_order.push_back(key);
     }
 
-    fn trim_root_cache(&mut self) {
-        while self.root_cache.len() > self.max_cached_roots {
-            if let Some(key) = self.root_cache_order.pop_front() {
-                self.root_cache.remove(&key);
+    fn trim_leaf_cache(&mut self) {
+        while self.leaf_cache.len() > self.max_cached_leaves {
+            if let Some(key) = self.leaf_cache_order.pop_front() {
+                self.leaf_cache.remove(&key);
             } else {
                 break;
             }
         }
     }
+}
 
-    fn push_u32(out: &mut Vec<u8>, value: u32) {
-        out.extend_from_slice(&value.to_le_bytes());
+// ---------------------------------------------------------------------------
+// Chunk codec — shared by IndexWriter (serialize) and IndexStorage (deserialize)
+// ---------------------------------------------------------------------------
+
+pub(super) fn serialize_leaf(leaf: &BlockIndex) -> Vec<u8> {
+    let active = leaf.levels.is_some();
+    let mut out = Vec::new();
+    push_u32(&mut out, leaf.valid_samples);
+    out.push((leaf.first as u8) | ((leaf.last as u8) << 1) | ((active as u8) << 2));
+    out.extend_from_slice(&[0, 0, 0]);
+    if let Some(levels) = &leaf.levels {
+        push_u64_slice(&mut out, &levels.l1_toggle);
+        push_u64_slice(&mut out, &levels.l1_last);
+        push_u64_slice(&mut out, &levels.l2_toggle);
+        push_u64_slice(&mut out, &levels.l2_last);
+        push_u64(&mut out, levels.l3_toggle);
+        push_u64(&mut out, levels.l3_last);
     }
+    out
+}
 
-    fn push_u64(out: &mut Vec<u8>, value: u64) {
-        out.extend_from_slice(&value.to_le_bytes());
-    }
+fn deserialize_leaf(data: &[u8]) -> Result<BlockIndex> {
+    let mut cursor = Cursor::new(data);
+    let valid_samples = cursor.u32()?;
+    let flags = cursor.byte()?;
+    cursor.skip(3)?;
+    let levels = if flags & 0b100 != 0 {
+        let mut lvl = BlockLevels::zeroed();
+        cursor.u64_slice(&mut lvl.l1_toggle)?;
+        cursor.u64_slice(&mut lvl.l1_last)?;
+        cursor.u64_slice(&mut lvl.l2_toggle)?;
+        cursor.u64_slice(&mut lvl.l2_last)?;
+        lvl.l3_toggle = cursor.u64()?;
+        lvl.l3_last = cursor.u64()?;
+        Some(lvl)
+    } else {
+        None
+    };
+    Ok(BlockIndex {
+        valid_samples,
+        first: flags & 0b001 != 0,
+        last: flags & 0b010 != 0,
+        levels,
+    })
+}
 
-    fn push_u64_slice(out: &mut Vec<u8>, values: &[u64]) {
-        for value in values {
-            Self::push_u64(out, *value);
-        }
-    }
+// ---------------------------------------------------------------------------
+// Low-level I/O helpers
+// ---------------------------------------------------------------------------
 
-    fn read_u32(file: &mut File) -> Result<u32> {
-        let mut buf = [0_u8; 4];
-        file.read_exact(&mut buf)?;
-        Ok(u32::from_le_bytes(buf))
-    }
+fn push_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
 
-    fn read_u64(file: &mut File) -> Result<u64> {
-        let mut buf = [0_u8; 8];
-        file.read_exact(&mut buf)?;
-        Ok(u64::from_le_bytes(buf))
-    }
+fn push_u64(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
 
-    fn write_u32(file: &mut File, value: u32) -> Result<()> {
-        file.write_all(&value.to_le_bytes())?;
-        Ok(())
-    }
-
-    fn write_u64(file: &mut File, value: u64) -> Result<()> {
-        file.write_all(&value.to_le_bytes())?;
-        Ok(())
+fn push_u64_slice(out: &mut Vec<u8>, values: &[u64]) {
+    for value in values {
+        push_u64(out, *value);
     }
 }
+
+fn read_u32(file: &mut File) -> Result<u32> {
+    let mut buf = [0_u8; 4];
+    file.read_exact(&mut buf)?;
+    Ok(u32::from_le_bytes(buf))
+}
+
+fn read_u64(file: &mut File) -> Result<u64> {
+    let mut buf = [0_u8; 8];
+    file.read_exact(&mut buf)?;
+    Ok(u64::from_le_bytes(buf))
+}
+
+fn write_u32(file: &mut File, value: u32) -> Result<()> {
+    file.write_all(&value.to_le_bytes())?;
+    Ok(())
+}
+
+fn write_u64(file: &mut File, value: u64) -> Result<()> {
+    file.write_all(&value.to_le_bytes())?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Cursor — byte-slice reader for deserialization
+// ---------------------------------------------------------------------------
 
 struct Cursor<'a> {
     data: &'a [u8],
@@ -402,12 +530,11 @@ impl<'a> Cursor<'a> {
         Ok(u64::from_le_bytes(buf))
     }
 
-    fn u64_vec(&mut self, len: usize) -> Result<Vec<u64>> {
-        let mut out = Vec::with_capacity(len);
-        for _ in 0..len {
-            out.push(self.u64()?);
+    fn u64_slice(&mut self, out: &mut [u64]) -> Result<()> {
+        for word in out.iter_mut() {
+            *word = self.u64()?;
         }
-        Ok(out)
+        Ok(())
     }
 
     fn read_exact(&mut self, buf: &mut [u8]) -> Result<()> {

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 const SCROLL_INPUT_EPSILON: f32 = 0.5;
+const EXACT_WINDOW_MAX_SAMPLES: u64 = 2_000_000;
 
 pub struct LogicAnalyzerViewer {
     channels: Vec<LogicChannel>,
@@ -43,8 +44,32 @@ struct Transition {
 struct Bucket {
     start_us: f64,
     end_us: f64,
+    first: bool,
     toggle: bool,
     last: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PulseMeasurement {
+    channel_row: usize,
+    value: bool,
+    start_us: f64,
+    end_us: f64,
+    period_end_us: f64,
+}
+
+impl PulseMeasurement {
+    fn width_us(self) -> f64 {
+        self.end_us - self.start_us
+    }
+
+    fn period_us(self) -> f64 {
+        self.period_end_us - self.start_us
+    }
+
+    fn duty_cycle(self) -> f64 {
+        self.width_us() / self.period_us()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +79,7 @@ struct WindowKey {
     end_sample: u64,
     target_points: usize,
     channel_count: usize,
+    exact: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -345,6 +371,7 @@ impl LogicAnalyzerViewer {
                     if let Some(capture) = self.capture_info.as_ref() {
                         self.status = capture_status(capture);
                     }
+                    self.channels = placeholder_channels(&header);
                     self.last_window = None;
                     self.pending_window = None;
                     self.index_progress = None;
@@ -362,7 +389,24 @@ impl LogicAnalyzerViewer {
                     };
                     let (visible_start, visible_end) =
                         visible_sample_range(capture, self.visible_start_us, self.visible_span_us);
+                    let visible_exact =
+                        visible_end.saturating_sub(visible_start) <= EXACT_WINDOW_MAX_SAMPLES;
+                    if key.exact != visible_exact {
+                        if self.pending_window.as_ref() == Some(&key) {
+                            self.pending_window = None;
+                        }
+                        continue;
+                    }
                     if key.start_sample > visible_start || key.end_sample < visible_end {
+                        if self.pending_window.as_ref() == Some(&key) {
+                            self.pending_window = None;
+                        }
+                        continue;
+                    }
+                    if key.exact && window.sample_step != 1 {
+                        if self.pending_window.as_ref() == Some(&key) {
+                            self.pending_window = None;
+                        }
                         continue;
                     }
                     self.channels = channels_from_window(&window, samplerate_hz);
@@ -421,11 +465,11 @@ impl LogicAnalyzerViewer {
 
         let left_width = 145.0_f32.min(rect.width() * 0.35);
         let target_points = (rect.width() - left_width).max(1.0).round() as usize;
-        let total_samples = capture.header.total_samples;
         let channel_count = capture.header.total_probes.min(16);
         let (visible_start, visible_end) =
             visible_sample_range(capture, self.visible_start_us, self.visible_span_us);
         let visible_samples = visible_end - visible_start;
+        let exact = visible_samples <= EXACT_WINDOW_MAX_SAMPLES;
         let path = capture.path.clone();
 
         if self.loaded_window_covers(
@@ -434,24 +478,19 @@ impl LogicAnalyzerViewer {
             visible_end,
             target_points,
             channel_count,
+            exact,
         ) {
             self.pending_window = None;
             return;
         }
 
-        let overscan = visible_samples / 2;
-        let start_sample = visible_start.saturating_sub(overscan);
-        let end_sample = visible_end.saturating_add(overscan).min(total_samples);
-        let requested_samples = end_sample - start_sample;
-        let request_target_points =
-            scaled_target_points(target_points, requested_samples, visible_samples);
-
         let key = WindowKey {
             path,
-            start_sample,
-            end_sample,
-            target_points: request_target_points,
+            start_sample: visible_start,
+            end_sample: visible_end,
+            target_points,
             channel_count,
+            exact,
         };
 
         if self.pending_window.as_ref() == Some(&key) {
@@ -472,13 +511,15 @@ impl LogicAnalyzerViewer {
         visible_end: u64,
         target_points: usize,
         channel_count: usize,
+        exact: bool,
     ) -> bool {
         self.last_window.as_ref().is_some_and(|window| {
             window.path.as_path() == path
                 && window.start_sample <= visible_start
                 && window.end_sample >= visible_end
-                && window.target_points >= target_points
+                && (exact || window.target_points >= target_points)
                 && window.channel_count == channel_count
+                && window.exact == exact
         })
     }
 
@@ -583,6 +624,12 @@ impl LogicAnalyzerViewer {
                 ],
                 Stroke::new(1.0, Color32::from_rgba_premultiplied(220, 220, 220, 70)),
             );
+
+            if let Some(measurement) =
+                self.hovered_pulse_measurement(wave_rect, row_height, pointer)
+            {
+                self.draw_pulse_measurement(painter, wave_rect, row_height, measurement);
+            }
         }
     }
 
@@ -771,59 +818,195 @@ impl LogicAnalyzerViewer {
         let start = self.visible_start_us;
         let end = start + self.visible_span_us;
         let flat_stroke = Stroke::new(1.15, muted);
-        let edge_stroke = Stroke::new(1.0, muted);
-        let mut current = channel.initial;
-
-        for bucket in channel
-            .buckets
-            .iter()
-            .take_while(|bucket| bucket.end_us < start)
-        {
-            current = bucket.last;
-        }
+        let activity_stroke = Stroke::new(1.0, muted);
 
         for bucket in channel
             .buckets
             .iter()
             .filter(|bucket| bucket.end_us >= start && bucket.start_us <= end)
         {
-            let x0 = self.time_to_x(wave_rect, bucket.start_us.max(start));
-            let x1 = self
-                .time_to_x(wave_rect, bucket.end_us.min(end))
-                .max(x0 + 1.0);
+            let x0 = self.time_to_x(wave_rect, bucket.start_us);
+            let x1 = self.time_to_x(wave_rect, bucket.end_us);
 
             if bucket.toggle {
-                let y0 = if current { high_y } else { low_y };
-                let y1 = if bucket.last { high_y } else { low_y };
-                if current == bucket.last {
-                    let xa = x0 + (x1 - x0) * 0.35;
-                    let xb = x0 + (x1 - x0) * 0.65;
-                    let pulse_y = if current { low_y } else { high_y };
-                    painter.line_segment([Pos2::new(x0, y0), Pos2::new(xa, y0)], flat_stroke);
-                    painter.line_segment([Pos2::new(xa, y0), Pos2::new(xa, pulse_y)], edge_stroke);
-                    painter.line_segment(
-                        [Pos2::new(xa, pulse_y), Pos2::new(xb, pulse_y)],
-                        flat_stroke,
-                    );
-                    painter.line_segment([Pos2::new(xb, pulse_y), Pos2::new(xb, y0)], edge_stroke);
-                    painter.line_segment([Pos2::new(xb, y0), Pos2::new(x1, y0)], flat_stroke);
-                } else {
-                    let x = (x0 + x1) * 0.5;
-                    painter.line_segment([Pos2::new(x0, y0), Pos2::new(x, y0)], flat_stroke);
-                    painter.line_segment([Pos2::new(x, low_y), Pos2::new(x, high_y)], edge_stroke);
-                    painter.line_segment([Pos2::new(x, y1), Pos2::new(x1, y1)], flat_stroke);
-                }
+                let x = ((x0 + x1) * 0.5).clamp(wave_rect.left(), wave_rect.right());
+                painter.line_segment([Pos2::new(x, high_y), Pos2::new(x, low_y)], activity_stroke);
             } else {
-                let y = if bucket.last { high_y } else { low_y };
-                painter.line_segment([Pos2::new(x0, y), Pos2::new(x1, y)], flat_stroke);
+                let level = if bucket.first == bucket.last {
+                    bucket.last
+                } else {
+                    bucket.first
+                };
+                let y = if level { high_y } else { low_y };
+                Self::draw_clipped_horizontal(painter, wave_rect, x0, x1, y, flat_stroke);
             }
-            current = bucket.last;
+        }
+    }
+
+    fn draw_clipped_horizontal(
+        painter: &Painter,
+        clip: Rect,
+        x0: f32,
+        x1: f32,
+        y: f32,
+        stroke: Stroke,
+    ) {
+        let left = x0.min(x1).max(clip.left());
+        let right = x0.max(x1).min(clip.right());
+        if right > left {
+            painter.line_segment([Pos2::new(left, y), Pos2::new(right, y)], stroke);
+        }
+    }
+
+    fn hovered_pulse_measurement(
+        &self,
+        wave_rect: Rect,
+        row_height: f32,
+        pointer: Pos2,
+    ) -> Option<PulseMeasurement> {
+        if !wave_rect.contains(pointer) || row_height <= 0.0 {
+            return None;
+        }
+
+        let channel_row = ((pointer.y - wave_rect.top()) / row_height).floor() as usize;
+        let channel = self.channels.get(channel_row)?;
+        if !channel.buckets.is_empty() {
+            return None;
+        }
+
+        let time_us = self.x_to_time(wave_rect, pointer.x);
+        channel
+            .pulse_measurement_at(time_us)
+            .map(|measurement| PulseMeasurement {
+                channel_row,
+                ..measurement
+            })
+    }
+
+    fn draw_pulse_measurement(
+        &self,
+        painter: &Painter,
+        wave_rect: Rect,
+        row_height: f32,
+        measurement: PulseMeasurement,
+    ) {
+        let yellow = Color32::from_rgb(255, 190, 0);
+        let stroke = Stroke::new(1.2, yellow);
+        let row_top = wave_rect.top() + measurement.channel_row as f32 * row_height;
+        let row_bottom = row_top + row_height;
+        let high_y = row_top + row_height * 0.28;
+        let low_y = row_top + row_height * 0.72;
+        let signal_y = if measurement.value { high_y } else { low_y };
+        let marker_y = if measurement.value {
+            (signal_y - 8.0).max(row_top + 4.0)
+        } else {
+            (signal_y + 8.0).min(row_bottom - 4.0)
+        };
+
+        let x0 = self.time_to_x(wave_rect, measurement.start_us);
+        let x1 = self.time_to_x(wave_rect, measurement.end_us);
+        let x2 = self.time_to_x(wave_rect, measurement.period_end_us);
+        if (x2 - x0).abs() < 2.0 {
+            return;
+        }
+
+        painter.line_segment([Pos2::new(x0, marker_y), Pos2::new(x2, marker_y)], stroke);
+        self.draw_measurement_arrow_end(painter, Pos2::new(x0, marker_y), 1.0, yellow);
+        self.draw_measurement_arrow_end(painter, Pos2::new(x2, marker_y), -1.0, yellow);
+
+        painter.line_segment(
+            [Pos2::new(x0, marker_y - 4.0), Pos2::new(x0, signal_y)],
+            stroke,
+        );
+        painter.line_segment(
+            [Pos2::new(x2, marker_y - 4.0), Pos2::new(x2, signal_y)],
+            stroke,
+        );
+
+        if x1 > wave_rect.left() && x1 < wave_rect.right() {
+            painter.line_segment(
+                [
+                    Pos2::new(x1 - 3.5, marker_y - 3.5),
+                    Pos2::new(x1 + 3.5, marker_y + 3.5),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(x1 - 3.5, marker_y + 3.5),
+                    Pos2::new(x1 + 3.5, marker_y - 3.5),
+                ],
+                stroke,
+            );
+            painter.line_segment([Pos2::new(x1, marker_y), Pos2::new(x1, signal_y)], stroke);
+        }
+
+        self.draw_measurement_tooltip(painter, wave_rect, marker_y, measurement);
+    }
+
+    fn draw_measurement_arrow_end(
+        &self,
+        painter: &Painter,
+        tip: Pos2,
+        direction: f32,
+        color: Color32,
+    ) {
+        let stroke = Stroke::new(1.2, color);
+        let dx = 5.0 * direction;
+        painter.line_segment([tip, Pos2::new(tip.x + dx, tip.y - 4.0)], stroke);
+        painter.line_segment([tip, Pos2::new(tip.x + dx, tip.y + 4.0)], stroke);
+    }
+
+    fn draw_measurement_tooltip(
+        &self,
+        painter: &Painter,
+        wave_rect: Rect,
+        marker_y: f32,
+        measurement: PulseMeasurement,
+    ) {
+        let width = 145.0_f32.min(wave_rect.width().max(1.0));
+        let height = 80.0_f32.min(wave_rect.height().max(1.0));
+        let x0 = self.time_to_x(wave_rect, measurement.start_us);
+        let x1 = self.time_to_x(wave_rect, measurement.end_us);
+        let center_x = ((x0 + x1) * 0.5).clamp(wave_rect.left(), wave_rect.right());
+        let left = (center_x - width * 0.5)
+            .max(wave_rect.left())
+            .min(wave_rect.right() - width);
+        let top = (marker_y + 8.0)
+            .max(wave_rect.top())
+            .min(wave_rect.bottom() - height);
+        let rect = Rect::from_min_size(Pos2::new(left, top), vec2(width, height));
+        let background = Color32::from_rgba_premultiplied(0, 120, 180, 225);
+        let yellow = Color32::from_rgb(255, 190, 0);
+
+        painter.rect_filled(rect, 0.0, background);
+
+        let lines = [
+            format!("Width: {}", format_delta(measurement.width_us())),
+            format!("Period: {}", format_delta(measurement.period_us())),
+            format!("Frequency: {}", format_frequency(measurement.period_us())),
+            format!("Duty Cycle: {:.2}%", measurement.duty_cycle() * 100.0),
+        ];
+
+        for (index, line) in lines.iter().enumerate() {
+            painter.text(
+                Pos2::new(rect.right() - 8.0, rect.top() + 10.0 + index as f32 * 20.0),
+                Align2::RIGHT_TOP,
+                line,
+                FontId::proportional(11.0),
+                yellow,
+            );
         }
     }
 
     fn time_to_x(&self, rect: Rect, time_us: f64) -> f32 {
         let t = ((time_us - self.visible_start_us) / self.visible_span_us).clamp(0.0, 1.0);
         rect.left() + rect.width() * t as f32
+    }
+
+    fn x_to_time(&self, rect: Rect, x: f32) -> f64 {
+        let t = ((x - rect.left()) / rect.width()).clamp(0.0, 1.0) as f64;
+        self.visible_start_us + self.visible_span_us * t
     }
 }
 
@@ -862,6 +1045,7 @@ fn spawn_capture_worker(
                             end_sample: preview_end,
                             target_points: 1_000,
                             channel_count,
+                            exact: false,
                         };
                         if responses
                             .send(WorkerResponse::Window {
@@ -922,7 +1106,7 @@ fn spawn_capture_worker(
                     }
                 },
             )
-            .map(|reader| reader.with_max_cached_roots(8))
+            .map(|reader| reader.with_max_cached_leaves(8))
             {
                 Ok(reader) => reader,
                 Err(err) => {
@@ -1044,6 +1228,36 @@ impl LogicChannel {
         }
         value
     }
+
+    fn pulse_measurement_at(&self, time_us: f64) -> Option<PulseMeasurement> {
+        if self.transitions.len() < 3 {
+            return None;
+        }
+
+        let end_index = self
+            .transitions
+            .iter()
+            .position(|transition| transition.time_us > time_us)?;
+        let start_index = end_index.checked_sub(1)?;
+        let period_end_index = start_index + 2;
+        let period_end = self.transitions.get(period_end_index)?;
+        let start = self.transitions[start_index];
+        let end = self.transitions[end_index];
+
+        let width_us = end.time_us - start.time_us;
+        let period_us = period_end.time_us - start.time_us;
+        if width_us <= 0.0 || period_us <= width_us {
+            return None;
+        }
+
+        Some(PulseMeasurement {
+            channel_row: 0,
+            value: start.value,
+            start_us: start.time_us,
+            end_us: end.time_us,
+            period_end_us: period_end.time_us,
+        })
+    }
 }
 
 fn channels_from_window(window: &CaptureSampledWindow, samplerate_hz: f64) -> Vec<LogicChannel> {
@@ -1069,10 +1283,29 @@ fn channels_from_window(window: &CaptureSampledWindow, samplerate_hz: f64) -> Ve
                 .map(|bucket| Bucket {
                     start_us: sample_to_us(bucket.start_sample, samplerate_hz),
                     end_us: sample_to_us(bucket.end_sample, samplerate_hz),
+                    first: bucket.first,
                     toggle: bucket.toggle,
                     last: bucket.last,
                 })
                 .collect(),
+        })
+        .collect()
+}
+
+fn placeholder_channels(header: &CaptureMetadata) -> Vec<LogicChannel> {
+    let channel_count = header.total_probes.min(16);
+    (0..channel_count)
+        .map(|channel| LogicChannel {
+            index: channel,
+            name: header
+                .probe_names
+                .get(channel)
+                .cloned()
+                .unwrap_or_else(|| channel.to_string()),
+            color: channel_color(channel),
+            initial: false,
+            transitions: Vec::new(),
+            buckets: Vec::new(),
         })
         .collect()
 }
@@ -1121,19 +1354,6 @@ fn waveform_rect(rect: Rect) -> Rect {
     )
 }
 
-fn scaled_target_points(
-    target_points: usize,
-    requested_samples: u64,
-    visible_samples: u64,
-) -> usize {
-    if visible_samples == 0 {
-        return target_points.max(1);
-    }
-
-    let scale = requested_samples.div_ceil(visible_samples).clamp(1, 3) as usize;
-    target_points.saturating_mul(scale).max(1)
-}
-
 fn nice_step(raw: f64) -> f64 {
     if raw <= 0.0 {
         return 1.0;
@@ -1166,5 +1386,33 @@ fn format_duration(us: f64) -> String {
         format!("{:.2} ms", us / 1_000.0)
     } else {
         format!("{:.0} µs", us)
+    }
+}
+
+fn format_delta(us: f64) -> String {
+    let ns = us * 1_000.0;
+    if ns.abs() < 1_000.0 {
+        format!("+{ns:.0}ns")
+    } else if us.abs() < 1_000.0 {
+        format!("+{us:.2}µs")
+    } else if us.abs() < 1_000_000.0 {
+        format!("+{:.2}ms", us / 1_000.0)
+    } else {
+        format!("+{:.2}s", us / 1_000_000.0)
+    }
+}
+
+fn format_frequency(period_us: f64) -> String {
+    if period_us <= 0.0 {
+        return "—".to_string();
+    }
+
+    let hz = 1_000_000.0 / period_us;
+    if hz >= 1_000_000.0 {
+        format!("{:.2}MHz", hz / 1_000_000.0)
+    } else if hz >= 1_000.0 {
+        format!("{:.2}kHz", hz / 1_000.0)
+    } else {
+        format!("{hz:.2}Hz")
     }
 }

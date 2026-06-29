@@ -54,8 +54,8 @@ where
         })
     }
 
-    pub fn with_max_cached_roots(mut self, max_cached_roots: usize) -> Self {
-        self.reader = self.reader.with_max_cached_roots(max_cached_roots);
+    pub fn with_max_cached_leaves(mut self, max: usize) -> Self {
+        self.reader = self.reader.with_max_cached_leaves(max);
         self
     }
 
@@ -221,11 +221,29 @@ mod tests {
         let window = reader.sampled_window(&[0], 0, 128, 2)?;
         assert_eq!(window.channels.len(), 1);
         assert!(!window.channels[0].initial);
-        assert_eq!(window.channels[0].activities.len(), 1);
-        assert_eq!(window.channels[0].activities[0].start_sample, 64);
-        assert_eq!(window.channels[0].activities[0].end_sample, 128);
+        assert!(window.channels[0].activities.is_empty());
+        assert!(window.channels[0].buckets.is_empty());
         assert_eq!(window.channels[0].transitions.len(), 1);
-        assert_eq!(window.channels[0].transitions[0].sample, 96);
+        assert_eq!(window.channels[0].transitions[0].sample, 64);
+        assert!(window.channels[0].transitions[0].value);
+
+        source.remove_index();
+        Ok(())
+    }
+
+    #[test]
+    fn zoomed_in_reader_returns_exact_transitions() -> Result<()> {
+        let mut samples = [0_u8; 16];
+        samples[8..16].fill(0xff);
+
+        let source = MemoryCaptureDataSource::new(128, 128, vec![vec![samples.to_vec()]]);
+        let mut reader = IndexedCaptureReader::open_data_source(source.clone())?;
+        let window = reader.sampled_window(&[0], 0, 128, 3)?;
+
+        assert_eq!(window.sample_step, 1);
+        assert_eq!(window.channels[0].buckets.len(), 0);
+        assert_eq!(window.channels[0].transitions.len(), 1);
+        assert_eq!(window.channels[0].transitions[0].sample, 64);
         assert!(window.channels[0].transitions[0].value);
 
         source.remove_index();
@@ -249,14 +267,15 @@ mod tests {
         assert_eq!(window.channels[0].buckets.len(), 2);
         assert_eq!(window.channels[0].buckets[0].start_sample, 0);
         assert_eq!(window.channels[0].buckets[0].end_sample, 16_777_216);
+        assert!(!window.channels[0].buckets[0].first);
         assert!(!window.channels[0].buckets[0].toggle);
         assert!(!window.channels[0].buckets[0].last);
         assert_eq!(window.channels[0].buckets[1].start_sample, 16_777_216);
         assert_eq!(window.channels[0].buckets[1].end_sample, 33_554_432);
+        assert!(window.channels[0].buckets[1].first);
         assert!(window.channels[0].buckets[1].toggle);
         assert!(window.channels[0].buckets[1].last);
-        assert_eq!(window.channels[0].transitions.len(), 1);
-        assert!(window.channels[0].transitions[0].sample >= 16_777_216);
+        assert!(window.channels[0].transitions.is_empty());
 
         source.remove_index();
         Ok(())
