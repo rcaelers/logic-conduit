@@ -280,4 +280,85 @@ mod tests {
         source.remove_index();
         Ok(())
     }
+
+    #[test]
+    fn l2_level_sampling_returns_correct_transitions() -> Result<()> {
+        // 33M samples, 2 blocks — target_points=1000 → sample_step≈33554 → L2 level (4096 smp/bit)
+        let total_samples = 33_554_432_u64;
+        let half = total_samples / 2; // = 16_777_216
+        let source = MemoryCaptureDataSource::new(
+            total_samples,
+            half,
+            vec![vec![
+                vec![0_u8; 2 * 1024 * 1024],
+                vec![0xff_u8; 2 * 1024 * 1024],
+            ]],
+        );
+        let mut reader = IndexedCaptureReader::open_data_source(source.clone())?;
+        let window = reader.sampled_window(&[0], 0, total_samples, 1000)?;
+
+        assert_eq!(window.sample_step, 4_096); // L2 granularity
+        let buckets = &window.channels[0].buckets;
+        assert_eq!(buckets.len(), 1000);
+        assert!(window.channels[0].transitions.is_empty());
+
+        // All buckets fully inside the first block should be constant-false.
+        for b in buckets.iter().filter(|b| b.end_sample <= half) {
+            assert!(!b.first, "first-block bucket first=false");
+            assert!(!b.toggle, "first-block bucket toggle=false");
+            assert!(!b.last, "first-block bucket last=false");
+        }
+
+        // At least one bucket must capture the inter-block transition.
+        let has_toggle = buckets.iter().any(|b| b.toggle);
+        assert!(has_toggle, "some bucket must capture the 0→1 transition");
+
+        // Buckets that start strictly past the block boundary are in the constant-true region.
+        // (The bucket starting exactly at `half` covers L2-group-0 of block 1, which carries
+        //  the boundary-activation toggle; that bucket is correctly toggle=true.)
+        for b in buckets.iter().filter(|b| b.start_sample > half) {
+            assert!(!b.toggle, "second-block interior bucket toggle=false, got start={}", b.start_sample);
+            assert!(b.last, "second-block interior bucket last=true");
+        }
+
+        source.remove_index();
+        Ok(())
+    }
+
+    #[test]
+    fn l3_level_sampling_returns_correct_transitions() -> Result<()> {
+        // 33M samples, 2 standard 16M-sample blocks, target_points=100
+        // sample_step = 33_554_432 / 100 ≈ 335_544 ≥ 262_144 → L3 level
+        let total_samples = 33_554_432_u64;
+        let half = total_samples / 2;
+        let source = MemoryCaptureDataSource::new(
+            total_samples,
+            half,
+            vec![vec![
+                vec![0_u8; 2 * 1024 * 1024],
+                vec![0xff_u8; 2 * 1024 * 1024],
+            ]],
+        );
+        let mut reader = IndexedCaptureReader::open_data_source(source.clone())?;
+        let window = reader.sampled_window(&[0], 0, total_samples, 100)?;
+
+        assert!(window.sample_step >= 262_144, "expected L3 granularity");
+        let buckets = &window.channels[0].buckets;
+        assert_eq!(buckets.len(), 100);
+        assert!(window.channels[0].transitions.is_empty());
+
+        for b in buckets.iter().filter(|b| b.end_sample <= half) {
+            assert!(!b.toggle, "first-block bucket toggle=false");
+            assert!(!b.last, "first-block bucket last=false");
+        }
+        let has_toggle = buckets.iter().any(|b| b.toggle);
+        assert!(has_toggle, "some bucket must capture the 0→1 transition");
+        for b in buckets.iter().filter(|b| b.start_sample > half) {
+            assert!(!b.toggle, "second-block interior bucket toggle=false");
+            assert!(b.last, "second-block interior bucket last=true");
+        }
+
+        source.remove_index();
+        Ok(())
+    }
 }
