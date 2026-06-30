@@ -194,10 +194,10 @@ impl IndexWriter {
 }
 
 // ---------------------------------------------------------------------------
-// IndexStorage — read an existing index file
+// IndexReader — read an existing index file
 // ---------------------------------------------------------------------------
 
-pub(super) struct IndexStorage {
+pub(super) struct IndexReader {
     path: PathBuf,
     header: CaptureMetadata,
     file: File,
@@ -207,7 +207,7 @@ pub(super) struct IndexStorage {
     max_cached_leaves: usize,
 }
 
-impl IndexStorage {
+impl IndexReader {
     const DEFAULT_MAX_CACHED_LEAVES: usize = 8;
 
     pub(super) fn is_valid(
@@ -402,10 +402,10 @@ impl IndexStorage {
 }
 
 // ---------------------------------------------------------------------------
-// Chunk codec — shared by IndexWriter (serialize) and IndexStorage (deserialize)
+// Chunk codec — shared by IndexWriter (serialize) and IndexReader (deserialize)
 // ---------------------------------------------------------------------------
 
-pub(super) fn serialize_leaf(leaf: &BlockIndex) -> Vec<u8> {
+fn serialize_leaf(leaf: &BlockIndex) -> Vec<u8> {
     let active = leaf.levels.is_some();
     let mut out = Vec::new();
     push_u32(&mut out, leaf.valid_samples);
@@ -490,6 +490,35 @@ fn write_u64(file: &mut File, value: u64) -> Result<()> {
 // ---------------------------------------------------------------------------
 // Cursor — byte-slice reader for deserialization
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::types::{BlockIndex, BlockLevels, bit, set_bit};
+
+    #[test]
+    fn chunk_round_trips_active_leaf() {
+        let mut lvl = BlockLevels::zeroed();
+        set_bit(&mut lvl.l1_toggle[0], 0);
+        set_bit(&mut lvl.l2_toggle[0], 0);
+        set_bit(&mut lvl.l3_toggle, 0);
+        let leaf = BlockIndex { valid_samples: 16, first: false, last: true, levels: Some(lvl) };
+        let data = serialize_leaf(&leaf);
+        let decoded = IndexReader::decode_leaf_for_test(&data).expect("leaf should decode");
+        let lvl = decoded.levels.as_ref().expect("decoded leaf should be active");
+        assert!(bit(lvl.l1_toggle[0], 0));
+    }
+
+    #[test]
+    fn chunk_round_trips_constant_leaf() {
+        let leaf = BlockIndex { valid_samples: 64, first: true, last: true, levels: None };
+        let data = serialize_leaf(&leaf);
+        let decoded = IndexReader::decode_leaf_for_test(&data).expect("leaf should decode");
+        assert!(decoded.levels.is_none());
+        assert!(decoded.first);
+        assert!(decoded.last);
+    }
+}
 
 struct Cursor<'a> {
     data: &'a [u8],

@@ -3,89 +3,8 @@ mod reader;
 mod storage;
 mod types;
 
-use crate::runtime::{CaptureDataSource, CaptureMetadata, CaptureSampledWindow};
-use crate::{Error, Result};
-use builder::IndexBuilder;
-use reader::IndexReader;
-use std::path::Path;
-use storage::IndexStorage;
-
+pub use reader::IndexSampler;
 pub use types::CaptureIndexProgress;
-
-/// Compatibility wrapper that owns a capture data source and a viewer retrieval reader.
-///
-/// Build/load orchestration lives here. The actual sampled-window retrieval lives in
-/// [`reader::IndexReader`].
-pub struct IndexedCaptureReader<S: CaptureDataSource> {
-    data_source: S,
-    reader: IndexReader<S::Reader>,
-}
-
-impl<S> IndexedCaptureReader<S>
-where
-    S: CaptureDataSource,
-{
-    pub fn open_data_source(data_source: S) -> Result<Self> {
-        Self::open_data_source_with_progress(data_source, |_| {})
-    }
-
-    pub fn open_data_source_with_progress<C>(data_source: S, progress: C) -> Result<Self>
-    where
-        C: FnMut(CaptureIndexProgress),
-    {
-        let header = data_source.metadata().clone();
-        let fingerprint = data_source.fingerprint();
-        let index_path = data_source
-            .index_path()
-            .ok_or_else(|| Error::ParseError("capture source is not indexable".to_string()))?;
-
-        if !IndexStorage::is_valid(&index_path, &header, fingerprint.revision)? {
-            IndexBuilder::new(&data_source, &index_path, &header, fingerprint.revision)
-                .build(progress)?;
-        }
-
-        let storage = IndexStorage::open(index_path, header, fingerprint.revision)?;
-        let raw_reader = data_source.open_reader()?;
-        let reader = IndexReader::new(storage, raw_reader);
-
-        Ok(Self {
-            data_source,
-            reader,
-        })
-    }
-
-    pub fn with_max_cached_leaves(mut self, max: usize) -> Self {
-        self.reader = self.reader.with_max_cached_leaves(max);
-        self
-    }
-
-    pub fn display_name(&self) -> String {
-        self.data_source.display_name()
-    }
-
-    pub fn index_path(&self) -> &Path {
-        self.reader.index_path()
-    }
-
-    pub fn header(&self) -> &CaptureMetadata {
-        self.reader.header()
-    }
-
-    pub fn capture_duration_us(&self) -> f64 {
-        self.reader.capture_duration_us()
-    }
-
-    pub fn sampled_window(
-        &mut self,
-        channels: &[usize],
-        start_sample: u64,
-        end_sample: u64,
-        target_points: usize,
-    ) -> Result<CaptureSampledWindow> {
-        self.reader
-            .sampled_window(channels, start_sample, end_sample, target_points)
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -216,7 +135,7 @@ mod tests {
         samples[8..16].fill(0xff);
 
         let source = MemoryCaptureDataSource::new(128, 128, vec![vec![samples.to_vec()]]);
-        let mut reader = IndexedCaptureReader::open_data_source(source.clone())?;
+        let mut reader = IndexSampler::open_data_source(source.clone())?;
         assert!(reader.index_path().exists());
         let window = reader.sampled_window(&[0], 0, 128, 2)?;
         assert_eq!(window.channels.len(), 1);
@@ -237,7 +156,7 @@ mod tests {
         samples[8..16].fill(0xff);
 
         let source = MemoryCaptureDataSource::new(128, 128, vec![vec![samples.to_vec()]]);
-        let mut reader = IndexedCaptureReader::open_data_source(source.clone())?;
+        let mut reader = IndexSampler::open_data_source(source.clone())?;
         let window = reader.sampled_window(&[0], 0, 128, 3)?;
 
         assert_eq!(window.sample_step, 1);
@@ -260,7 +179,7 @@ mod tests {
                 vec![0xff_u8; 2 * 1024 * 1024],
             ]],
         );
-        let mut reader = IndexedCaptureReader::open_data_source(source.clone())?;
+        let mut reader = IndexSampler::open_data_source(source.clone())?;
         let window = reader.sampled_window(&[0], 0, 33_554_432, 2)?;
 
         assert_eq!(window.sample_step, 16_777_216);
@@ -294,7 +213,7 @@ mod tests {
                 vec![0xff_u8; 2 * 1024 * 1024],
             ]],
         );
-        let mut reader = IndexedCaptureReader::open_data_source(source.clone())?;
+        let mut reader = IndexSampler::open_data_source(source.clone())?;
         let window = reader.sampled_window(&[0], 0, total_samples, 1000)?;
 
         assert_eq!(window.sample_step, 4_096); // L2 granularity
@@ -339,7 +258,7 @@ mod tests {
                 vec![0xff_u8; 2 * 1024 * 1024],
             ]],
         );
-        let mut reader = IndexedCaptureReader::open_data_source(source.clone())?;
+        let mut reader = IndexSampler::open_data_source(source.clone())?;
         let window = reader.sampled_window(&[0], 0, total_samples, 100)?;
 
         assert!(window.sample_step >= 262_144, "expected L3 granularity");

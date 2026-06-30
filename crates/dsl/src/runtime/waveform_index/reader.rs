@@ -1,5 +1,12 @@
-use super::storage::IndexStorage;
-use super::types::{SAMPLES_PER_L1_BIT, SAMPLES_PER_L2_BIT, SAMPLES_PER_L3_BIT, bit};
+use super::builder::IndexBuilder;
+use super::storage::IndexReader;
+use super::types::{CaptureIndexProgress, SAMPLES_PER_L1_BIT, SAMPLES_PER_L2_BIT, SAMPLES_PER_L3_BIT, bit};
+use crate::runtime::{
+    BlockCaptureSource, CaptureActivity, CaptureBucket, CaptureDataSource, CaptureMetadata,
+    CaptureSampledChannel, CaptureSampledWindow, CaptureTransition, packed_bit,
+};
+use crate::{Error, Result};
+use std::path::Path;
 
 #[derive(Clone, Copy)]
 struct GroupSummary {
@@ -7,51 +14,78 @@ struct GroupSummary {
     toggle: bool,
     last: bool,
 }
-use crate::runtime::{
-    BlockCaptureSource, CaptureActivity, CaptureBucket, CaptureMetadata, CaptureSampledChannel,
-    CaptureSampledWindow, CaptureTransition, packed_bit,
-};
-use crate::{Error, Result};
-use std::path::Path;
 
 const EXACT_SCAN_MAX_SAMPLES: u64 = 2_000_000;
 
-/// Retrieval API used by the logic analyzer viewer.
+/// Windowed sampler for indexed capture data.
 ///
-/// This type assumes index construction and sidecar loading are already handled.
-/// It only samples visible windows from an [`IndexStorage`] and falls back to a
-/// raw reader for deep zoom levels.
-pub(super) struct IndexReader<R: BlockCaptureSource> {
-    storage: IndexStorage,
+/// Handles index construction/loading and samples visible windows from an
+/// [`IndexReader`], falling back to a raw reader for deep zoom levels.
+pub struct IndexSampler<R: BlockCaptureSource> {
+    display_name: String,
+    storage: IndexReader,
     raw_reader: R,
 }
 
-impl<R> IndexReader<R>
+impl<R> IndexSampler<R>
 where
     R: BlockCaptureSource,
 {
-    pub(super) fn new(storage: IndexStorage, raw_reader: R) -> Self {
-        Self { storage, raw_reader }
+    pub(super) fn new(display_name: String, storage: IndexReader, raw_reader: R) -> Self {
+        Self { display_name, storage, raw_reader }
     }
 
-    pub(super) fn with_max_cached_leaves(mut self, max: usize) -> Self {
+    pub fn open_data_source<S>(data_source: S) -> Result<Self>
+    where
+        S: CaptureDataSource<Reader = R>,
+    {
+        Self::open_data_source_with_progress(data_source, |_| {})
+    }
+
+    pub fn open_data_source_with_progress<S, C>(data_source: S, progress: C) -> Result<Self>
+    where
+        S: CaptureDataSource<Reader = R>,
+        C: FnMut(CaptureIndexProgress),
+    {
+        let header = data_source.metadata().clone();
+        let fingerprint = data_source.fingerprint();
+        let index_path = data_source
+            .index_path()
+            .ok_or_else(|| Error::ParseError("capture source is not indexable".to_string()))?;
+
+        if !IndexReader::is_valid(&index_path, &header, fingerprint.revision)? {
+            IndexBuilder::new(&data_source, &index_path, &header, fingerprint.revision)
+                .build(progress)?;
+        }
+
+        let storage = IndexReader::open(index_path, header, fingerprint.revision)?;
+        let display_name = data_source.display_name();
+        let raw_reader = data_source.open_reader()?;
+        Ok(Self::new(display_name, storage, raw_reader))
+    }
+
+    pub fn display_name(&self) -> String {
+        self.display_name.clone()
+    }
+
+    pub fn with_max_cached_leaves(mut self, max: usize) -> Self {
         self.storage.set_max_cached_leaves(max);
         self
     }
 
-    pub(super) fn index_path(&self) -> &Path {
+    pub fn index_path(&self) -> &Path {
         self.storage.path()
     }
 
-    pub(super) fn header(&self) -> &CaptureMetadata {
+    pub fn header(&self) -> &CaptureMetadata {
         self.storage.header()
     }
 
-    pub(super) fn capture_duration_us(&self) -> f64 {
+    pub fn capture_duration_us(&self) -> f64 {
         self.header().total_samples as f64 * 1_000_000.0 / self.header().samplerate_hz
     }
 
-    pub(super) fn sampled_window(
+    pub fn sampled_window(
         &mut self,
         channels: &[usize],
         start_sample: u64,

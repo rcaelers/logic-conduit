@@ -13,7 +13,7 @@ use crate::runtime::{
     BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureSource, DslHeader,
     DslSampledWindow, Sender,
 };
-use crate::runtime::{CaptureIndexProgress, IndexedCaptureReader};
+use crate::runtime::{CaptureIndexProgress, IndexSampler};
 use crate::{Error, Result};
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -228,9 +228,9 @@ impl CaptureDataSource for DslFileCaptureDataSource {
     }
 }
 
-pub type DslChunkedCaptureReader = IndexedCaptureReader<DslFileCaptureDataSource>;
+pub type DslChunkedCaptureReader = IndexSampler<DslCaptureReader>;
 
-impl IndexedCaptureReader<DslFileCaptureDataSource> {
+impl IndexSampler<DslCaptureReader> {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let source = DslFileCaptureDataSource::open(path)?;
         Self::open_data_source_with_progress(source, |_| {})

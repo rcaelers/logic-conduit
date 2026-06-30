@@ -31,4 +31,4 @@ pub use scheduler::Scheduler;
 pub use sender::ChannelMessage;
 pub use sender::Sender;
 pub use watchdog::Watchdog;
-pub use waveform_index::{CaptureIndexProgress, IndexedCaptureReader};
+pub use waveform_index::{CaptureIndexProgress, IndexSampler};

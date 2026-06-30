@@ -44,7 +44,7 @@ pub use runtime::{
     BlockCaptureSource, CaptureActivity, CaptureBucket, CaptureDataSource, CaptureFingerprint,
     CaptureIndexProgress, CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow,
     CaptureSource, CaptureTransition, DslActivity, DslBucket, DslHeader, DslSampledChannel,
-    DslSampledWindow, DslTransition, IndexedCaptureReader,
+    DslSampledWindow, DslTransition, IndexSampler,
 };
 
 // Re-export streaming decoders

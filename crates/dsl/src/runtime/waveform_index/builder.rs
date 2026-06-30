@@ -170,14 +170,10 @@ where
         let block_start = block * header.samples_per_block;
         let remaining = header.total_samples.saturating_sub(block_start);
         let valid_samples = ((data.len() as u64) * 8).min(remaining);
-        Ok(Self::build_leaf_summary(&data, valid_samples, None))
+        Ok(Self::build_leaf_summary(&data, valid_samples))
     }
 
-    fn build_leaf_summary(
-        data: &[u8],
-        valid_samples: u64,
-        previous_last: Option<bool>,
-    ) -> BlockIndex {
+    fn build_leaf_summary(data: &[u8], valid_samples: u64) -> BlockIndex {
         let valid_samples = valid_samples.min(u32::MAX as u64) as u32;
         if valid_samples == 0 {
             return BlockIndex { valid_samples, first: false, last: false, levels: None };
@@ -185,7 +181,7 @@ where
 
         let first = packed_bit(data, 0);
         let last = packed_bit(data, valid_samples as usize - 1);
-        let mut entering = previous_last.unwrap_or(first);
+        let mut entering = first;
 
         // Allocate directly on the heap to avoid a large stack frame.
         let mut lvl = BlockLevels::zeroed();
@@ -348,7 +344,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::storage::{IndexStorage, serialize_leaf};
+    use super::super::storage::IndexReader;
     use crate::runtime::{
         BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureMetadata, CaptureSource,
     };
@@ -407,7 +403,7 @@ mod tests {
     #[test]
     fn constant_leaf_stores_only_root_values() {
         let data = vec![0_u8; 128];
-        let leaf = TestBuilder::build_leaf_summary(&data, 1024, None);
+        let leaf = TestBuilder::build_leaf_summary(&data, 1024);
 
         assert!(!leaf.first);
         assert!(!leaf.last);
@@ -417,7 +413,8 @@ mod tests {
     #[test]
     fn boundary_toggle_activates_constant_leaf() {
         let data = vec![0xff_u8; 128];
-        let leaf = TestBuilder::build_leaf_summary(&data, 1024, Some(false));
+        let mut leaf = TestBuilder::build_leaf_summary(&data, 1024);
+        TestBuilder::apply_boundary_transition(&mut leaf, Some(false));
 
         assert!(leaf.first);
         assert!(leaf.last);
@@ -436,7 +433,7 @@ mod tests {
         for byte in &mut data[8..16] {
             *byte = 0xff;
         }
-        let leaf = TestBuilder::build_leaf_summary(&data, 128, Some(false));
+        let leaf = TestBuilder::build_leaf_summary(&data, 128);
 
         let lvl = leaf.levels.as_ref().unwrap();
         assert!(!bit(lvl.l1_toggle[0], 0));
@@ -450,25 +447,6 @@ mod tests {
     }
 
     #[test]
-    fn chunk_round_trips_active_leaf() {
-        let leaf = TestBuilder::build_leaf_summary(&[0_u8, 0xff], 16, Some(false));
-        let data = serialize_leaf(&leaf);
-        let decoded = IndexStorage::decode_leaf_for_test(&data).expect("leaf should decode");
-        let lvl = decoded.levels.as_ref().expect("decoded leaf should be active");
-        assert!(bit(lvl.l1_toggle[0], 0));
-    }
-
-    #[test]
-    fn chunk_round_trips_constant_leaf() {
-        let leaf = TestBuilder::build_leaf_summary(&[0xff_u8; 8], 64, Some(true));
-        let data = serialize_leaf(&leaf);
-        let decoded = IndexStorage::decode_leaf_for_test(&data).expect("leaf should decode");
-        assert!(decoded.levels.is_none());
-        assert!(decoded.first);
-        assert!(decoded.last);
-    }
-
-    #[test]
     fn word_toggle_detection_handles_boundaries_and_partial_groups() {
         assert!(!TestBuilder::l1_word_has_internal_toggle(0, 64));
         assert!(!TestBuilder::l1_word_has_internal_toggle(u64::MAX, 64));
@@ -476,12 +454,14 @@ mod tests {
         assert!(!TestBuilder::l1_word_has_internal_toggle(0b10, 1));
 
         let data = [0b0000_1111_u8];
-        let leaf = TestBuilder::build_leaf_summary(&data, 8, Some(false));
+        let mut leaf = TestBuilder::build_leaf_summary(&data, 8);
+        TestBuilder::apply_boundary_transition(&mut leaf, Some(false));
         let lvl = leaf.levels.as_ref().unwrap();
         assert!(bit(lvl.l1_toggle[0], 0));
         assert!(!bit(lvl.l1_last[0], 0));
 
-        let leaf = TestBuilder::build_leaf_summary(&[0xff], 1, Some(false));
+        let mut leaf = TestBuilder::build_leaf_summary(&[0xff], 1);
+        TestBuilder::apply_boundary_transition(&mut leaf, Some(false));
         assert!(leaf.first);
         assert!(leaf.last);
         let lvl = leaf.levels.as_ref().unwrap();

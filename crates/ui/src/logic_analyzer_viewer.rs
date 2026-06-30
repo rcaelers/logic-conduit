@@ -1,6 +1,6 @@
 use dsl::{
     CaptureDataSource, CaptureIndexProgress, CaptureMetadata, CaptureSampledWindow, CaptureSource,
-    DslFileCaptureDataSource, IndexedCaptureReader,
+    DslFileCaptureDataSource, IndexSampler,
 };
 use egui::{Align2, Color32, FontId, Painter, PointerButton, Pos2, Rect, Sense, Stroke, Ui, vec2};
 use std::path::{Path, PathBuf};
@@ -832,12 +832,18 @@ impl LogicAnalyzerViewer {
                 let x_mid = ((x0 + x1) * 0.5).clamp(wave_rect.left(), wave_rect.right());
                 let y_first = if bucket.first { high_y } else { low_y };
                 let y_last = if bucket.last { high_y } else { low_y };
-                Self::draw_clipped_horizontal(painter, wave_rect, x0, x_mid, y_first, flat_stroke);
+                if x1 - x0 >= 4.0 {
+                    Self::draw_clipped_horizontal(painter, wave_rect, x0, x_mid, y_first, flat_stroke);
+                    Self::draw_clipped_horizontal(painter, wave_rect, x_mid, x1, y_last, flat_stroke);
+                } else {
+                    // Bucket too narrow to show distinct first/last halves; draw full-width
+                    // at the exit level so adjacent constant buckets connect seamlessly.
+                    Self::draw_clipped_horizontal(painter, wave_rect, x0, x1, y_last, flat_stroke);
+                }
                 painter.line_segment(
                     [Pos2::new(x_mid, high_y), Pos2::new(x_mid, low_y)],
                     activity_stroke,
                 );
-                Self::draw_clipped_horizontal(painter, wave_rect, x_mid, x1, y_last, flat_stroke);
             } else {
                 let y = if bucket.last { high_y } else { low_y };
                 Self::draw_clipped_horizontal(painter, wave_rect, x0, x1, y, flat_stroke);
@@ -1086,7 +1092,7 @@ fn spawn_capture_worker(
                 .checked_sub(std::time::Duration::from_millis(100))
                 .unwrap_or_else(std::time::Instant::now);
             let mut last_progress_completed = 0_usize;
-            let mut reader = match IndexedCaptureReader::open_data_source_with_progress(
+            let mut reader = match IndexSampler::open_data_source_with_progress(
                 data_source,
                 |progress| {
                     let now = std::time::Instant::now();
