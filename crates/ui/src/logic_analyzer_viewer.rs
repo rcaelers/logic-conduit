@@ -1,13 +1,14 @@
 use dsl::{
     CaptureDataSource, CaptureIndexProgress, CaptureMetadata, CaptureSampledWindow, CaptureSource,
-    DslFileCaptureDataSource, IndexSampler,
+    CaptureWaveformSegment, DslCaptureReader, DslFileCaptureDataSource, IndexSampler,
+    exact_window_sample_limit,
 };
 use egui::{Align2, Color32, FontId, Painter, PointerButton, Pos2, Rect, Sense, Stroke, Ui, vec2};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 const SCROLL_INPUT_EPSILON: f32 = 0.5;
-const EXACT_WINDOW_MAX_SAMPLES: u64 = 2_000_000;
+const MAX_EXACT_TRANSITIONS_PER_PIXEL: f32 = 6.0;
 
 pub struct LogicAnalyzerViewer {
     channels: Vec<LogicChannel>,
@@ -17,6 +18,8 @@ pub struct LogicAnalyzerViewer {
     capture_info: Option<CaptureInfo>,
     worker_requests: Option<Sender<WorkerRequest>>,
     worker_responses: Option<Receiver<WorkerResponse>>,
+    dsl_data_source: Option<DslFileCaptureDataSource>,
+    interactive_sampler: Option<IndexSampler<DslCaptureReader>>,
     status: String,
     last_window: Option<WindowKey>,
     pending_window: Option<WindowKey>,
@@ -31,7 +34,7 @@ pub struct LogicChannel {
     color: Color32,
     initial: bool,
     transitions: Vec<Transition>,
-    buckets: Vec<Bucket>,
+    waveform: Vec<WaveformSegment>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -41,12 +44,17 @@ struct Transition {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Bucket {
+struct WaveformSegment {
     start_us: f64,
     end_us: f64,
-    first: bool,
-    toggle: bool,
-    last: bool,
+    kind: WaveformSegmentKind,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum WaveformSegmentKind {
+    Level { value: bool },
+    Edge { before: bool, after: bool },
+    Activity,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -180,6 +188,8 @@ impl LogicAnalyzerViewer {
             capture_info: None,
             worker_requests: None,
             worker_responses: None,
+            dsl_data_source: None,
+            interactive_sampler: None,
             status: "Demo data".to_string(),
             last_window: None,
             pending_window: None,
@@ -208,33 +218,27 @@ impl LogicAnalyzerViewer {
                 self.last_window = None;
                 self.pending_window = None;
                 self.index_progress = None;
+                self.dsl_data_source = None;
+                self.interactive_sampler = None;
                 self.status = format!("Could not inspect capture: {err}");
                 return;
             }
         };
-        self.set_capture_data_source(path, data_source);
-    }
 
-    pub fn set_capture_data_source<S>(&mut self, identity: PathBuf, data_source: S)
-    where
-        S: CaptureDataSource,
-    {
-        if self.capture_path.as_deref() == Some(identity.as_path()) {
-            return;
-        }
-
-        self.capture_path = Some(identity.clone());
+        self.capture_path = Some(path.clone());
         self.capture_info = None;
         self.channels.clear();
         self.last_window = None;
         self.pending_window = None;
         self.index_progress = None;
         self.fit_to_capture = true;
+        self.dsl_data_source = Some(data_source.clone());
+        self.interactive_sampler = None;
         self.status = format!("Opening {}", data_source.display_name());
 
         let (request_tx, request_rx) = mpsc::channel();
         let (response_tx, response_rx) = mpsc::channel();
-        spawn_capture_worker(identity, data_source, request_rx, response_tx);
+        spawn_capture_worker(path, data_source, request_rx, response_tx);
         self.worker_requests = Some(request_tx);
         self.worker_responses = Some(response_rx);
     }
@@ -381,6 +385,12 @@ impl LogicAnalyzerViewer {
                     samplerate_hz,
                     window,
                 } => {
+                    if self.interactive_sampler.is_some() {
+                        if self.pending_window.as_ref() == Some(&key) {
+                            self.pending_window = None;
+                        }
+                        continue;
+                    }
                     if self.capture_path.as_deref() != Some(key.path.as_path()) {
                         continue;
                     }
@@ -389,8 +399,8 @@ impl LogicAnalyzerViewer {
                     };
                     let (visible_start, visible_end) =
                         visible_sample_range(capture, self.visible_start_us, self.visible_span_us);
-                    let visible_exact =
-                        visible_end.saturating_sub(visible_start) <= EXACT_WINDOW_MAX_SAMPLES;
+                    let visible_exact = visible_end.saturating_sub(visible_start)
+                        <= exact_window_sample_limit(key.target_points);
                     if key.exact != visible_exact {
                         if self.pending_window.as_ref() == Some(&key) {
                             self.pending_window = None;
@@ -435,6 +445,25 @@ impl LogicAnalyzerViewer {
                 WorkerResponse::IndexReady { path } => {
                     if self.capture_path.as_deref() == Some(path.as_path()) {
                         self.index_progress = None;
+                        if self.interactive_sampler.is_none()
+                            && let Some(data_source) = self.dsl_data_source.clone()
+                        {
+                            match IndexSampler::open_data_source(data_source)
+                                .map(|sampler| sampler.with_max_cached_leaves(64))
+                            {
+                                Ok(sampler) => {
+                                    self.interactive_sampler = Some(sampler);
+                                    self.worker_requests = None;
+                                    self.last_window = None;
+                                    self.pending_window = None;
+                                }
+                                Err(err) => {
+                                    self.status =
+                                        format!("Could not open interactive index reader: {err}");
+                                    continue;
+                                }
+                            }
+                        }
                         if self.fit_to_capture {
                             self.fit_capture();
                         }
@@ -469,7 +498,7 @@ impl LogicAnalyzerViewer {
         let (visible_start, visible_end) =
             visible_sample_range(capture, self.visible_start_us, self.visible_span_us);
         let visible_samples = visible_end - visible_start;
-        let exact = visible_samples <= EXACT_WINDOW_MAX_SAMPLES;
+        let exact = visible_samples <= exact_window_sample_limit(target_points);
         let path = capture.path.clone();
 
         if self.loaded_window_covers(
@@ -485,13 +514,35 @@ impl LogicAnalyzerViewer {
         }
 
         let key = WindowKey {
-            path,
+            path: path.clone(),
             start_sample: visible_start,
             end_sample: visible_end,
             target_points,
             channel_count,
             exact,
         };
+
+        if let Some(sampler) = self.interactive_sampler.as_mut() {
+            let channels: Vec<usize> = (0..channel_count).collect();
+            match sampler.sampled_window(&channels, visible_start, visible_end, target_points) {
+                Ok(window) => {
+                    let samplerate_hz = sampler.header().samplerate_hz;
+                    self.channels = channels_from_window(&window, samplerate_hz);
+                    self.last_window = Some(key);
+                    self.pending_window = None;
+                    self.status = self
+                        .capture_info
+                        .as_ref()
+                        .map(capture_status)
+                        .unwrap_or_else(|| "Capture ready".to_string());
+                }
+                Err(err) => {
+                    self.status = format!("Could not read capture window: {err}");
+                    self.pending_window = None;
+                }
+            }
+            return;
+        }
 
         if self.pending_window.as_ref() == Some(&key) {
             return;
@@ -775,20 +826,31 @@ impl LogicAnalyzerViewer {
         let end = start + self.visible_span_us;
         let stroke = Stroke::new(1.4, muted);
 
-        if !channel.buckets.is_empty() {
-            self.draw_bucket_waveform(painter, wave_rect, high_y, low_y, channel, muted);
+        if !channel.waveform.is_empty() {
+            self.draw_segment_waveform(painter, wave_rect, high_y, low_y, channel, muted);
             return;
         }
 
-        let mut value = channel.value_at(start);
+        let (visible_transitions, mut value) = channel.visible_transitions(start, end);
+        let max_exact_transitions =
+            (wave_rect.width().max(1.0) * MAX_EXACT_TRANSITIONS_PER_PIXEL) as usize;
+        if visible_transitions.len() > max_exact_transitions {
+            self.draw_dense_transition_waveform(
+                painter,
+                wave_rect,
+                high_y,
+                low_y,
+                visible_transitions,
+                value,
+                muted,
+            );
+            return;
+        }
+
         let mut prev_x = wave_rect.left();
         let mut y = if value { high_y } else { low_y };
 
-        for transition in channel
-            .transitions
-            .iter()
-            .filter(|transition| transition.time_us >= start && transition.time_us <= end)
-        {
+        for transition in visible_transitions {
             let x = self.time_to_x(wave_rect, transition.time_us);
             painter.line_segment([Pos2::new(prev_x, y), Pos2::new(x, y)], stroke);
 
@@ -806,7 +868,58 @@ impl LogicAnalyzerViewer {
         );
     }
 
-    fn draw_bucket_waveform(
+    fn draw_dense_transition_waveform(
+        &self,
+        painter: &Painter,
+        wave_rect: Rect,
+        high_y: f32,
+        low_y: f32,
+        transitions: &[Transition],
+        initial_value: bool,
+        muted: Color32,
+    ) {
+        let start = self.visible_start_us;
+        let end = start + self.visible_span_us;
+        let pixel_count = wave_rect.width().ceil().max(1.0) as usize;
+        let flat_stroke = Stroke::new(1.15, muted);
+
+        let mut transition_index = 0;
+        let mut value = initial_value;
+        for pixel in 0..pixel_count {
+            let x0 = wave_rect.left() + pixel as f32;
+            let x1 = (x0 + 1.0).min(wave_rect.right());
+            let t0 = start + self.visible_span_us * pixel as f64 / pixel_count as f64;
+            let t1 = if pixel + 1 == pixel_count {
+                end
+            } else {
+                start + self.visible_span_us * (pixel + 1) as f64 / pixel_count as f64
+            };
+
+            while transition_index < transitions.len() && transitions[transition_index].time_us < t0
+            {
+                value = transitions[transition_index].value;
+                transition_index += 1;
+            }
+
+            let mut active = false;
+            while transition_index < transitions.len()
+                && transitions[transition_index].time_us <= t1
+            {
+                active = true;
+                value = transitions[transition_index].value;
+                transition_index += 1;
+            }
+
+            if active {
+                Self::draw_activity_band(painter, wave_rect, x0, x1, high_y, low_y, muted);
+            } else {
+                let y = if value { high_y } else { low_y };
+                Self::draw_clipped_horizontal(painter, wave_rect, x0, x1, y, flat_stroke);
+            }
+        }
+    }
+
+    fn draw_segment_waveform(
         &self,
         painter: &Painter,
         wave_rect: Rect,
@@ -820,35 +933,60 @@ impl LogicAnalyzerViewer {
         let flat_stroke = Stroke::new(1.15, muted);
         let activity_stroke = Stroke::new(1.0, muted);
 
-        for bucket in channel
-            .buckets
+        for segment in channel
+            .waveform
             .iter()
-            .filter(|bucket| bucket.end_us >= start && bucket.start_us <= end)
+            .filter(|segment| segment.end_us >= start && segment.start_us <= end)
         {
-            let x0 = self.time_to_x(wave_rect, bucket.start_us);
-            let x1 = self.time_to_x(wave_rect, bucket.end_us);
+            let x0 = self.time_to_x(wave_rect, segment.start_us);
+            let x1 = self.time_to_x(wave_rect, segment.end_us);
 
-            if bucket.toggle {
-                let x_mid = ((x0 + x1) * 0.5).clamp(wave_rect.left(), wave_rect.right());
-                let y_first = if bucket.first { high_y } else { low_y };
-                let y_last = if bucket.last { high_y } else { low_y };
-                if x1 - x0 >= 4.0 {
-                    Self::draw_clipped_horizontal(painter, wave_rect, x0, x_mid, y_first, flat_stroke);
-                    Self::draw_clipped_horizontal(painter, wave_rect, x_mid, x1, y_last, flat_stroke);
-                } else {
-                    // Bucket too narrow to show distinct first/last halves; draw full-width
-                    // at the exit level so adjacent constant buckets connect seamlessly.
-                    Self::draw_clipped_horizontal(painter, wave_rect, x0, x1, y_last, flat_stroke);
+            match segment.kind {
+                WaveformSegmentKind::Level { value } => {
+                    let y = if value { high_y } else { low_y };
+                    Self::draw_clipped_horizontal(painter, wave_rect, x0, x1, y, flat_stroke);
                 }
-                painter.line_segment(
-                    [Pos2::new(x_mid, high_y), Pos2::new(x_mid, low_y)],
-                    activity_stroke,
-                );
-            } else {
-                let y = if bucket.last { high_y } else { low_y };
-                Self::draw_clipped_horizontal(painter, wave_rect, x0, x1, y, flat_stroke);
+                WaveformSegmentKind::Edge { before, after } => {
+                    let y0 = if before { high_y } else { low_y };
+                    let y1 = if after { high_y } else { low_y };
+                    painter.line_segment([Pos2::new(x0, y0), Pos2::new(x0, y1)], activity_stroke);
+                }
+                WaveformSegmentKind::Activity => {
+                    Self::draw_activity_band(painter, wave_rect, x0, x1, high_y, low_y, muted);
+                }
             }
         }
+    }
+
+    fn draw_activity_band(
+        painter: &Painter,
+        clip: Rect,
+        x0: f32,
+        x1: f32,
+        high_y: f32,
+        low_y: f32,
+        color: Color32,
+    ) {
+        let center = ((x0 + x1) * 0.5).clamp(clip.left(), clip.right());
+        let half_width = ((x1 - x0).abs().max(1.0)) * 0.5;
+        let left = (center - half_width).max(clip.left());
+        let right = (center + half_width).min(clip.right());
+        if right <= left {
+            return;
+        }
+
+        let fill = Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 118);
+        let edge = Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 170);
+        let rect = Rect::from_min_max(Pos2::new(left, high_y), Pos2::new(right, low_y));
+        painter.rect_filled(rect, 0.0, fill);
+        painter.line_segment(
+            [Pos2::new(left, high_y), Pos2::new(right, high_y)],
+            Stroke::new(0.8, edge),
+        );
+        painter.line_segment(
+            [Pos2::new(left, low_y), Pos2::new(right, low_y)],
+            Stroke::new(0.8, edge),
+        );
     }
 
     fn draw_clipped_horizontal(
@@ -878,7 +1016,7 @@ impl LogicAnalyzerViewer {
 
         let channel_row = ((pointer.y - wave_rect.top()) / row_height).floor() as usize;
         let channel = self.channels.get(channel_row)?;
-        if !channel.buckets.is_empty() {
+        if !channel.waveform.is_empty() {
             return None;
         }
 
@@ -1092,9 +1230,8 @@ fn spawn_capture_worker(
                 .checked_sub(std::time::Duration::from_millis(100))
                 .unwrap_or_else(std::time::Instant::now);
             let mut last_progress_completed = 0_usize;
-            let mut reader = match IndexSampler::open_data_source_with_progress(
-                data_source,
-                |progress| {
+            let mut reader =
+                match IndexSampler::open_data_source_with_progress(data_source, |progress| {
                     let now = std::time::Instant::now();
                     let is_first = progress.completed_roots == 0;
                     let is_done = progress.completed_roots >= progress.total_roots;
@@ -1112,19 +1249,18 @@ fn spawn_capture_worker(
                             progress,
                         });
                     }
-                },
-            )
-            .map(|reader| reader.with_max_cached_leaves(8))
-            {
-                Ok(reader) => reader,
-                Err(err) => {
-                    let _ = responses.send(WorkerResponse::Error {
-                        path: identity,
-                        message: format!("Could not open capture: {err}"),
-                    });
-                    return;
-                }
-            };
+                })
+                .map(|reader| reader.with_max_cached_leaves(8))
+                {
+                    Ok(reader) => reader,
+                    Err(err) => {
+                        let _ = responses.send(WorkerResponse::Error {
+                            path: identity,
+                            message: format!("Could not open capture: {err}"),
+                        });
+                        return;
+                    }
+                };
 
             if responses
                 .send(WorkerResponse::IndexReady {
@@ -1222,19 +1358,22 @@ impl LogicChannel {
             color,
             initial,
             transitions,
-            buckets: Vec::new(),
+            waveform: Vec::new(),
         }
     }
 
-    fn value_at(&self, time_us: f64) -> bool {
-        let mut value = self.initial;
-        for transition in &self.transitions {
-            if transition.time_us > time_us {
-                break;
-            }
-            value = transition.value;
-        }
-        value
+    fn visible_transitions(&self, start_us: f64, end_us: f64) -> (&[Transition], bool) {
+        let start_index = self
+            .transitions
+            .partition_point(|transition| transition.time_us < start_us);
+        let end_index = start_index
+            + self.transitions[start_index..]
+                .partition_point(|transition| transition.time_us <= end_us);
+        let value = start_index
+            .checked_sub(1)
+            .and_then(|index| self.transitions.get(index))
+            .map_or(self.initial, |transition| transition.value);
+        (&self.transitions[start_index..end_index], value)
     }
 
     fn pulse_measurement_at(&self, time_us: f64) -> Option<PulseMeasurement> {
@@ -1285,15 +1424,40 @@ fn channels_from_window(window: &CaptureSampledWindow, samplerate_hz: f64) -> Ve
                     value: transition.value,
                 })
                 .collect(),
-            buckets: channel
-                .buckets
+            waveform: channel
+                .waveform
                 .iter()
-                .map(|bucket| Bucket {
-                    start_us: sample_to_us(bucket.start_sample, samplerate_hz),
-                    end_us: sample_to_us(bucket.end_sample, samplerate_hz),
-                    first: bucket.first,
-                    toggle: bucket.toggle,
-                    last: bucket.last,
+                .map(|segment| match *segment {
+                    CaptureWaveformSegment::Level {
+                        start_sample,
+                        end_sample,
+                        value,
+                    } => WaveformSegment {
+                        start_us: sample_to_us(start_sample, samplerate_hz),
+                        end_us: sample_to_us(end_sample, samplerate_hz),
+                        kind: WaveformSegmentKind::Level { value },
+                    },
+                    CaptureWaveformSegment::Edge {
+                        sample,
+                        before,
+                        after,
+                    } => {
+                        let time_us = sample_to_us(sample, samplerate_hz);
+                        WaveformSegment {
+                            start_us: time_us,
+                            end_us: time_us,
+                            kind: WaveformSegmentKind::Edge { before, after },
+                        }
+                    }
+                    CaptureWaveformSegment::Activity {
+                        start_sample,
+                        end_sample,
+                        ..
+                    } => WaveformSegment {
+                        start_us: sample_to_us(start_sample, samplerate_hz),
+                        end_us: sample_to_us(end_sample, samplerate_hz),
+                        kind: WaveformSegmentKind::Activity,
+                    },
                 })
                 .collect(),
         })
@@ -1313,7 +1477,7 @@ fn placeholder_channels(header: &CaptureMetadata) -> Vec<LogicChannel> {
             color: channel_color(channel),
             initial: false,
             transitions: Vec::new(),
-            buckets: Vec::new(),
+            waveform: Vec::new(),
         })
         .collect()
 }

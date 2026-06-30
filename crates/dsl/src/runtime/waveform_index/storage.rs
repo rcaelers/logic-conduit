@@ -58,7 +58,7 @@
 //! ```
 
 use super::types::{
-    DIR_ENTRY_SIZE, HEADER_SIZE, IndexHeader, BlockIndex, BlockLevels, MAGIC, RootDirEntry,
+    BlockIndex, BlockLevels, DIR_ENTRY_SIZE, HEADER_SIZE, IndexHeader, MAGIC, RootDirEntry,
 };
 use crate::runtime::CaptureMetadata;
 use crate::{Error, Result};
@@ -150,7 +150,8 @@ impl IndexWriter {
     pub(super) fn finish(mut self) -> Result<()> {
         self.file.seek(SeekFrom::Start(0))?;
         Self::write_header(&mut self.file, &self.index_header)?;
-        self.file.seek(SeekFrom::Start(self.index_header.dir_offset))?;
+        self.file
+            .seek(SeekFrom::Start(self.index_header.dir_offset))?;
         for channel_dir in &self.directory {
             for entry in channel_dir {
                 Self::write_dir_entry(&mut self.file, entry)?;
@@ -184,8 +185,7 @@ impl IndexWriter {
         debug_assert_eq!(DIR_ENTRY_SIZE, 40);
         write_u64(file, entry.offset)?;
         write_u64(file, entry.len)?;
-        let flags =
-            (entry.toggle as u8) | ((entry.first as u8) << 1) | ((entry.last as u8) << 2);
+        let flags = (entry.toggle as u8) | ((entry.first as u8) << 1) | ((entry.last as u8) << 2);
         file.write_all(&[flags, 0, 0, 0, 0, 0, 0, 0])?;
         write_u64(file, entry.l3_toggle)?;
         write_u64(file, entry.l3_last)?;
@@ -383,7 +383,11 @@ impl IndexReader {
     }
 
     fn touch_leaf_cache_key(&mut self, key: (usize, usize)) {
-        if self.leaf_cache_order.back().is_some_and(|existing| *existing == key) {
+        if self
+            .leaf_cache_order
+            .back()
+            .is_some_and(|existing| *existing == key)
+        {
             return;
         }
         self.leaf_cache_order.retain(|existing| *existing != key);
@@ -493,8 +497,8 @@ fn write_u64(file: &mut File, value: u64) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::{BlockIndex, BlockLevels, bit, set_bit};
+    use super::*;
 
     #[test]
     fn chunk_round_trips_active_leaf() {
@@ -502,16 +506,29 @@ mod tests {
         set_bit(&mut lvl.l1_toggle[0], 0);
         set_bit(&mut lvl.l2_toggle[0], 0);
         set_bit(&mut lvl.l3_toggle, 0);
-        let leaf = BlockIndex { valid_samples: 16, first: false, last: true, levels: Some(lvl) };
+        let leaf = BlockIndex {
+            valid_samples: 16,
+            first: false,
+            last: true,
+            levels: Some(lvl),
+        };
         let data = serialize_leaf(&leaf);
         let decoded = IndexReader::decode_leaf_for_test(&data).expect("leaf should decode");
-        let lvl = decoded.levels.as_ref().expect("decoded leaf should be active");
+        let lvl = decoded
+            .levels
+            .as_ref()
+            .expect("decoded leaf should be active");
         assert!(bit(lvl.l1_toggle[0], 0));
     }
 
     #[test]
     fn chunk_round_trips_constant_leaf() {
-        let leaf = BlockIndex { valid_samples: 64, first: true, last: true, levels: None };
+        let leaf = BlockIndex {
+            valid_samples: 64,
+            first: true,
+            last: true,
+            levels: None,
+        };
         let data = serialize_leaf(&leaf);
         let decoded = IndexReader::decode_leaf_for_test(&data).expect("leaf should decode");
         assert!(decoded.levels.is_none());

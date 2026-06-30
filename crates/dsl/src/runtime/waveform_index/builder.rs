@@ -1,5 +1,7 @@
 use super::storage::IndexWriter;
-use super::types::{BlockIndex, BlockLevels, CaptureIndexProgress, SAMPLES_PER_L1_BIT, bit, set_bit};
+use super::types::{
+    BlockIndex, BlockLevels, CaptureIndexProgress, SAMPLES_PER_L1_BIT, bit, set_bit,
+};
 use crate::runtime::{BlockCaptureSource, CaptureDataSource, CaptureMetadata, packed_bit};
 use crate::{Error, Result};
 use std::collections::VecDeque;
@@ -31,7 +33,12 @@ where
         header: &'a CaptureMetadata,
         source_revision: u64,
     ) -> Self {
-        Self { data_source, index_path, header, source_revision }
+        Self {
+            data_source,
+            index_path,
+            header,
+            source_revision,
+        }
     }
 
     pub(super) fn build<P>(&self, mut progress: P) -> Result<()>
@@ -48,7 +55,10 @@ where
             }
         }
 
-        progress(CaptureIndexProgress { completed_roots: 0, total_roots: job_count });
+        progress(CaptureIndexProgress {
+            completed_roots: 0,
+            total_roots: job_count,
+        });
 
         let mut chunks = Self::build_chunks_parallel(
             (*self.data_source).clone(),
@@ -57,8 +67,7 @@ where
             &mut progress,
         )?;
 
-        let mut writer =
-            IndexWriter::create(self.index_path, self.header, self.source_revision)?;
+        let mut writer = IndexWriter::create(self.index_path, self.header, self.source_revision)?;
 
         for (channel, channel_chunks) in chunks.iter_mut().enumerate() {
             let mut previous_last = None;
@@ -101,7 +110,9 @@ where
                 let worker_result = || -> Result<()> {
                     let mut source = data_source.open_reader()?;
                     loop {
-                        let Some(job) = jobs.lock().unwrap().pop_front() else { break };
+                        let Some(job) = jobs.lock().unwrap().pop_front() else {
+                            break;
+                        };
                         let leaf =
                             Self::build_block_chunk(&mut source, &header, job.channel, job.block)?;
                         if result_tx.send(Ok((job, leaf))).is_err() {
@@ -176,7 +187,12 @@ where
     fn build_leaf_summary(data: &[u8], valid_samples: u64) -> BlockIndex {
         let valid_samples = valid_samples.min(u32::MAX as u64) as u32;
         if valid_samples == 0 {
-            return BlockIndex { valid_samples, first: false, last: false, levels: None };
+            return BlockIndex {
+                valid_samples,
+                first: false,
+                last: false,
+                levels: None,
+            };
         }
 
         let first = packed_bit(data, 0);
@@ -296,13 +312,19 @@ where
         if valid_bits <= 1 {
             return false;
         }
-        let valid_mask = if valid_bits == 64 { u64::MAX } else { (1_u64 << valid_bits) - 1 };
+        let valid_mask = if valid_bits == 64 {
+            u64::MAX
+        } else {
+            (1_u64 << valid_bits) - 1
+        };
         let internal_mask = valid_mask & !1_u64;
         (word ^ (word << 1)) & internal_mask != 0
     }
 
     fn apply_boundary_transition(leaf: &mut BlockIndex, previous_last: Option<bool>) {
-        let Some(previous_last) = previous_last else { return };
+        let Some(previous_last) = previous_last else {
+            return;
+        };
         if leaf.valid_samples == 0 || previous_last == leaf.first {
             return;
         }
@@ -344,7 +366,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::storage::IndexReader;
     use crate::runtime::{
         BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureMetadata, CaptureSource,
     };

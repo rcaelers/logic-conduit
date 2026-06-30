@@ -41,10 +41,10 @@ pub use nodes::{
 };
 
 pub use runtime::{
-    BlockCaptureSource, CaptureActivity, CaptureBucket, CaptureDataSource, CaptureFingerprint,
-    CaptureIndexProgress, CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow,
-    CaptureSource, CaptureTransition, DslActivity, DslBucket, DslHeader, DslSampledChannel,
-    DslSampledWindow, DslTransition, IndexSampler,
+    BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureIndexProgress,
+    CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,
+    CaptureWaveformSegment, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
+    DslWaveformSegment, IndexSampler, exact_window_sample_limit,
 };
 
 // Re-export streaming decoders

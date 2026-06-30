@@ -37,23 +37,24 @@ pub struct CaptureTransition {
     pub value: bool,
 }
 
-/// One sampled activity range in a windowed logic-analyzer view.
-///
-/// Activity means the signal toggled at least once in this sample range, but the
-/// sampled representation may not know the exact edge positions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CaptureActivity {
-    pub start_sample: u64,
-    pub end_sample: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CaptureBucket {
-    pub start_sample: u64,
-    pub end_sample: u64,
-    pub first: bool,
-    pub toggle: bool,
-    pub last: bool,
+pub enum CaptureWaveformSegment {
+    Level {
+        start_sample: u64,
+        end_sample: u64,
+        value: bool,
+    },
+    Edge {
+        sample: u64,
+        before: bool,
+        after: bool,
+    },
+    Activity {
+        start_sample: u64,
+        end_sample: u64,
+        first: bool,
+        last: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,8 +63,7 @@ pub struct CaptureSampledChannel {
     pub name: String,
     pub initial: bool,
     pub transitions: Vec<CaptureTransition>,
-    pub activities: Vec<CaptureActivity>,
-    pub buckets: Vec<CaptureBucket>,
+    pub waveform: Vec<CaptureWaveformSegment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,8 +139,7 @@ pub trait CaptureSource {
                 name,
                 initial,
                 transitions,
-                activities: Vec::new(),
-                buckets: Vec::new(),
+                waveform: Vec::new(),
             });
         }
 
@@ -186,7 +185,6 @@ pub fn packed_bit(data: &[u8], bit_index: usize) -> bool {
 
 pub type DslHeader = CaptureMetadata;
 pub type DslTransition = CaptureTransition;
-pub type DslActivity = CaptureActivity;
-pub type DslBucket = CaptureBucket;
 pub type DslSampledChannel = CaptureSampledChannel;
 pub type DslSampledWindow = CaptureSampledWindow;
+pub type DslWaveformSegment = CaptureWaveformSegment;

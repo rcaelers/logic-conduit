@@ -34,11 +34,11 @@ pub(super) struct BlockIndex {
 #[derive(Debug, Clone)]
 pub(super) struct BlockLevels {
     pub l1_toggle: [u64; L1_WORDS],
-    pub l1_last:   [u64; L1_WORDS],
+    pub l1_last: [u64; L1_WORDS],
     pub l2_toggle: [u64; L2_WORDS],
-    pub l2_last:   [u64; L2_WORDS],
+    pub l2_last: [u64; L2_WORDS],
     pub l3_toggle: u64,
-    pub l3_last:   u64,
+    pub l3_last: u64,
 }
 
 impl BlockLevels {
@@ -72,11 +72,11 @@ pub(super) const LEVEL_POWER: usize = 6;
 #[allow(dead_code)]
 pub(super) const LEVEL_COUNT: usize = 3;
 
-pub(super) const SAMPLES_PER_L1_BIT: u64 = (1_usize << LEVEL_POWER) as u64;           // 64
-pub(super) const SAMPLES_PER_L2_BIT: u64 = (1_usize << (LEVEL_POWER * 2)) as u64;     // 4 096
-pub(super) const SAMPLES_PER_L3_BIT: u64 = (1_usize << (LEVEL_POWER * 3)) as u64;     // 262 144
-pub(super) const L1_WORDS: usize = 1 << (LEVEL_POWER * 2);  // 64^3 bits / 64 bits-per-word = 4 096
-pub(super) const L2_WORDS: usize = 1 << LEVEL_POWER;         // 64^2 bits / 64 bits-per-word = 64
+pub(super) const SAMPLES_PER_L1_BIT: u64 = (1_usize << LEVEL_POWER) as u64; // 64
+pub(super) const SAMPLES_PER_L2_BIT: u64 = (1_usize << (LEVEL_POWER * 2)) as u64; // 4 096
+pub(super) const SAMPLES_PER_L3_BIT: u64 = (1_usize << (LEVEL_POWER * 3)) as u64; // 262 144
+pub(super) const L1_WORDS: usize = 1 << (LEVEL_POWER * 2); // 64^3 bits / 64 bits-per-word = 4 096
+pub(super) const L2_WORDS: usize = 1 << LEVEL_POWER; // 64^2 bits / 64 bits-per-word = 64
 pub(super) const MAGIC: &[u8; 8] = b"CAPIDX06";
 pub(super) const HEADER_SIZE: u64 = 96;
 pub(super) const DIR_ENTRY_SIZE: u64 = 40;

@@ -15,10 +15,10 @@ pub mod watchdog;
 pub mod waveform_index;
 
 pub use capture::{
-    BlockCaptureSource, CaptureActivity, CaptureBucket, CaptureDataSource, CaptureFingerprint,
-    CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,
-    DslActivity, DslBucket, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
-    packed_bit,
+    BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureMetadata,
+    CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,
+    CaptureWaveformSegment, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
+    DslWaveformSegment, packed_bit,
 };
 pub use errors::{ConnectionError, PortError, WorkError, WorkResult};
 pub use graph::{Connection, GraphBuilder, NodeId};
@@ -31,4 +31,4 @@ pub use scheduler::Scheduler;
 pub use sender::ChannelMessage;
 pub use sender::Sender;
 pub use watchdog::Watchdog;
-pub use waveform_index::{CaptureIndexProgress, IndexSampler};
+pub use waveform_index::{CaptureIndexProgress, IndexSampler, exact_window_sample_limit};
