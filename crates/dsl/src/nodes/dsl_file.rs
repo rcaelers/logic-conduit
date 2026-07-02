@@ -43,7 +43,14 @@ pub struct DslCaptureReader {
 }
 
 impl DslCaptureReader {
-    const DEFAULT_MAX_CACHED_BLOCKS: usize = 32;
+    /// A single slot: enough to make sequential `read_sample` access viable
+    /// (the current block stays decompressed). Block-level consumers get
+    /// their caching from the mmap'd raw sidecar instead, so a larger LRU
+    /// here would only duplicate it — notably during the index build, where
+    /// every parallel worker holds its own reader. Callers that genuinely
+    /// stream samples across blocks can raise it via
+    /// [`DslCaptureReader::with_max_cached_blocks`].
+    const DEFAULT_MAX_CACHED_BLOCKS: usize = 1;
 
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
