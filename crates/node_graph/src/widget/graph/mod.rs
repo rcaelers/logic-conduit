@@ -10,7 +10,7 @@ use interaction::{GraphResponses, InteractionState};
 use menu::MenuController;
 
 use crate::{
-    model::{GraphState, Node, NodeId},
+    model::{FrameId, GraphState, Node, NodeId},
     runtime::NodeTypeRegistry,
     runtime::{NodeInstance, NodeRuntime},
     support::ViewState,
@@ -34,6 +34,13 @@ pub struct NodeGraphWidget {
     clipboard_cache: Option<String>,
     undo_stack: Vec<GraphState>,
     redo_stack: Vec<GraphState>,
+    frame_rename: Option<FrameRenameState>,
+}
+
+struct FrameRenameState {
+    frame_id: FrameId,
+    text: String,
+    screen_pos: Pos2,
 }
 
 impl NodeGraphWidget {
@@ -52,6 +59,7 @@ impl NodeGraphWidget {
             clipboard_cache: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            frame_rename: None,
         }
     }
 
@@ -145,5 +153,6 @@ impl NodeGraphWidget {
 
         let layout = self.build_layout(origin);
         self.draw_graph(ui, &painter, rect, origin, pointer, &layout);
+        self.show_frame_rename(ui.ctx());
     }
 }

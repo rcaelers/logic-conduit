@@ -1,5 +1,5 @@
 use crate::{
-    model::{GraphState, NodeId, SocketId},
+    model::{GraphState, SocketId},
     support::ViewState,
 };
 use egui::epaint::CubicBezierShape;
@@ -81,20 +81,15 @@ pub fn draw_grid(painter: &Painter, rect: Rect, view: &ViewState) {
 pub fn draw_frames(
     painter: &Painter,
     graph: &GraphState,
-    node_rects: &HashMap<NodeId, Rect>,
+    frame_rects: &HashMap<crate::model::FrameId, Rect>,
     view: &ViewState,
     origin: Pos2,
 ) {
     for frame in &graph.frames {
-        let mut bounds: Option<Rect> = None;
-        for &id in &frame.node_ids {
-            if let Some(&nr) = node_rects.get(&id) {
-                bounds = Some(bounds.map_or(nr, |b| b.union(nr)));
-            }
-        }
-        let Some(bounds) = bounds else { continue };
-        let padded = bounds.expand(20.0);
-        let screen = to_screen_rect(padded, view, origin);
+        let Some(&bounds) = frame_rects.get(&frame.id) else {
+            continue;
+        };
+        let screen = to_screen_rect(bounds, view, origin);
         let r = CornerRadius::same(6);
         let c = frame.color;
         painter.rect_filled(
@@ -107,7 +102,7 @@ pub fn draw_frames(
             r,
             Stroke::new(
                 1.5_f32,
-                Color32::from_rgba_premultiplied(c.r(), c.g(), c.b(), 140),
+                Color32::from_rgba_premultiplied(c.r(), c.g(), c.b(), 170),
             ),
             egui::StrokeKind::Middle,
         );
@@ -118,6 +113,19 @@ pub fn draw_frames(
             &frame.label,
             FontId::proportional(font_sz),
             Color32::from_rgba_premultiplied(c.r(), c.g(), c.b(), 200),
+        );
+    }
+
+    for frame in graph.frames.iter().filter(|frame| frame.selected) {
+        let Some(&bounds) = frame_rects.get(&frame.id) else {
+            continue;
+        };
+        let screen = to_screen_rect(bounds, view, origin);
+        painter.rect_stroke(
+            screen,
+            CornerRadius::same(6),
+            Stroke::new(2.0_f32, Color32::WHITE),
+            egui::StrokeKind::Outside,
         );
     }
 }

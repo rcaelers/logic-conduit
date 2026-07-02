@@ -35,7 +35,13 @@ impl NodeGraphWidget {
             };
 
         draw_grid(painter, rect, &self.view);
-        draw_frames(painter, &self.graph, &layout.node_rects, &self.view, origin);
+        draw_frames(
+            painter,
+            &self.graph,
+            &layout.frame_rects,
+            &self.view,
+            origin,
+        );
 
         let wire_w = (2.0 * self.view.zoom).clamp(1.0_f32, 4.0_f32);
         draw_connections(painter, &self.graph, &layout.socket_screen_pos, wire_w);
@@ -216,5 +222,57 @@ impl NodeGraphWidget {
             Color32::from_rgba_premultiplied(220, 220, 220, (alpha * 230.0) as u8),
         );
         ctx.request_repaint();
+    }
+
+    pub(super) fn show_frame_rename(&mut self, ctx: &egui::Context) {
+        let Some(state) = &mut self.frame_rename else {
+            return;
+        };
+
+        let mut apply = false;
+        let mut cancel = false;
+        egui::Window::new("Rename Frame")
+            .id(egui::Id::new("node_graph_rename_frame"))
+            .fixed_pos(state.screen_pos)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut state.text)
+                        .desired_width(240.0)
+                        .hint_text("Frame name"),
+                );
+                response.request_focus();
+                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    apply = true;
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("OK").clicked() {
+                        apply = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            cancel = true;
+        }
+        if apply {
+            if let Some(state) = self.frame_rename.take() {
+                self.push_undo_snapshot();
+                if let Some(frame) = self
+                    .graph
+                    .frames
+                    .iter_mut()
+                    .find(|frame| frame.id == state.frame_id)
+                {
+                    frame.label = state.text;
+                }
+            }
+        } else if cancel {
+            self.frame_rename = None;
+        }
     }
 }

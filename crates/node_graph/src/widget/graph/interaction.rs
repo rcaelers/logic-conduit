@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     api::sockets_compatible,
-    model::{NodeId, SocketDirection, SocketId},
+    model::{FrameId, NodeId, SocketDirection, SocketId},
     support::paint::{bezier_wire_distance, wire_intersects_knife},
     widget::{menu::dispatch_menu_shortcut, node::NodeWidget},
 };
@@ -24,6 +24,10 @@ pub(super) enum InteractionState {
     DraggingNode {
         node_id: NodeId,
         offset: Vec2,
+    },
+    DraggingFrame {
+        frame_id: FrameId,
+        last_canvas: Pos2,
     },
     DraggingWire {
         from: SocketId,
@@ -49,7 +53,10 @@ impl InteractionState {
     }
 
     pub(super) fn use_fast_rendering(&self) -> bool {
-        matches!(self, Self::Panning { .. } | Self::DraggingNode { .. })
+        matches!(
+            self,
+            Self::Panning { .. } | Self::DraggingNode { .. } | Self::DraggingFrame { .. }
+        )
     }
 }
 
@@ -65,16 +72,24 @@ pub(super) struct MinimapResponse {
 
 pub(super) struct GraphResponses {
     pub canvas: egui::Response,
+    pub frames: HashMap<FrameId, egui::Response>,
     pub nodes: HashMap<NodeId, NodeResponses>,
     pub collapse_toggles: HashMap<NodeId, egui::Response>,
     pub sockets: HashMap<SocketId, egui::Response>,
     pub minimap: Option<MinimapResponse>,
 }
 
+enum ContextClickTarget {
+    Canvas,
+    Node(NodeId),
+    Frame(FrameId),
+}
+
 impl GraphResponses {
     pub(super) fn canvas_only(canvas: egui::Response) -> Self {
         Self {
             canvas,
+            frames: HashMap::new(),
             nodes: HashMap::new(),
             collapse_toggles: HashMap::new(),
             sockets: HashMap::new(),
@@ -187,6 +202,21 @@ impl NodeGraphWidget {
         layout: &GraphWidgetLayout,
         canvas_rect: Rect,
     ) -> GraphResponses {
+        let frames = layout
+            .frame_screen_rects
+            .iter()
+            .map(|(&id, &rect)| {
+                (
+                    id,
+                    ui.interact(
+                        rect,
+                        ui.id().with(("frame", id.0)),
+                        egui::Sense::click_and_drag(),
+                    ),
+                )
+            })
+            .collect();
+
         let mut nodes = HashMap::new();
         for (&id, &body_rect) in &layout.node_screen_rects {
             let Some(&header_rect) = layout.header_screen_rects.get(&id) else {
@@ -249,6 +279,7 @@ impl NodeGraphWidget {
 
         GraphResponses {
             canvas: canvas_response,
+            frames,
             nodes,
             collapse_toggles,
             sockets,
@@ -268,6 +299,11 @@ impl NodeGraphWidget {
         let Some(pc) = pointer_canvas else {
             return InteractionState::Idle;
         };
+
+        let current_screen_pos = self.view.canvas_to_screen(origin, pc);
+        let press_screen_pos = ui
+            .input(|i| i.pointer.press_origin())
+            .unwrap_or(current_screen_pos);
 
         if ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary)) {
             return InteractionState::Idle;
@@ -333,9 +369,39 @@ impl NodeGraphWidget {
             }
         }
 
+        if responses.frames.values().any(egui::Response::clicked)
+            && self
+                .node_at_screen_pos(responses, current_screen_pos)
+                .is_none()
+            && let Some(id) = self.frame_at_screen_pos(responses, layout, current_screen_pos)
+        {
+            self.select_frame(id, ctrl);
+            return InteractionState::Idle;
+        }
+
+        if responses.frames.values().any(egui::Response::drag_started) {
+            if self
+                .node_at_screen_pos(responses, press_screen_pos)
+                .is_some()
+            {
+                return InteractionState::Idle;
+            }
+            if let Some(id) = self.frame_at_screen_pos(responses, layout, press_screen_pos) {
+                self.select_frame(id, ctrl);
+                self.push_undo_snapshot();
+                return InteractionState::DraggingFrame {
+                    frame_id: id,
+                    last_canvas: pc,
+                };
+            }
+        }
+
         if responses.canvas.clicked() && !ctrl {
             for node in self.graph.nodes.values_mut() {
                 node.selected = false;
+            }
+            for frame in &mut self.graph.frames {
+                frame.selected = false;
             }
         }
 
@@ -393,6 +459,30 @@ impl NodeGraphWidget {
             && !self.graph.nodes[&node_id].outputs.is_empty();
         if has_io {
             self.try_wire_insert(node_id, nodes);
+        }
+        InteractionState::Idle
+    }
+
+    fn update_drag_frame(
+        &mut self,
+        ui: &egui::Ui,
+        pointer_canvas: Option<Pos2>,
+        frame_id: FrameId,
+        last_canvas: Pos2,
+    ) -> InteractionState {
+        if ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
+            if let Some(pc) = pointer_canvas {
+                let delta = pc - last_canvas;
+                self.move_selected_frame_nodes(frame_id, delta);
+                return InteractionState::DraggingFrame {
+                    frame_id,
+                    last_canvas: pc,
+                };
+            }
+            return InteractionState::DraggingFrame {
+                frame_id,
+                last_canvas,
+            };
         }
         InteractionState::Idle
     }
@@ -515,7 +605,7 @@ impl NodeGraphWidget {
         &mut self,
         ui: &egui::Ui,
         pointer_canvas: Option<Pos2>,
-        nodes: &HashMap<NodeId, NodeWidget>,
+        layout: &GraphWidgetLayout,
         start_canvas: Pos2,
         mut current_canvas: Pos2,
     ) -> InteractionState {
@@ -535,12 +625,22 @@ impl NodeGraphWidget {
             for n in self.graph.nodes.values_mut() {
                 n.selected = false;
             }
+            for frame in &mut self.graph.frames {
+                frame.selected = false;
+            }
         }
-        for (id, widget) in nodes {
+        for (id, widget) in &layout.nodes {
             if select_rect.intersects(widget.node_rect())
                 && let Some(n) = self.graph.nodes.get_mut(id)
             {
                 n.selected = !ctrl;
+            }
+        }
+        for (id, rect) in &layout.frame_rects {
+            if select_rect.intersects(*rect)
+                && let Some(frame) = self.graph.frames.iter_mut().find(|frame| frame.id == *id)
+            {
+                frame.selected = !ctrl;
             }
         }
         InteractionState::Idle
@@ -620,38 +720,68 @@ impl NodeGraphWidget {
             .any(|node| node.selected && node.collapsed)
     }
 
-    fn hovered_node(&self, responses: &GraphResponses) -> Option<NodeId> {
-        responses
+    fn node_at_screen_pos(&self, responses: &GraphResponses, screen_pos: Pos2) -> Option<NodeId> {
+        if let Some((&id, _)) = responses
             .collapse_toggles
             .iter()
-            .find_map(|(&id, response)| response.hovered().then_some(id))
-            .or_else(|| {
-                responses.nodes.iter().find_map(|(&id, responses)| {
-                    (responses.body.hovered() || responses.header.hovered()).then_some(id)
-                })
-            })
-            .or_else(|| {
-                responses
-                    .sockets
-                    .iter()
-                    .find_map(|(&id, response)| response.hovered().then_some(id.node))
-            })
+            .find(|(_, response)| response.rect.contains(screen_pos))
+        {
+            return Some(id);
+        }
+        if let Some((&id, _)) = responses.nodes.iter().find(|(_, node)| {
+            node.header.rect.contains(screen_pos) || node.body.rect.contains(screen_pos)
+        }) {
+            return Some(id);
+        }
+        responses
+            .sockets
+            .iter()
+            .find_map(|(&id, response)| response.rect.contains(screen_pos).then_some(id.node))
     }
 
-    fn context_menu_opened(&self, responses: &GraphResponses) -> bool {
-        responses.canvas.context_menu_opened()
-            || responses
-                .collapse_toggles
-                .values()
-                .any(egui::Response::context_menu_opened)
-            || responses
-                .nodes
-                .values()
-                .any(|node| node.body.context_menu_opened() || node.header.context_menu_opened())
-            || responses
-                .sockets
-                .values()
-                .any(egui::Response::context_menu_opened)
+    fn frame_at_screen_pos(
+        &self,
+        responses: &GraphResponses,
+        layout: &GraphWidgetLayout,
+        screen_pos: Pos2,
+    ) -> Option<FrameId> {
+        responses
+            .frames
+            .keys()
+            .filter(|id| {
+                layout
+                    .frame_screen_rects
+                    .get(id)
+                    .is_some_and(|rect| rect.contains(screen_pos))
+            })
+            .min_by(|a, b| {
+                let a_rect = layout.frame_screen_rects[a];
+                let b_rect = layout.frame_screen_rects[b];
+                a_rect
+                    .area()
+                    .total_cmp(&b_rect.area())
+                    .then_with(|| a.0.cmp(&b.0))
+            })
+            .copied()
+    }
+
+    fn context_click_target_at(
+        &self,
+        responses: &GraphResponses,
+        layout: &GraphWidgetLayout,
+        screen_pos: Pos2,
+    ) -> Option<ContextClickTarget> {
+        if let Some(id) = self.node_at_screen_pos(responses, screen_pos) {
+            return Some(ContextClickTarget::Node(id));
+        }
+        if let Some(id) = self.frame_at_screen_pos(responses, layout, screen_pos) {
+            return Some(ContextClickTarget::Frame(id));
+        }
+        responses
+            .canvas
+            .rect
+            .contains(screen_pos)
+            .then_some(ContextClickTarget::Canvas)
     }
 
     fn select_node(&mut self, id: NodeId, toggle: bool) {
@@ -659,12 +789,61 @@ impl NodeGraphWidget {
             for n in self.graph.nodes.values_mut() {
                 n.selected = false;
             }
+            for frame in &mut self.graph.frames {
+                frame.selected = false;
+            }
         }
         if let Some(node) = self.graph.nodes.get_mut(&id) {
             if toggle {
                 node.selected = !node.selected;
             } else {
                 node.selected = true;
+            }
+        }
+    }
+
+    fn select_frame(&mut self, id: FrameId, toggle: bool) {
+        if !toggle {
+            for node in self.graph.nodes.values_mut() {
+                node.selected = false;
+            }
+            for frame in &mut self.graph.frames {
+                frame.selected = false;
+            }
+        }
+        if let Some(frame) = self.graph.frames.iter_mut().find(|frame| frame.id == id) {
+            if toggle {
+                frame.selected = !frame.selected;
+            } else {
+                frame.selected = true;
+            }
+        }
+    }
+
+    fn move_selected_frame_nodes(&mut self, fallback_frame: FrameId, delta: Vec2) {
+        let selected_frames: Vec<_> = self
+            .graph
+            .frames
+            .iter()
+            .filter(|frame| frame.selected)
+            .map(|frame| frame.id)
+            .collect();
+        let target_frames = if selected_frames.is_empty() {
+            vec![fallback_frame]
+        } else {
+            selected_frames
+        };
+        let mut moved = std::collections::HashSet::new();
+        for frame_id in target_frames {
+            let Some(frame) = self.graph.frames.iter().find(|frame| frame.id == frame_id) else {
+                continue;
+            };
+            for &node_id in &frame.node_ids {
+                if moved.insert(node_id)
+                    && let Some(node) = self.graph.nodes.get_mut(&node_id)
+                {
+                    node.pos += delta;
+                }
             }
         }
     }
@@ -697,11 +876,15 @@ impl NodeGraphWidget {
         let no_focus = ui.ctx().memory(|m| m.focused().is_none());
 
         if no_focus {
-            let any_selected = self.graph.nodes.values().any(|node| node.selected);
+            let any_selected = self.graph.nodes.values().any(|node| node.selected)
+                || self.graph.frames.iter().any(|frame| frame.selected);
             let shortcut_entries = build_context_entries(
                 &self.registry,
                 fallback_paste_pos,
+                pointer.unwrap_or(canvas_rect.center()),
                 None,
+                None,
+                self.graph.frames.iter().any(|frame| frame.selected),
                 false,
                 self.menu_collapsed_state(None),
                 any_selected,
@@ -722,17 +905,40 @@ impl NodeGraphWidget {
 
         let cutting = matches!(self.interaction_state, InteractionState::CuttingWire { .. });
 
-        if self.context_menu_opened(responses) && !cutting {
-            let canvas_pos = pointer_canvas.unwrap_or(Pos2::ZERO);
-            let context_node = self.hovered_node(responses);
+        if let Some(context_screen_pos) = self.menu.context_trigger_pos(ui, pointer, !cutting)
+            && let Some(context_target) =
+                self.context_click_target_at(responses, layout, context_screen_pos)
+        {
+            let mut context_frame = None;
+            let context_node = match context_target {
+                ContextClickTarget::Canvas => None,
+                ContextClickTarget::Node(id) => Some(id),
+                ContextClickTarget::Frame(id) => {
+                    if !self
+                        .graph
+                        .frames
+                        .iter()
+                        .any(|frame| frame.id == id && frame.selected)
+                    {
+                        self.select_frame(id, false);
+                    }
+                    context_frame = Some(id);
+                    None
+                }
+            };
+            let canvas_pos = self.view.screen_to_canvas(origin, context_screen_pos);
             let node_hidden = context_node.is_some_and(|id| self.node_has_hidden_sockets(id));
             let node_collapsed = self.menu_collapsed_state(context_node);
-            let any_selected = self.graph.nodes.values().any(|n| n.selected);
+            let any_selected = self.graph.nodes.values().any(|n| n.selected)
+                || self.graph.frames.iter().any(|frame| frame.selected);
             let can_paste = self.can_paste_nodes();
             let entries = build_context_entries(
                 &self.registry,
                 canvas_pos,
+                context_screen_pos,
                 context_node,
+                context_frame,
+                self.graph.frames.iter().any(|frame| frame.selected),
                 node_hidden,
                 node_collapsed,
                 any_selected,
@@ -740,7 +946,7 @@ impl NodeGraphWidget {
                 self.can_undo(),
                 self.can_redo(),
             );
-            self.menu.on_context_opened(entries);
+            self.menu.open_popup(context_screen_pos, entries);
         }
 
         if no_focus
@@ -962,6 +1168,10 @@ impl NodeGraphWidget {
             InteractionState::DraggingNode { node_id, offset } => {
                 self.update_drag_node(ui, pointer_canvas, node_id, offset, &layout.nodes)
             }
+            InteractionState::DraggingFrame {
+                frame_id,
+                last_canvas,
+            } => self.update_drag_frame(ui, pointer_canvas, frame_id, last_canvas),
             InteractionState::DraggingWire {
                 from,
                 from_canvas,
@@ -978,13 +1188,7 @@ impl NodeGraphWidget {
             InteractionState::BoxSelecting {
                 start_canvas,
                 current_canvas,
-            } => self.update_box_select(
-                ui,
-                pointer_canvas,
-                &layout.nodes,
-                start_canvas,
-                current_canvas,
-            ),
+            } => self.update_box_select(ui, pointer_canvas, layout, start_canvas, current_canvas),
             InteractionState::CuttingWire { path } => {
                 self.update_cut_wire(ui, pointer_canvas, &layout.nodes, path)
             }

@@ -1,6 +1,9 @@
 pub(super) use super::super::menu::Shortcut;
-use super::NodeGraphWidget;
-use crate::model::{Connection, Node, NodeId, SocketId};
+use super::{FrameRenameState, NodeGraphWidget};
+use crate::{
+    api::sockets_compatible,
+    model::{Connection, FrameId, Node, NodeId, SocketDirection, SocketId},
+};
 use egui::{Color32, Pos2, Vec2};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -33,16 +36,47 @@ pub(super) enum ActionEffect {
 pub(super) enum GraphAction {
     Undo,
     Redo,
-    AddNode { name: String, pos: Pos2 },
-    Cut { target: Option<NodeId> },
-    Copy { target: Option<NodeId> },
-    Paste { text: Option<String>, pos: Pos2 },
-    Delete { target: Option<NodeId> },
+    AddNode {
+        name: String,
+        pos: Pos2,
+    },
+    Cut {
+        target: Option<NodeId>,
+    },
+    Copy {
+        target: Option<NodeId>,
+    },
+    Paste {
+        text: Option<String>,
+        pos: Pos2,
+    },
+    Delete {
+        target: Option<NodeId>,
+    },
+    Dissolve {
+        target: Option<NodeId>,
+    },
     DuplicateSelected,
-    AddFrame { target: Option<NodeId> },
-    RemoveFromFrame { target: Option<NodeId> },
-    ToggleHidden { target: Option<NodeId> },
-    ToggleCollapsed { target: Option<NodeId> },
+    AddFrame {
+        target: Option<NodeId>,
+    },
+    RenameFrame {
+        target: FrameId,
+        screen_pos: Pos2,
+    },
+    SetFrameColor {
+        target: Option<FrameId>,
+        color: Color32,
+    },
+    RemoveFromFrame {
+        target: Option<NodeId>,
+    },
+    ToggleHidden {
+        target: Option<NodeId>,
+    },
+    ToggleCollapsed {
+        target: Option<NodeId>,
+    },
     ToggleMinimap,
     Save,
     Load,
@@ -143,6 +177,11 @@ impl NodeGraphWidget {
                 self.delete_nodes(target);
                 ActionEffect::None
             }
+            GraphAction::Dissolve { target } => {
+                self.push_undo_snapshot();
+                self.dissolve_nodes(target);
+                ActionEffect::None
+            }
             GraphAction::DuplicateSelected => {
                 self.push_undo_snapshot();
                 self.duplicate_selected();
@@ -151,6 +190,15 @@ impl NodeGraphWidget {
             GraphAction::AddFrame { target } => {
                 self.push_undo_snapshot();
                 self.add_frame(target);
+                ActionEffect::None
+            }
+            GraphAction::RenameFrame { target, screen_pos } => {
+                self.start_renaming_frame(target, screen_pos);
+                ActionEffect::None
+            }
+            GraphAction::SetFrameColor { target, color } => {
+                self.push_undo_snapshot();
+                self.set_frame_color(target, color);
                 ActionEffect::None
             }
             GraphAction::RemoveFromFrame { target } => {
@@ -205,11 +253,91 @@ impl NodeGraphWidget {
     }
 
     fn delete_nodes(&mut self, target: Option<NodeId>) {
+        if target.is_none() {
+            self.graph.frames.retain(|frame| !frame.selected);
+        }
         for id in self.target_nodes(target) {
             self.graph.remove_node(id);
             self.runtime.remove(&id);
         }
         self.graph.cleanup_frames();
+    }
+
+    fn dissolve_nodes(&mut self, target: Option<NodeId>) {
+        let targets = self.target_nodes(target);
+        if targets.is_empty() {
+            return;
+        }
+        let target_set: HashSet<_> = targets.iter().copied().collect();
+        let mut rewired = Vec::new();
+
+        for &id in &targets {
+            let incoming: Vec<_> = self
+                .graph
+                .connections
+                .iter()
+                .filter(|connection| {
+                    connection.to.node == id && !target_set.contains(&connection.from.node)
+                })
+                .cloned()
+                .collect();
+            let outgoing: Vec<_> = self
+                .graph
+                .connections
+                .iter()
+                .filter(|connection| {
+                    connection.from.node == id && !target_set.contains(&connection.to.node)
+                })
+                .cloned()
+                .collect();
+
+            for input_connection in &incoming {
+                for output_connection in &outgoing {
+                    if self
+                        .direct_connection_compatible(input_connection.from, output_connection.to)
+                    {
+                        rewired.push(Connection {
+                            from: input_connection.from,
+                            to: output_connection.to,
+                        });
+                    }
+                }
+            }
+        }
+
+        for id in targets {
+            self.graph.remove_node(id);
+            self.runtime.remove(&id);
+        }
+        for connection in rewired {
+            self.graph.add_connection(connection.from, connection.to);
+        }
+        self.graph.cleanup_frames();
+    }
+
+    fn direct_connection_compatible(&self, from: SocketId, to: SocketId) -> bool {
+        if from.direction != SocketDirection::Output || to.direction != SocketDirection::Input {
+            return false;
+        }
+        let Some(from_type) = self
+            .graph
+            .nodes
+            .get(&from.node)
+            .and_then(|node| node.outputs.get(from.index))
+            .map(|socket| socket.type_name.as_str())
+        else {
+            return false;
+        };
+        let Some(to_type) = self
+            .graph
+            .nodes
+            .get(&to.node)
+            .and_then(|node| node.inputs.get(to.index))
+            .map(|socket| socket.type_name.as_str())
+        else {
+            return false;
+        };
+        sockets_compatible(from_type, to_type)
     }
 
     fn duplicate_selected(&mut self) {
@@ -328,6 +456,9 @@ impl NodeGraphWidget {
         for node in self.graph.nodes.values_mut() {
             node.selected = false;
         }
+        for frame in &mut self.graph.frames {
+            frame.selected = false;
+        }
 
         let mut pasted = 0usize;
         for mut node in payload.nodes {
@@ -373,6 +504,36 @@ impl NodeGraphWidget {
         }
         let color = FRAME_COLORS[self.graph.frames.len() % FRAME_COLORS.len()];
         self.graph.add_frame("Frame".to_string(), color, targets);
+    }
+
+    fn set_frame_color(&mut self, target: Option<FrameId>, color: Color32) {
+        if let Some(frame_id) = target {
+            if let Some(frame) = self
+                .graph
+                .frames
+                .iter_mut()
+                .find(|frame| frame.id == frame_id)
+            {
+                frame.color = color;
+            }
+            return;
+        }
+        for frame in &mut self.graph.frames {
+            if frame.selected {
+                frame.color = color;
+            }
+        }
+    }
+
+    fn start_renaming_frame(&mut self, target: FrameId, screen_pos: Pos2) {
+        let Some(frame) = self.graph.frames.iter().find(|frame| frame.id == target) else {
+            return;
+        };
+        self.frame_rename = Some(FrameRenameState {
+            frame_id: target,
+            text: frame.label.clone(),
+            screen_pos,
+        });
     }
 
     fn target_nodes(&self, target: Option<NodeId>) -> Vec<NodeId> {

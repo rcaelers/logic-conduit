@@ -11,4 +11,6 @@ pub struct Frame {
     pub label: String,
     pub color: Color32,
     pub node_ids: Vec<NodeId>,
+    #[serde(default)]
+    pub selected: bool,
 }

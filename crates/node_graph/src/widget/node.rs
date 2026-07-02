@@ -536,10 +536,12 @@ fn draw_reroute(painter: &Painter, screen_rect: Rect, selected: bool) {
 }
 
 fn draw_socket(painter: &Painter, pos: Pos2, radius: f32, shape: SocketShape, color: Color32) {
+    let outline = socket_outline_color(color);
+    let outline_stroke = Stroke::new(2.0_f32, outline);
     match shape {
         SocketShape::Circle => {
-            painter.circle_filled(pos, radius, Color32::from_rgb(28, 28, 28));
-            painter.circle_stroke(pos, radius - 1.5, Stroke::new(2.0_f32, color));
+            painter.circle_filled(pos, radius, color);
+            painter.circle_stroke(pos, radius, outline_stroke);
         }
         SocketShape::Diamond => {
             let pts = vec![
@@ -548,13 +550,16 @@ fn draw_socket(painter: &Painter, pos: Pos2, radius: f32, shape: SocketShape, co
                 Pos2::new(pos.x, pos.y + radius),
                 Pos2::new(pos.x - radius, pos.y),
             ];
-            painter.add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+            painter.add(egui::Shape::convex_polygon(pts, color, outline_stroke));
         }
         SocketShape::Square => {
-            painter.rect_filled(
-                Rect::from_center_size(pos, Vec2::splat(radius * 1.7)),
+            let rect = Rect::from_center_size(pos, Vec2::splat(radius * 1.7));
+            painter.rect_filled(rect, CornerRadius::ZERO, color);
+            painter.rect_stroke(
+                rect,
                 CornerRadius::ZERO,
-                color,
+                outline_stroke,
+                egui::StrokeKind::Outside,
             );
         }
         SocketShape::Triangle => {
@@ -563,7 +568,17 @@ fn draw_socket(painter: &Painter, pos: Pos2, radius: f32, shape: SocketShape, co
                 Pos2::new(pos.x + radius, pos.y + radius),
                 Pos2::new(pos.x - radius, pos.y + radius),
             ];
-            painter.add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+            painter.add(egui::Shape::convex_polygon(pts, color, outline_stroke));
         }
+    }
+}
+
+fn socket_outline_color(color: Color32) -> Color32 {
+    let luminance =
+        0.2126 * color.r() as f32 + 0.7152 * color.g() as f32 + 0.0722 * color.b() as f32;
+    if luminance < 95.0 {
+        Color32::from_rgb(210, 210, 210)
+    } else {
+        Color32::from_rgb(20, 20, 20)
     }
 }

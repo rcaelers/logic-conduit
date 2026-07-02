@@ -1,6 +1,6 @@
 use super::NodeGraphWidget;
 use crate::{
-    model::{NodeId, SocketDirection, SocketId},
+    model::{FrameId, NodeId, SocketDirection, SocketId},
     support::paint::{SOCKET_RADIUS, to_screen_rect},
     widget::node::NodeWidget,
 };
@@ -8,10 +8,13 @@ use egui::{Pos2, Rect};
 use std::collections::HashMap;
 
 const SOCKET_HIT_PADDING: f32 = 5.0;
+const FRAME_PADDING: f32 = 20.0;
 
 pub(super) struct GraphWidgetLayout {
     pub nodes: HashMap<NodeId, NodeWidget>,
     pub node_rects: HashMap<NodeId, Rect>,
+    pub frame_rects: HashMap<FrameId, Rect>,
+    pub frame_screen_rects: HashMap<FrameId, Rect>,
     pub node_screen_rects: HashMap<NodeId, Rect>,
     pub header_screen_rects: HashMap<NodeId, Rect>,
     pub collapse_toggle_screen_rects: HashMap<NodeId, Rect>,
@@ -31,6 +34,38 @@ impl NodeGraphWidget {
         let node_rects: HashMap<NodeId, Rect> = nodes
             .iter()
             .map(|(&id, widget)| (id, widget.node_rect()))
+            .collect();
+        let mut frame_order: Vec<_> = self.graph.frames.iter().collect();
+        frame_order.sort_by_key(|frame| frame.node_ids.len());
+        let mut frame_rects = HashMap::new();
+        for frame in frame_order {
+            let mut bounds = frame
+                .node_ids
+                .iter()
+                .filter_map(|id| node_rects.get(id).copied())
+                .reduce(|bounds, rect| bounds.union(rect));
+            for child in &self.graph.frames {
+                if child.id == frame.id
+                    || child.node_ids.len() >= frame.node_ids.len()
+                    || !child.node_ids.iter().all(|id| frame.node_ids.contains(id))
+                {
+                    continue;
+                }
+                if let Some(&child_rect) = frame_rects.get(&child.id) {
+                    bounds = Some(bounds.map_or(child_rect, |bounds| bounds.union(child_rect)));
+                }
+            }
+            if let Some(bounds) = bounds {
+                frame_rects.insert(frame.id, bounds.expand(FRAME_PADDING));
+            }
+        }
+        let frame_screen_rects: HashMap<FrameId, Rect> = frame_rects
+            .iter()
+            .map(|(&id, &rect)| {
+                let mut screen_rect = to_screen_rect(rect, &self.view, origin);
+                screen_rect.min.y -= (18.0 * self.view.zoom).clamp(10.0, 22.0);
+                (id, screen_rect)
+            })
             .collect();
         let node_screen_rects: HashMap<NodeId, Rect> = nodes
             .iter()
@@ -97,6 +132,8 @@ impl NodeGraphWidget {
         GraphWidgetLayout {
             nodes,
             node_rects,
+            frame_rects,
+            frame_screen_rects,
             node_screen_rects,
             header_screen_rects,
             collapse_toggle_screen_rects,

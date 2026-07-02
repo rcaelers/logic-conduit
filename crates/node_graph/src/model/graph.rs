@@ -54,6 +54,7 @@ impl GraphState {
             label,
             color,
             node_ids,
+            selected: false,
         });
         id
     }

@@ -103,6 +103,7 @@ pub(crate) enum MenuKind<T> {
     Separator,
     Action(T),
     SubMenu(Vec<MenuEntry<T>>),
+    Palette(Vec<(Color32, T)>),
 }
 
 pub(crate) struct MenuEntry<T> {
@@ -129,6 +130,15 @@ impl<T> MenuEntry<T> {
             icon: None,
             shortcut: None,
             kind: MenuKind::SubMenu(children),
+        }
+    }
+
+    pub fn palette(items: Vec<(Color32, T)>) -> Self {
+        Self {
+            label: String::new(),
+            icon: None,
+            shortcut: None,
+            kind: MenuKind::Palette(items),
         }
     }
 
@@ -185,6 +195,7 @@ pub(crate) fn dispatch_menu_shortcut<T: Clone>(
                     return Some(action);
                 }
             }
+            MenuKind::Palette(_) => {}
             MenuKind::Separator => {}
         }
     }
@@ -214,6 +225,7 @@ pub(crate) struct Menu<T> {
 
 impl<T: Clone> Menu<T> {
     const MIN_WIDTH: f32 = 180.0;
+    const COLUMN_OVERLAP: f32 = 10.0;
 
     pub fn new(area_id: egui::Id) -> Self {
         Self {
@@ -373,11 +385,10 @@ impl<T: Clone> Menu<T> {
     /// Standalone `Area` popup.  Returns `(area_response, activated_action)`.
     pub fn show_popup(&mut self, ui: &mut egui::Ui) -> (egui::Response, Option<T>) {
         let entries = std::mem::take(&mut self.entries);
-        let sel = self.sel.clone();
+        let mut sel = self.sel.clone();
         let area_id = self.area_id;
         let pos = self.pos;
 
-        let mut new_btn_ids: Vec<Vec<egui::Id>> = Vec::new();
         let mut result: Option<T> = None;
 
         let area_resp = egui::Area::new(area_id)
@@ -390,13 +401,64 @@ impl<T: Clone> Menu<T> {
             ))
             .show(ui.ctx(), |ui| {
                 egui::containers::menu::menu_style(ui.style_mut());
-                egui::Frame::menu(ui.style()).show(ui, |ui| {
-                    Self::render_entries(ui, &entries, &sel, 0, &mut new_btn_ids, &mut result);
+                ui.spacing_mut().item_spacing.x = -Self::COLUMN_OVERLAP;
+                ui.horizontal_top(|ui| {
+                    let mut depth = 0;
+                    let mut column_offsets = vec![0.0_f32];
+                    loop {
+                        let depth_entries = Self::entries_at(&entries, &sel[..depth]);
+                        if depth_entries.is_empty() {
+                            break;
+                        }
+
+                        let column_offset = column_offsets.get(depth).copied().unwrap_or(0.0);
+                        let mut next_column_offset = None;
+                        ui.vertical(|ui| {
+                            ui.add_space(column_offset);
+                            egui::Frame::menu(ui.style()).show(ui, |ui| {
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(Self::MIN_WIDTH, 0.0),
+                                    egui::Layout::top_down_justified(egui::Align::Min),
+                                    |ui| {
+                                        next_column_offset = Self::render_column(
+                                            ui,
+                                            depth_entries,
+                                            &mut sel,
+                                            depth,
+                                            &mut result,
+                                        )
+                                        .map(|offset| column_offset + offset);
+                                    },
+                                );
+                            });
+                        });
+
+                        if result.is_some() {
+                            break;
+                        }
+                        let Some(&selected) = sel.get(depth) else {
+                            break;
+                        };
+                        if !depth_entries
+                            .get(selected)
+                            .is_some_and(MenuEntry::is_submenu)
+                        {
+                            break;
+                        }
+
+                        if column_offsets.len() <= depth + 1 {
+                            column_offsets.push(next_column_offset.unwrap_or(column_offset));
+                        } else if let Some(offset) = next_column_offset {
+                            column_offsets[depth + 1] = offset;
+                        }
+                        depth += 1;
+                    }
                 });
             });
 
         self.entries = entries;
-        self.btn_ids = new_btn_ids;
+        self.sel = sel;
+        self.btn_ids.clear();
         (area_resp.response, result)
     }
 
@@ -513,28 +575,23 @@ impl<T: Clone> Menu<T> {
         job
     }
 
-    fn render_entries(
+    fn render_column(
         ui: &mut egui::Ui,
         entries: &[MenuEntry<T>],
-        sel: &[usize],
+        sel: &mut Vec<usize>,
         depth: usize,
-        btn_ids: &mut Vec<Vec<egui::Id>>,
         result: &mut Option<T>,
-    ) {
+    ) -> Option<f32> {
         ui.set_min_width(Self::MIN_WIDTH);
 
         let sel_bg = ui.visuals().selection.bg_fill;
         let sel_at_depth = sel.get(depth).copied();
-
-        if btn_ids.len() <= depth {
-            btn_ids.resize(depth + 1, Vec::new());
-        }
-        btn_ids[depth].clear();
+        let column_top = ui.next_widget_position().y;
+        let mut selected_submenu_offset = None;
 
         for (i, entry) in entries.iter().enumerate() {
             if entry.is_separator() {
                 ui.separator();
-                btn_ids[depth].push(egui::Id::NULL);
                 continue;
             }
 
@@ -547,16 +604,22 @@ impl<T: Clone> Menu<T> {
             let job = Self::item_layout_job(ui, entry.icon.as_deref(), &entry.label);
 
             match &entry.kind {
-                MenuKind::SubMenu(children) => {
+                MenuKind::SubMenu(_) => {
                     let arrow = egui::containers::menu::SubMenuButton::RIGHT_ARROW;
                     let btn = egui::Button::new(egui::WidgetText::LayoutJob(job.into()))
                         .right_text(arrow)
                         .fill(fill);
-                    let (resp, _) =
-                        egui::containers::menu::SubMenuButton::from_button(btn).ui(ui, |ui| {
-                            Self::render_entries(ui, children, sel, depth + 1, btn_ids, result);
-                        });
-                    btn_ids[depth].push(resp.id);
+                    let resp = ui.add(btn);
+                    if resp.hovered() || resp.clicked() {
+                        if sel.len() <= depth {
+                            sel.resize(depth + 1, 0);
+                        }
+                        sel[depth] = i;
+                        sel.truncate(depth + 1);
+                    }
+                    if sel.get(depth) == Some(&i) {
+                        selected_submenu_offset = Some(resp.rect.min.y - column_top);
+                    }
                 }
                 MenuKind::Action(action) => {
                     let mut btn =
@@ -564,14 +627,54 @@ impl<T: Clone> Menu<T> {
                     if let Some(sc) = entry.shortcut {
                         btn = btn.right_text(sc.to_string());
                     }
-                    if ui.add(btn).clicked() {
+                    let resp = ui.add(btn);
+                    if resp.hovered() {
+                        if sel.len() <= depth {
+                            sel.resize(depth + 1, 0);
+                        }
+                        sel[depth] = i;
+                        sel.truncate(depth + 1);
+                    }
+                    if resp.clicked() {
                         *result = Some(action.clone());
                         ui.close();
                     }
-                    btn_ids[depth].push(egui::Id::NULL);
+                }
+                MenuKind::Palette(items) => {
+                    Self::render_palette(ui, items, result);
                 }
                 MenuKind::Separator => unreachable!(),
             }
+        }
+        selected_submenu_offset
+    }
+
+    fn render_palette(ui: &mut egui::Ui, items: &[(Color32, T)], result: &mut Option<T>) {
+        const COLUMNS: usize = 8;
+        const SWATCH: f32 = 18.0;
+        const GAP: f32 = 3.0;
+
+        ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
+        for row in items.chunks(COLUMNS) {
+            ui.horizontal(|ui| {
+                for &(color, ref action) in row {
+                    let (rect, response) =
+                        ui.allocate_exact_size(egui::vec2(SWATCH, SWATCH), egui::Sense::click());
+                    let rounding = egui::CornerRadius::same(3);
+                    ui.painter().rect_filled(rect, rounding, color);
+                    let stroke = if response.hovered() {
+                        egui::Stroke::new(2.0, Color32::WHITE)
+                    } else {
+                        egui::Stroke::new(1.0, Color32::from_rgb(75, 75, 75))
+                    };
+                    ui.painter()
+                        .rect_stroke(rect, rounding, stroke, egui::StrokeKind::Outside);
+                    if response.clicked() {
+                        *result = Some(action.clone());
+                        ui.close();
+                    }
+                }
+            });
         }
     }
 }
@@ -599,6 +702,10 @@ impl<T: Clone> PopupMenu<T> {
     pub fn open_popup(&mut self, pos: Pos2, entries: Vec<MenuEntry<T>>) {
         self.popup.set_entries(entries);
         self.popup.open(pos);
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.popup.visible
     }
 
     /// Drive keyboard navigation for whichever menu is currently active and
