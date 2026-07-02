@@ -8,7 +8,8 @@
 //!   bitmaps (`BlockLevels`). The directory maps each (channel, block) to its chunk's byte offset
 //!   and length.
 //! - **Payload**: the region of the index file that holds all the chunks, after the header and
-//!   directory. Chunks are written in channel-major order.
+//!   directory. Chunks may appear in any order (the build streams them as workers complete);
+//!   the directory records each chunk's offset.
 //!
 //! # Index file format  (magic `CAPIDX06`, version 6)
 //!
@@ -41,7 +42,7 @@
 //! │                     any transition in group?)        │
 //! │    l3_last    u64  (last sample value of group)     │
 //! ├─────────────────────────────────────────────────────┤
-//! │  PAYLOAD  (all chunks, channel-major order)         │
+//! │  PAYLOAD  (all chunks, any order; see directory)    │
 //! │  Each chunk covers one (channel, block) pair:       │
 //! │    valid_samples  u32                               │
 //! │    flags          u8  bit0=first  bit1=last         │
@@ -78,14 +79,17 @@ compile_error!("the waveform index mmap path assumes a little-endian target");
 /// Writes a new index file for one capture source.
 ///
 /// Call [`IndexWriter::create`] to open the file, [`IndexWriter::write_block`] once per
-/// (channel, block) pair in channel-major order, then [`IndexWriter::finish`] to flush
-/// and atomically rename the temp file into place.
+/// (channel, block) pair — in any order, since the directory records each
+/// chunk's offset — then [`IndexWriter::finish`] to flush and atomically
+/// rename the temp file into place. Dropping the writer without finishing
+/// removes the temp file.
 pub(super) struct IndexWriter {
     temp_path: PathBuf,
     final_path: PathBuf,
     file: File,
     directory: Vec<Vec<RootDirEntry>>,
     index_header: IndexHeader,
+    finished: bool,
 }
 
 impl IndexWriter {
@@ -124,6 +128,7 @@ impl IndexWriter {
             file,
             directory: vec![vec![RootDirEntry::default(); total_blocks]; channels],
             index_header,
+            finished: false,
         })
     }
 
@@ -161,8 +166,8 @@ impl IndexWriter {
             }
         }
         self.file.sync_all()?;
-        drop(self.file);
         fs::rename(&self.temp_path, &self.final_path)?;
+        self.finished = true;
         Ok(())
     }
 
@@ -184,6 +189,12 @@ impl IndexWriter {
         Ok(())
     }
 
+    fn abort_cleanup(&mut self) {
+        if !self.finished {
+            let _ = fs::remove_file(&self.temp_path);
+        }
+    }
+
     fn write_dir_entry(file: &mut File, entry: &RootDirEntry) -> Result<()> {
         debug_assert_eq!(DIR_ENTRY_SIZE, 40);
         write_u64(file, entry.offset)?;
@@ -193,6 +204,12 @@ impl IndexWriter {
         write_u64(file, entry.l3_toggle)?;
         write_u64(file, entry.l3_last)?;
         Ok(())
+    }
+}
+
+impl Drop for IndexWriter {
+    fn drop(&mut self) {
+        self.abort_cleanup();
     }
 }
 

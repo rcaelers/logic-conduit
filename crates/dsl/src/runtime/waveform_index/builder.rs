@@ -4,7 +4,7 @@ use super::types::{
 };
 use crate::runtime::{BlockCaptureSource, CaptureDataSource, CaptureMetadata, packed_bit};
 use crate::{Error, Result};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc};
@@ -60,41 +60,35 @@ where
             total_roots: job_count,
         });
 
-        let mut chunks = Self::build_chunks_parallel(
+        let writer = IndexWriter::create(self.index_path, self.header, self.source_revision)?;
+        Self::build_parallel_streaming(
             (*self.data_source).clone(),
             self.header,
             jobs,
+            writer,
             &mut progress,
-        )?;
-
-        let mut writer = IndexWriter::create(self.index_path, self.header, self.source_revision)?;
-
-        for (channel, channel_chunks) in chunks.iter_mut().enumerate() {
-            let mut previous_last = None;
-            for (block_idx, maybe_leaf) in channel_chunks.iter_mut().enumerate() {
-                let Some(leaf) = maybe_leaf else { continue };
-                Self::apply_boundary_transition(leaf, previous_last);
-                previous_last = Some(leaf.last);
-                writer.write_block(channel, block_idx, leaf)?;
-            }
-        }
-
-        writer.finish()
+        )
     }
 
-    fn build_chunks_parallel(
+    /// Runs the per-(channel, block) summary jobs on worker threads and
+    /// writes each chunk to the index file as soon as its per-channel
+    /// predecessor has been written (boundary-transition patching needs the
+    /// predecessor's exit level), so peak memory is a handful of leaves
+    /// instead of the whole index. Workers pull jobs in order, so the
+    /// reorder buffer stays around the worker count.
+    fn build_parallel_streaming(
         data_source: S,
         header: &CaptureMetadata,
         jobs: VecDeque<BuildJob>,
+        mut writer: IndexWriter,
         progress: &mut impl FnMut(CaptureIndexProgress),
-    ) -> Result<Vec<Vec<Option<BlockIndex>>>> {
+    ) -> Result<()> {
         let total_jobs = jobs.len();
-        let total_blocks = header.total_blocks as usize;
-        let mut chunks = vec![vec![None; total_blocks]; header.total_probes];
         if total_jobs == 0 {
-            return Ok(chunks);
+            return writer.finish();
         }
 
+        let channels = header.total_probes;
         let worker_count = Self::index_worker_count(total_jobs);
         let jobs = Arc::new(Mutex::new(jobs));
         let header = Arc::new(header.clone());
@@ -129,12 +123,30 @@ where
         }
         drop(result_tx);
 
+        let mut pending: HashMap<(usize, u64), BlockIndex> = HashMap::new();
+        let mut previous_last: Vec<Option<bool>> = vec![None; channels];
+        let mut next_block: Vec<u64> = vec![0; channels];
         let mut received = 0;
         let mut first_error = None;
         while received < total_jobs {
             match result_rx.recv() {
                 Ok(Ok((job, leaf))) => {
-                    chunks[job.channel][job.block as usize] = Some(leaf);
+                    pending.insert((job.channel, job.block), leaf);
+                    let channel = job.channel;
+                    while let Some(mut leaf) = pending.remove(&(channel, next_block[channel])) {
+                        Self::apply_boundary_transition(&mut leaf, previous_last[channel]);
+                        previous_last[channel] = Some(leaf.last);
+                        if let Err(err) =
+                            writer.write_block(channel, next_block[channel] as usize, &leaf)
+                        {
+                            first_error = Some(err);
+                            break;
+                        }
+                        next_block[channel] += 1;
+                    }
+                    if first_error.is_some() {
+                        break;
+                    }
                     received += 1;
                     progress(CaptureIndexProgress {
                         completed_roots: received,
@@ -147,6 +159,12 @@ where
                 }
                 Err(_) => break,
             }
+        }
+
+        // On failure, stop the workers from grinding through the remaining
+        // queue before joining.
+        if first_error.is_some() || received < total_jobs {
+            jobs.lock().unwrap().clear();
         }
 
         for worker in workers {
@@ -165,7 +183,7 @@ where
                 "waveform index build did not complete".to_string(),
             ));
         }
-        Ok(chunks)
+        writer.finish()
     }
 
     fn build_block_chunk<R>(

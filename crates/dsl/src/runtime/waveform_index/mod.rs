@@ -569,6 +569,98 @@ mod tests {
         )
     }
 
+    /// Multi-channel build: chunks stream to disk as workers finish, so the
+    /// per-channel boundary chaining (a block whose first sample differs from
+    /// its predecessor's last) must survive out-of-order job completion.
+    #[test]
+    fn multi_channel_build_preserves_block_boundary_transitions() -> Result<()> {
+        let samples_per_block = 4_096_u64;
+        let total_samples = samples_per_block * 3;
+        let channel_blocks = |value_at: fn(u64) -> bool| {
+            single_channel_blocks_from_fn(total_samples, samples_per_block, value_at).remove(0)
+        };
+        let blocks = vec![
+            // Flips exactly at every block boundary; each block is constant.
+            channel_blocks(|sample| (sample / 4_096) % 2 == 1),
+            // Constant high across all blocks.
+            channel_blocks(|_| true),
+            // Single edge inside the middle block.
+            channel_blocks(|sample| sample >= 4_196),
+        ];
+        let source = MemoryCaptureDataSource::new(total_samples, samples_per_block, blocks);
+        let mut reader = IndexSampler::open_data_source(source.clone())?;
+
+        // Block-granularity view: one point per block.
+        let window = reader.sampled_window(&[0, 1, 2], 0, total_samples, 3)?;
+        assert_eq!(window.sample_step, samples_per_block);
+        assert_eq!(
+            window.channels[0].waveform,
+            vec![
+                CaptureWaveformSegment::Level {
+                    start_sample: 0,
+                    end_sample: 4_096,
+                    value: false,
+                },
+                CaptureWaveformSegment::Activity {
+                    start_sample: 4_096,
+                    end_sample: 8_192,
+                    first: false,
+                    last: true,
+                },
+                CaptureWaveformSegment::Activity {
+                    start_sample: 8_192,
+                    end_sample: 12_288,
+                    first: true,
+                    last: false,
+                },
+            ]
+        );
+        assert_eq!(
+            window.channels[1].waveform,
+            vec![CaptureWaveformSegment::Level {
+                start_sample: 0,
+                end_sample: total_samples,
+                value: true,
+            }]
+        );
+        assert_eq!(
+            window.channels[2].waveform,
+            vec![
+                CaptureWaveformSegment::Level {
+                    start_sample: 0,
+                    end_sample: 4_096,
+                    value: false,
+                },
+                CaptureWaveformSegment::Activity {
+                    start_sample: 4_096,
+                    end_sample: 8_192,
+                    first: false,
+                    last: true,
+                },
+                CaptureWaveformSegment::Level {
+                    start_sample: 8_192,
+                    end_sample: total_samples,
+                    value: true,
+                },
+            ]
+        );
+
+        // Exact view across the first boundary sees channel 0's edge at
+        // exactly the block start.
+        let window = reader.sampled_window(&[0, 1, 2], 4_046, 4_146, 200)?;
+        assert_eq!(window.sample_step, 1);
+        assert_eq!(window.channels[0].transitions.len(), 1);
+        assert_eq!(window.channels[0].transitions[0].sample, 4_096);
+        assert!(window.channels[0].transitions[0].value);
+        assert!(window.channels[1].initial);
+        assert!(window.channels[1].transitions.is_empty());
+        assert!(!window.channels[2].initial);
+        assert!(window.channels[2].transitions.is_empty());
+
+        source.remove_index();
+        Ok(())
+    }
+
     #[test]
     fn raw_block_cache_serves_reopened_exact_windows() -> Result<()> {
         let samples_per_block = 4_096_u64;
