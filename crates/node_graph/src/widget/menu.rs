@@ -245,11 +245,6 @@ impl<T: Clone> Menu<T> {
         self.pending_close = false;
     }
 
-    pub fn reset(&mut self) {
-        self.sel.clear();
-        self.pending_close = false;
-    }
-
     // ── Keyboard navigation ───────────────────────────────────────────────────
 
     /// `root_id` — context menus: `egui::Popup::default_response_id(response)`;
@@ -403,26 +398,6 @@ impl<T: Clone> Menu<T> {
         self.entries = entries;
         self.btn_ids = new_btn_ids;
         (area_resp.response, result)
-    }
-
-    /// Render inside `response.context_menu()`.  Returns activated action on click.
-    pub fn show_in_context(&mut self, ui: &mut egui::Ui) -> Option<T> {
-        if self.pending_close {
-            ui.close();
-            self.pending_close = false;
-            return None;
-        }
-
-        let entries = std::mem::take(&mut self.entries);
-        let sel = self.sel.clone();
-        let mut new_btn_ids: Vec<Vec<egui::Id>> = Vec::new();
-        let mut result: Option<T> = None;
-
-        Self::render_entries(ui, &entries, &sel, 0, &mut new_btn_ids, &mut result);
-
-        self.entries = entries;
-        self.btn_ids = new_btn_ids;
-        result
     }
 
     // ── Internals ─────────────────────────────────────────────────────────────
@@ -611,14 +586,12 @@ impl<T: Clone> Menu<T> {
 /// `visible` directly.
 pub(crate) struct PopupMenu<T> {
     popup: Menu<T>,
-    context: Menu<T>,
 }
 
 impl<T: Clone> PopupMenu<T> {
     pub fn new(popup_id: egui::Id) -> Self {
         Self {
             popup: Menu::new(popup_id),
-            context: Menu::new(egui::Id::new("__popup_ctx__")),
         }
     }
 
@@ -628,18 +601,12 @@ impl<T: Clone> PopupMenu<T> {
         self.popup.open(pos);
     }
 
-    /// Supply entries for the right-click context menu.  Called each frame
-    /// while the context menu may be open; ignored when it is not.
-    pub fn set_context_entries(&mut self, entries: Vec<MenuEntry<T>>) {
-        self.context.set_entries(entries);
-    }
-
     /// Drive keyboard navigation for whichever menu is currently active and
     /// claim keyboard focus so the host's `no_focus` check naturally suppresses
     /// global shortcuts while any menu is open.
     ///
     /// **Must be called before sampling `no_focus`.**
-    pub fn handle_keys(&mut self, ui: &mut egui::Ui, response: &egui::Response) -> Option<T> {
+    pub fn handle_keys(&mut self, ui: &mut egui::Ui, _response: &egui::Response) -> Option<T> {
         if self.popup.visible {
             let id = self.popup.area_id;
             let result = self.popup.handle_keys(ui, id);
@@ -647,23 +614,14 @@ impl<T: Clone> PopupMenu<T> {
                 self.popup.close();
             }
             result
-        } else if response.context_menu_opened() {
-            let id = egui::Popup::default_response_id(response);
-            self.context.handle_keys(ui, id)
         } else {
-            self.context.reset();
             None
         }
     }
 
     /// Render whichever menu is active and return any mouse-activated action.
-    pub fn render(&mut self, ui: &mut egui::Ui, response: &egui::Response) -> Option<T> {
+    pub fn render(&mut self, ui: &mut egui::Ui, _response: &egui::Response) -> Option<T> {
         let mut result = None;
-
-        // Right-click context menu — egui owns its lifecycle (Escape, outside click).
-        response.context_menu(|ui| {
-            result = self.context.show_in_context(ui);
-        });
 
         // Standalone popup — we own its lifecycle entirely.
         if self.popup.visible {
