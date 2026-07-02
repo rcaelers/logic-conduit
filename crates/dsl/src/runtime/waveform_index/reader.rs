@@ -250,7 +250,7 @@ where
             }
             previous_end = visible_end;
 
-            let summary = self.display_range_summary(
+            let summary = self.indexed_display_range_summary(
                 channel,
                 visible_start,
                 visible_end,
@@ -258,14 +258,12 @@ where
                 previous_value,
             )?;
             self.append_pixel_waveform(
-                channel,
                 visible_start,
                 visible_end,
-                group_samples,
                 summary,
                 &mut previous_value,
                 &mut waveform,
-            )?;
+            );
         }
 
         Ok(CaptureSampledChannel {
@@ -277,27 +275,17 @@ where
         })
     }
 
-    fn display_range_summary(
-        &mut self,
-        channel: usize,
-        start_sample: u64,
-        end_sample: u64,
-        group_samples: u64,
-        first: bool,
-    ) -> Result<GroupSummary> {
-        self.indexed_display_range_summary(channel, start_sample, end_sample, group_samples, first)
-    }
-
     fn indexed_display_range_summary(
         &mut self,
         channel: usize,
         start_sample: u64,
         end_sample: u64,
         group_samples: u64,
-        first: bool,
+        fallback_first: bool,
     ) -> Result<GroupSummary> {
+        let mut first = None;
+        let mut last = fallback_first;
         let mut toggle = false;
-        let mut last = first;
         let samples_per_block = self.header().samples_per_block;
         let first_block = self.block_for_sample(start_sample);
         let last_block = self.block_for_sample(end_sample.saturating_sub(1));
@@ -319,13 +307,13 @@ where
                 local_end,
                 group_samples,
             )?;
-            toggle |= summary.toggle || summary.first != last;
+            let range_first = *first.get_or_insert(summary.first);
+            toggle |= summary.toggle || summary.first != last || range_first != summary.last;
             last = summary.last;
         }
 
-        toggle |= first != last;
         Ok(GroupSummary {
-            first,
+            first: first.unwrap_or(fallback_first),
             toggle,
             last,
         })
@@ -339,7 +327,15 @@ where
         local_end: u64,
         group_samples: u64,
     ) -> Result<GroupSummary> {
-        if group_samples >= self.header().samples_per_block {
+        let samples_per_block = self.header().samples_per_block;
+        let block_start = block as u64 * samples_per_block;
+        let valid_end = self
+            .header()
+            .total_samples
+            .saturating_sub(block_start)
+            .min(samples_per_block);
+
+        if local_start == 0 && local_end >= valid_end {
             let entry = self.storage.load_root_summary(channel, block)?;
             return Ok(GroupSummary {
                 first: entry.first,
@@ -348,18 +344,29 @@ where
             });
         }
 
-        if group_samples == SAMPLES_PER_L3_BIT {
+        if group_samples >= SAMPLES_PER_L3_BIT {
             let entry = self.storage.load_root_summary(channel, block)?;
+            // Constant blocks store no level bitmaps; their l3_last/l3_toggle
+            // words are zero and must not be interpreted as sample values.
+            if !entry.toggle {
+                return Ok(GroupSummary {
+                    first: entry.first,
+                    toggle: false,
+                    last: entry.last,
+                });
+            }
             let first_group = (local_start / SAMPLES_PER_L3_BIT).min(63) as usize;
             let last_group = ((local_end - 1) / SAMPLES_PER_L3_BIT).min(63) as usize;
+            let first = if first_group == 0 {
+                entry.first
+            } else {
+                bit(entry.l3_last, first_group - 1)
+            };
+            let last = bit(entry.l3_last, last_group);
             return Ok(GroupSummary {
-                first: if first_group == 0 {
-                    entry.first
-                } else {
-                    bit(entry.l3_last, first_group - 1)
-                },
-                toggle: bit_range_any(&[entry.l3_toggle], first_group, last_group),
-                last: bit(entry.l3_last, last_group),
+                first,
+                toggle: bit_range_any(&[entry.l3_toggle], first_group, last_group) || first != last,
+                last,
             });
         }
 
@@ -368,252 +375,83 @@ where
             return Ok(GroupSummary {
                 first: leaf.first,
                 toggle: false,
-                last: leaf.first,
+                last: leaf.last,
             });
         };
 
-        if group_samples == SAMPLES_PER_L2_BIT {
+        if group_samples >= SAMPLES_PER_L2_BIT {
             let first_group = (local_start / SAMPLES_PER_L2_BIT).min(4095) as usize;
             let last_group = ((local_end - 1) / SAMPLES_PER_L2_BIT).min(4095) as usize;
+            let first = if first_group == 0 {
+                leaf.first
+            } else {
+                bit(
+                    levels.l2_last[(first_group - 1) / 64],
+                    (first_group - 1) % 64,
+                )
+            };
+            let last = bit(levels.l2_last[last_group / 64], last_group % 64);
             Ok(GroupSummary {
-                first: if first_group == 0 {
-                    leaf.first
-                } else {
-                    bit(
-                        levels.l2_last[(first_group - 1) / 64],
-                        (first_group - 1) % 64,
-                    )
-                },
-                toggle: bit_range_any(&levels.l2_toggle, first_group, last_group),
-                last: bit(levels.l2_last[last_group / 64], last_group % 64),
+                first,
+                toggle: bit_range_any(&levels.l2_toggle, first_group, last_group) || first != last,
+                last,
             })
         } else {
             let first_group = (local_start / SAMPLES_PER_L1_BIT).min(262_143) as usize;
             let last_group = ((local_end - 1) / SAMPLES_PER_L1_BIT).min(262_143) as usize;
+            let first = if first_group == 0 {
+                leaf.first
+            } else {
+                bit(
+                    levels.l1_last[(first_group - 1) / 64],
+                    (first_group - 1) % 64,
+                )
+            };
+            let last = bit(levels.l1_last[last_group / 64], last_group % 64);
             Ok(GroupSummary {
-                first: if first_group == 0 {
-                    leaf.first
-                } else {
-                    bit(
-                        levels.l1_last[(first_group - 1) / 64],
-                        (first_group - 1) % 64,
-                    )
-                },
-                toggle: bit_range_any(&levels.l1_toggle, first_group, last_group),
-                last: bit(levels.l1_last[last_group / 64], last_group % 64),
+                first,
+                toggle: bit_range_any(&levels.l1_toggle, first_group, last_group) || first != last,
+                last,
             })
         }
     }
 
     fn append_pixel_waveform(
-        &mut self,
-        channel: usize,
+        &self,
         start_sample: u64,
         end_sample: u64,
-        group_samples: u64,
         summary: GroupSummary,
         previous_value: &mut bool,
         waveform: &mut Vec<CaptureWaveformSegment>,
-    ) -> Result<()> {
+    ) {
         if end_sample <= start_sample {
-            return Ok(());
+            return;
         }
 
-        let has_entry_edge = summary.first != *previous_value;
-        let has_internal_toggle = if has_entry_edge && summary.toggle {
-            if end_sample > start_sample + 1 {
-                let interior =
-                    self.range_summary(channel, start_sample + 1, end_sample, group_samples)?;
-                interior.toggle || interior.first != summary.first
-            } else {
-                false
-            }
-        } else {
-            summary.toggle
-        };
-
-        if !has_entry_edge && !has_internal_toggle {
-            push_level(waveform, start_sample, end_sample, summary.first);
-            *previous_value = summary.last;
-            return Ok(());
-        }
-
-        if has_entry_edge {
-            waveform.push(CaptureWaveformSegment::Edge {
-                sample: start_sample,
-                before: *previous_value,
-                after: summary.first,
-            });
-            *previous_value = summary.first;
-        }
-
-        if has_internal_toggle {
+        if summary.toggle {
             waveform.push(CaptureWaveformSegment::Activity {
                 start_sample,
                 end_sample,
                 first: *previous_value,
                 last: summary.last,
             });
-        } else {
-            push_level(waveform, start_sample, end_sample, *previous_value);
+            *previous_value = summary.last;
+            return;
         }
+
+        if summary.first == *previous_value {
+            push_level(waveform, start_sample, end_sample, summary.first);
+            *previous_value = summary.last;
+            return;
+        }
+
+        waveform.push(CaptureWaveformSegment::Edge {
+            sample: start_sample,
+            before: *previous_value,
+            after: summary.first,
+        });
+        push_level(waveform, start_sample, end_sample, summary.first);
         *previous_value = summary.last;
-        Ok(())
-    }
-
-    fn range_summary(
-        &mut self,
-        channel: usize,
-        start_sample: u64,
-        end_sample: u64,
-        group_samples: u64,
-    ) -> Result<GroupSummary> {
-        let first = self.raw_reader.read_sample(channel, start_sample)?;
-        let mut toggle = false;
-        let mut last = first;
-        let mut pos = start_sample;
-
-        while pos < end_sample {
-            let (chunk_start, chunk_samples) =
-                self.next_summary_chunk(pos, end_sample, group_samples);
-            let summary = if chunk_samples < SAMPLES_PER_L1_BIT {
-                self.l0_range_summary(channel, chunk_start, chunk_start + chunk_samples)?
-            } else {
-                self.group_summary(channel, chunk_start, chunk_samples)?
-            };
-            toggle |= summary.toggle || summary.first != last;
-            last = summary.last;
-            pos = chunk_start + chunk_samples;
-            if chunk_samples == 0 {
-                break;
-            }
-        }
-
-        Ok(GroupSummary {
-            first,
-            toggle,
-            last,
-        })
-    }
-
-    fn next_summary_chunk(
-        &self,
-        sample: u64,
-        end_sample: u64,
-        preferred_group_samples: u64,
-    ) -> (u64, u64) {
-        let remaining = end_sample - sample;
-        let samples_per_block = self.header().samples_per_block;
-
-        for group_samples in [
-            samples_per_block,
-            SAMPLES_PER_L3_BIT,
-            SAMPLES_PER_L2_BIT,
-            SAMPLES_PER_L1_BIT,
-        ] {
-            if group_samples > preferred_group_samples {
-                continue;
-            }
-            if sample.is_multiple_of(group_samples) && remaining >= group_samples {
-                return (sample, group_samples);
-            }
-        }
-
-        let next_l1 = ((sample / SAMPLES_PER_L1_BIT) + 1) * SAMPLES_PER_L1_BIT;
-        let chunk_end = next_l1.min(end_sample);
-        (sample, chunk_end - sample)
-    }
-
-    fn l0_range_summary(
-        &mut self,
-        channel: usize,
-        start_sample: u64,
-        end_sample: u64,
-    ) -> Result<GroupSummary> {
-        let first = self.raw_reader.read_sample(channel, start_sample)?;
-        let mut last = first;
-        let mut toggle = false;
-        for sample in start_sample.saturating_add(1)..end_sample {
-            let value = self.raw_reader.read_sample(channel, sample)?;
-            toggle |= value != last;
-            last = value;
-        }
-        Ok(GroupSummary {
-            first,
-            toggle,
-            last,
-        })
-    }
-
-    fn group_summary(
-        &mut self,
-        channel: usize,
-        sample: u64,
-        group_samples: u64,
-    ) -> Result<GroupSummary> {
-        let sample = sample.min(self.header().total_samples.saturating_sub(1));
-        let block = self.block_for_sample(sample);
-        let local = sample - block * self.header().samples_per_block;
-
-        if group_samples >= self.header().samples_per_block {
-            let entry = self.storage.load_root_summary(channel, block as usize)?;
-            return Ok(GroupSummary {
-                first: entry.first,
-                toggle: entry.toggle,
-                last: entry.last,
-            });
-        }
-
-        if group_samples == SAMPLES_PER_L3_BIT {
-            let entry = self.storage.load_root_summary(channel, block as usize)?;
-            let idx = (local / SAMPLES_PER_L3_BIT).min(63) as usize;
-            return Ok(GroupSummary {
-                first: if idx == 0 {
-                    entry.first
-                } else {
-                    bit(entry.l3_last, idx - 1)
-                },
-                toggle: bit(entry.l3_toggle, idx),
-                last: bit(entry.l3_last, idx),
-            });
-        }
-
-        let leaf = self.storage.load_leaf(channel, block as usize)?;
-
-        let Some(levels) = leaf.levels.as_ref() else {
-            return Ok(GroupSummary {
-                first: leaf.first,
-                toggle: false,
-                last: leaf.first,
-            });
-        };
-
-        Ok(match group_samples {
-            SAMPLES_PER_L2_BIT => {
-                let group = (local / SAMPLES_PER_L2_BIT).min(4095) as usize;
-                GroupSummary {
-                    first: if group == 0 {
-                        leaf.first
-                    } else {
-                        bit(levels.l2_last[(group - 1) / 64], (group - 1) % 64)
-                    },
-                    toggle: bit(levels.l2_toggle[group / 64], group % 64),
-                    last: bit(levels.l2_last[group / 64], group % 64),
-                }
-            }
-            _ => {
-                let group = (local / SAMPLES_PER_L1_BIT).min(262_143) as usize;
-                GroupSummary {
-                    first: if group == 0 {
-                        leaf.first
-                    } else {
-                        bit(levels.l1_last[(group - 1) / 64], (group - 1) % 64)
-                    },
-                    toggle: bit(levels.l1_toggle[group / 64], group % 64),
-                    last: bit(levels.l1_last[group / 64], group % 64),
-                }
-            }
-        })
     }
 
     fn block_for_sample(&self, sample: u64) -> u64 {

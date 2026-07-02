@@ -376,4 +376,211 @@ mod tests {
         source.remove_index();
         Ok(())
     }
+
+    struct XorShift(u64);
+
+    impl XorShift {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+
+        fn below(&mut self, bound: u64) -> u64 {
+            self.next() % bound.max(1)
+        }
+    }
+
+    fn random_signal(rng: &mut XorShift, total_samples: u64, max_run_magnitude: u64) -> Vec<bool> {
+        let mut samples = Vec::with_capacity(total_samples as usize);
+        let mut value = rng.below(2) == 1;
+        while (samples.len() as u64) < total_samples {
+            // Log-uniform run lengths: dense bursts and long idle stretches.
+            let magnitude = rng.below(max_run_magnitude);
+            let run = 1 + rng.below(1 << magnitude);
+            for _ in 0..run.min(total_samples - samples.len() as u64) {
+                samples.push(value);
+            }
+            value = !value;
+        }
+        samples
+    }
+
+    fn blocks_from_samples(samples: &[bool], samples_per_block: u64) -> Vec<Vec<Vec<u8>>> {
+        single_channel_blocks_from_fn(samples.len() as u64, samples_per_block, |sample| {
+            samples[sample as usize]
+        })
+    }
+
+    fn has_transition_in(samples: &[bool], start: u64, end: u64) -> bool {
+        let start = start.max(1) as usize;
+        let end = (end as usize).min(samples.len());
+        (start..end).any(|index| samples[index] != samples[index - 1])
+    }
+
+    /// Validates an indexed waveform against ground truth:
+    /// - segments tile the window contiguously,
+    /// - `Level` segments must be truly constant at the claimed value,
+    /// - `Activity` segments must contain a real transition within one
+    ///   `sample_step` of slack on either side (index granularity smear).
+    fn check_waveform_against_samples(
+        samples: &[bool],
+        window: &crate::runtime::CaptureSampledWindow,
+        context: &str,
+    ) {
+        let channel = &window.channels[0];
+        let mut cursor = window.start_sample;
+        for segment in &channel.waveform {
+            match *segment {
+                CaptureWaveformSegment::Level {
+                    start_sample,
+                    end_sample,
+                    value,
+                } => {
+                    assert_eq!(start_sample, cursor, "gap before level segment ({context})");
+                    for sample in start_sample..end_sample {
+                        assert_eq!(
+                            samples[sample as usize], value,
+                            "level segment {start_sample}..{end_sample} claims {value} but \
+                             sample {sample} differs ({context})"
+                        );
+                    }
+                    cursor = end_sample;
+                }
+                CaptureWaveformSegment::Edge { sample, .. } => {
+                    assert_eq!(sample, cursor, "edge segment out of place ({context})");
+                }
+                CaptureWaveformSegment::Activity {
+                    start_sample,
+                    end_sample,
+                    ..
+                } => {
+                    assert_eq!(
+                        start_sample, cursor,
+                        "gap before activity segment ({context})"
+                    );
+                    let slack = window.sample_step;
+                    assert!(
+                        has_transition_in(
+                            samples,
+                            start_sample.saturating_sub(slack),
+                            end_sample.saturating_add(slack),
+                        ),
+                        "activity segment {start_sample}..{end_sample} has no nearby \
+                         transition ({context})"
+                    );
+                    cursor = end_sample;
+                }
+            }
+        }
+        assert_eq!(cursor, window.end_sample, "segments do not cover window ({context})");
+    }
+
+    fn run_randomized_rounds(
+        rng: &mut XorShift,
+        rounds: usize,
+        block_sizes: &[u64],
+        min_samples: u64,
+        max_extra_samples: u64,
+        max_run_magnitude: u64,
+        max_target_points: u64,
+    ) -> Result<()> {
+        for round in 0..rounds {
+            let samples_per_block = block_sizes[rng.below(block_sizes.len() as u64) as usize];
+            let total_samples = min_samples + rng.below(max_extra_samples);
+            let samples = random_signal(rng, total_samples, max_run_magnitude);
+            let blocks = blocks_from_samples(&samples, samples_per_block);
+            let source = MemoryCaptureDataSource::new(total_samples, samples_per_block, blocks);
+            let mut reader = IndexSampler::open_data_source(source.clone())?;
+
+            for case in 0..25 {
+                let start = rng.below(total_samples - 1);
+                let len = 1 + rng.below(total_samples - start);
+                let end = start + len;
+                let target_points = 1 + rng.below(max_target_points) as usize;
+                let window = reader.sampled_window(&[0], start, end, target_points)?;
+                let context = format!(
+                    "round {round} case {case}: spb={samples_per_block} total={total_samples} \
+                     window={start}..{end} target={target_points} step={}",
+                    window.sample_step
+                );
+
+                if window.sample_step == 1 {
+                    // Exact path: transitions must match ground truth exactly.
+                    assert_eq!(window.channels[0].initial, samples[start as usize], "{context}");
+                    let mut value = samples[start as usize];
+                    let mut expected = Vec::new();
+                    for sample in (start + 1)..end {
+                        if samples[sample as usize] != value {
+                            value = samples[sample as usize];
+                            expected.push((sample, value));
+                        }
+                    }
+                    let actual: Vec<(u64, bool)> = window.channels[0]
+                        .transitions
+                        .iter()
+                        .map(|transition| (transition.sample, transition.value))
+                        .collect();
+                    assert_eq!(actual, expected, "{context}");
+                } else {
+                    check_waveform_against_samples(&samples, &window, &context);
+                }
+            }
+
+            source.remove_index();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn randomized_indexed_windows_match_ground_truth() -> Result<()> {
+        let mut rng = XorShift(0x1234_5678_9abc_def0);
+        run_randomized_rounds(&mut rng, 40, &[4_096, 16_384, 65_536], 60_000, 400_000, 13, 200)
+    }
+
+    /// Large blocks (several L3 groups each) with runs long enough to produce
+    /// fully constant blocks — exercises the L3 root-directory path, where
+    /// constant blocks have no level bitmaps.
+    #[test]
+    fn randomized_l3_windows_match_ground_truth() -> Result<()> {
+        let mut rng = XorShift(0xfeed_face_cafe_beef);
+        run_randomized_rounds(
+            &mut rng,
+            8,
+            &[1 << 20, 1 << 21],
+            4_000_000,
+            6_000_000,
+            23,
+            24,
+        )
+    }
+
+    #[test]
+    fn block_level_partial_range_does_not_leak_earlier_block_activity() -> Result<()> {
+        let samples_per_block = 16_384_u64;
+        let total_samples = samples_per_block * 2;
+        let visible_start = samples_per_block / 2;
+        let visible_end = visible_start + samples_per_block;
+        let blocks =
+            single_channel_blocks_from_fn(total_samples, samples_per_block, |sample| sample >= 128);
+        let source = MemoryCaptureDataSource::new(total_samples, samples_per_block, blocks);
+        let mut reader = IndexSampler::open_data_source(source.clone())?;
+        let window = reader.sampled_window(&[0], visible_start, visible_end, 1)?;
+
+        assert_eq!(window.sample_step, samples_per_block);
+        assert_eq!(
+            window.channels[0].waveform,
+            vec![CaptureWaveformSegment::Level {
+                start_sample: visible_start,
+                end_sample: visible_end,
+                value: true,
+            }]
+        );
+
+        source.remove_index();
+        Ok(())
+    }
 }

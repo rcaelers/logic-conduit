@@ -1,28 +1,29 @@
 use dsl::{
-    CaptureDataSource, CaptureIndexProgress, CaptureMetadata, CaptureSampledWindow, CaptureSource,
+    CaptureDataSource, CaptureIndexProgress, CaptureMetadata, CaptureSampledWindow,
     CaptureWaveformSegment, DslCaptureReader, DslFileCaptureDataSource, IndexSampler,
-    exact_window_sample_limit,
 };
 use egui::{Align2, Color32, FontId, Painter, PointerButton, Pos2, Rect, Sense, Stroke, Ui, vec2};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 const SCROLL_INPUT_EPSILON: f32 = 0.5;
-const MAX_EXACT_TRANSITIONS_PER_PIXEL: f32 = 6.0;
 
 pub struct LogicAnalyzerViewer {
     channels: Vec<LogicChannel>,
+    /// Synchronous sampler over the waveform index; present once the index
+    /// build (which runs on a worker thread) has completed. Sampling the
+    /// visible window happens on the UI thread every frame the view changes,
+    /// so what is drawn is always the current view at the current zoom —
+    /// there is no asynchronous refinement that could disagree with it.
+    sampler: Option<IndexSampler<DslCaptureReader>>,
+    /// (start_sample, end_sample, target_points) of the sampled `channels`.
+    sampled_key: Option<(u64, u64, usize)>,
     visible_start_us: f64,
     visible_span_us: f64,
     capture_path: Option<PathBuf>,
     capture_info: Option<CaptureInfo>,
-    worker_requests: Option<Sender<WorkerRequest>>,
     worker_responses: Option<Receiver<WorkerResponse>>,
-    dsl_data_source: Option<DslFileCaptureDataSource>,
-    interactive_sampler: Option<IndexSampler<DslCaptureReader>>,
     status: String,
-    last_window: Option<WindowKey>,
-    pending_window: Option<WindowKey>,
     index_progress: Option<IndexBuildProgress>,
     fit_to_capture: bool,
 }
@@ -54,7 +55,7 @@ struct WaveformSegment {
 enum WaveformSegmentKind {
     Level { value: bool },
     Edge { before: bool, after: bool },
-    Activity,
+    Activity { first: bool, last: bool },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -80,16 +81,6 @@ impl PulseMeasurement {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct WindowKey {
-    path: PathBuf,
-    start_sample: u64,
-    end_sample: u64,
-    target_points: usize,
-    channel_count: usize,
-    exact: bool,
-}
-
 #[derive(Debug, Clone)]
 struct CaptureInfo {
     path: PathBuf,
@@ -113,20 +104,11 @@ impl IndexBuildProgress {
     }
 }
 
-enum WorkerRequest {
-    LoadWindow(WindowKey),
-}
-
 enum WorkerResponse {
     Opened {
         path: PathBuf,
         header: CaptureMetadata,
         duration_us: f64,
-    },
-    Window {
-        key: WindowKey,
-        samplerate_hz: f64,
-        window: CaptureSampledWindow,
     },
     Status {
         path: PathBuf,
@@ -182,17 +164,14 @@ impl LogicAnalyzerViewer {
 
         Self {
             channels,
+            sampler: None,
+            sampled_key: None,
             visible_start_us: 0.0,
             visible_span_us: 900.0,
             capture_path: None,
             capture_info: None,
-            worker_requests: None,
             worker_responses: None,
-            dsl_data_source: None,
-            interactive_sampler: None,
             status: "Demo data".to_string(),
-            last_window: None,
-            pending_window: None,
             index_progress: None,
             fit_to_capture: false,
         }
@@ -215,11 +194,10 @@ impl LogicAnalyzerViewer {
                 self.capture_path = Some(path.clone());
                 self.capture_info = None;
                 self.channels.clear();
-                self.last_window = None;
-                self.pending_window = None;
+                self.sampler = None;
+                self.sampled_key = None;
                 self.index_progress = None;
-                self.dsl_data_source = None;
-                self.interactive_sampler = None;
+                self.worker_responses = None;
                 self.status = format!("Could not inspect capture: {err}");
                 return;
             }
@@ -228,18 +206,14 @@ impl LogicAnalyzerViewer {
         self.capture_path = Some(path.clone());
         self.capture_info = None;
         self.channels.clear();
-        self.last_window = None;
-        self.pending_window = None;
+        self.sampler = None;
+        self.sampled_key = None;
         self.index_progress = None;
         self.fit_to_capture = true;
-        self.dsl_data_source = Some(data_source.clone());
-        self.interactive_sampler = None;
         self.status = format!("Opening {}", data_source.display_name());
 
-        let (request_tx, request_rx) = mpsc::channel();
         let (response_tx, response_rx) = mpsc::channel();
-        spawn_capture_worker(path, data_source, request_rx, response_tx);
-        self.worker_requests = Some(request_tx);
+        spawn_capture_worker(path, data_source, response_tx);
         self.worker_responses = Some(response_rx);
     }
 
@@ -260,17 +234,55 @@ impl LogicAnalyzerViewer {
             response.hovered(),
             response.dragged_by(PointerButton::Primary),
         );
-        self.request_visible_window(rect);
+        self.sample_visible_window(rect);
         self.draw(&painter, rect, response.hover_pos());
-        if self.pending_window.is_some()
-            || (self.capture_path.is_some() && self.capture_info.is_none())
-        {
+        if self.capture_path.is_some() && self.capture_info.is_none() {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(16));
-        } else if self.index_progress.is_some() {
+        } else if self.index_progress.is_some()
+            || (self.capture_info.is_some() && self.sampler.is_none())
+        {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
+    }
+
+    /// Samples the visible window from the index synchronously, so the drawn
+    /// waveform always matches the current view exactly. Skipped when neither
+    /// the view nor the viewport size changed since the last sampling.
+    fn sample_visible_window(&mut self, rect: Rect) {
+        if rect.width() <= 1.0 {
+            return;
+        }
+        let Some(capture) = self.capture_info.as_ref() else {
+            return;
+        };
+        let samplerate_hz = capture.header.samplerate_hz;
+        let channel_count = capture.header.total_probes.min(16);
+        let (visible_start, visible_end) =
+            visible_sample_range(capture, self.visible_start_us, self.visible_span_us);
+        let left_width = 145.0_f32.min(rect.width() * 0.35);
+        let target_points = (rect.width() - left_width).max(1.0).round() as usize;
+
+        let key = (visible_start, visible_end, target_points);
+        if self.sampled_key == Some(key) {
+            return;
+        }
+        let Some(sampler) = self.sampler.as_mut() else {
+            return;
+        };
+
+        let channels: Vec<usize> = (0..channel_count).collect();
+        match sampler.sampled_window(&channels, visible_start, visible_end, target_points) {
+            Ok(window) => {
+                self.channels = channels_from_window(&window, samplerate_hz);
+            }
+            Err(err) => {
+                self.status = format!("Could not read capture window: {err}");
+            }
+        }
+        // Recorded even on failure so a persistent error does not retry every frame.
+        self.sampled_key = Some(key);
     }
 
     fn handle_input(&mut self, ui: &Ui, rect: Rect, hovered: bool, dragging: bool) {
@@ -376,54 +388,9 @@ impl LogicAnalyzerViewer {
                         self.status = capture_status(capture);
                     }
                     self.channels = placeholder_channels(&header);
-                    self.last_window = None;
-                    self.pending_window = None;
+                    self.sampler = None;
+                    self.sampled_key = None;
                     self.index_progress = None;
-                }
-                WorkerResponse::Window {
-                    key,
-                    samplerate_hz,
-                    window,
-                } => {
-                    if self.interactive_sampler.is_some() {
-                        if self.pending_window.as_ref() == Some(&key) {
-                            self.pending_window = None;
-                        }
-                        continue;
-                    }
-                    if self.capture_path.as_deref() != Some(key.path.as_path()) {
-                        continue;
-                    }
-                    let Some(capture) = self.capture_info.as_ref() else {
-                        continue;
-                    };
-                    let (visible_start, visible_end) =
-                        visible_sample_range(capture, self.visible_start_us, self.visible_span_us);
-                    let visible_exact = visible_end.saturating_sub(visible_start)
-                        <= exact_window_sample_limit(key.target_points);
-                    if key.exact != visible_exact {
-                        if self.pending_window.as_ref() == Some(&key) {
-                            self.pending_window = None;
-                        }
-                        continue;
-                    }
-                    if key.start_sample > visible_start || key.end_sample < visible_end {
-                        if self.pending_window.as_ref() == Some(&key) {
-                            self.pending_window = None;
-                        }
-                        continue;
-                    }
-                    if key.exact && window.sample_step != 1 {
-                        if self.pending_window.as_ref() == Some(&key) {
-                            self.pending_window = None;
-                        }
-                        continue;
-                    }
-                    self.channels = channels_from_window(&window, samplerate_hz);
-                    self.last_window = Some(key.clone());
-                    if self.pending_window.as_ref() == Some(&key) {
-                        self.pending_window = None;
-                    }
                 }
                 WorkerResponse::Status { path, message } => {
                     if self.capture_path.as_deref() == Some(path.as_path()) {
@@ -443,135 +410,42 @@ impl LogicAnalyzerViewer {
                     }
                 }
                 WorkerResponse::IndexReady { path } => {
-                    if self.capture_path.as_deref() == Some(path.as_path()) {
-                        self.index_progress = None;
-                        if self.interactive_sampler.is_none()
-                            && let Some(data_source) = self.dsl_data_source.clone()
-                        {
-                            match IndexSampler::open_data_source(data_source)
-                                .map(|sampler| sampler.with_max_cached_leaves(64))
-                            {
-                                Ok(sampler) => {
-                                    self.interactive_sampler = Some(sampler);
-                                    self.worker_requests = None;
-                                    self.last_window = None;
-                                    self.pending_window = None;
-                                }
-                                Err(err) => {
-                                    self.status =
-                                        format!("Could not open interactive index reader: {err}");
-                                    continue;
-                                }
+                    if self.capture_path.as_deref() != Some(path.as_path()) {
+                        continue;
+                    }
+                    self.index_progress = None;
+                    // The worker validated/built the index; opening it here is
+                    // cheap (header + directory read) and gives the UI thread
+                    // its own sampler for synchronous per-frame sampling.
+                    match DslFileCaptureDataSource::open(&path)
+                        .and_then(IndexSampler::open_data_source)
+                    {
+                        Ok(sampler) => {
+                            // Sized so the widest L2 viewport (~17 blocks ×
+                            // 16 channels) fits without evictions (~34 MB).
+                            self.sampler = Some(sampler.with_max_cached_leaves(512));
+                            self.sampled_key = None;
+                            if self.fit_to_capture {
+                                self.fit_capture();
                             }
+                            self.status = self
+                                .capture_info
+                                .as_ref()
+                                .map(capture_status)
+                                .unwrap_or_else(|| "Capture ready".to_string());
                         }
-                        if self.fit_to_capture {
-                            self.fit_capture();
+                        Err(err) => {
+                            self.status = format!("Could not open capture: {err}");
                         }
-                        self.status = self
-                            .capture_info
-                            .as_ref()
-                            .map(capture_status)
-                            .unwrap_or_else(|| "Capture ready".to_string());
                     }
                 }
                 WorkerResponse::Error { path, message } => {
                     if self.capture_path.as_deref() == Some(path.as_path()) {
                         self.status = message;
-                        self.pending_window = None;
                     }
                 }
             }
         }
-    }
-
-    fn request_visible_window(&mut self, rect: Rect) {
-        let Some(capture) = self.capture_info.as_ref() else {
-            return;
-        };
-        if rect.width() <= 1.0 {
-            return;
-        }
-
-        let left_width = 145.0_f32.min(rect.width() * 0.35);
-        let target_points = (rect.width() - left_width).max(1.0).round() as usize;
-        let channel_count = capture.header.total_probes.min(16);
-        let (visible_start, visible_end) =
-            visible_sample_range(capture, self.visible_start_us, self.visible_span_us);
-        let visible_samples = visible_end - visible_start;
-        let exact = visible_samples <= exact_window_sample_limit(target_points);
-        let path = capture.path.clone();
-
-        if self.loaded_window_covers(
-            &path,
-            visible_start,
-            visible_end,
-            target_points,
-            channel_count,
-            exact,
-        ) {
-            self.pending_window = None;
-            return;
-        }
-
-        let key = WindowKey {
-            path: path.clone(),
-            start_sample: visible_start,
-            end_sample: visible_end,
-            target_points,
-            channel_count,
-            exact,
-        };
-
-        if let Some(sampler) = self.interactive_sampler.as_mut() {
-            let channels: Vec<usize> = (0..channel_count).collect();
-            match sampler.sampled_window(&channels, visible_start, visible_end, target_points) {
-                Ok(window) => {
-                    let samplerate_hz = sampler.header().samplerate_hz;
-                    self.channels = channels_from_window(&window, samplerate_hz);
-                    self.last_window = Some(key);
-                    self.pending_window = None;
-                    self.status = self
-                        .capture_info
-                        .as_ref()
-                        .map(capture_status)
-                        .unwrap_or_else(|| "Capture ready".to_string());
-                }
-                Err(err) => {
-                    self.status = format!("Could not read capture window: {err}");
-                    self.pending_window = None;
-                }
-            }
-            return;
-        }
-
-        if self.pending_window.as_ref() == Some(&key) {
-            return;
-        }
-
-        if let Some(sender) = &self.worker_requests
-            && sender.send(WorkerRequest::LoadWindow(key.clone())).is_ok()
-        {
-            self.pending_window = Some(key);
-        }
-    }
-
-    fn loaded_window_covers(
-        &self,
-        path: &Path,
-        visible_start: u64,
-        visible_end: u64,
-        target_points: usize,
-        channel_count: usize,
-        exact: bool,
-    ) -> bool {
-        self.last_window.as_ref().is_some_and(|window| {
-            window.path.as_path() == path
-                && window.start_sample <= visible_start
-                && window.end_sample >= visible_end
-                && (exact || window.target_points >= target_points)
-                && window.channel_count == channel_count
-                && window.exact == exact
-        })
     }
 
     fn draw(&self, painter: &Painter, rect: Rect, pointer: Option<Pos2>) {
@@ -832,21 +706,6 @@ impl LogicAnalyzerViewer {
         }
 
         let (visible_transitions, mut value) = channel.visible_transitions(start, end);
-        let max_exact_transitions =
-            (wave_rect.width().max(1.0) * MAX_EXACT_TRANSITIONS_PER_PIXEL) as usize;
-        if visible_transitions.len() > max_exact_transitions {
-            self.draw_dense_transition_waveform(
-                painter,
-                wave_rect,
-                high_y,
-                low_y,
-                visible_transitions,
-                value,
-                muted,
-            );
-            return;
-        }
-
         let mut prev_x = wave_rect.left();
         let mut y = if value { high_y } else { low_y };
 
@@ -866,57 +725,6 @@ impl LogicAnalyzerViewer {
             [Pos2::new(prev_x, y), Pos2::new(wave_rect.right(), y)],
             stroke,
         );
-    }
-
-    fn draw_dense_transition_waveform(
-        &self,
-        painter: &Painter,
-        wave_rect: Rect,
-        high_y: f32,
-        low_y: f32,
-        transitions: &[Transition],
-        initial_value: bool,
-        muted: Color32,
-    ) {
-        let start = self.visible_start_us;
-        let end = start + self.visible_span_us;
-        let pixel_count = wave_rect.width().ceil().max(1.0) as usize;
-        let flat_stroke = Stroke::new(1.15, muted);
-
-        let mut transition_index = 0;
-        let mut value = initial_value;
-        for pixel in 0..pixel_count {
-            let x0 = wave_rect.left() + pixel as f32;
-            let x1 = (x0 + 1.0).min(wave_rect.right());
-            let t0 = start + self.visible_span_us * pixel as f64 / pixel_count as f64;
-            let t1 = if pixel + 1 == pixel_count {
-                end
-            } else {
-                start + self.visible_span_us * (pixel + 1) as f64 / pixel_count as f64
-            };
-
-            while transition_index < transitions.len() && transitions[transition_index].time_us < t0
-            {
-                value = transitions[transition_index].value;
-                transition_index += 1;
-            }
-
-            let mut active = false;
-            while transition_index < transitions.len()
-                && transitions[transition_index].time_us <= t1
-            {
-                active = true;
-                value = transitions[transition_index].value;
-                transition_index += 1;
-            }
-
-            if active {
-                Self::draw_activity_band(painter, wave_rect, x0, x1, high_y, low_y, muted);
-            } else {
-                let y = if value { high_y } else { low_y };
-                Self::draw_clipped_horizontal(painter, wave_rect, x0, x1, y, flat_stroke);
-            }
-        }
     }
 
     fn draw_segment_waveform(
@@ -951,41 +759,71 @@ impl LogicAnalyzerViewer {
                     let y1 = if after { high_y } else { low_y };
                     painter.line_segment([Pos2::new(x0, y0), Pos2::new(x0, y1)], activity_stroke);
                 }
-                WaveformSegmentKind::Activity => {
-                    Self::draw_activity_band(painter, wave_rect, x0, x1, high_y, low_y, muted);
+                WaveformSegmentKind::Activity { first, last } => {
+                    Self::draw_activity_summary(
+                        painter,
+                        wave_rect,
+                        x0,
+                        x1,
+                        high_y,
+                        low_y,
+                        first,
+                        last,
+                        flat_stroke,
+                        activity_stroke,
+                    );
                 }
             }
         }
     }
 
-    fn draw_activity_band(
+    fn draw_activity_summary(
         painter: &Painter,
         clip: Rect,
         x0: f32,
         x1: f32,
         high_y: f32,
         low_y: f32,
-        color: Color32,
+        first: bool,
+        last: bool,
+        flat_stroke: Stroke,
+        activity_stroke: Stroke,
     ) {
-        let center = ((x0 + x1) * 0.5).clamp(clip.left(), clip.right());
-        let half_width = ((x1 - x0).abs().max(1.0)) * 0.5;
-        let left = (center - half_width).max(clip.left());
-        let right = (center + half_width).min(clip.right());
+        let left = x0.min(x1).max(clip.left());
+        let right = x0.max(x1).min(clip.right());
         if right <= left {
             return;
         }
 
-        let fill = Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 118);
-        let edge = Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 170);
-        let rect = Rect::from_min_max(Pos2::new(left, high_y), Pos2::new(right, low_y));
-        painter.rect_filled(rect, 0.0, fill);
+        // An activity segment wider than a couple of pixels (a coarse window
+        // stretched by zooming in) only promises "at least one toggle in this
+        // range" — draw it as a solid band rather than inventing edge
+        // positions that a refresh would then contradict.
+        if right - left > 3.0 {
+            painter.rect_filled(
+                Rect::from_min_max(Pos2::new(left, high_y), Pos2::new(right, low_y)),
+                0.0,
+                flat_stroke.color,
+            );
+            return;
+        }
+
+        let y_first = if first { high_y } else { low_y };
+        let y_last = if last { high_y } else { low_y };
+        let marker_x = ((left + right) * 0.5).clamp(clip.left(), clip.right());
+
+        if first == last {
+            Self::draw_clipped_horizontal(painter, clip, left, right, y_last, flat_stroke);
+        } else if right - left >= 4.0 {
+            Self::draw_clipped_horizontal(painter, clip, left, marker_x, y_first, flat_stroke);
+            Self::draw_clipped_horizontal(painter, clip, marker_x, right, y_last, flat_stroke);
+        } else {
+            Self::draw_clipped_horizontal(painter, clip, left, right, y_last, flat_stroke);
+        }
+
         painter.line_segment(
-            [Pos2::new(left, high_y), Pos2::new(right, high_y)],
-            Stroke::new(0.8, edge),
-        );
-        painter.line_segment(
-            [Pos2::new(left, low_y), Pos2::new(right, low_y)],
-            Stroke::new(0.8, edge),
+            [Pos2::new(marker_x, high_y), Pos2::new(marker_x, low_y)],
+            activity_stroke,
         );
     }
 
@@ -1156,62 +994,28 @@ impl LogicAnalyzerViewer {
     }
 }
 
+/// Opens the capture and builds (or validates) the waveform index on a
+/// background thread, reporting progress. Window sampling itself happens
+/// synchronously on the UI thread once the index is ready.
 fn spawn_capture_worker(
     identity: PathBuf,
     data_source: impl CaptureDataSource,
-    requests: Receiver<WorkerRequest>,
     responses: Sender<WorkerResponse>,
 ) {
     std::thread::Builder::new()
-        .name("dsl_capture_viewer".to_string())
+        .name("dsl_capture_indexer".to_string())
         .spawn(move || {
             let header = data_source.metadata().clone();
-            let samplerate_hz = header.samplerate_hz;
             let duration_us = header.duration_us();
             if responses
                 .send(WorkerResponse::Opened {
                     path: identity.clone(),
-                    header: header.clone(),
+                    header,
                     duration_us,
                 })
                 .is_err()
             {
                 return;
-            }
-
-            match data_source.open_reader() {
-                Ok(mut source) => {
-                    let channel_count = header.total_probes.min(16);
-                    let channels: Vec<usize> = (0..channel_count).collect();
-                    let preview_end = header.total_samples.min(100_000).max(1);
-                    if let Ok(window) = source.sampled_window(&channels, 0, preview_end, 1_000) {
-                        let key = WindowKey {
-                            path: identity.clone(),
-                            start_sample: 0,
-                            end_sample: preview_end,
-                            target_points: 1_000,
-                            channel_count,
-                            exact: false,
-                        };
-                        if responses
-                            .send(WorkerResponse::Window {
-                                key,
-                                samplerate_hz,
-                                window,
-                            })
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                }
-                Err(err) => {
-                    let _ = responses.send(WorkerResponse::Error {
-                        path: identity,
-                        message: format!("Could not open capture: {err}"),
-                    });
-                    return;
-                }
             }
 
             if responses
@@ -1230,91 +1034,36 @@ fn spawn_capture_worker(
                 .checked_sub(std::time::Duration::from_millis(100))
                 .unwrap_or_else(std::time::Instant::now);
             let mut last_progress_completed = 0_usize;
-            let mut reader =
-                match IndexSampler::open_data_source_with_progress(data_source, |progress| {
-                    let now = std::time::Instant::now();
-                    let is_first = progress.completed_roots == 0;
-                    let is_done = progress.completed_roots >= progress.total_roots;
-                    let enough_time = now.duration_since(last_progress_sent)
-                        >= std::time::Duration::from_millis(100);
-                    let enough_work = progress
-                        .completed_roots
-                        .saturating_sub(last_progress_completed)
-                        >= 64;
-                    if is_first || is_done || enough_time || enough_work {
-                        last_progress_sent = now;
-                        last_progress_completed = progress.completed_roots;
-                        let _ = progress_responses.send(WorkerResponse::IndexProgress {
-                            path: progress_path.clone(),
-                            progress,
-                        });
-                    }
-                })
-                .map(|reader| reader.with_max_cached_leaves(8))
-                {
-                    Ok(reader) => reader,
-                    Err(err) => {
-                        let _ = responses.send(WorkerResponse::Error {
-                            path: identity,
-                            message: format!("Could not open capture: {err}"),
-                        });
-                        return;
-                    }
-                };
-
-            if responses
-                .send(WorkerResponse::IndexReady {
-                    path: identity.clone(),
-                })
-                .is_err()
-            {
-                return;
-            }
-
-            while let Ok(mut request) = requests.recv() {
-                while let Ok(newer_request) = requests.try_recv() {
-                    request = newer_request;
+            let result = IndexSampler::open_data_source_with_progress(data_source, |progress| {
+                let now = std::time::Instant::now();
+                let is_first = progress.completed_roots == 0;
+                let is_done = progress.completed_roots >= progress.total_roots;
+                let enough_time = now.duration_since(last_progress_sent)
+                    >= std::time::Duration::from_millis(100);
+                let enough_work = progress
+                    .completed_roots
+                    .saturating_sub(last_progress_completed)
+                    >= 64;
+                if is_first || is_done || enough_time || enough_work {
+                    last_progress_sent = now;
+                    last_progress_completed = progress.completed_roots;
+                    let _ = progress_responses.send(WorkerResponse::IndexProgress {
+                        path: progress_path.clone(),
+                        progress,
+                    });
                 }
+            });
 
-                match request {
-                    WorkerRequest::LoadWindow(key) => {
-                        let channels: Vec<usize> = (0..key.channel_count).collect();
-                        let samplerate_hz = reader.header().samplerate_hz;
-                        match reader.sampled_window(
-                            &channels,
-                            key.start_sample,
-                            key.end_sample,
-                            key.target_points,
-                        ) {
-                            Ok(window) => {
-                                if responses
-                                    .send(WorkerResponse::Window {
-                                        key,
-                                        samplerate_hz,
-                                        window,
-                                    })
-                                    .is_err()
-                                {
-                                    return;
-                                }
-                            }
-                            Err(err) => {
-                                if responses
-                                    .send(WorkerResponse::Error {
-                                        path: identity.clone(),
-                                        message: format!("Could not read capture window: {err}"),
-                                    })
-                                    .is_err()
-                                {
-                                    return;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            let response = match result {
+                Ok(_) => WorkerResponse::IndexReady { path: identity },
+                Err(err) => WorkerResponse::Error {
+                    path: identity,
+                    message: format!("Could not open capture: {err}"),
+                },
+            };
+            let _ = responses.send(response);
         })
-        .expect("capture viewer worker thread should start");
+        .expect("capture indexer thread should start");
 }
 
 fn capture_status(capture: &CaptureInfo) -> String {
@@ -1452,11 +1201,12 @@ fn channels_from_window(window: &CaptureSampledWindow, samplerate_hz: f64) -> Ve
                     CaptureWaveformSegment::Activity {
                         start_sample,
                         end_sample,
-                        ..
+                        first,
+                        last,
                     } => WaveformSegment {
                         start_us: sample_to_us(start_sample, samplerate_hz),
                         end_us: sample_to_us(end_sample, samplerate_hz),
-                        kind: WaveformSegmentKind::Activity,
+                        kind: WaveformSegmentKind::Activity { first, last },
                     },
                 })
                 .collect(),
