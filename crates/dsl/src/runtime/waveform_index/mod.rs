@@ -364,16 +364,11 @@ mod tests {
                     end_sample: 2_218_524,
                     value: false,
                 },
+                // Two adjacent activity points merged into one segment.
                 CaptureWaveformSegment::Activity {
                     start_sample: 2_218_524,
-                    end_sample: 2_223_024,
-                    first: false,
-                    last: true,
-                },
-                CaptureWaveformSegment::Activity {
-                    start_sample: 2_223_024,
                     end_sample: 2_227_524,
-                    first: true,
+                    first: false,
                     last: true,
                 },
                 CaptureWaveformSegment::Level {
@@ -601,16 +596,12 @@ mod tests {
                     end_sample: 4_096,
                     value: false,
                 },
+                // Both boundary-flip blocks merge into one activity run that
+                // enters and leaves low.
                 CaptureWaveformSegment::Activity {
                     start_sample: 4_096,
-                    end_sample: 8_192,
-                    first: false,
-                    last: true,
-                },
-                CaptureWaveformSegment::Activity {
-                    start_sample: 8_192,
                     end_sample: 12_288,
-                    first: true,
+                    first: false,
                     last: false,
                 },
             ]

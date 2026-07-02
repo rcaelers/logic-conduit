@@ -475,12 +475,13 @@ where
         }
 
         if summary.toggle {
-            waveform.push(CaptureWaveformSegment::Activity {
+            push_activity(
+                waveform,
                 start_sample,
                 end_sample,
-                first: *previous_value,
-                last: summary.last,
-            });
+                *previous_value,
+                summary.last,
+            );
             *previous_value = summary.last;
             return;
         }
@@ -531,6 +532,38 @@ fn push_level(
         start_sample,
         end_sample,
         value,
+    });
+}
+
+/// Appends an activity range, merging it into a directly adjacent preceding
+/// activity segment. Busy regions produce long runs of per-point activity;
+/// merging collapses them into one segment per run (`first` stays the value
+/// entering the run, `last` tracks the value leaving it), which shrinks the
+/// window payload and the per-frame draw work substantially.
+fn push_activity(
+    waveform: &mut Vec<CaptureWaveformSegment>,
+    start_sample: u64,
+    end_sample: u64,
+    first: bool,
+    last: bool,
+) {
+    if let Some(CaptureWaveformSegment::Activity {
+        end_sample: previous_end,
+        last: previous_last,
+        ..
+    }) = waveform.last_mut()
+        && *previous_end == start_sample
+    {
+        *previous_end = end_sample;
+        *previous_last = last;
+        return;
+    }
+
+    waveform.push(CaptureWaveformSegment::Activity {
+        start_sample,
+        end_sample,
+        first,
+        last,
     });
 }
 
