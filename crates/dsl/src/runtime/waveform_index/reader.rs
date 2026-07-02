@@ -73,9 +73,12 @@ where
                 .build(progress)?;
         }
 
-        let raw_cache =
-            RawBlockCache::open(&index_path.with_extension("raw"), &header, fingerprint.revision)
-                .ok();
+        let raw_cache = RawBlockCache::open(
+            &index_path.with_extension("raw"),
+            &header,
+            fingerprint.revision,
+        )
+        .ok();
         let storage = IndexReader::open(index_path, header, fingerprint.revision)?;
         let display_name = data_source.display_name();
         let raw_reader = data_source.open_reader()?;
@@ -197,19 +200,45 @@ where
             let block_end = block_start
                 .saturating_add(samples_per_block)
                 .min(end_sample);
-            let sample_start = start_sample.max(block_start);
+            // Transitions are reported from the second window sample onwards.
+            let scan_start = block_start.max(start_sample + 1);
+            if scan_start >= block_end {
+                continue;
+            }
 
-            for sample in sample_start..block_end {
-                if sample == start_sample {
-                    continue;
-                }
+            let lo_local = (scan_start - block_start) as usize;
+            let hi_local = (block_end - block_start) as usize;
+            let first_word = lo_local / 64;
+            let last_word = (hi_local - 1) / 64;
+            for word_index in first_word..=last_word {
+                let word = load_le_word(&data, word_index);
+                let lo = if word_index == first_word {
+                    lo_local % 64
+                } else {
+                    0
+                };
+                let hi = if word_index == last_word {
+                    hi_local - word_index * 64
+                } else {
+                    64
+                };
 
-                let local_sample = (sample - block_start) as usize;
-                let value = packed_bit(&data, local_sample);
-                if value != current {
-                    current = value;
-                    transitions.push(CaptureTransition { sample, value });
+                // Bit i marks a change between sample i and sample i-1; the
+                // shifted-in bit 0 compares against `current`, the value of
+                // the last sample processed before this word.
+                let mut toggles = word ^ ((word << 1) | current as u64);
+                toggles &= range_mask(lo, hi);
+
+                while toggles != 0 {
+                    let bit_index = toggles.trailing_zeros() as usize;
+                    toggles &= toggles - 1;
+                    let value = (word >> bit_index) & 1 != 0;
+                    transitions.push(CaptureTransition {
+                        sample: block_start + (word_index * 64 + bit_index) as u64,
+                        value,
+                    });
                 }
+                current = (word >> (hi - 1)) & 1 != 0;
             }
         }
 
@@ -533,6 +562,30 @@ fn push_level(
         end_sample,
         value,
     });
+}
+
+/// Loads the 64-sample word at `word_index` from LSB-first packed bytes,
+/// zero-padding past the end of `data` (callers mask out padded bits).
+fn load_le_word(data: &[u8], word_index: usize) -> u64 {
+    let byte_start = word_index * 8;
+    if let Some(chunk) = data.get(byte_start..byte_start + 8) {
+        u64::from_le_bytes(chunk.try_into().expect("chunk is 8 bytes"))
+    } else {
+        let mut bytes = [0_u8; 8];
+        let available = data.len().saturating_sub(byte_start).min(8);
+        bytes[..available].copy_from_slice(&data[byte_start..byte_start + available]);
+        u64::from_le_bytes(bytes)
+    }
+}
+
+/// Mask selecting bits `lo..hi` (hi exclusive, hi ≤ 64).
+fn range_mask(lo: usize, hi: usize) -> u64 {
+    let upper = if hi == 64 {
+        u64::MAX
+    } else {
+        (1_u64 << hi) - 1
+    };
+    upper & !((1_u64 << lo) - 1)
 }
 
 /// Appends an activity range, merging it into a directly adjacent preceding
