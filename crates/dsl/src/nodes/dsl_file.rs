@@ -10,7 +10,7 @@
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkResult};
 use crate::runtime::sample::{Sample, SampleBlock};
 use crate::runtime::{
-    BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureSource, DslHeader,
+    BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureSource, DslHeader,
     DslSampledWindow, Sender,
 };
 use crate::runtime::{CaptureIndexProgress, IndexSampler};
@@ -163,8 +163,8 @@ impl CaptureSource for DslCaptureReader {
 }
 
 impl BlockCaptureSource for DslCaptureReader {
-    fn read_packed_block(&mut self, channel: usize, block: u64) -> Result<Arc<[u8]>> {
-        self.read_block_cached((channel, block))
+    fn read_packed_block(&mut self, channel: usize, block: u64) -> Result<BlockData> {
+        self.read_block_cached((channel, block)).map(BlockData::from)
     }
 }
 

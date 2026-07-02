@@ -414,7 +414,7 @@ mod tests {
             &mut self,
             _channel: usize,
             _block: u64,
-        ) -> Result<std::sync::Arc<[u8]>> {
+        ) -> Result<crate::runtime::BlockData> {
             unreachable!("builder helper tests do not read blocks")
         }
     }

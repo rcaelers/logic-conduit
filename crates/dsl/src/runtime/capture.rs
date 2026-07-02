@@ -152,8 +152,37 @@ pub trait CaptureSource {
     }
 }
 
+/// Packed sample bytes for one block: either owned (e.g. freshly
+/// decompressed from an archive) or a zero-copy view into a memory-mapped
+/// cache file, where only the pages actually touched are faulted in.
+pub enum BlockData {
+    Owned(Arc<[u8]>),
+    Mapped {
+        map: Arc<memmap2::Mmap>,
+        offset: usize,
+        len: usize,
+    },
+}
+
+impl std::ops::Deref for BlockData {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        match self {
+            BlockData::Owned(data) => data,
+            BlockData::Mapped { map, offset, len } => &map[*offset..*offset + *len],
+        }
+    }
+}
+
+impl From<Arc<[u8]>> for BlockData {
+    fn from(data: Arc<[u8]>) -> Self {
+        BlockData::Owned(data)
+    }
+}
+
 pub trait BlockCaptureSource: CaptureSource {
-    fn read_packed_block(&mut self, channel: usize, block: u64) -> Result<Arc<[u8]>>;
+    fn read_packed_block(&mut self, channel: usize, block: u64) -> Result<BlockData>;
 }
 
 /// Reloadable provider for capture data.

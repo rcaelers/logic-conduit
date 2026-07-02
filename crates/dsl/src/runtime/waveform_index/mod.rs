@@ -27,8 +27,8 @@ pub fn exact_window_sample_limit(target_points: usize) -> u64 {
 mod tests {
     use super::*;
     use crate::runtime::{
-        BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureMetadata, CaptureSource,
-        CaptureWaveformSegment, packed_bit,
+        BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureMetadata,
+        CaptureSource, CaptureWaveformSegment, packed_bit,
     };
     use crate::{Error, Result};
     use std::fs;
@@ -44,11 +44,13 @@ mod tests {
         blocks: Arc<Vec<Vec<Arc<[u8]>>>>,
         index_path: PathBuf,
         revision: u64,
+        raw_reads: Arc<AtomicU64>,
     }
 
     struct MemoryCaptureReader {
         metadata: CaptureMetadata,
         blocks: Arc<Vec<Vec<Arc<[u8]>>>>,
+        raw_reads: Arc<AtomicU64>,
     }
 
     impl MemoryCaptureDataSource {
@@ -82,11 +84,17 @@ mod tests {
                 blocks: Arc::new(blocks),
                 index_path: std::env::temp_dir().join(format!("capture-index-test-{id}.idx")),
                 revision: id,
+                raw_reads: Arc::new(AtomicU64::new(0)),
             }
         }
 
         fn remove_index(&self) {
             let _ = fs::remove_file(&self.index_path);
+            let _ = fs::remove_file(self.index_path.with_extension("raw"));
+        }
+
+        fn raw_reads(&self) -> u64 {
+            self.raw_reads.load(Ordering::Relaxed)
         }
     }
 
@@ -118,6 +126,7 @@ mod tests {
             Ok(MemoryCaptureReader {
                 metadata: self.metadata.clone(),
                 blocks: Arc::clone(&self.blocks),
+                raw_reads: Arc::clone(&self.raw_reads),
             })
         }
 
@@ -157,11 +166,13 @@ mod tests {
     }
 
     impl BlockCaptureSource for MemoryCaptureReader {
-        fn read_packed_block(&mut self, channel: usize, block: u64) -> Result<Arc<[u8]>> {
+        fn read_packed_block(&mut self, channel: usize, block: u64) -> Result<BlockData> {
+            self.raw_reads.fetch_add(1, Ordering::Relaxed);
             self.blocks
                 .get(channel)
                 .and_then(|channel_blocks| channel_blocks.get(block as usize))
                 .cloned()
+                .map(BlockData::from)
                 .ok_or(Error::InvalidBlock(block))
         }
     }
@@ -556,6 +567,54 @@ mod tests {
             23,
             24,
         )
+    }
+
+    #[test]
+    fn raw_block_cache_serves_reopened_exact_windows() -> Result<()> {
+        let samples_per_block = 4_096_u64;
+        let total_samples = samples_per_block * 2;
+        let blocks = single_channel_blocks_from_fn(total_samples, samples_per_block, |sample| {
+            (sample / 700) % 2 == 1
+        });
+        let source = MemoryCaptureDataSource::new(total_samples, samples_per_block, blocks);
+
+        // 3 000 samples with 50 target points takes the exact path and spans
+        // both blocks.
+        let first_window = {
+            let mut reader = IndexSampler::open_data_source(source.clone())?;
+            reader.sampled_window(&[0], 3_000, 6_000, 50)?
+        };
+        assert_eq!(first_window.sample_step, 1);
+        let reads_after_first = source.raw_reads();
+        assert!(reads_after_first > 0);
+
+        // Reopened sampler must serve the same window from the raw cache
+        // without touching the capture source at all.
+        let second_window = {
+            let mut reader = IndexSampler::open_data_source(source.clone())?;
+            reader.sampled_window(&[0], 3_000, 6_000, 50)?
+        };
+        assert_eq!(source.raw_reads(), reads_after_first);
+        assert_eq!(
+            first_window.channels[0].initial,
+            second_window.channels[0].initial
+        );
+        assert_eq!(
+            first_window.channels[0]
+                .transitions
+                .iter()
+                .map(|transition| (transition.sample, transition.value))
+                .collect::<Vec<_>>(),
+            second_window.channels[0]
+                .transitions
+                .iter()
+                .map(|transition| (transition.sample, transition.value))
+                .collect::<Vec<_>>(),
+        );
+        assert!(!second_window.channels[0].transitions.is_empty());
+
+        source.remove_index();
+        Ok(())
     }
 
     #[test]

@@ -6,6 +6,7 @@ pub mod graph;
 pub mod node;
 pub mod pipeline;
 pub mod ports;
+pub(crate) mod raw_block_cache;
 pub mod receiver;
 pub mod sample;
 pub mod scheduler;
@@ -15,7 +16,7 @@ pub mod watchdog;
 pub mod waveform_index;
 
 pub use capture::{
-    BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureMetadata,
+    BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureMetadata,
     CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,
     CaptureWaveformSegment, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
     DslWaveformSegment, packed_bit,

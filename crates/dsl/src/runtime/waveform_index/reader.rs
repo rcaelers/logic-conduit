@@ -4,8 +4,9 @@ use super::storage::IndexReader;
 use super::types::{
     CaptureIndexProgress, SAMPLES_PER_L1_BIT, SAMPLES_PER_L2_BIT, SAMPLES_PER_L3_BIT, bit,
 };
+use crate::runtime::raw_block_cache::RawBlockCache;
 use crate::runtime::{
-    BlockCaptureSource, CaptureDataSource, CaptureMetadata, CaptureSampledChannel,
+    BlockCaptureSource, BlockData, CaptureDataSource, CaptureMetadata, CaptureSampledChannel,
     CaptureSampledWindow, CaptureTransition, CaptureWaveformSegment, packed_bit,
 };
 use crate::{Error, Result};
@@ -26,17 +27,26 @@ pub struct IndexSampler<R: BlockCaptureSource> {
     display_name: String,
     storage: IndexReader,
     raw_reader: R,
+    /// Sparse on-disk cache of decompressed raw blocks; optional because the
+    /// sampler works (more slowly) without it.
+    raw_cache: Option<RawBlockCache>,
 }
 
 impl<R> IndexSampler<R>
 where
     R: BlockCaptureSource,
 {
-    pub(super) fn new(display_name: String, storage: IndexReader, raw_reader: R) -> Self {
+    pub(super) fn new(
+        display_name: String,
+        storage: IndexReader,
+        raw_reader: R,
+        raw_cache: Option<RawBlockCache>,
+    ) -> Self {
         Self {
             display_name,
             storage,
             raw_reader,
+            raw_cache,
         }
     }
 
@@ -63,10 +73,13 @@ where
                 .build(progress)?;
         }
 
+        let raw_cache =
+            RawBlockCache::open(&index_path.with_extension("raw"), &header, fingerprint.revision)
+                .ok();
         let storage = IndexReader::open(index_path, header, fingerprint.revision)?;
         let display_name = data_source.display_name();
         let raw_reader = data_source.open_reader()?;
-        Ok(Self::new(display_name, storage, raw_reader))
+        Ok(Self::new(display_name, storage, raw_reader, raw_cache))
     }
 
     pub fn display_name(&self) -> String {
@@ -169,14 +182,17 @@ where
             .cloned()
             .unwrap_or_else(|| format!("Probe{}", channel));
         let samples_per_block = self.header().samples_per_block;
-        let mut current = self.raw_reader.read_sample(channel, start_sample)?;
+        let first_block = start_sample / samples_per_block;
+        let last_block = (end_sample - 1) / samples_per_block;
+        let mut current = {
+            let data = self.cached_packed_block(channel, first_block)?;
+            packed_bit(&data, (start_sample % samples_per_block) as usize)
+        };
         let initial = current;
         let mut transitions = Vec::new();
 
-        let first_block = start_sample / samples_per_block;
-        let last_block = (end_sample - 1) / samples_per_block;
         for block in first_block..=last_block {
-            let data = self.raw_reader.read_packed_block(channel, block)?;
+            let data = self.cached_packed_block(channel, block)?;
             let block_start = block * samples_per_block;
             let block_end = block_start
                 .saturating_add(samples_per_block)
@@ -204,6 +220,24 @@ where
             transitions,
             waveform: Vec::new(),
         })
+    }
+
+    /// Packed block bytes, preferring the sparse raw cache over the (usually
+    /// compressed) capture source; freshly decompressed blocks are stored in
+    /// the cache for later zero-copy reads.
+    fn cached_packed_block(&mut self, channel: usize, block: u64) -> Result<BlockData> {
+        if let Some(data) = self
+            .raw_cache
+            .as_ref()
+            .and_then(|cache| cache.get(channel, block))
+        {
+            return Ok(data);
+        }
+        let data = self.raw_reader.read_packed_block(channel, block)?;
+        if let Some(cache) = self.raw_cache.as_mut() {
+            cache.put(channel, block, &data);
+        }
+        Ok(data)
     }
 
     fn sample_indexed_channel(
