@@ -421,9 +421,7 @@ impl LogicAnalyzerViewer {
                         .and_then(IndexSampler::open_data_source)
                     {
                         Ok(sampler) => {
-                            // Sized so the widest L2 viewport (~17 blocks ×
-                            // 16 channels) fits without evictions (~34 MB).
-                            self.sampler = Some(sampler.with_max_cached_leaves(512));
+                            self.sampler = Some(sampler);
                             self.sampled_key = None;
                             if self.fit_to_capture {
                                 self.fit_capture();

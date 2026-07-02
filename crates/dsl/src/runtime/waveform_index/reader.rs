@@ -73,11 +73,6 @@ where
         self.display_name.clone()
     }
 
-    pub fn with_max_cached_leaves(mut self, max: usize) -> Self {
-        self.storage.set_max_cached_leaves(max);
-        self
-    }
-
     pub fn index_path(&self) -> &Path {
         self.storage.path()
     }
@@ -229,7 +224,7 @@ where
             .get(channel)
             .cloned()
             .unwrap_or_else(|| format!("Probe{}", channel));
-        let initial = self.raw_reader.read_sample(channel, start_sample)?;
+        let initial = self.indexed_initial_value(channel, start_sample, group_samples)?;
         let transitions = Vec::new();
         let mut waveform = Vec::new();
 
@@ -273,6 +268,23 @@ where
             transitions,
             waveform,
         })
+    }
+
+    /// Group-aligned value entering `sample`, derived purely from the index.
+    /// Keeps the indexed path free of raw-capture reads (which decompress
+    /// whole blocks); consistent with the per-pixel summaries, which are
+    /// aligned to the same groups.
+    fn indexed_initial_value(
+        &mut self,
+        channel: usize,
+        sample: u64,
+        group_samples: u64,
+    ) -> Result<bool> {
+        let block = self.block_for_sample(sample);
+        let local = sample % self.header().samples_per_block;
+        Ok(self
+            .block_local_display_summary(channel, block as usize, local, local + 1, group_samples)?
+            .first)
     }
 
     fn indexed_display_range_summary(
@@ -371,7 +383,7 @@ where
         }
 
         let leaf = self.storage.load_leaf(channel, block)?;
-        let Some(levels) = leaf.levels.as_ref() else {
+        let Some(levels) = leaf.levels else {
             return Ok(GroupSummary {
                 first: leaf.first,
                 toggle: false,
@@ -393,7 +405,7 @@ where
             let last = bit(levels.l2_last[last_group / 64], last_group % 64);
             Ok(GroupSummary {
                 first,
-                toggle: bit_range_any(&levels.l2_toggle, first_group, last_group) || first != last,
+                toggle: bit_range_any(levels.l2_toggle, first_group, last_group) || first != last,
                 last,
             })
         } else {
@@ -410,7 +422,7 @@ where
             let last = bit(levels.l1_last[last_group / 64], last_group % 64);
             Ok(GroupSummary {
                 first,
-                toggle: bit_range_any(&levels.l1_toggle, first_group, last_group) || first != last,
+                toggle: bit_range_any(levels.l1_toggle, first_group, last_group) || first != last,
                 last,
             })
         }

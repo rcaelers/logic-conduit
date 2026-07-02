@@ -58,15 +58,18 @@
 //! ```
 
 use super::types::{
-    BlockIndex, BlockLevels, DIR_ENTRY_SIZE, HEADER_SIZE, IndexHeader, MAGIC, RootDirEntry,
+    BlockIndex, DIR_ENTRY_SIZE, HEADER_SIZE, IndexHeader, L1_WORDS, L2_WORDS, MAGIC, RootDirEntry,
 };
 use crate::runtime::CaptureMetadata;
 use crate::{Error, Result};
-use std::collections::{HashMap, VecDeque};
+use memmap2::Mmap;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+
+// Leaf chunks are read zero-copy as native u64 words from the mapped file.
+#[cfg(target_endian = "big")]
+compile_error!("the waveform index mmap path assumes a little-endian target");
 
 // ---------------------------------------------------------------------------
 // IndexWriter — create and populate a new index file
@@ -197,19 +200,37 @@ impl IndexWriter {
 // IndexReader — read an existing index file
 // ---------------------------------------------------------------------------
 
+/// Zero-copy view of one leaf chunk inside the mapped index file.
+pub(super) struct LeafView<'a> {
+    #[allow(dead_code)]
+    pub valid_samples: u32,
+    pub first: bool,
+    pub last: bool,
+    pub levels: Option<LevelsView<'a>>,
+}
+
+pub(super) struct LevelsView<'a> {
+    pub l1_toggle: &'a [u64],
+    pub l1_last: &'a [u64],
+    pub l2_toggle: &'a [u64],
+    pub l2_last: &'a [u64],
+    #[allow(dead_code)]
+    pub l3_toggle: u64,
+    #[allow(dead_code)]
+    pub l3_last: u64,
+}
+
 pub(super) struct IndexReader {
     path: PathBuf,
     header: CaptureMetadata,
-    file: File,
+    /// Memory-mapped index file; leaf chunks are read directly out of the
+    /// mapping, so residency is managed by the OS page cache and no
+    /// application-level leaf cache is needed.
+    mmap: Mmap,
     directory: Vec<Vec<RootDirEntry>>,
-    leaf_cache: HashMap<(usize, usize), Arc<BlockIndex>>,
-    leaf_cache_order: VecDeque<(usize, usize)>,
-    max_cached_leaves: usize,
 }
 
 impl IndexReader {
-    const DEFAULT_MAX_CACHED_LEAVES: usize = 8;
-
     pub(super) fn is_valid(
         path: &Path,
         header: &CaptureMetadata,
@@ -239,15 +260,16 @@ impl IndexReader {
             header.total_probes,
             blocks_per_channel,
         )?;
+        // SAFETY: the mapping is read-only and the index file is owned by
+        // this application; it is atomically replaced (rename), never
+        // truncated or rewritten in place while mapped.
+        let mmap = unsafe { Mmap::map(&file)? };
 
         Ok(Self {
             path,
             header,
-            file,
+            mmap,
             directory,
-            leaf_cache: HashMap::new(),
-            leaf_cache_order: VecDeque::new(),
-            max_cached_leaves: Self::DEFAULT_MAX_CACHED_LEAVES,
         })
     }
 
@@ -259,32 +281,19 @@ impl IndexReader {
         &self.header
     }
 
-    pub(super) fn set_max_cached_leaves(&mut self, max: usize) {
-        self.max_cached_leaves = max.max(1);
-        self.trim_leaf_cache();
-    }
-
-    pub(super) fn load_leaf(&mut self, channel: usize, block: usize) -> Result<Arc<BlockIndex>> {
-        let key = (channel, block);
-        if let Some(leaf) = self.leaf_cache.get(&key).cloned() {
-            self.touch_leaf_cache_key(key);
-            return Ok(leaf);
-        }
-
+    pub(super) fn load_leaf(&self, channel: usize, block: usize) -> Result<LeafView<'_>> {
         let entry = self
             .directory
             .get(channel)
             .and_then(|blocks| blocks.get(block))
             .copied()
             .ok_or_else(|| Error::ParseError("block index out of bounds".to_string()))?;
-        self.file.seek(SeekFrom::Start(entry.offset))?;
-        let mut data = vec![0_u8; entry.len as usize];
-        self.file.read_exact(&mut data)?;
-        let leaf = Arc::new(deserialize_leaf(&data)?);
-        self.leaf_cache.insert(key, Arc::clone(&leaf));
-        self.leaf_cache_order.push_back(key);
-        self.trim_leaf_cache();
-        Ok(leaf)
+        let start = entry.offset as usize;
+        let data = start
+            .checked_add(entry.len as usize)
+            .and_then(|end| self.mmap.get(start..end))
+            .ok_or_else(|| Error::ParseError("truncated waveform sidecar".to_string()))?;
+        leaf_view(data)
     }
 
     pub(super) fn load_root_summary(&self, channel: usize, block: usize) -> Result<RootDirEntry> {
@@ -293,11 +302,6 @@ impl IndexReader {
             .and_then(|blocks| blocks.get(block))
             .copied()
             .ok_or_else(|| Error::ParseError("block index out of bounds".to_string()))
-    }
-
-    #[cfg(test)]
-    pub(super) fn decode_leaf_for_test(data: &[u8]) -> Result<BlockIndex> {
-        deserialize_leaf(data)
     }
 
     fn validate_header(
@@ -382,27 +386,6 @@ impl IndexReader {
         })
     }
 
-    fn touch_leaf_cache_key(&mut self, key: (usize, usize)) {
-        if self
-            .leaf_cache_order
-            .back()
-            .is_some_and(|existing| *existing == key)
-        {
-            return;
-        }
-        self.leaf_cache_order.retain(|existing| *existing != key);
-        self.leaf_cache_order.push_back(key);
-    }
-
-    fn trim_leaf_cache(&mut self) {
-        while self.leaf_cache.len() > self.max_cached_leaves {
-            if let Some(key) = self.leaf_cache_order.pop_front() {
-                self.leaf_cache.remove(&key);
-            } else {
-                break;
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -426,24 +409,48 @@ fn serialize_leaf(leaf: &BlockIndex) -> Vec<u8> {
     out
 }
 
-fn deserialize_leaf(data: &[u8]) -> Result<BlockIndex> {
-    let mut cursor = Cursor::new(data);
-    let valid_samples = cursor.u32()?;
-    let flags = cursor.byte()?;
-    cursor.skip(3)?;
+/// Interprets one serialized leaf chunk in place, without copying the level
+/// bitmaps. Requires `data` to be 8-byte aligned, which holds for chunks in
+/// the mapped index file: the header (96 B), directory entries (40 B), and
+/// chunk sizes (8 B constant / 66 584 B active) are all multiples of 8.
+fn leaf_view(data: &[u8]) -> Result<LeafView<'_>> {
+    let truncated = || Error::ParseError("truncated waveform sidecar".to_string());
+    let (chunk_header, payload) = data.split_at_checked(8).ok_or_else(truncated)?;
+    let valid_samples = u32::from_le_bytes(
+        chunk_header[..4]
+            .try_into()
+            .expect("chunk header is 8 bytes"),
+    );
+    let flags = chunk_header[4];
+
     let levels = if flags & 0b100 != 0 {
-        let mut lvl = BlockLevels::zeroed();
-        cursor.u64_slice(&mut lvl.l1_toggle)?;
-        cursor.u64_slice(&mut lvl.l1_last)?;
-        cursor.u64_slice(&mut lvl.l2_toggle)?;
-        cursor.u64_slice(&mut lvl.l2_last)?;
-        lvl.l3_toggle = cursor.u64()?;
-        lvl.l3_last = cursor.u64()?;
-        Some(lvl)
+        const LEVEL_WORDS: usize = 2 * L1_WORDS + 2 * L2_WORDS + 2;
+        let payload = payload.get(..LEVEL_WORDS * 8).ok_or_else(truncated)?;
+        // SAFETY: any bit pattern is a valid u64; the slice length is a
+        // multiple of 8 and the alignment is checked via the empty prefix.
+        let (prefix, words, _) = unsafe { payload.align_to::<u64>() };
+        if !prefix.is_empty() || words.len() != LEVEL_WORDS {
+            return Err(Error::ParseError(
+                "misaligned waveform sidecar chunk".to_string(),
+            ));
+        }
+        let (l1_toggle, rest) = words.split_at(L1_WORDS);
+        let (l1_last, rest) = rest.split_at(L1_WORDS);
+        let (l2_toggle, rest) = rest.split_at(L2_WORDS);
+        let (l2_last, rest) = rest.split_at(L2_WORDS);
+        Some(LevelsView {
+            l1_toggle,
+            l1_last,
+            l2_toggle,
+            l2_last,
+            l3_toggle: rest[0],
+            l3_last: rest[1],
+        })
     } else {
         None
     };
-    Ok(BlockIndex {
+
+    Ok(LeafView {
         valid_samples,
         first: flags & 0b001 != 0,
         last: flags & 0b010 != 0,
@@ -491,14 +498,28 @@ fn write_u64(file: &mut File, value: u64) -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Cursor — byte-slice reader for deserialization
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::super::types::{BlockIndex, BlockLevels, bit, set_bit};
     use super::*;
+
+    /// Copies serialized bytes into an 8-byte-aligned buffer, as `leaf_view`
+    /// requires (the mapped file provides this alignment naturally).
+    fn aligned(data: &[u8]) -> Vec<u64> {
+        let mut buf = vec![0_u64; data.len().div_ceil(8)];
+        for (word, chunk) in buf.iter_mut().zip(data.chunks(8)) {
+            let mut bytes = [0_u8; 8];
+            bytes[..chunk.len()].copy_from_slice(chunk);
+            *word = u64::from_le_bytes(bytes);
+        }
+        buf
+    }
+
+    fn as_bytes(buf: &[u64], len: usize) -> &[u8] {
+        // SAFETY: reinterpreting u64s as bytes is always valid; len is
+        // bounded by the buffer size.
+        unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), len.min(buf.len() * 8)) }
+    }
 
     #[test]
     fn chunk_round_trips_active_leaf() {
@@ -513,12 +534,18 @@ mod tests {
             levels: Some(lvl),
         };
         let data = serialize_leaf(&leaf);
-        let decoded = IndexReader::decode_leaf_for_test(&data).expect("leaf should decode");
+        let buf = aligned(&data);
+        let decoded = leaf_view(as_bytes(&buf, data.len())).expect("leaf should decode");
+        assert_eq!(decoded.valid_samples, 16);
+        assert!(!decoded.first);
+        assert!(decoded.last);
         let lvl = decoded
             .levels
             .as_ref()
             .expect("decoded leaf should be active");
         assert!(bit(lvl.l1_toggle[0], 0));
+        assert!(bit(lvl.l2_toggle[0], 0));
+        assert!(bit(lvl.l3_toggle, 0));
     }
 
     #[test]
@@ -530,65 +557,10 @@ mod tests {
             levels: None,
         };
         let data = serialize_leaf(&leaf);
-        let decoded = IndexReader::decode_leaf_for_test(&data).expect("leaf should decode");
+        let buf = aligned(&data);
+        let decoded = leaf_view(as_bytes(&buf, data.len())).expect("leaf should decode");
         assert!(decoded.levels.is_none());
         assert!(decoded.first);
         assert!(decoded.last);
-    }
-}
-
-struct Cursor<'a> {
-    data: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Cursor<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0 }
-    }
-
-    fn byte(&mut self) -> Result<u8> {
-        let byte = *self
-            .data
-            .get(self.pos)
-            .ok_or_else(|| Error::ParseError("truncated waveform sidecar".to_string()))?;
-        self.pos += 1;
-        Ok(byte)
-    }
-
-    fn skip(&mut self, count: usize) -> Result<()> {
-        if self.pos + count > self.data.len() {
-            return Err(Error::ParseError("truncated waveform sidecar".to_string()));
-        }
-        self.pos += count;
-        Ok(())
-    }
-
-    fn u32(&mut self) -> Result<u32> {
-        let mut buf = [0_u8; 4];
-        self.read_exact(&mut buf)?;
-        Ok(u32::from_le_bytes(buf))
-    }
-
-    fn u64(&mut self) -> Result<u64> {
-        let mut buf = [0_u8; 8];
-        self.read_exact(&mut buf)?;
-        Ok(u64::from_le_bytes(buf))
-    }
-
-    fn u64_slice(&mut self, out: &mut [u64]) -> Result<()> {
-        for word in out.iter_mut() {
-            *word = self.u64()?;
-        }
-        Ok(())
-    }
-
-    fn read_exact(&mut self, buf: &mut [u8]) -> Result<()> {
-        if self.pos + buf.len() > self.data.len() {
-            return Err(Error::ParseError("truncated waveform sidecar".to_string()));
-        }
-        buf.copy_from_slice(&self.data[self.pos..self.pos + buf.len()]);
-        self.pos += buf.len();
-        Ok(())
     }
 }
