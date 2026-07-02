@@ -106,13 +106,22 @@ pub fn draw_frames(
             ),
             egui::StrokeKind::Middle,
         );
-        let font_sz = (13.0 * view.zoom).clamp(8.0, 16.0);
+        let font_sz = (14.0 * view.zoom).clamp(8.0, 18.0);
+        let label_pos = Pos2::new(screen.center().x, screen.min.y + 7.0 * view.zoom);
+        let label_font = FontId::proportional(font_sz);
         painter.text(
-            Pos2::new(screen.min.x + 7.0, screen.min.y - 1.0),
-            egui::Align2::LEFT_BOTTOM,
+            label_pos + Vec2::splat(1.0),
+            egui::Align2::CENTER_TOP,
             &frame.label,
-            FontId::proportional(font_sz),
-            Color32::from_rgba_premultiplied(c.r(), c.g(), c.b(), 200),
+            label_font.clone(),
+            Color32::from_rgba_premultiplied(0, 0, 0, 180),
+        );
+        painter.text(
+            label_pos,
+            egui::Align2::CENTER_TOP,
+            &frame.label,
+            label_font,
+            Color32::from_rgba_premultiplied(245, 245, 245, 235),
         );
     }
 

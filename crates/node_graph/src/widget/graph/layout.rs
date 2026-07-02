@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 const SOCKET_HIT_PADDING: f32 = 5.0;
 const FRAME_PADDING: f32 = 20.0;
+const FRAME_TITLE_PADDING: f32 = 44.0;
 
 pub(super) struct GraphWidgetLayout {
     pub nodes: HashMap<NodeId, NodeWidget>,
@@ -56,16 +57,21 @@ impl NodeGraphWidget {
                 }
             }
             if let Some(bounds) = bounds {
-                frame_rects.insert(frame.id, bounds.expand(FRAME_PADDING));
+                frame_rects.insert(
+                    frame.id,
+                    Rect::from_min_max(
+                        Pos2::new(
+                            bounds.min.x - FRAME_PADDING,
+                            bounds.min.y - FRAME_TITLE_PADDING,
+                        ),
+                        Pos2::new(bounds.max.x + FRAME_PADDING, bounds.max.y + FRAME_PADDING),
+                    ),
+                );
             }
         }
         let frame_screen_rects: HashMap<FrameId, Rect> = frame_rects
             .iter()
-            .map(|(&id, &rect)| {
-                let mut screen_rect = to_screen_rect(rect, &self.view, origin);
-                screen_rect.min.y -= (18.0 * self.view.zoom).clamp(10.0, 22.0);
-                (id, screen_rect)
-            })
+            .map(|(&id, &rect)| (id, to_screen_rect(rect, &self.view, origin)))
             .collect();
         let node_screen_rects: HashMap<NodeId, Rect> = nodes
             .iter()
