@@ -22,7 +22,3 @@ pub trait SocketDef: 'static + Send + Sync {
 pub trait SocketWithControlDef: SocketDef {
     type Control: InlineControl;
 }
-
-pub fn sockets_compatible(a: &str, b: &str) -> bool {
-    a == "Any" || b == "Any" || a == b
-}

@@ -1,6 +1,6 @@
 use crate::{
     model::{GraphState, Node, NodeId, NodeKind, SocketDirection, SocketId, SocketShape},
-    runtime::NodeInstance,
+    runtime::{NodeInstance, NodeTypeRegistry},
     support::{ViewState, paint::to_screen_rect},
 };
 use egui::{Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Ui, Vec2};
@@ -247,7 +247,14 @@ impl NodeWidget {
 
     // ── Drawing ───────────────────────────────────────────────────────────────
 
-    pub(crate) fn draw(&self, painter: &Painter, node: &Node, view: &ViewState, origin: Pos2) {
+    pub(crate) fn draw(
+        &self,
+        painter: &Painter,
+        node: &Node,
+        registry: &NodeTypeRegistry,
+        view: &ViewState,
+        origin: Pos2,
+    ) {
         let l = &self.layout;
         let node_s = to_screen_rect(l.node_rect, view, origin);
 
@@ -332,14 +339,16 @@ impl NodeWidget {
                 let Some(pos) = l.output_socket_pos[i] else {
                     continue;
                 };
-                draw_socket(painter, s(pos), sz(SOCKET_RADIUS), sock.shape, sock.color);
+                let (color, shape) = registry.socket_display(sock);
+                draw_socket(painter, s(pos), sz(SOCKET_RADIUS), shape, color);
             }
 
             for (i, sock) in node.inputs.iter().enumerate() {
                 let Some(pos) = l.input_socket_pos[i] else {
                     continue;
                 };
-                draw_socket(painter, s(pos), sz(SOCKET_RADIUS), sock.shape, sock.color);
+                let (color, shape) = registry.socket_display(sock);
+                draw_socket(painter, s(pos), sz(SOCKET_RADIUS), shape, color);
             }
             return;
         }
@@ -363,7 +372,8 @@ impl NodeWidget {
                 continue;
             };
             let sp = s(pos);
-            draw_socket(painter, sp, sz(SOCKET_RADIUS), sock.shape, sock.color);
+            let (color, shape) = registry.socket_display(sock);
+            draw_socket(painter, sp, sz(SOCKET_RADIUS), shape, color);
             if !sock.has_control {
                 painter.text(
                     Pos2::new(sp.x - sz(SOCKET_RADIUS + 4.0), sp.y),
@@ -380,7 +390,8 @@ impl NodeWidget {
                 continue;
             };
             let sp = s(pos);
-            draw_socket(painter, sp, sz(SOCKET_RADIUS), sock.shape, sock.color);
+            let (color, shape) = registry.socket_display(sock);
+            draw_socket(painter, sp, sz(SOCKET_RADIUS), shape, color);
             let has_control = node.inputs.get(i).is_some_and(|s| s.has_control);
             if !has_control {
                 painter.text(
@@ -427,9 +438,12 @@ impl NodeWidget {
             if ws.width() < 30.0 {
                 continue;
             }
+            // Controls are declared on defs; sockets and defs diverge once
+            // variadic groups grow, so map through the socket's def_index.
+            let def_index = node.inputs[i].def_index;
             let changed = ui
                 .push_id((node_id.0, i), |ui| {
-                    instance.draw_input_control(i, ui, ws, zoom, node_screen_rect)
+                    instance.draw_input_control(def_index, ui, ws, zoom, node_screen_rect)
                 })
                 .inner;
             if changed {
@@ -445,9 +459,10 @@ impl NodeWidget {
             if ws.width() < 30.0 {
                 continue;
             }
+            let def_index = node.outputs[i].def_index;
             let changed = ui
                 .push_id(("output", node_id.0, i), |ui| {
-                    instance.draw_output_control(i, ui, ws, zoom, node_screen_rect)
+                    instance.draw_output_control(def_index, ui, ws, zoom, node_screen_rect)
                 })
                 .inner;
             if changed {

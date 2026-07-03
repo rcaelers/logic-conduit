@@ -1,9 +1,6 @@
 pub(super) use super::super::menu::Shortcut;
 use super::{FrameRenameState, NodeGraphWidget};
-use crate::{
-    api::sockets_compatible,
-    model::{Connection, FrameId, Node, NodeId, SocketDirection, SocketId},
-};
+use crate::model::{Connection, FrameId, Node, NodeId, SocketDirection, SocketId};
 use egui::{Color32, Pos2, Vec2};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -309,8 +306,16 @@ impl NodeGraphWidget {
             self.graph.remove_node(id);
             self.runtime.remove(&id);
         }
+        let mut touched: Vec<NodeId> = Vec::new();
         for connection in rewired {
             self.graph.add_connection(connection.from, connection.to);
+            touched.push(connection.from.node);
+            touched.push(connection.to.node);
+        }
+        touched.sort_unstable_by_key(|id| id.0);
+        touched.dedup();
+        for id in touched {
+            self.run_update(id);
         }
         self.graph.cleanup_frames();
     }
@@ -324,20 +329,15 @@ impl NodeGraphWidget {
             .nodes
             .get(&from.node)
             .and_then(|node| node.outputs.get(from.index))
-            .map(|socket| socket.type_name.as_str())
+            .map(|socket| socket.effective_type())
         else {
             return false;
         };
-        let Some(to_type) = self
-            .graph
+        self.graph
             .nodes
             .get(&to.node)
             .and_then(|node| node.inputs.get(to.index))
-            .map(|socket| socket.type_name.as_str())
-        else {
-            return false;
-        };
-        sockets_compatible(from_type, to_type)
+            .is_some_and(|socket| socket.accepts(from_type))
     }
 
     fn duplicate_selected(&mut self) {
@@ -494,6 +494,8 @@ impl NodeGraphWidget {
             })
             .collect();
         self.graph.connections.extend(new_connections);
+        let pasted_ids: Vec<NodeId> = id_map.values().copied().collect();
+        self.graph.prune_unconnected_resolutions(&pasted_ids);
         pasted
     }
 

@@ -53,19 +53,15 @@ impl Node {
             type_name: "Any".to_string(),
             color: Color32::from_rgb(150, 150, 150),
             shape: SocketShape::Circle,
+            allowed: Vec::new(),
+            resolved_type: None,
+            def_index: 0,
+            variadic: None,
             visible: true,
             hidden: false,
             has_control: false,
         };
-        let output = Socket {
-            name: String::new(),
-            type_name: "Any".to_string(),
-            color: Color32::from_rgb(150, 150, 150),
-            shape: SocketShape::Circle,
-            visible: true,
-            hidden: false,
-            has_control: false,
-        };
+        let output = input.clone();
         Self {
             id,
             kind: NodeKind::Reroute,

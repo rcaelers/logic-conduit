@@ -6,11 +6,40 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt;
 
+/// Identity of a socket type as it should appear graph-wide: used to re-skin
+/// sockets that resolved to this type, regardless of any per-def idle styling.
+#[derive(Debug, Clone)]
+pub struct SocketTypeIdentity {
+    pub name: &'static str,
+    pub color: Color32,
+    pub shape: SocketShape,
+}
+
+impl SocketTypeIdentity {
+    fn of<T: SocketDef>() -> Self {
+        Self {
+            name: T::type_name(),
+            color: T::color(),
+            shape: T::shape(),
+        }
+    }
+}
+
 pub struct InputDef<S> {
     pub label: String,
     pub type_name: &'static str,
+    /// Idle look shown while unconnected; defaults to the native type's
+    /// identity, overridable per def via [`InputDef::idle_style`].
     pub color: Color32,
     pub shape: SocketShape,
+    /// Native type identity (never restyled) — feeds the type identity table.
+    pub(crate) identity: SocketTypeIdentity,
+    /// Extra types this input accepts; the node handles them itself.
+    pub(crate) accepted: Vec<SocketTypeIdentity>,
+    /// `Some(max)` turns this def into a growing group: it starts as a single
+    /// placeholder socket; each connection converts the placeholder into a
+    /// member and spawns a new one, up to `max` members.
+    pub(crate) variadic_max: Option<usize>,
     pub(crate) control: Option<Box<dyn ControlBinding<S>>>,
 }
 
@@ -21,6 +50,9 @@ impl<S: 'static> InputDef<S> {
             type_name: T::type_name(),
             color: T::color(),
             shape: T::shape(),
+            identity: SocketTypeIdentity::of::<T>(),
+            accepted: Vec::new(),
+            variadic_max: None,
             control: None,
         }
     }
@@ -35,8 +67,35 @@ impl<S: 'static> InputDef<S> {
             type_name: T::type_name(),
             color: T::color(),
             shape: T::shape(),
+            identity: SocketTypeIdentity::of::<T>(),
+            accepted: Vec::new(),
+            variadic_max: None,
             control: Some(Box::new(ControlBindingRenderer { label, accessor })),
         }
+    }
+
+    /// Declares that this input also accepts `T` — the node's processing is
+    /// able to handle a `T` on this input (e.g. a constant on a stream input).
+    pub fn accepts<T: SocketDef>(mut self) -> Self {
+        self.accepted.push(SocketTypeIdentity::of::<T>());
+        self
+    }
+
+    /// Overrides the look shown while the socket is unconnected. The resolved
+    /// look always comes from the connected type's identity.
+    pub fn idle_style(mut self, color: Color32, shape: SocketShape) -> Self {
+        self.color = color;
+        self.shape = shape;
+        self
+    }
+
+    /// Turns this input into a growing group of up to `max` sockets.
+    /// Connecting to the trailing placeholder adds a member ("{label} 1",
+    /// "{label} 2", …) and a new placeholder; disconnecting a member removes
+    /// it. Variadic inputs cannot carry inline controls.
+    pub fn variadic(mut self, max: usize) -> Self {
+        self.variadic_max = Some(max.max(1));
+        self
     }
 }
 
@@ -45,6 +104,7 @@ pub struct OutputDef<S> {
     pub type_name: &'static str,
     pub color: Color32,
     pub shape: SocketShape,
+    pub(crate) identity: SocketTypeIdentity,
     pub(crate) control: Option<Box<dyn ControlBinding<S>>>,
 }
 
@@ -55,6 +115,7 @@ impl<S: 'static> OutputDef<S> {
             type_name: T::type_name(),
             color: T::color(),
             shape: T::shape(),
+            identity: SocketTypeIdentity::of::<T>(),
             control: None,
         }
     }
@@ -69,6 +130,7 @@ impl<S: 'static> OutputDef<S> {
             type_name: T::type_name(),
             color: T::color(),
             shape: T::shape(),
+            identity: SocketTypeIdentity::of::<T>(),
             control: Some(Box::new(ControlBindingRenderer { label, accessor })),
         }
     }

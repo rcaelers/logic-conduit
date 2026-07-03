@@ -11,6 +11,20 @@ pub struct IntSocket;
 pub struct FloatSocket;
 pub struct StrSocket;
 pub struct FileSocket;
+/// Wildcard type: accepts (and is accepted by) every other type. Useful as
+/// the native type of variadic placeholder inputs and reroute nodes.
+pub struct AnySocket;
+
+impl SocketDef for AnySocket {
+    type Value = ();
+
+    fn type_name() -> &'static str {
+        "Any"
+    }
+    fn color() -> Color32 {
+        Color32::from_rgb(150, 150, 150)
+    }
+}
 
 impl SocketDef for BoolSocket {
     type Value = bool;

@@ -405,6 +405,7 @@ impl NodeDef for ParallelDecoder {
     fn inputs() -> Vec<InputDef<Self::State>> {
         vec![
             InputDef::new::<Signal>("CLK"),
+            InputDef::new::<Signal>("D").variadic(32),
             InputDef::control::<node_graph::IntSocket>("Width", |state| &mut state.width),
         ]
     }
@@ -504,7 +505,8 @@ impl NodeDef for Viewer {
     }
 
     fn inputs() -> Vec<InputDef<Self::State>> {
-        vec![InputDef::new::<Protocol>("Input")]
+        // Also accepts a raw channel: the viewer renders undecoded signals.
+        vec![InputDef::new::<Protocol>("Input").accepts::<Signal>()]
     }
 
     fn outputs() -> Vec<OutputDef<Self::State>> {

@@ -99,16 +99,35 @@ impl NodeGraphWidget {
                 wire_w,
             );
             if let Some((target, target_canvas)) = snap {
-                let highlight = self
-                    .graph
-                    .nodes
-                    .get(&target.node)
-                    .and_then(|node| match target.direction {
+                let target_socket = self.graph.nodes.get(&target.node).and_then(|node| {
+                    match target.direction {
                         SocketDirection::Input => node.inputs.get(target.index),
                         SocketDirection::Output => node.outputs.get(target.index),
-                    })
-                    .map(|socket| socket.color)
-                    .unwrap_or(color);
+                    }
+                });
+                // Preview what a multi-accepting input would resolve to: the
+                // dragged output's type identity instead of the idle look.
+                let from_type = self
+                    .graph
+                    .nodes
+                    .get(&from.node)
+                    .filter(|_| from.direction == SocketDirection::Output)
+                    .and_then(|n| n.outputs.get(from.index))
+                    .map(|s| s.effective_type().to_owned());
+                let highlight = match (target_socket, from_type) {
+                    (Some(socket), Some(ft))
+                        if target.direction == SocketDirection::Input
+                            && ft != "Any"
+                            && ft != socket.type_name =>
+                    {
+                        self.registry
+                            .socket_type_style(&ft)
+                            .map(|style| style.color)
+                            .unwrap_or(socket.color)
+                    }
+                    (Some(socket), _) => socket.color,
+                    (None, _) => color,
+                };
                 socket_highlights.push((target_canvas, highlight));
             }
         }
@@ -128,7 +147,7 @@ impl NodeGraphWidget {
 
         for id in sorted {
             if let (Some(widget), Some(node)) = (layout.nodes.get(&id), self.graph.nodes.get(&id)) {
-                widget.draw(painter, node, &self.view, origin);
+                widget.draw(painter, node, &self.registry, &self.view, origin);
             }
             if self.view.zoom >= 0.6 && !fast_interaction {
                 let changed = if let (Some(widget), Some(node), Some(instance)) = (

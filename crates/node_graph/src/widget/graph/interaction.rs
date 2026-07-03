@@ -6,7 +6,6 @@ use super::{
     minimap,
 };
 use crate::{
-    api::sockets_compatible,
     model::{FrameId, NodeId, SocketDirection, SocketId},
     support::paint::{bezier_wire_distance, wire_intersects_knife},
     widget::{menu::dispatch_menu_shortcut, node::NodeWidget},
@@ -117,14 +116,13 @@ impl NodeGraphWidget {
             .nodes
             .get(&output.node)
             .and_then(|n| n.outputs.get(output.index))
-            .map(|s| s.type_name.as_str());
-        let in_type = self
+            .map(|s| s.effective_type());
+        let in_socket = self
             .graph
             .nodes
             .get(&input.node)
-            .and_then(|n| n.inputs.get(input.index))
-            .map(|s| s.type_name.as_str());
-        matches!((out_type, in_type), (Some(ot), Some(it)) if sockets_compatible(ot, it))
+            .and_then(|n| n.inputs.get(input.index));
+        matches!((out_type, in_socket), (Some(ot), Some(is)) if is.accepts(ot))
     }
 
     pub(super) fn snapped_wire_target(
@@ -192,6 +190,8 @@ impl NodeGraphWidget {
         if self.compatible_wire_target(from, to) {
             self.push_undo_snapshot();
             self.graph.add_connection(output, input);
+            self.run_update(output.node);
+            self.run_update(input.node);
         }
     }
 
@@ -327,7 +327,8 @@ impl NodeGraphWidget {
                 && let Some(&src_spos) = layout.socket_screen_pos.get(&src)
             {
                 self.push_undo_snapshot();
-                self.graph.connections.retain(|c| c.to != sid);
+                self.graph.disconnect_input(sid);
+                self.run_update(sid.node);
                 return InteractionState::DraggingWire {
                     from: src,
                     from_canvas: self.view.screen_to_canvas(origin, src_spos),
@@ -518,29 +519,29 @@ impl NodeGraphWidget {
             .nodes
             .get(&conn.from.node)
             .and_then(|n| n.outputs.get(conn.from.index))
-            .map(|s| s.type_name.clone());
-        let dst_type = self
+            .map(|s| s.effective_type().to_owned());
+        let dst_socket = self
             .graph
             .nodes
             .get(&conn.to.node)
             .and_then(|n| n.inputs.get(conn.to.index))
-            .map(|s| s.type_name.clone());
+            .cloned();
         let nn = &self.graph.nodes[&node_id];
 
         let in_idx = src_type.as_deref().and_then(|t| {
             nn.inputs
                 .iter()
-                .position(|s| s.visible && sockets_compatible(&s.type_name, t))
+                .position(|s| s.visible && s.accepts(t))
         });
-        let out_idx = dst_type.as_deref().and_then(|t| {
+        let out_idx = dst_socket.as_ref().and_then(|dst| {
             nn.outputs
                 .iter()
-                .position(|s| s.visible && sockets_compatible(&s.type_name, t))
+                .position(|s| s.visible && dst.accepts(&s.type_name))
         });
 
         if let (Some(ii), Some(oi)) = (in_idx, out_idx) {
             self.push_undo_snapshot();
-            self.graph.connections.remove(idx);
+            self.graph.remove_connection_at(idx);
             self.graph.add_connection(
                 conn.from,
                 SocketId {
@@ -557,6 +558,9 @@ impl NodeGraphWidget {
                 },
                 conn.to,
             );
+            self.run_update(node_id);
+            self.run_update(conn.from.node);
+            self.run_update(conn.to.node);
         }
     }
 
@@ -670,8 +674,16 @@ impl NodeGraphWidget {
         if !to_remove.is_empty() {
             self.push_undo_snapshot();
         }
+        let mut touched = Vec::new();
         for idx in to_remove.into_iter().rev() {
-            self.graph.connections.remove(idx);
+            let conn = self.graph.remove_connection_at(idx);
+            touched.push(conn.from.node);
+            touched.push(conn.to.node);
+        }
+        touched.sort_unstable_by_key(|id: &NodeId| id.0);
+        touched.dedup();
+        for node_id in touched {
+            self.run_update(node_id);
         }
     }
 
@@ -1052,22 +1064,19 @@ impl NodeGraphWidget {
                 .nodes
                 .get(&conn.from.node)
                 .and_then(|n| n.outputs.get(conn.from.index))
-                .map(|s| s.type_name.as_str());
-            let dst_t = self
+                .map(|s| s.effective_type());
+            let dst_socket = self
                 .graph
                 .nodes
                 .get(&conn.to.node)
-                .and_then(|n| n.inputs.get(conn.to.index))
-                .map(|s| s.type_name.as_str());
+                .and_then(|n| n.inputs.get(conn.to.index));
             let ok_in = src_t.is_some_and(|t| {
-                nn.inputs
-                    .iter()
-                    .any(|s| s.visible && sockets_compatible(&s.type_name, t))
+                nn.inputs.iter().any(|s| s.visible && s.accepts(t))
             });
-            let ok_out = dst_t.is_some_and(|t| {
+            let ok_out = dst_socket.is_some_and(|dst| {
                 nn.outputs
                     .iter()
-                    .any(|s| s.visible && sockets_compatible(&s.type_name, t))
+                    .any(|s| s.visible && dst.accepts(&s.type_name))
             });
             if !ok_in || !ok_out {
                 continue;
