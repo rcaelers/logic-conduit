@@ -559,11 +559,15 @@ fn draw_socket(painter: &Painter, pos: Pos2, radius: f32, shape: SocketShape, co
             painter.circle_stroke(pos, radius, outline_stroke);
         }
         SocketShape::Diamond => {
+            // A diamond (rotated square) with vertices at `radius` has area 2*r^2,
+            // versus a circle's pi*r^2 — noticeably smaller at equal radius.
+            // Scale up so it reads as the same visual size as the circle.
+            let r = radius * 1.25;
             let pts = vec![
-                Pos2::new(pos.x, pos.y - radius),
-                Pos2::new(pos.x + radius, pos.y),
-                Pos2::new(pos.x, pos.y + radius),
-                Pos2::new(pos.x - radius, pos.y),
+                Pos2::new(pos.x, pos.y - r),
+                Pos2::new(pos.x + r, pos.y),
+                Pos2::new(pos.x, pos.y + r),
+                Pos2::new(pos.x - r, pos.y),
             ];
             painter.add(egui::Shape::convex_polygon(pts, color, outline_stroke));
         }
