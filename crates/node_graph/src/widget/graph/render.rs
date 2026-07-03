@@ -149,7 +149,7 @@ impl NodeGraphWidget {
             if let (Some(widget), Some(node)) = (layout.nodes.get(&id), self.graph.nodes.get(&id)) {
                 widget.draw(painter, node, &self.registry, &self.view, origin);
             }
-            if self.view.zoom >= 0.6 && !fast_interaction {
+            if self.view.zoom >= 0.6 {
                 let changed = if let (Some(widget), Some(node), Some(instance)) = (
                     layout.nodes.get(&id),
                     self.graph.nodes.get(&id),
@@ -206,7 +206,7 @@ impl NodeGraphWidget {
             }
         }
 
-        if self.minimap_visible && !fast_interaction {
+        if self.minimap_visible {
             let (info, _) = minimap::compute_minimap(layout.node_rects.values().copied(), rect);
             minimap::draw_minimap(
                 painter,
