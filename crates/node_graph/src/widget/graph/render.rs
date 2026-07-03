@@ -261,9 +261,12 @@ impl NodeGraphWidget {
                         .desired_width(240.0)
                         .hint_text("Frame name"),
                 );
-                response.request_focus();
                 if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     apply = true;
+                } else {
+                    // Re-requesting focus here would mask the surrender above,
+                    // since `lost_focus()` reads live state, not a frame snapshot.
+                    response.request_focus();
                 }
                 ui.horizontal(|ui| {
                     if ui.button("OK").clicked() {
