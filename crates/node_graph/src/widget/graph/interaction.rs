@@ -6,14 +6,13 @@ use super::{
     minimap,
 };
 use crate::{
-    model::{FrameId, NodeId, SocketDirection, SocketId},
-    support::paint::{bezier_wire_distance, wire_intersects_knife},
+    model::{Connection, FrameId, NodeId, SocketDirection, SocketId},
+    support::paint::{bezier_wire_distance, bezier_wire_intersects_rect, wire_intersects_knife},
     widget::{menu::dispatch_menu_shortcut, node::NodeWidget},
 };
 use egui::{Pos2, Rect, Vec2};
 use std::collections::HashMap;
 
-const WIRE_INSERT_THRESHOLD: f32 = 40.0;
 const WIRE_SNAP_DISTANCE: f32 = 18.0;
 
 #[derive(Default)]
@@ -222,10 +221,12 @@ impl NodeGraphWidget {
             let Some(&header_rect) = layout.header_screen_rects.get(&id) else {
                 continue;
             };
+            // Embedded controls are drawn later in the frame, so they sit on
+            // top of this region and still receive their own clicks/drags.
             let body = ui.interact(
                 body_rect,
                 ui.id().with(("node-body", id.0)),
-                egui::Sense::click(),
+                egui::Sense::click_and_drag(),
             );
             let header = ui.interact(
                 header_rect,
@@ -355,7 +356,7 @@ impl NodeGraphWidget {
                 self.select_node(id, ctrl);
                 return InteractionState::Idle;
             }
-            if responses.header.drag_started() {
+            if responses.header.drag_started() || responses.body.drag_started() {
                 if let Some(node) = self.graph.nodes.get(&id) {
                     let node_pos = node.pos.to_vec2();
                     if !node.selected || ctrl {
@@ -456,11 +457,7 @@ impl NodeGraphWidget {
             }
             return InteractionState::DraggingNode { node_id, offset };
         }
-        let has_io = !self.graph.nodes[&node_id].inputs.is_empty()
-            && !self.graph.nodes[&node_id].outputs.is_empty();
-        if has_io {
-            self.try_wire_insert(node_id, nodes);
-        }
+        self.try_wire_insert(node_id, pointer_canvas, nodes);
         InteractionState::Idle
     }
 
@@ -488,58 +485,23 @@ impl NodeGraphWidget {
         InteractionState::Idle
     }
 
-    fn try_wire_insert(&mut self, node_id: NodeId, nodes: &HashMap<NodeId, NodeWidget>) {
-        let Some(node_center) = nodes.get(&node_id).map(|w| w.node_rect().center()) else {
+    fn try_wire_insert(
+        &mut self,
+        node_id: NodeId,
+        pointer_canvas: Option<Pos2>,
+        nodes: &HashMap<NodeId, NodeWidget>,
+    ) {
+        let Some(point) =
+            pointer_canvas.or_else(|| Some(nodes.get(&node_id)?.node_rect().center()))
+        else {
             return;
         };
-        let mut best: Option<(usize, f32)> = None;
-        for (idx, conn) in self.graph.connections.iter().enumerate() {
-            if conn.from.node == node_id || conn.to.node == node_id {
-                continue;
-            }
-            let fp = nodes
-                .get(&conn.from.node)
-                .and_then(|w| w.output_socket_pos(conn.from.index));
-            let tp = nodes
-                .get(&conn.to.node)
-                .and_then(|w| w.input_socket_pos(conn.to.index));
-            let (Some(fp), Some(tp)) = (fp, tp) else {
-                continue;
-            };
-            let dist = bezier_wire_distance(fp, tp, node_center);
-            if dist < best.map_or(WIRE_INSERT_THRESHOLD, |(_, d)| d) {
-                best = Some((idx, dist));
-            }
-        }
-        let Some((idx, _)) = best else { return };
+        let Some(idx) = self.closest_insert_wire(node_id, point, nodes) else {
+            return;
+        };
         let conn = self.graph.connections[idx].clone();
 
-        let src_type = self
-            .graph
-            .nodes
-            .get(&conn.from.node)
-            .and_then(|n| n.outputs.get(conn.from.index))
-            .map(|s| s.effective_type().to_owned());
-        let dst_socket = self
-            .graph
-            .nodes
-            .get(&conn.to.node)
-            .and_then(|n| n.inputs.get(conn.to.index))
-            .cloned();
-        let nn = &self.graph.nodes[&node_id];
-
-        let in_idx = src_type.as_deref().and_then(|t| {
-            nn.inputs
-                .iter()
-                .position(|s| s.visible && s.accepts(t))
-        });
-        let out_idx = dst_socket.as_ref().and_then(|dst| {
-            nn.outputs
-                .iter()
-                .position(|s| s.visible && dst.accepts(&s.type_name))
-        });
-
-        if let (Some(ii), Some(oi)) = (in_idx, out_idx) {
+        if let Some((ii, oi)) = self.wire_insert_sockets(node_id, &conn) {
             self.push_undo_snapshot();
             self.graph.remove_connection_at(idx);
             self.graph.add_connection(
@@ -1003,48 +965,19 @@ impl NodeGraphWidget {
         }
     }
 
-    pub(super) fn compute_hovered_wire(
-        &self,
-        pointer_canvas: Option<Pos2>,
-        nodes: &HashMap<NodeId, NodeWidget>,
-    ) -> Option<usize> {
-        let pc = pointer_canvas?;
-        if matches!(
-            self.interaction_state,
-            InteractionState::DraggingWire { .. } | InteractionState::DraggingNode { .. }
-        ) {
-            return None;
-        }
-        let threshold = 10.0 / self.view.zoom;
-        let mut best: Option<(usize, f32)> = None;
-        for (idx, conn) in self.graph.connections.iter().enumerate() {
-            let Some(fp) = nodes
-                .get(&conn.from.node)
-                .and_then(|w| w.output_socket_pos(conn.from.index))
-            else {
-                continue;
-            };
-            let Some(tp) = nodes
-                .get(&conn.to.node)
-                .and_then(|w| w.input_socket_pos(conn.to.index))
-            else {
-                continue;
-            };
-            let dist = bezier_wire_distance(fp, tp, pc);
-            if dist < best.map_or(threshold, |(_, d)| d) {
-                best = Some((idx, dist));
-            }
-        }
-        best.map(|(idx, _)| idx)
-    }
-
-    pub(super) fn compute_insert_candidate_wire(
+    /// Wire overlapped by the dragged node's rect, ignoring wires already
+    /// attached to `node_id`; when several overlap, the one closest to
+    /// `point` (the pointer) wins. Compatibility is deliberately not a
+    /// selection criterion — the same wire must be chosen whether or not the
+    /// node fits, so the preview (highlight vs. muted) and the actual drop
+    /// always agree on the target.
+    fn closest_insert_wire(
         &self,
         node_id: NodeId,
+        point: Pos2,
         nodes: &HashMap<NodeId, NodeWidget>,
     ) -> Option<usize> {
-        let node_center = nodes.get(&node_id)?.node_rect().center();
-        let nn = &self.graph.nodes[&node_id];
+        let node_rect = nodes.get(&node_id)?.node_rect();
         let mut best: Option<(usize, f32)> = None;
         for (idx, conn) in self.graph.connections.iter().enumerate() {
             if conn.from.node == node_id || conn.to.node == node_id {
@@ -1059,34 +992,57 @@ impl NodeGraphWidget {
             let (Some(fp), Some(tp)) = (fp, tp) else {
                 continue;
             };
-            let src_t = self
-                .graph
-                .nodes
-                .get(&conn.from.node)
-                .and_then(|n| n.outputs.get(conn.from.index))
-                .map(|s| s.effective_type());
-            let dst_socket = self
-                .graph
-                .nodes
-                .get(&conn.to.node)
-                .and_then(|n| n.inputs.get(conn.to.index));
-            let ok_in = src_t.is_some_and(|t| {
-                nn.inputs.iter().any(|s| s.visible && s.accepts(t))
-            });
-            let ok_out = dst_socket.is_some_and(|dst| {
-                nn.outputs
-                    .iter()
-                    .any(|s| s.visible && dst.accepts(&s.type_name))
-            });
-            if !ok_in || !ok_out {
+            if !bezier_wire_intersects_rect(fp, tp, node_rect) {
                 continue;
             }
-            let dist = bezier_wire_distance(fp, tp, node_center);
-            if dist < best.map_or(WIRE_INSERT_THRESHOLD, |(_, d)| d) {
+            let dist = bezier_wire_distance(fp, tp, point);
+            if dist < best.map_or(f32::INFINITY, |(_, d)| d) {
                 best = Some((idx, dist));
             }
         }
         best.map(|(idx, _)| idx)
+    }
+
+    /// Socket indices (input, output) on `node_id` that would splice it into
+    /// `conn`, or `None` if the node cannot be inserted there.
+    fn wire_insert_sockets(&self, node_id: NodeId, conn: &Connection) -> Option<(usize, usize)> {
+        let src_type = self
+            .graph
+            .nodes
+            .get(&conn.from.node)?
+            .outputs
+            .get(conn.from.index)?
+            .effective_type()
+            .to_owned();
+        let dst_socket = self
+            .graph
+            .nodes
+            .get(&conn.to.node)?
+            .inputs
+            .get(conn.to.index)?;
+        let nn = self.graph.nodes.get(&node_id)?;
+        let in_idx = nn
+            .inputs
+            .iter()
+            .position(|s| s.visible && s.accepts(&src_type))?;
+        let out_idx = nn
+            .outputs
+            .iter()
+            .position(|s| s.visible && dst_socket.accepts(&s.type_name))?;
+        Some((in_idx, out_idx))
+    }
+
+    /// Wire the dragged node is hovering, and whether it can be spliced in.
+    pub(super) fn compute_insert_candidate_wire(
+        &self,
+        node_id: NodeId,
+        pointer_canvas: Option<Pos2>,
+        nodes: &HashMap<NodeId, NodeWidget>,
+    ) -> Option<(usize, bool)> {
+        let point = pointer_canvas.or_else(|| Some(nodes.get(&node_id)?.node_rect().center()))?;
+        let idx = self.closest_insert_wire(node_id, point, nodes)?;
+        let conn = self.graph.connections.get(idx)?;
+        Some((idx, self.wire_insert_sockets(node_id, conn).is_some()))
     }
 
     #[allow(clippy::too_many_arguments)]

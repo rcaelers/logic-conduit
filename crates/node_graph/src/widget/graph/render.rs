@@ -2,7 +2,8 @@ use super::{NodeGraphWidget, interaction::InteractionState, layout::GraphWidgetL
 use crate::{
     model::SocketDirection,
     support::paint::{
-        draw_box_select, draw_connections, draw_frames, draw_grid, draw_knife_line, draw_wire,
+        WireEmphasis, draw_box_select, draw_connections, draw_frames, draw_grid, draw_knife_line,
+        draw_wire,
     },
 };
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
@@ -18,20 +19,14 @@ impl NodeGraphWidget {
         layout: &GraphWidgetLayout,
     ) {
         let pointer_canvas = pointer.map(|p| self.view.screen_to_canvas(origin, p));
-        let fast_interaction = self.interaction_state.use_fast_rendering();
 
-        let hovered_wire =
+        // While a node is dragged over a wire, that wire previews the drop:
+        // highlighted when the node can be spliced in, muted when it can't.
+        let insert_candidate =
             if let InteractionState::DraggingNode { node_id, .. } = self.interaction_state {
-                let has_io = !fast_interaction
-                    && !self.graph.nodes[&node_id].inputs.is_empty()
-                    && !self.graph.nodes[&node_id].outputs.is_empty();
-                if has_io {
-                    self.compute_insert_candidate_wire(node_id, &layout.nodes)
-                } else {
-                    None
-                }
+                self.compute_insert_candidate_wire(node_id, pointer_canvas, &layout.nodes)
             } else {
-                self.compute_hovered_wire(pointer_canvas, &layout.nodes)
+                None
             };
 
         draw_grid(painter, rect, &self.view);
@@ -44,31 +39,32 @@ impl NodeGraphWidget {
         );
 
         let wire_w = (2.0 * self.view.zoom).clamp(1.0_f32, 4.0_f32);
-        draw_connections(painter, &self.graph, &layout.socket_screen_pos, wire_w);
+        draw_connections(
+            painter,
+            &self.graph,
+            &layout.socket_screen_pos,
+            wire_w,
+            |idx, conn| match insert_candidate {
+                Some((candidate, insertable)) if candidate == idx => {
+                    if insertable {
+                        WireEmphasis::Highlight
+                    } else {
+                        WireEmphasis::Muted
+                    }
+                }
+                _ => {
+                    let endpoint_selected = [conn.from.node, conn.to.node]
+                        .iter()
+                        .any(|id| self.graph.nodes.get(id).is_some_and(|n| n.selected));
+                    if endpoint_selected {
+                        WireEmphasis::Highlight
+                    } else {
+                        WireEmphasis::Normal
+                    }
+                }
+            },
+        );
         let mut socket_highlights = Vec::new();
-
-        if let Some(idx) = hovered_wire
-            && let Some(conn) = self.graph.connections.get(idx)
-            && let (Some(&fp), Some(&tp)) = (
-                layout.socket_screen_pos.get(&conn.from),
-                layout.socket_screen_pos.get(&conn.to),
-            )
-        {
-            let base = self
-                .graph
-                .nodes
-                .get(&conn.from.node)
-                .and_then(|n| n.outputs.get(conn.from.index))
-                .map(|s| s.color)
-                .unwrap_or(Color32::from_rgb(160, 160, 160));
-            let bright = Color32::from_rgba_unmultiplied(
-                (base.r() as f32 * 1.5).min(255.0) as u8,
-                (base.g() as f32 * 1.5).min(255.0) as u8,
-                (base.b() as f32 * 1.5).min(255.0) as u8,
-                255,
-            );
-            draw_wire(painter, fp, tp, bright, wire_w * 2.0);
-        }
 
         if let InteractionState::DraggingWire {
             from,

@@ -1,5 +1,5 @@
 use crate::{
-    model::{GraphState, SocketId},
+    model::{Connection, GraphState, SocketId},
     support::ViewState,
 };
 use egui::epaint::CubicBezierShape;
@@ -15,27 +15,37 @@ pub fn to_screen_rect(r: Rect, view: &ViewState, origin: Pos2) -> Rect {
     )
 }
 
-pub fn bezier_wire_distance(from: Pos2, to: Pos2, point: Pos2) -> f32 {
+/// Points sampled along the same cubic bezier that `draw_wire` renders.
+fn bezier_wire_points(from: Pos2, to: Pos2, steps: usize) -> impl Iterator<Item = Pos2> {
     let dx = (to.x - from.x).abs().max(50.0) * 0.5;
     let cp1 = from + Vec2::new(dx, 0.0);
     let cp2 = to - Vec2::new(dx, 0.0);
-    (0..=24)
-        .map(|k| {
-            let t = k as f32 / 24.0;
-            let u = 1.0 - t;
-            let p = Pos2::new(
-                u * u * u * from.x
-                    + 3.0 * u * u * t * cp1.x
-                    + 3.0 * u * t * t * cp2.x
-                    + t * t * t * to.x,
-                u * u * u * from.y
-                    + 3.0 * u * u * t * cp1.y
-                    + 3.0 * u * t * t * cp2.y
-                    + t * t * t * to.y,
-            );
-            point.distance(p)
-        })
+    (0..=steps).map(move |k| {
+        let t = k as f32 / steps as f32;
+        let u = 1.0 - t;
+        Pos2::new(
+            u * u * u * from.x
+                + 3.0 * u * u * t * cp1.x
+                + 3.0 * u * t * t * cp2.x
+                + t * t * t * to.x,
+            u * u * u * from.y
+                + 3.0 * u * u * t * cp1.y
+                + 3.0 * u * t * t * cp2.y
+                + t * t * t * to.y,
+        )
+    })
+}
+
+pub fn bezier_wire_distance(from: Pos2, to: Pos2, point: Pos2) -> f32 {
+    bezier_wire_points(from, to, 24)
+        .map(|p| point.distance(p))
         .fold(f32::INFINITY, f32::min)
+}
+
+/// Whether the wire passes through `rect`. Sampled densely enough that even
+/// a collapsed node can't fit between consecutive samples of a long wire.
+pub fn bezier_wire_intersects_rect(from: Pos2, to: Pos2, rect: Rect) -> bool {
+    bezier_wire_points(from, to, 64).any(|p| rect.contains(p))
 }
 
 pub fn draw_grid(painter: &Painter, rect: Rect, view: &ViewState) {
@@ -151,26 +161,60 @@ pub fn draw_wire(painter: &Painter, from: Pos2, to: Pos2, color: Color32, width:
     ));
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum WireEmphasis {
+    Normal,
+    /// Connected to a selected node, or a valid insert target for the
+    /// dragged node: brighter and thicker.
+    Highlight,
+    /// Insert target the dragged node cannot splice into: dimmed.
+    Muted,
+}
+
+fn brighten_wire_color(base: Color32) -> Color32 {
+    Color32::from_rgba_unmultiplied(
+        (base.r() as f32 * 1.5).min(255.0) as u8,
+        (base.g() as f32 * 1.5).min(255.0) as u8,
+        (base.b() as f32 * 1.5).min(255.0) as u8,
+        255,
+    )
+}
+
+fn mute_wire_color(base: Color32) -> Color32 {
+    Color32::from_rgba_unmultiplied(
+        (base.r() as f32 * 0.35) as u8,
+        (base.g() as f32 * 0.35) as u8,
+        (base.b() as f32 * 0.35) as u8,
+        255,
+    )
+}
+
 pub fn draw_connections(
     painter: &Painter,
     graph: &GraphState,
     socket_positions: &HashMap<SocketId, Pos2>,
     wire_width: f32,
+    emphasis: impl Fn(usize, &Connection) -> WireEmphasis,
 ) {
-    for conn in &graph.connections {
+    for (idx, conn) in graph.connections.iter().enumerate() {
         let Some(&from_p) = socket_positions.get(&conn.from) else {
             continue;
         };
         let Some(&to_p) = socket_positions.get(&conn.to) else {
             continue;
         };
-        let color = graph
+        let base = graph
             .nodes
             .get(&conn.from.node)
             .and_then(|n| n.outputs.get(conn.from.index))
             .map(|s| s.color)
             .unwrap_or(Color32::from_rgb(160, 160, 160));
-        draw_wire(painter, from_p, to_p, color, wire_width);
+        let (color, width) = match emphasis(idx, conn) {
+            WireEmphasis::Normal => (base, wire_width),
+            WireEmphasis::Highlight => (brighten_wire_color(base), wire_width * 2.0),
+            WireEmphasis::Muted => (mute_wire_color(base), wire_width),
+        };
+        draw_wire(painter, from_p, to_p, color, width);
     }
 }
 
