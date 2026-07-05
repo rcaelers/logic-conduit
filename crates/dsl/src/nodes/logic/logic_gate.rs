@@ -2,7 +2,6 @@
 
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
-use crate::runtime::receiver::ReceiverSelector;
 use crate::runtime::sample::Sample;
 use std::collections::VecDeque;
 use tracing::{debug, warn};
@@ -40,10 +39,21 @@ impl GateOp {
 /// Inputs: `in0..inN-1` — `Sample`
 /// Output: `out` — `Sample`
 ///
-/// Event-driven (module docs): holds every input's current level (initially
-/// false), recomputes on each received edge, and emits only output changes.
-/// The initial output is emitted at t=0. An input that shuts down keeps its
-/// last level for the remainder of the run.
+/// Merges its inputs in **strict timestamp order**: it holds every input's
+/// current level (initially false), keeps one pending edge per input, and
+/// applies the globally earliest one, blocking on an input whose next edge
+/// is unknown. Unlike trigger streams (SR latch), level streams make this
+/// safe: an input either advances or closes, and its edges are totally
+/// ordered — while a purely event-driven merge corrupts the output timeline
+/// whenever input arrival skew is large (a raw source channel runs
+/// megabytes ahead of a decode-derived control level, so its edges would be
+/// consumed far past the other input's current position and late edges
+/// clamped en masse). The cost is lag, not deadlock: the output advances at
+/// the pace of the laggiest input, which is the accepted-lag model of the
+/// level-stream contract (§3.1).
+///
+/// Emits only output changes; the initial output is emitted at t=0. An
+/// input that shuts down keeps its last level for the remainder of the run.
 pub struct LogicGate {
     name: String,
     op: GateOp,
@@ -51,6 +61,10 @@ pub struct LogicGate {
     started: bool,
     last_out: bool,
     last_emit_ts: u64,
+    /// Pending (peeked) edge per input, not yet applied.
+    heads: Vec<Option<Sample>>,
+    /// Inputs whose channel has closed; their level persists.
+    eos: Vec<bool>,
     buffers: Vec<VecDeque<Sample>>,
 }
 
@@ -69,6 +83,8 @@ impl LogicGate {
             started: false,
             last_out: false,
             last_emit_ts: 0,
+            heads: vec![None; num_inputs],
+            eos: vec![false; num_inputs],
             buffers: (0..num_inputs).map(|_| VecDeque::new()).collect(),
         }
     }
@@ -123,39 +139,50 @@ impl ProcessNode for LogicGate {
             receivers.push(receiver);
         }
 
-        // Block for one edge, then drain what is immediately available so
-        // simultaneous edges are applied deterministically.
-        let first = ReceiverSelector::new(&mut receivers).select()?;
-        let mut batch = vec![first];
+        // Strict merge: every live input must have a pending edge before any
+        // edge is applied — blocking on the lagging input is what keeps the
+        // output timeline ordered under arbitrary arrival skew.
         for (index, receiver) in receivers.iter_mut().enumerate() {
-            while let Ok(sample) = receiver.try_recv() {
-                batch.push((index, sample));
-            }
-        }
-        batch.sort_by_key(|(index, sample)| (sample.start_time, *index));
-
-        let mut emitted = 0;
-        for (index, sample) in batch {
-            self.levels[index] = sample.value;
-            let out = self.op.combine(&self.levels);
-            if out == self.last_out {
+            if self.heads[index].is_some() || self.eos[index] {
                 continue;
             }
-            let mut ts = sample.start_time;
-            if ts < self.last_emit_ts {
-                warn!(
-                    "[{}] out-of-order edge at {}ns clamped to {}ns",
-                    self.name, ts, self.last_emit_ts
-                );
-                ts = self.last_emit_ts;
+            match receiver.recv() {
+                Ok(sample) => self.heads[index] = Some(sample),
+                Err(WorkError::Shutdown) => self.eos[index] = true,
+                Err(e) => return Err(e),
             }
-            self.last_out = out;
-            self.last_emit_ts = ts;
-            debug!("[{}] out={} at {}ns", self.name, out, ts);
-            output.send(Sample::new(out, ts))?;
-            emitted += 1;
         }
-        Ok(emitted)
+
+        // Apply the globally earliest pending edge (input order breaks ties).
+        let next = self
+            .heads
+            .iter()
+            .enumerate()
+            .filter_map(|(index, head)| head.map(|sample| (index, sample)))
+            .min_by_key(|(index, sample)| (sample.start_time, *index));
+        let Some((index, sample)) = next else {
+            return Err(WorkError::Shutdown); // all inputs closed and drained
+        };
+        self.heads[index] = None;
+
+        self.levels[index] = sample.value;
+        let out = self.op.combine(&self.levels);
+        if out == self.last_out {
+            return Ok(0);
+        }
+        let mut ts = sample.start_time;
+        if ts < self.last_emit_ts {
+            warn!(
+                "[{}] out-of-order edge at {}ns clamped to {}ns",
+                self.name, ts, self.last_emit_ts
+            );
+            ts = self.last_emit_ts;
+        }
+        self.last_out = out;
+        self.last_emit_ts = ts;
+        debug!("[{}] out={} at {}ns", self.name, out, ts);
+        output.send(Sample::new(out, ts))?;
+        Ok(1)
     }
 }
 
@@ -277,6 +304,81 @@ mod tests {
     fn nand_initial_state_is_true() {
         let edges = run_gate(&mut LogicGate::new(GateOp::Nand, 2), vec![vec![], vec![]]);
         assert_eq!(edges, vec![Sample::new(true, 0)]);
+    }
+
+    /// The failure mode that motivated the strict merge: one input's edges
+    /// are all buffered immediately (a raw source channel), the other's
+    /// arrive late in wall-clock time but early in stream time (a
+    /// decode-derived level). The gate must still produce the
+    /// timestamp-ordered conjunction.
+    #[test]
+    fn strict_merge_survives_arrival_skew() {
+        use std::time::Duration;
+
+        let wd = Watchdog::new();
+        // Fast input: fully available up front.
+        let (fast_tx, fast_rx) = bounded::<ChannelMessage<Sample>>(256);
+        for edge in [
+            Sample::new(true, 100),
+            Sample::new(false, 200),
+            Sample::new(true, 300),
+            Sample::new(false, 400),
+        ] {
+            fast_tx.send(ChannelMessage::Sample(edge)).unwrap();
+        }
+        drop(fast_tx);
+        // Slow input: edges arrive with wall-clock delay.
+        let (slow_tx, slow_rx) = bounded::<ChannelMessage<Sample>>(256);
+        let feeder = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            slow_tx
+                .send(ChannelMessage::Sample(Sample::new(true, 150)))
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+            slow_tx
+                .send(ChannelMessage::Sample(Sample::new(false, 350)))
+                .unwrap();
+        });
+
+        let inputs = vec![
+            InputPort::new_with_watchdog(fast_rx, &wd, "gate", "in0"),
+            InputPort::new_with_watchdog(slow_rx, &wd, "gate", "in1"),
+        ];
+        let (out_tx, out_rx) = bounded::<ChannelMessage<Sample>>(256);
+        let outputs = vec![OutputPort::new_with_watchdog(
+            Sender::new(vec![out_tx]),
+            &wd,
+            "gate",
+            "out",
+        )];
+
+        let mut gate = LogicGate::new(GateOp::And, 2);
+        loop {
+            match gate.work(&inputs, &outputs) {
+                Ok(_) => {}
+                Err(WorkError::Shutdown) => break,
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+        feeder.join().unwrap();
+
+        let edges: Vec<Sample> = out_rx
+            .try_iter()
+            .filter_map(|m| match m {
+                ChannelMessage::Sample(s) => Some(s),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            edges,
+            vec![
+                Sample::new(false, 0),
+                Sample::new(true, 150),  // fast high @100, slow high @150
+                Sample::new(false, 200), // fast drops
+                Sample::new(true, 300),  // fast high again, slow still high
+                Sample::new(false, 350), // slow drops
+            ]
+        );
     }
 
     #[test]

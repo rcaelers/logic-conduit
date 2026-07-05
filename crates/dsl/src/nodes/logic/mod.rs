@@ -14,12 +14,22 @@
 //! All level outputs follow the level-stream contract: the initial value is
 //! emitted at t=0 on the first `work()` call, then changes only.
 //!
-//! Multi-input nodes are *event-driven*, not strict timestamp merges: they
-//! process whichever input has data (holding every input's current level)
-//! and order only the items that are available at that moment. A strict
-//! merge would starve on sparse inputs — it could not emit a set edge until
-//! the *next* reset arrived. Out-of-order arrivals across inputs are clamped
-//! to the last emitted timestamp and logged.
+//! Multi-input merge semantics differ by stream kind:
+//!
+//! - **Trigger inputs** ([`SrLatch`]) merge *event-driven*: process whichever
+//!   input has data, ordering only the items available at that moment. A
+//!   strict merge would starve — a trigger stream carries no "nothing
+//!   happened" information, so a set edge could not be emitted until the
+//!   *next* reset arrived. Out-of-order arrivals are clamped + logged
+//!   (set/reset derive from the same word stream, so their skew is
+//!   protocol-scale).
+//! - **Level inputs** ([`LogicGate`]) merge in *strict timestamp order*,
+//!   blocking on the input whose next edge is unknown. Levels make this safe
+//!   (each input either advances or closes) and it is required for
+//!   correctness: input arrival skew is unbounded — a raw source channel
+//!   runs megabytes ahead of a decode-derived control level — and an
+//!   event-driven merge would consume the fast input far past the slow one,
+//!   mass-clamping its edges and corrupting the output timeline.
 
 mod formatter;
 mod logic_gate;
