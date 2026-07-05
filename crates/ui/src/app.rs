@@ -27,32 +27,66 @@ impl App {
     }
 }
 
-/// Adds Noto Sans Symbols 2 as a fallback font: the single, consistent
-/// source for menu icon glyphs (modifier keys, undo/redo, cut/copy/paste/
-/// duplicate) that egui's bundled fonts don't cover.
+/// Adds the platform's native symbol font as a fallback for menu icon glyphs
+/// that egui's bundled fonts don't cover.
 fn install_fonts(ctx: &egui::Context) {
-    const FONT_NAME: &str = "noto-sans-symbols-2";
     let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        FONT_NAME.to_owned(),
-        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-            "../assets/fonts/NotoSansSymbols2-Regular.ttf"
-        ))),
-    );
-    fonts
-        .families
-        .get_mut(&egui::FontFamily::Proportional)
-        .unwrap()
-        .push(FONT_NAME.to_owned());
+    if let Some(font_data) = load_symbol_font() {
+        const FONT_NAME: &str = "system-symbols";
+        fonts
+            .font_data
+            .insert(FONT_NAME.to_owned(), std::sync::Arc::new(font_data));
+        fonts
+            .families
+            .get_mut(&egui::FontFamily::Proportional)
+            .unwrap()
+            .push(FONT_NAME.to_owned());
+    }
     ctx.set_fonts(fonts);
+}
+
+fn load_symbol_font() -> Option<egui::FontData> {
+    symbol_font_paths()
+        .iter()
+        .find_map(|path| std::fs::read(path).ok())
+        .map(egui::FontData::from_owned)
+}
+
+#[cfg(target_os = "macos")]
+fn symbol_font_paths() -> &'static [&'static str] {
+    &["/System/Library/Fonts/Apple Symbols.ttf"]
+}
+
+#[cfg(target_os = "windows")]
+fn symbol_font_paths() -> &'static [&'static str] {
+    &[r"C:\Windows\Fonts\seguisym.ttf"]
+}
+
+#[cfg(target_os = "linux")]
+fn symbol_font_paths() -> &'static [&'static str] {
+    &[
+        "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
+        "/usr/share/fonts/google-noto-sans-symbols2-fonts/NotoSansSymbols2-Regular.ttf",
+        "/usr/local/share/fonts/NotoSansSymbols2-Regular.ttf",
+    ]
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+fn symbol_font_paths() -> &'static [&'static str] {
+    &[]
 }
 
 #[cfg(test)]
 mod font_tests {
-    use super::install_fonts;
+    use super::{install_fonts, load_symbol_font};
 
     #[test]
     fn menu_icon_glyphs_are_available() {
+        assert!(
+            load_symbol_font().is_some(),
+            "missing platform symbol font; expected Apple Symbols on macOS, Segoe UI Symbol on Windows, or Noto Sans Symbols 2 on Linux"
+        );
         let ctx = egui::Context::default();
         install_fonts(&ctx);
         // `set_fonts` only takes effect at the start of the *next* pass.
@@ -61,14 +95,12 @@ mod font_tests {
         ctx.begin_pass(Default::default());
         let font_id = egui::FontId::proportional(14.0);
         ctx.fonts_mut(|fonts| {
-            // Every glyph sourced from our bundled Noto Sans Symbols 2 font
-            // (as opposed to egui's own bundled fonts, which already cover
-            // e.g. ✂ 🗐 ▣ and aren't ours to regression-test here).
-            for c in ['⇧', '⌘', '⌥', '⇪', '⏎', '⭮', '⭯', '🗎'] {
+            const MENU_GLYPHS: &[char] = &['⇧', '⌘', '⌥', '⇪', '⏎', '↶', '↷', '⌧', '⎘', '⧉', '▣'];
+            for c in MENU_GLYPHS {
                 assert!(
-                    fonts.has_glyph(&font_id, c),
+                    fonts.has_glyph(&font_id, *c),
                     "missing glyph for {c:?} (U+{:04X})",
-                    c as u32
+                    *c as u32
                 );
             }
         });

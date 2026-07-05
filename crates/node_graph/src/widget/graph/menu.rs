@@ -126,7 +126,7 @@ pub(super) fn build_context_entries(
         if any_selected {
             entries.push(
                 MenuEntry::action("Duplicate", GraphAction::DuplicateSelected)
-                    .with_icon("🗎")
+                    .with_icon("⧉")
                     .with_shortcut(Shortcut::shift(egui::Key::D)),
             );
         }
@@ -253,14 +253,14 @@ fn add_undo_redo_entries(
     if can_undo {
         entries.push(
             MenuEntry::action("Undo", GraphAction::Undo)
-                .with_icon("⭮")
+                .with_icon("↶")
                 .with_shortcut(Shortcut::command(egui::Key::Z)),
         );
     }
     if can_redo {
         entries.push(
             MenuEntry::action("Redo", GraphAction::Redo)
-                .with_icon("⭯")
+                .with_icon("↷")
                 .with_shortcut(Shortcut::command_shift(egui::Key::Z)),
         );
     }
