@@ -601,52 +601,54 @@ impl<T: Clone> Menu<T> {
             } else {
                 Color32::TRANSPARENT
             };
-            let job = Self::item_layout_job(ui, entry.icon.as_deref(), &entry.label);
+            ui.push_id((depth, i), |ui| {
+                let job = Self::item_layout_job(ui, entry.icon.as_deref(), &entry.label);
 
-            match &entry.kind {
-                MenuKind::SubMenu(_) => {
-                    let arrow = egui::containers::menu::SubMenuButton::RIGHT_ARROW;
-                    let btn = egui::Button::new(egui::WidgetText::LayoutJob(job.into()))
-                        .right_text(arrow)
-                        .fill(fill)
-                        .wrap_mode(egui::TextWrapMode::Extend);
-                    let resp = ui.add(btn);
-                    if resp.hovered() || resp.clicked() {
-                        if sel.len() <= depth {
-                            sel.resize(depth + 1, 0);
+                match &entry.kind {
+                    MenuKind::SubMenu(_) => {
+                        let arrow = egui::containers::menu::SubMenuButton::RIGHT_ARROW;
+                        let btn = egui::Button::new(egui::WidgetText::LayoutJob(job.into()))
+                            .right_text(arrow)
+                            .fill(fill)
+                            .wrap_mode(egui::TextWrapMode::Extend);
+                        let resp = ui.add(btn);
+                        if resp.hovered() || resp.clicked() {
+                            if sel.len() <= depth {
+                                sel.resize(depth + 1, 0);
+                            }
+                            sel[depth] = i;
+                            sel.truncate(depth + 1);
                         }
-                        sel[depth] = i;
-                        sel.truncate(depth + 1);
-                    }
-                    if sel.get(depth) == Some(&i) {
-                        selected_submenu_offset = Some(resp.rect.min.y - column_top);
-                    }
-                }
-                MenuKind::Action(action) => {
-                    let mut btn = egui::Button::new(egui::WidgetText::LayoutJob(job.into()))
-                        .fill(fill)
-                        .wrap_mode(egui::TextWrapMode::Extend);
-                    if let Some(sc) = entry.shortcut {
-                        btn = btn.right_text(sc.to_string());
-                    }
-                    let resp = ui.add(btn);
-                    if resp.hovered() {
-                        if sel.len() <= depth {
-                            sel.resize(depth + 1, 0);
+                        if sel.get(depth) == Some(&i) {
+                            selected_submenu_offset = Some(resp.rect.min.y - column_top);
                         }
-                        sel[depth] = i;
-                        sel.truncate(depth + 1);
                     }
-                    if resp.clicked() {
-                        *result = Some(action.clone());
-                        ui.close();
+                    MenuKind::Action(action) => {
+                        let mut btn = egui::Button::new(egui::WidgetText::LayoutJob(job.into()))
+                            .fill(fill)
+                            .wrap_mode(egui::TextWrapMode::Extend);
+                        if let Some(sc) = entry.shortcut {
+                            btn = btn.right_text(sc.to_string());
+                        }
+                        let resp = ui.add(btn);
+                        if resp.hovered() {
+                            if sel.len() <= depth {
+                                sel.resize(depth + 1, 0);
+                            }
+                            sel[depth] = i;
+                            sel.truncate(depth + 1);
+                        }
+                        if resp.clicked() {
+                            *result = Some(action.clone());
+                            ui.close();
+                        }
                     }
+                    MenuKind::Palette(items) => {
+                        Self::render_palette(ui, items, result);
+                    }
+                    MenuKind::Separator => unreachable!(),
                 }
-                MenuKind::Palette(items) => {
-                    Self::render_palette(ui, items, result);
-                }
-                MenuKind::Separator => unreachable!(),
-            }
+            });
         }
         selected_submenu_offset
     }

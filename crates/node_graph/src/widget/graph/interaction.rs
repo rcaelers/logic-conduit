@@ -2,7 +2,7 @@ use super::{
     NodeGraphWidget,
     action::ActionEffect,
     layout::GraphWidgetLayout,
-    menu::{build_context_entries, build_empty_canvas_entries},
+    menu::{build_add_entries, build_context_entries},
     minimap,
 };
 use crate::{
@@ -933,16 +933,8 @@ impl NodeGraphWidget {
         {
             let screen_pos = pointer.unwrap_or(canvas_rect.center());
             let canvas_pos = self.view.screen_to_canvas(origin, screen_pos);
-            self.menu.open_popup(
-                screen_pos,
-                build_empty_canvas_entries(
-                    &self.registry,
-                    canvas_pos,
-                    self.can_paste_nodes(),
-                    self.can_undo(),
-                    self.can_redo(),
-                ),
-            );
+            self.menu
+                .open_popup(screen_pos, build_add_entries(&self.registry, canvas_pos));
         }
 
         if let Some(action) = self.menu.update(ui, response, pointer, !cutting) {
