@@ -145,6 +145,12 @@ impl Scheduler {
         self.stop_signal.store(true, Ordering::Relaxed);
     }
 
+    /// Cloneable handle to request a stop from another thread while `wait()`
+    /// owns the scheduler (e.g. a UI Stop button).
+    pub fn stop_handle(&self) -> StopHandle {
+        StopHandle(Arc::clone(&self.stop_signal))
+    }
+
     /// Wait for all node threads to complete
     /// Uses a completion notification channel to join threads as they finish
     pub fn wait(mut self) {
@@ -211,6 +217,16 @@ impl Scheduler {
 impl Default for Scheduler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Cloneable stop signal detached from the scheduler's ownership.
+#[derive(Clone)]
+pub struct StopHandle(Arc<AtomicBool>);
+
+impl StopHandle {
+    pub fn stop(&self) {
+        self.0.store(true, Ordering::Relaxed);
     }
 }
 

@@ -30,7 +30,7 @@ pub use ports::{InputPort, OutputPort, Pipeline, PortDirection, PortSchema, regi
 pub use receiver::{Receiver, ReceiverSelector};
 pub use sample::Sample;
 pub use sample::SampleBlock;
-pub use scheduler::Scheduler;
+pub use scheduler::{Scheduler, StopHandle};
 pub use sender::ChannelMessage;
 pub use sender::Sender;
 pub use watchdog::Watchdog;

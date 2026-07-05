@@ -62,3 +62,35 @@ pub trait ProcessNode: Send {
     /// Returns Ok(n) where n is the number of items produced, or Err on failure
     fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize>;
 }
+
+/// Forwarding impl so factories (e.g. the graph compiler) can hand
+/// `Box<dyn ProcessNode>` to `Pipeline::add_process`.
+impl ProcessNode for Box<dyn ProcessNode> {
+    fn name(&self) -> &str {
+        (**self).name()
+    }
+    fn should_stop(&self) -> bool {
+        (**self).should_stop()
+    }
+    fn is_self_threading(&self) -> bool {
+        (**self).is_self_threading()
+    }
+    fn num_inputs(&self) -> usize {
+        (**self).num_inputs()
+    }
+    fn num_outputs(&self) -> usize {
+        (**self).num_outputs()
+    }
+    fn input_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
+        (**self).input_schema()
+    }
+    fn output_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
+        (**self).output_schema()
+    }
+    fn node_type(&self) -> &str {
+        (**self).node_type()
+    }
+    fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
+        (**self).work(inputs, outputs)
+    }
+}

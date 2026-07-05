@@ -1,11 +1,18 @@
+use crate::compile;
 use crate::logic_analyzer_viewer::LogicAnalyzerViewer;
 use crate::nodes;
-use node_graph::NodeGraphWidget;
+use node_graph::{NodeBadge, NodeGraphWidget, NodeId};
 
 pub struct App {
     node_graph: NodeGraphWidget,
     logic_analyzer: LogicAnalyzerViewer,
     analyzer_split: f32,
+    builders: compile::BuilderRegistry,
+    run: Option<compile::RunHandle>,
+    /// Last global compile/run message shown in the toolbar.
+    run_message: Option<(String, bool /* is_error */)>,
+    /// Nodes badged with compile errors; cleared on the next Run.
+    error_badges: Vec<NodeId>,
 }
 
 impl App {
@@ -18,7 +25,80 @@ impl App {
             node_graph: widget,
             logic_analyzer: LogicAnalyzerViewer::demo(),
             analyzer_split: 0.42,
+            builders: compile::BuilderRegistry::standard(),
+            run: None,
+            run_message: None,
+            error_badges: Vec::new(),
         }
+    }
+
+    fn start_run(&mut self) {
+        for id in self.error_badges.drain(..) {
+            self.node_graph.set_node_badge(id, None);
+        }
+        self.run_message = None;
+
+        match compile::compile(self.node_graph.graph(), &self.builders) {
+            Ok(scheduler) => {
+                self.run = Some(compile::start(scheduler));
+            }
+            Err(errors) => {
+                for error in &errors {
+                    if let Some(id) = error.node {
+                        self.node_graph
+                            .set_node_badge(id, Some(NodeBadge::error(&error.message)));
+                        self.error_badges.push(id);
+                    }
+                }
+                let summary = errors
+                    .first()
+                    .map(|e| e.message.clone())
+                    .unwrap_or_else(|| "compile failed".to_owned());
+                let extra = errors.len().saturating_sub(1);
+                self.run_message = Some((
+                    if extra > 0 {
+                        format!("{summary} (+{extra} more)")
+                    } else {
+                        summary
+                    },
+                    true,
+                ));
+            }
+        }
+    }
+
+    fn show_toolbar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.add_space(6.0);
+            let running = self.run.as_ref().is_some_and(compile::RunHandle::is_running);
+            if running {
+                if ui.button("⏹ Stop").clicked() {
+                    if let Some(run) = &self.run {
+                        run.stop();
+                    }
+                }
+                ui.spinner();
+                ui.label("Running…");
+                // Keep polling the background run without user input.
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(250));
+            } else {
+                if ui.button("▶ Run").clicked() {
+                    self.start_run();
+                }
+                if self.run.is_some() {
+                    ui.label("Finished");
+                }
+            }
+            if let Some((message, is_error)) = &self.run_message {
+                let color = if *is_error {
+                    egui::Color32::from_rgb(230, 120, 120)
+                } else {
+                    egui::Color32::from_rgb(180, 180, 180)
+                };
+                ui.colored_label(color, message);
+            }
+        });
     }
 }
 
@@ -108,7 +188,8 @@ impl eframe::App for App {
         let available = ui.available_size();
         let splitter_hit_height = 7.0;
         let splitter_visual_height = 2.0;
-        let usable_height = (available.y - splitter_hit_height).max(0.0);
+        let toolbar_height = 28.0;
+        let usable_height = (available.y - splitter_hit_height - toolbar_height).max(0.0);
         let analyzer_min = 160.0;
         let graph_min = 160.0;
         let mut analyzer_height = usable_height * self.analyzer_split;
@@ -160,6 +241,10 @@ impl eframe::App for App {
             egui::vec2(splitter_rect.width(), splitter_visual_height),
         );
         ui.painter().rect_filled(visual_rect, 0.0, splitter_color);
+
+        ui.allocate_ui(egui::vec2(available.x, toolbar_height), |ui| {
+            self.show_toolbar(ui);
+        });
 
         ui.allocate_ui(egui::vec2(available.x, graph_height), |ui| {
             self.node_graph.show(ui);
