@@ -85,10 +85,10 @@ impl fmt::Display for Shortcut {
             }
         }
         if self.modifiers.ctrl {
-            write!(f, "^")?;
+            write!(f, "^ ")?;
         }
         if self.modifiers.shift {
-            write!(f, "Shift+")?;
+            write!(f, "⇧ ")?;
         }
         if self.modifiers.alt {
             write!(f, "Alt+")?;
@@ -608,7 +608,8 @@ impl<T: Clone> Menu<T> {
                     let arrow = egui::containers::menu::SubMenuButton::RIGHT_ARROW;
                     let btn = egui::Button::new(egui::WidgetText::LayoutJob(job.into()))
                         .right_text(arrow)
-                        .fill(fill);
+                        .fill(fill)
+                        .wrap_mode(egui::TextWrapMode::Extend);
                     let resp = ui.add(btn);
                     if resp.hovered() || resp.clicked() {
                         if sel.len() <= depth {
@@ -622,8 +623,9 @@ impl<T: Clone> Menu<T> {
                     }
                 }
                 MenuKind::Action(action) => {
-                    let mut btn =
-                        egui::Button::new(egui::WidgetText::LayoutJob(job.into())).fill(fill);
+                    let mut btn = egui::Button::new(egui::WidgetText::LayoutJob(job.into()))
+                        .fill(fill)
+                        .wrap_mode(egui::TextWrapMode::Extend);
                     if let Some(sc) = entry.shortcut {
                         btn = btn.right_text(sc.to_string());
                     }
