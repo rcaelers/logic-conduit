@@ -26,6 +26,11 @@ impl SocketDef for AnySocket {
     }
 }
 
+// Builtin config sockets follow the graph-wide styling axes (design §3.2):
+// square = static config, and the hue is the payload family shared with the
+// stream types (green logic, blue integer, violet float, rose text, tan file).
+// Red is reserved for error feedback, grey for the wildcard.
+
 impl SocketDef for BoolSocket {
     type Value = bool;
 
@@ -33,7 +38,7 @@ impl SocketDef for BoolSocket {
         "Bool"
     }
     fn color() -> Color32 {
-        Color32::from_rgb(200, 80, 80)
+        Color32::from_rgb(95, 175, 95)
     }
     fn shape() -> SocketShape {
         SocketShape::Square
@@ -47,10 +52,10 @@ impl SocketDef for IntSocket {
         "Int"
     }
     fn color() -> Color32 {
-        Color32::from_rgb(110, 155, 110)
+        Color32::from_rgb(95, 145, 210)
     }
     fn shape() -> SocketShape {
-        SocketShape::Diamond
+        SocketShape::Square
     }
 }
 
@@ -61,7 +66,10 @@ impl SocketDef for FloatSocket {
         "Float"
     }
     fn color() -> Color32 {
-        Color32::from_rgb(160, 160, 160)
+        Color32::from_rgb(165, 130, 215)
+    }
+    fn shape() -> SocketShape {
+        SocketShape::Square
     }
 }
 
@@ -72,7 +80,10 @@ impl SocketDef for StrSocket {
         "String"
     }
     fn color() -> Color32 {
-        Color32::from_rgb(200, 160, 160)
+        Color32::from_rgb(215, 150, 170)
+    }
+    fn shape() -> SocketShape {
+        SocketShape::Square
     }
 }
 
@@ -411,7 +422,7 @@ impl InlineControl for FileValue {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct EnumValue {
     pub index: usize,
     pub variants: Vec<String>,
@@ -423,6 +434,55 @@ impl EnumValue {
             index,
             variants: variants.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    /// The currently selected variant name ("" when out of range).
+    pub fn selected(&self) -> &str {
+        self.variants.get(self.index).map_or("", String::as_str)
+    }
+
+    /// Selects `name` if it is a known variant; ignores unknown names.
+    pub fn select(&mut self, name: &str) {
+        if let Some(index) = self.variants.iter().position(|variant| variant == name) {
+            self.index = index;
+        }
+    }
+}
+
+/// Persisted by variant *name*, not index, so saved graphs survive variant
+/// reorders in node defs. Legacy files that stored only an index still load.
+impl Serialize for EnumValue {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("EnumValue", 2)?;
+        s.serialize_field("value", self.selected())?;
+        s.serialize_field("variants", &self.variants)?;
+        s.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for EnumValue {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Repr {
+            #[serde(default)]
+            value: Option<String>,
+            #[serde(default)]
+            index: Option<usize>,
+            #[serde(default)]
+            variants: Vec<String>,
+        }
+        let repr = Repr::deserialize(deserializer)?;
+        let index = repr
+            .value
+            .and_then(|name| repr.variants.iter().position(|variant| *variant == name))
+            .or(repr.index)
+            .unwrap_or(0)
+            .min(repr.variants.len().saturating_sub(1));
+        Ok(Self {
+            index,
+            variants: repr.variants,
+        })
     }
 }
 

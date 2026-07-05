@@ -1,6 +1,6 @@
 use super::control::InlineControl;
 use super::socket::{SocketDef, SocketWithControlDef};
-use crate::model::{Socket, SocketShape};
+use crate::model::{NodeBadge, Socket, SocketShape};
 use egui::{Color32, Rect, Ui};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -157,6 +157,10 @@ impl<S, T: InlineControl> ControlBinding<S> for ControlBindingRenderer<S, T> {
 pub struct PropDef<S> {
     pub id: &'static str,
     pub label: &'static str,
+    /// Row height when rendered in the properties panel; `None` uses the
+    /// panel's default row height. Controls that need more vertical room
+    /// (e.g. a channel grid) set this.
+    pub(crate) panel_height: Option<f32>,
     pub(crate) binding: Box<dyn ControlBinding<S>>,
 }
 
@@ -169,11 +173,31 @@ impl<S: 'static> PropDef<S> {
         Self {
             id,
             label,
+            panel_height: None,
             binding: Box::new(ControlBindingRenderer {
                 label: label.to_owned(),
                 accessor,
             }),
         }
+    }
+
+    /// Requests a taller row in the properties panel.
+    pub fn panel_height(mut self, height: f32) -> Self {
+        self.panel_height = Some(height);
+        self
+    }
+}
+
+/// A titled, collapsible group of props in the properties panel (§4.11):
+/// the home of low-frequency configuration that would bloat the node body.
+pub struct PanelSection<S> {
+    pub title: &'static str,
+    pub props: Vec<PropDef<S>>,
+}
+
+impl<S> PanelSection<S> {
+    pub fn new(title: &'static str, props: Vec<PropDef<S>>) -> Self {
+        Self { title, props }
     }
 }
 
@@ -207,9 +231,26 @@ pub trait NodeDef: 'static {
     {
         vec![]
     }
+    /// Properties shown in the right-docked properties panel when this node
+    /// is active. Edits run through the same state/`on_update` path as
+    /// inline controls.
+    fn panel() -> Vec<PanelSection<Self::State>>
+    where
+        Self: Sized,
+    {
+        vec![]
+    }
     fn on_update(_state: &mut Self::State, _inputs: &mut [Socket], _outputs: &mut [Socket])
     where
         Self: Sized,
     {
+    }
+    /// Status message shown under the node, recomputed after every state
+    /// update (validation notes, clamped settings, …).
+    fn badge(_state: &Self::State) -> Option<NodeBadge>
+    where
+        Self: Sized,
+    {
+        None
     }
 }

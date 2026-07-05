@@ -9,5 +9,5 @@ pub use connection::Connection;
 pub use frame::{Frame, FrameId};
 pub use graph::GraphState;
 pub use ids::{NodeId, SocketDirection, SocketId};
-pub use node::{Node, NodeKind};
+pub use node::{BadgeSeverity, Node, NodeBadge, NodeKind};
 pub use socket::{Socket, SocketShape, VariadicInfo};

@@ -770,6 +770,13 @@ impl NodeGraphWidget {
             } else {
                 node.selected = true;
             }
+            // Blender-style "active" node: the properties panel follows the
+            // most recent selection.
+            if node.selected {
+                self.active_node = Some(id);
+            } else if self.active_node == Some(id) {
+                self.active_node = None;
+            }
         }
     }
 

@@ -76,6 +76,7 @@ pub(super) enum GraphAction {
         target: Option<NodeId>,
     },
     ToggleMinimap,
+    TogglePanel,
     Save,
     Load,
 }
@@ -102,6 +103,7 @@ impl HotkeyRegistry {
             GraphAction::Delete { target: None },
         );
         r.bind(Shortcut::key(egui::Key::M), GraphAction::ToggleMinimap);
+        r.bind(Shortcut::key(egui::Key::N), GraphAction::TogglePanel);
         r.bind(Shortcut::ctrl(egui::Key::S), GraphAction::Save);
         r.bind(Shortcut::ctrl(egui::Key::O), GraphAction::Load);
         r
@@ -217,6 +219,10 @@ impl NodeGraphWidget {
             }
             GraphAction::ToggleMinimap => {
                 self.minimap_visible = !self.minimap_visible;
+                ActionEffect::None
+            }
+            GraphAction::TogglePanel => {
+                self.toggle_panel();
                 ActionEffect::None
             }
             GraphAction::Save => {

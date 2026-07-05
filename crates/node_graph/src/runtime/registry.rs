@@ -146,6 +146,7 @@ fn build_node<T: NodeDef>(id: NodeId, pos: Pos2, state: T::State) -> NodeRuntime
     let inputs = T::inputs();
     let outputs = T::outputs();
     let properties = T::props();
+    let panel = T::panel();
     let state_json = serde_json::to_value(&state).expect("node state must serialize");
     let input_sockets = build_input_sockets(&inputs);
     let output_sockets = build_output_sockets(&outputs);
@@ -153,6 +154,7 @@ fn build_node<T: NodeDef>(id: NodeId, pos: Pos2, state: T::State) -> NodeRuntime
         id,
         kind: NodeKind::Regular,
         title: T::name().to_owned(),
+        type_name: T::name().to_owned(),
         header_color: T::color(),
         pos,
         inputs: input_sockets,
@@ -160,6 +162,7 @@ fn build_node<T: NodeDef>(id: NodeId, pos: Pos2, state: T::State) -> NodeRuntime
         collapsed: false,
         state: state_json,
         property_count: properties.len(),
+        badge: None,
         selected: false,
     };
     let mut instance: Box<dyn NodeInstance> = Box::new(TypedNode::<T> {
@@ -167,9 +170,11 @@ fn build_node<T: NodeDef>(id: NodeId, pos: Pos2, state: T::State) -> NodeRuntime
         inputs,
         outputs,
         properties,
+        panel,
     });
     instance.update(&mut node.inputs, &mut node.outputs);
     node.state = instance.save_state();
+    node.badge = instance.badge();
     NodeRuntime { node, instance }
 }
 
@@ -182,6 +187,7 @@ pub(crate) fn restore_node<T: NodeDef>(node: &mut Node) -> Box<dyn NodeInstance>
     let inputs = T::inputs();
     let outputs = T::outputs();
     let properties = T::props();
+    let panel = T::panel();
 
     reconcile_input_sockets(&mut node.inputs, &inputs);
     if node.outputs.len() != outputs.len() {
@@ -194,14 +200,19 @@ pub(crate) fn restore_node<T: NodeDef>(node: &mut Node) -> Box<dyn NodeInstance>
     }
 
     node.property_count = properties.len();
+    if node.type_name.is_empty() {
+        node.type_name = T::name().to_owned();
+    }
     let mut instance: Box<dyn NodeInstance> = Box::new(TypedNode::<T> {
         state,
         inputs,
         outputs,
         properties,
+        panel,
     });
     instance.update(&mut node.inputs, &mut node.outputs);
     node.state = instance.save_state();
+    node.badge = instance.badge();
     instance
 }
 
@@ -222,6 +233,13 @@ impl RegisteredNodeType {
             create: create_node::<T>,
             restore: restore_node::<T>,
         }
+    }
+}
+
+impl NodeTypeRegistry {
+    /// Category of a registered node type, for read-only display.
+    pub fn category_of(&self, type_name: &str) -> Option<&str> {
+        self.find(type_name).map(|def| def.category.as_str())
     }
 }
 
@@ -301,7 +319,7 @@ impl NodeTypeRegistry {
 
     pub(crate) fn restore_node(&self, node: &mut Node) -> Option<Box<dyn NodeInstance>> {
         if node.kind == NodeKind::Regular
-            && let Some(definition) = self.find(&node.title)
+            && let Some(definition) = self.find(node.def_name())
         {
             return Some((definition.restore)(node));
         }

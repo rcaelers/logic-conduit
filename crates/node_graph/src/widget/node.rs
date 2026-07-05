@@ -1,5 +1,8 @@
 use crate::{
-    model::{GraphState, Node, NodeId, NodeKind, SocketDirection, SocketId, SocketShape},
+    model::{
+        BadgeSeverity, GraphState, Node, NodeBadge, NodeId, NodeKind, SocketDirection, SocketId,
+        SocketShape,
+    },
     runtime::{NodeInstance, NodeTypeRegistry},
     support::{ViewState, paint::to_screen_rect},
 };
@@ -251,6 +254,7 @@ impl NodeWidget {
         &self,
         painter: &Painter,
         node: &Node,
+        badge: Option<&NodeBadge>,
         registry: &NodeTypeRegistry,
         view: &ViewState,
         origin: Pos2,
@@ -261,6 +265,10 @@ impl NodeWidget {
         if node.kind == NodeKind::Reroute {
             draw_reroute(painter, node_s, node.selected);
             return;
+        }
+
+        if let Some(badge) = badge {
+            draw_badge(painter, node_s, badge, view.zoom);
         }
 
         let s = |p: Pos2| view.canvas_to_screen(origin, p);
@@ -493,6 +501,32 @@ impl NodeWidget {
 }
 
 // ── Private draw helpers ──────────────────────────────────────────────────────
+
+/// Status pill under the node body. Wraps at ~1.6 node widths so long
+/// compile errors stay readable without dwarfing the node.
+fn draw_badge(painter: &Painter, node_screen_rect: Rect, badge: &NodeBadge, zoom: f32) {
+    if zoom < 0.35 {
+        return;
+    }
+    let (fill, icon) = match badge.severity {
+        BadgeSeverity::Info => (Color32::from_rgb(62, 62, 62), "ℹ"),
+        BadgeSeverity::Warning => (Color32::from_rgb(140, 105, 30), "⚠"),
+        BadgeSeverity::Error => (Color32::from_rgb(150, 45, 45), "⚠"),
+    };
+    let font = FontId::proportional((11.0 * zoom).clamp(8.0, 14.0));
+    let wrap_width = node_screen_rect.width() * 1.6;
+    let galley = painter.layout(
+        format!("{icon} {}", badge.text),
+        font,
+        Color32::from_rgb(235, 235, 235),
+        wrap_width,
+    );
+    let pad = Vec2::new(6.0, 3.0);
+    let pos = node_screen_rect.left_bottom() + Vec2::new(0.0, 6.0 * zoom.max(0.5));
+    let rect = Rect::from_min_size(pos, galley.size() + pad * 2.0);
+    painter.rect_filled(rect, CornerRadius::same(4), fill);
+    painter.galley(pos + pad, galley, Color32::WHITE);
+}
 
 fn draw_collapse_toggle(painter: &Painter, rect: Rect, collapsed: bool) {
     let center = rect.center();

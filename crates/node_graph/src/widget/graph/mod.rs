@@ -3,14 +3,16 @@ mod interaction;
 mod layout;
 mod menu;
 mod minimap;
+mod panel;
 mod render;
 
 use action::HotkeyRegistry;
 use interaction::{GraphResponses, InteractionState};
 use menu::MenuController;
+use panel::PanelState;
 
 use crate::{
-    model::{FrameId, GraphState, Node, NodeId},
+    model::{FrameId, GraphState, Node, NodeBadge, NodeId},
     runtime::NodeTypeRegistry,
     runtime::{NodeInstance, NodeRuntime},
     support::ViewState,
@@ -35,6 +37,12 @@ pub struct NodeGraphWidget {
     undo_stack: Vec<GraphState>,
     redo_stack: Vec<GraphState>,
     frame_rename: Option<FrameRenameState>,
+    /// Most recently clicked/added node; the properties panel shows it.
+    active_node: Option<NodeId>,
+    panel: PanelState,
+    /// Badges set from outside the graph (compiler errors, runtime status);
+    /// they take precedence over def-driven badges.
+    external_badges: HashMap<NodeId, NodeBadge>,
 }
 
 struct FrameRenameState {
@@ -60,6 +68,9 @@ impl NodeGraphWidget {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             frame_rename: None,
+            active_node: None,
+            panel: PanelState::default(),
+            external_badges: HashMap::new(),
         }
     }
 
@@ -83,9 +94,40 @@ impl NodeGraphWidget {
             let nid = node.id;
             self.runtime.insert(nid, instance);
             self.graph.add_node(node);
+            self.active_node = Some(nid);
             Some(nid)
         } else {
             None
+        }
+    }
+
+    /// Replaces a node's state wholesale and re-runs its def (sockets,
+    /// visibility, badge) — the programmatic equivalent of editing its
+    /// controls. Returns false when the node or its def is unknown or the
+    /// state fails to restore.
+    pub fn set_node_state(&mut self, id: NodeId, state: serde_json::Value) -> bool {
+        let Some(node) = self.graph.nodes.get_mut(&id) else {
+            return false;
+        };
+        node.state = state;
+        let Some(instance) = self.registry.restore_node(node) else {
+            return false;
+        };
+        self.runtime.insert(id, instance);
+        true
+    }
+
+    /// Sets (or clears, with `None`) an externally owned badge on a node —
+    /// compile errors, runtime status. External badges render instead of the
+    /// def's own badge while present.
+    pub fn set_node_badge(&mut self, id: NodeId, badge: Option<NodeBadge>) {
+        match badge {
+            Some(badge) => {
+                self.external_badges.insert(id, badge);
+            }
+            None => {
+                self.external_badges.remove(&id);
+            }
         }
     }
 
@@ -95,6 +137,7 @@ impl NodeGraphWidget {
         {
             instance.update(&mut node.inputs, &mut node.outputs);
             node.state = instance.save_state();
+            node.badge = instance.badge();
         }
     }
 
@@ -143,16 +186,29 @@ impl NodeGraphWidget {
             .hover_pos()
             .or_else(|| ui.input(|i| i.pointer.hover_pos()));
 
+        // The properties panel claims a right-hand strip; the rest of the
+        // chrome (minimap, zoom hit-testing) works with what remains.
+        let panel_rect = self.panel_rect(rect);
+        let content_rect = panel_rect.map_or(rect, |panel| {
+            egui::Rect::from_min_max(rect.min, Pos2::new(panel.left(), rect.max.y))
+        });
+        if let Some(panel_rect) = panel_rect {
+            self.update_panel_interaction(ui, panel_rect);
+        }
+
         let layout = self.build_layout(origin);
         let responses = if self.interaction_state.use_fast_rendering() {
             GraphResponses::canvas_only(response)
         } else {
-            self.allocate_responses(ui, response, &layout, rect)
+            self.allocate_responses(ui, response, &layout, content_rect)
         };
-        self.handle_input(ui, &responses, origin, &layout, rect);
+        self.handle_input(ui, &responses, origin, &layout, content_rect);
 
         let layout = self.build_layout(origin);
-        self.draw_graph(ui, &painter, rect, origin, pointer, &layout);
+        self.draw_graph(ui, &painter, content_rect, origin, pointer, &layout);
+        if let Some(panel_rect) = panel_rect {
+            self.show_properties_panel(ui, panel_rect);
+        }
         self.show_frame_rename(ui.ctx());
     }
 }

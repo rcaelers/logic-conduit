@@ -2,6 +2,7 @@
 
 mod app;
 mod logic_analyzer_viewer;
+mod nodes;
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
