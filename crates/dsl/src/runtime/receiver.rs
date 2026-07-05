@@ -245,51 +245,58 @@ impl<'b, 'a, T> ReceiverSelector<'b, 'a, T> {
     /// Blocking receive from any channel. Checks all putback buffers first
     /// (in order), then falls through to `crossbeam_channel::Select`.
     ///
+    /// A channel that delivers `EndOfStream` (or disconnects) is marked EOS
+    /// and skipped; selection continues on the remaining live channels.
+    /// Returns `Err(WorkError::Shutdown)` only when *all* channels are EOS.
+    ///
     /// Returns `(channel_index, item)`.
     pub fn select(&mut self) -> WorkResult<(usize, T)> {
-        // Check buffers first (round-robin from index 0)
-        for (i, ch) in self.channels.iter_mut().enumerate() {
-            if ch.eos.load(Ordering::Relaxed) {
-                continue;
+        loop {
+            // Check buffers first (round-robin from index 0)
+            for (i, ch) in self.channels.iter_mut().enumerate() {
+                if ch.eos.load(Ordering::Relaxed) {
+                    continue;
+                }
+                if let Some(item) = ch.buffer.pop_front() {
+                    return Ok((i, item));
+                }
             }
-            if let Some(item) = ch.buffer.pop_front() {
-                return Ok((i, item));
-            }
-        }
 
-        // All buffers empty — block on crossbeam Select (skip EOS channels)
-        let mut sel = crossbeam_channel::Select::new();
-        let mut index_map = Vec::new();
-        for (i, ch) in self.channels.iter().enumerate() {
-            if !ch.eos.load(Ordering::Relaxed) {
-                sel.recv(ch.receiver);
-                index_map.push(i);
+            // All buffers empty — block on crossbeam Select (skip EOS channels)
+            let mut sel = crossbeam_channel::Select::new();
+            let mut index_map = Vec::new();
+            for (i, ch) in self.channels.iter().enumerate() {
+                if !ch.eos.load(Ordering::Relaxed) {
+                    sel.recv(ch.receiver);
+                    index_map.push(i);
+                }
             }
-        }
 
-        if index_map.is_empty() {
-            return Err(WorkError::Shutdown);
-        }
-
-        let oper = sel.select();
-        let sel_idx = oper.index();
-        let ch_idx = index_map[sel_idx];
-        match oper.recv(self.channels[ch_idx].receiver) {
-            Ok(ChannelMessage::Sample(item)) => Ok((ch_idx, item)),
-            Ok(ChannelMessage::EndOfStream) => {
-                self.channels[ch_idx].eos.store(true, Ordering::Relaxed);
-                tracing::debug!(
-                    "ReceiverSelector::select() - channel {} EndOfStream",
-                    ch_idx
-                );
-                Err(WorkError::Shutdown)
+            if index_map.is_empty() {
+                return Err(WorkError::Shutdown);
             }
-            Err(_) => {
-                tracing::debug!(
-                    "ReceiverSelector::select() - channel {} disconnected, returning Shutdown",
-                    ch_idx
-                );
-                Err(WorkError::Shutdown)
+
+            let oper = sel.select();
+            let sel_idx = oper.index();
+            let ch_idx = index_map[sel_idx];
+            match oper.recv(self.channels[ch_idx].receiver) {
+                Ok(ChannelMessage::Sample(item)) => return Ok((ch_idx, item)),
+                Ok(ChannelMessage::EndOfStream) => {
+                    self.channels[ch_idx].eos.store(true, Ordering::Relaxed);
+                    tracing::debug!(
+                        "ReceiverSelector::select() - channel {} EndOfStream",
+                        ch_idx
+                    );
+                    // Keep selecting from the remaining live channels.
+                }
+                Err(_) => {
+                    self.channels[ch_idx].eos.store(true, Ordering::Relaxed);
+                    tracing::debug!(
+                        "ReceiverSelector::select() - channel {} disconnected",
+                        ch_idx
+                    );
+                    // Keep selecting from the remaining live channels.
+                }
             }
         }
     }
@@ -298,52 +305,56 @@ impl<'b, 'a, T> ReceiverSelector<'b, 'a, T> {
     /// first, then blocks on `crossbeam_channel::Select` for only those
     /// channels.
     ///
+    /// EOS channels are skipped like in [`select`](Self::select); returns
+    /// `Err(WorkError::Shutdown)` only when all listed channels are EOS.
+    ///
     /// Returns `(channel_index, item)` where `channel_index` is the
     /// original index into the slice.
     pub fn select_from(&mut self, indices: &[usize]) -> WorkResult<(usize, T)> {
-        // Check buffers first
-        for &i in indices {
-            if self.channels[i].eos.load(Ordering::Relaxed) {
-                continue;
+        loop {
+            // Check buffers first
+            for &i in indices {
+                if self.channels[i].eos.load(Ordering::Relaxed) {
+                    continue;
+                }
+                if let Some(item) = self.channels[i].buffer.pop_front() {
+                    return Ok((i, item));
+                }
             }
-            if let Some(item) = self.channels[i].buffer.pop_front() {
-                return Ok((i, item));
-            }
-        }
 
-        // Block on crossbeam Select for specified channels only (skip EOS channels)
-        let mut sel = crossbeam_channel::Select::new();
-        let mut index_map = Vec::new();
-        for &i in indices {
-            if !self.channels[i].eos.load(Ordering::Relaxed) {
-                sel.recv(self.channels[i].receiver);
-                index_map.push(i);
+            // Block on crossbeam Select for specified channels only (skip EOS channels)
+            let mut sel = crossbeam_channel::Select::new();
+            let mut index_map = Vec::new();
+            for &i in indices {
+                if !self.channels[i].eos.load(Ordering::Relaxed) {
+                    sel.recv(self.channels[i].receiver);
+                    index_map.push(i);
+                }
             }
-        }
 
-        if index_map.is_empty() {
-            return Err(WorkError::Shutdown);
-        }
-
-        let oper = sel.select();
-        let sel_idx = oper.index();
-        let rx_idx = index_map[sel_idx];
-        match oper.recv(self.channels[rx_idx].receiver) {
-            Ok(ChannelMessage::Sample(item)) => Ok((rx_idx, item)),
-            Ok(ChannelMessage::EndOfStream) => {
-                self.channels[rx_idx].eos.store(true, Ordering::Relaxed);
-                tracing::debug!(
-                    "ReceiverSelector::select_from() - channel {} EndOfStream",
-                    rx_idx
-                );
-                Err(WorkError::Shutdown)
+            if index_map.is_empty() {
+                return Err(WorkError::Shutdown);
             }
-            Err(_) => {
-                tracing::debug!(
-                    "ReceiverSelector::select_from() - channel {} disconnected, returning Shutdown",
-                    rx_idx
-                );
-                Err(WorkError::Shutdown)
+
+            let oper = sel.select();
+            let sel_idx = oper.index();
+            let rx_idx = index_map[sel_idx];
+            match oper.recv(self.channels[rx_idx].receiver) {
+                Ok(ChannelMessage::Sample(item)) => return Ok((rx_idx, item)),
+                Ok(ChannelMessage::EndOfStream) => {
+                    self.channels[rx_idx].eos.store(true, Ordering::Relaxed);
+                    tracing::debug!(
+                        "ReceiverSelector::select_from() - channel {} EndOfStream",
+                        rx_idx
+                    );
+                }
+                Err(_) => {
+                    self.channels[rx_idx].eos.store(true, Ordering::Relaxed);
+                    tracing::debug!(
+                        "ReceiverSelector::select_from() - channel {} disconnected",
+                        rx_idx
+                    );
+                }
             }
         }
     }

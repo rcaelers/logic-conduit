@@ -14,7 +14,7 @@
 //! Because each data value is obtained by blocking recv (not try_recv),
 //! the race condition from the old batch-decode approach is eliminated.
 
-use super::types::{CsPolarity, SpiMode, SpiTransfer, TimingInfo};
+use super::types::{BitOrder, CsPolarity, SpiMode, SpiTransfer, TimingInfo};
 use crate::runtime::Receiver;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::sample::Sample;
@@ -32,6 +32,7 @@ pub struct SpiDecoder {
     has_mosi: bool,
     has_miso: bool,
     cs_polarity: CsPolarity,
+    bit_order: BitOrder,
 
     /// Per-channel putback buffers, persisted across work() calls.
     /// Indexed by CS=0, CLK=1, MOSI=2, MISO=3.
@@ -72,6 +73,7 @@ impl SpiDecoder {
             has_mosi,
             has_miso,
             cs_polarity,
+            bit_order: BitOrder::default(),
             channel_buffers: (0..num_channels).map(|_| VecDeque::new()).collect(),
             prev_clk: false,
             tx_count: 0,
@@ -81,6 +83,12 @@ impl SpiDecoder {
     /// With custom name
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
+        self
+    }
+
+    /// With a bit order other than the default MSB-first
+    pub fn with_bit_order(mut self, bit_order: BitOrder) -> Self {
+        self.bit_order = bit_order;
         self
     }
 
@@ -195,6 +203,13 @@ impl ProcessNode for SpiDecoder {
         let bits_per_word = self.bits_per_word;
         let has_mosi = self.has_mosi;
         let has_miso = self.has_miso;
+        let bit_order = self.bit_order;
+        let bit_position = |bit_index: usize| -> u32 {
+            match bit_order {
+                BitOrder::MsbFirst => (bits_per_word - 1 - bit_index) as u32,
+                BitOrder::LsbFirst => bit_index as u32,
+            }
+        };
         let mut prev_clk = self.prev_clk;
 
         // ── Create named Receivers per channel with automatic watchdog ───────
@@ -324,7 +339,7 @@ impl ProcessNode for SpiDecoder {
                     match Self::value_at_time(mosi.as_mut().unwrap(), sample_time)? {
                         Some(mosi_val) => {
                             if mosi_val {
-                                mosi_word |= 1 << (bits_per_word - 1 - bits_collected);
+                                mosi_word |= 1 << bit_position(bits_collected);
                             }
                             trace!(
                                 "bit {}: CLK edge at {:.9}s, MOSI={}",
@@ -345,7 +360,7 @@ impl ProcessNode for SpiDecoder {
                     match Self::value_at_time(miso.as_mut().unwrap(), sample_time)? {
                         Some(miso_val) => {
                             if miso_val {
-                                miso_word |= 1 << (bits_per_word - 1 - bits_collected);
+                                miso_word |= 1 << bit_position(bits_collected);
                             }
                         }
                         None => {

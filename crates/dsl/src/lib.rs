@@ -30,6 +30,7 @@ pub use nodes::decoders::{CsPolarity, ParallelWord, SpiMode, SpiTransfer, Strobe
 // Re-export data types from runtime
 pub use runtime::Sample;
 pub use runtime::SampleBlock;
+pub use runtime::{NumberSample, TextSample, Trigger};
 
 // Re-export streaming nodes - DslFileSource only (SpiCommandController is application-specific)
 pub use nodes::{
@@ -50,6 +51,12 @@ pub use runtime::{
 // Re-export streaming decoders
 pub use nodes::decoders::ParallelDecoder;
 pub use nodes::decoders::SpiDecoder;
+
+// Re-export control-path logic nodes and sinks
+pub use nodes::logic::{
+    GateOp, LogicGate, SrLatch, TextFormatter, TriggerCounter, WordField, WordMatcher, WordSource,
+};
+pub use nodes::sinks::{BinaryFileWriter, WriteWidth};
 
 // Re-export streaming runtime components
 pub use runtime::{

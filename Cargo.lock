@@ -1029,6 +1029,7 @@ dependencies = [
  "memmap2",
  "minifb",
  "rusb",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",

@@ -27,7 +27,9 @@
 pub mod decoders;
 mod dsl_file;
 mod dslogic_u3pro16;
+pub mod logic;
 mod logic_analyzer;
+pub mod sinks;
 
 // Export DslFileSource and related types for file I/O
 pub use dsl_file::{

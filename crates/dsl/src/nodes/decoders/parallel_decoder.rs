@@ -4,7 +4,7 @@
 //! and Sample inputs for low-bandwidth control signals (enable_signal).
 //! Outputs ParallelWord events.
 
-use super::types::{CsPolarity, ParallelWord, StrobeMode, TimingInfo};
+use super::types::{CsPolarity, Endianness, ParallelWord, StrobeMode, TimingInfo};
 use crate::runtime::Receiver;
 use crate::runtime::WorkError;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkResult};
@@ -25,6 +25,11 @@ pub struct ParallelDecoder {
     mode: StrobeMode,
     cs_polarity: CsPolarity,
 
+    /// Bus cycles assembled into one output word (1 = one cycle per word)
+    cycles_per_word: usize,
+    /// Cycle order when `cycles_per_word > 1`
+    endianness: Endianness,
+
     /// Putback buffer for enable_signal (edge-based Sample input)
     enable_buffer: VecDeque<Sample>,
 
@@ -36,6 +41,11 @@ pub struct ParallelDecoder {
     last_strobe_value: bool,
     work_call_count: usize,
     total_words_emitted: u64,
+
+    /// Word-assembly state (persists across blocks)
+    assembly_value: u64,
+    assembly_cycles: usize,
+    assembly_first_ts: u64,
 }
 
 impl ParallelDecoder {
@@ -57,18 +67,37 @@ impl ParallelDecoder {
             num_data_bits,
             mode,
             cs_polarity,
+            cycles_per_word: 1,
+            endianness: Endianness::default(),
             enable_buffer: VecDeque::new(),
             current_enable_value: false,
             next_enable_change_position: 0,
             last_strobe_value: false,
             work_call_count: 0,
             total_words_emitted: 0,
+            assembly_value: 0,
+            assembly_cycles: 0,
+            assembly_first_ts: 0,
         }
     }
 
     /// With custom name
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
+        self
+    }
+
+    /// Assemble `cycles` successive bus samples into one output word.
+    /// `endianness` selects whether the first cycle is the least (`Little`)
+    /// or most (`Big`) significant part. Incomplete words at a CS/enable
+    /// boundary are dropped.
+    pub fn with_word_assembly(mut self, cycles: usize, endianness: Endianness) -> Self {
+        assert!(
+            cycles >= 1 && cycles * self.num_data_bits <= 64,
+            "cycles_per_word must be >= 1 and fit in 64 bits"
+        );
+        self.cycles_per_word = cycles;
+        self.endianness = endianness;
         self
     }
 }
@@ -173,20 +202,31 @@ impl ProcessNode for ParallelDecoder {
             data_inputs.push(input);
         }
 
+        // CS is optional when the polarity is Disabled (unconnected input →
+        // dummy port → get() returns None). When connected it is received
+        // every iteration regardless of polarity to stay in block lockstep.
         let mut cs_buf = VecDeque::new();
         let mut cs_input = inputs
             .get(1 + self.num_data_bits)
-            .and_then(|port| port.get::<SampleBlock>(&mut cs_buf))
-            .ok_or_else(|| WorkError::NodeError("Missing cs block input".to_string()))?;
+            .and_then(|port| port.get::<SampleBlock>(&mut cs_buf));
+        if cs_input.is_none() && self.cs_polarity != CsPolarity::Disabled {
+            return Err(WorkError::NodeError(
+                "CS input unconnected but CS polarity is not Disabled".to_string(),
+            ));
+        }
 
-        // Get edge input: enable_signal
+        // Get edge input: enable_signal — optional; unconnected means
+        // always enabled.
         // Use local variables for enable state to avoid borrowing self
         let mut current_enable_value = self.current_enable_value;
         let mut next_enable_change_position = self.next_enable_change_position;
         let mut enable_input = inputs
             .get(1 + self.num_data_bits + 1)
-            .and_then(|port| port.get::<Sample>(&mut self.enable_buffer))
-            .ok_or_else(|| WorkError::NodeError("Missing enable_signal input".to_string()))?;
+            .and_then(|port| port.get::<Sample>(&mut self.enable_buffer));
+        if enable_input.is_none() {
+            current_enable_value = true;
+            next_enable_change_position = u64::MAX;
+        }
 
         // Receive one block from each channel
         let strobe_block = strobe_input.recv()?;
@@ -202,15 +242,24 @@ impl ProcessNode for ParallelDecoder {
             }
             data_blocks.push(block);
         }
-        let cs_block = cs_input.recv()?;
+        let cs_block = match &mut cs_input {
+            Some(input) => Some(input.recv()?),
+            None => None,
+        };
 
         let mode = self.mode;
         let cs_polarity = self.cs_polarity;
+        let cycles_per_word = self.cycles_per_word;
+        let endianness = self.endianness;
+        let num_data_bits = self.num_data_bits;
         let num_samples = strobe_block.num_samples;
         let start_pos = strobe_block.start_position;
         let timestamp_step = strobe_block.timestamp_step;
         let mut words_emitted = 0u64;
         let mut last_strobe_value = self.last_strobe_value;
+        let mut assembly_value = self.assembly_value;
+        let mut assembly_cycles = self.assembly_cycles;
+        let mut assembly_first_ts = self.assembly_first_ts;
 
         // Iterate through all samples in this block
         for local_idx in 0..num_samples {
@@ -232,24 +281,35 @@ impl ProcessNode for ParallelDecoder {
             }
 
             // Check CS: is it inactive?
-            let cs_inactive = match cs_polarity {
-                CsPolarity::ActiveLow => cs_block.get_bit(position), // inactive = high
-                CsPolarity::ActiveHigh => !cs_block.get_bit(position), // inactive = low
-                CsPolarity::Disabled => true,
+            let cs_inactive = match (cs_polarity, &cs_block) {
+                (CsPolarity::ActiveLow, Some(cs)) => cs.get_bit(position), // inactive = high
+                (CsPolarity::ActiveHigh, Some(cs)) => !cs.get_bit(position), // inactive = low
+                _ => true, // Disabled or unconnected
             };
 
             if !cs_inactive {
+                // A gated-off cycle breaks any word being assembled.
+                if assembly_cycles > 0 {
+                    debug!(
+                        "[{}] dropping incomplete word ({}/{} cycles) at CS boundary",
+                        self.name, assembly_cycles, cycles_per_word
+                    );
+                    assembly_cycles = 0;
+                    assembly_value = 0;
+                }
                 continue;
             }
 
             // Check enable signal (edge-based, timestamps in nanoseconds) — inline advance logic
             let timestamp_ns = position * timestamp_step;
-            if timestamp_ns >= next_enable_change_position {
+            if timestamp_ns >= next_enable_change_position
+                && let Some(enable) = &mut enable_input
+            {
                 loop {
-                    match enable_input.peek() {
+                    match enable.peek() {
                         Ok(next_edge) => {
                             if next_edge.start_time <= timestamp_ns {
-                                let edge = enable_input.recv()?;
+                                let edge = enable.recv()?;
                                 current_enable_value = edge.value;
                             } else {
                                 next_enable_change_position = next_edge.start_time;
@@ -266,6 +326,15 @@ impl ProcessNode for ParallelDecoder {
             }
 
             if !current_enable_value {
+                // A gated-off cycle breaks any word being assembled.
+                if assembly_cycles > 0 {
+                    debug!(
+                        "[{}] dropping incomplete word ({}/{} cycles) at enable boundary",
+                        self.name, assembly_cycles, cycles_per_word
+                    );
+                    assembly_cycles = 0;
+                    assembly_value = 0;
+                }
                 continue;
             }
 
@@ -277,13 +346,33 @@ impl ProcessNode for ParallelDecoder {
                 }
             }
 
+            // Assemble cycles into a word (cycles_per_word == 1 passes
+            // each cycle straight through).
+            if assembly_cycles == 0 {
+                assembly_first_ts = timestamp_ns;
+            }
+            match endianness {
+                Endianness::Little => {
+                    assembly_value |= value << (assembly_cycles * num_data_bits);
+                }
+                Endianness::Big => {
+                    assembly_value = (assembly_value << num_data_bits) | value;
+                }
+            }
+            assembly_cycles += 1;
+            if assembly_cycles < cycles_per_word {
+                continue;
+            }
+
             let word = ParallelWord {
-                value,
+                value: assembly_value,
                 timing: TimingInfo::new(
-                    timestamp_ns as f64 / 1_000.0, // Convert ns to microseconds
-                    timestamp_ns,
+                    assembly_first_ts as f64 / 1_000.0, // Convert ns to microseconds
+                    assembly_first_ts,
                 ),
             };
+            assembly_value = 0;
+            assembly_cycles = 0;
 
             output.send(word)?;
             words_emitted += 1;
@@ -294,6 +383,9 @@ impl ProcessNode for ParallelDecoder {
         self.current_enable_value = current_enable_value;
         self.next_enable_change_position = next_enable_change_position;
         self.total_words_emitted += words_emitted;
+        self.assembly_value = assembly_value;
+        self.assembly_cycles = assembly_cycles;
+        self.assembly_first_ts = assembly_first_ts;
 
         if self.work_call_count.is_multiple_of(10) || words_emitted > 0 {
             debug!(
@@ -309,6 +401,11 @@ impl ProcessNode for ParallelDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::node::ProcessNode;
+    use crate::runtime::sender::{ChannelMessage, Sender};
+    use crate::runtime::watchdog::Watchdog;
+    use crossbeam_channel::bounded;
+    use std::sync::Arc;
 
     #[test]
     fn test_decoder_creation() {
@@ -317,5 +414,131 @@ mod tests {
         assert_eq!(decoder.cs_polarity, CsPolarity::ActiveLow);
         // Block inputs: strobe + 8 data + cs = 10, Edge input: enable = 1, Total = 11
         assert_eq!(decoder.num_inputs(), 11);
+    }
+
+    fn block_from_bits(bits: &[bool]) -> SampleBlock {
+        let mut bytes = vec![0u8; bits.len().div_ceil(8)];
+        for (i, &bit) in bits.iter().enumerate() {
+            if bit {
+                bytes[i / 8] |= 1 << (i % 8);
+            }
+        }
+        SampleBlock::new(Arc::from(bytes.into_boxed_slice()), 0, bits.len(), 1)
+    }
+
+    fn block_input(wd: &Watchdog, block: SampleBlock, name: &str) -> InputPort {
+        let (tx, rx) = bounded::<ChannelMessage<SampleBlock>>(4);
+        tx.send(ChannelMessage::Sample(block)).unwrap();
+        drop(tx);
+        InputPort::new_with_watchdog(rx, wd, "pd", name)
+    }
+
+    fn unconnected(wd: &Watchdog, name: &str) -> InputPort {
+        InputPort::from_type_erased(Box::new(()) as Box<dyn std::any::Any + Send>)
+            .with_watchdog(wd.clone(), "pd".to_string(), name.to_string())
+    }
+
+    /// 4-bit bus, strobe rising at positions 1,5,9,13, bus values 1,2,3,4.
+    /// CS and enable are left unconnected.
+    fn run_4bit(decoder: &mut ParallelDecoder) -> Vec<ParallelWord> {
+        let wd = Watchdog::new();
+        let n = 16usize;
+        let values = [0u64, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4];
+        let strobe: Vec<bool> = (0..n).map(|i| i % 4 == 1 || i % 4 == 2).collect();
+        let mut inputs = vec![block_input(&wd, block_from_bits(&strobe), "strobe")];
+        for bit in 0..4 {
+            let bits: Vec<bool> = (0..n).map(|i| (values[i] >> bit) & 1 == 1).collect();
+            inputs.push(block_input(&wd, block_from_bits(&bits), &format!("d{bit}")));
+        }
+        inputs.push(unconnected(&wd, "cs"));
+        inputs.push(unconnected(&wd, "enable_signal"));
+
+        let (out_tx, out_rx) = bounded::<ChannelMessage<ParallelWord>>(64);
+        let outputs = [OutputPort::new_with_watchdog(
+            Sender::new(vec![out_tx]),
+            &wd,
+            "pd",
+            "words",
+        )];
+
+        loop {
+            match decoder.work(&inputs, &outputs) {
+                Ok(_) => {}
+                Err(WorkError::Shutdown) => break,
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+        out_rx
+            .try_iter()
+            .filter_map(|m| match m {
+                ChannelMessage::Sample(w) => Some(w),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn unconnected_cs_and_enable_pass_through() {
+        let mut decoder = ParallelDecoder::new(4, StrobeMode::RisingEdge, CsPolarity::Disabled);
+        let words = run_4bit(&mut decoder);
+        assert_eq!(
+            words.iter().map(|w| w.value).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+        // Timestamps at the strobe positions (step = 1ns).
+        assert_eq!(
+            words.iter().map(|w| w.timing.position).collect::<Vec<_>>(),
+            vec![1, 5, 9, 13]
+        );
+    }
+
+    #[test]
+    fn unconnected_cs_with_active_polarity_is_an_error() {
+        let wd = Watchdog::new();
+        let mut decoder = ParallelDecoder::new(1, StrobeMode::RisingEdge, CsPolarity::ActiveLow);
+        let inputs = [
+            block_input(&wd, block_from_bits(&[false, true]), "strobe"),
+            block_input(&wd, block_from_bits(&[true, true]), "d0"),
+            unconnected(&wd, "cs"),
+            unconnected(&wd, "enable_signal"),
+        ];
+        let (out_tx, _out_rx) = bounded::<ChannelMessage<ParallelWord>>(4);
+        let outputs = [OutputPort::new_with_watchdog(
+            Sender::new(vec![out_tx]),
+            &wd,
+            "pd",
+            "words",
+        )];
+        assert!(matches!(
+            decoder.work(&inputs, &outputs),
+            Err(WorkError::NodeError(_))
+        ));
+    }
+
+    #[test]
+    fn word_assembly_little_endian() {
+        let mut decoder = ParallelDecoder::new(4, StrobeMode::RisingEdge, CsPolarity::Disabled)
+            .with_word_assembly(2, Endianness::Little);
+        let words = run_4bit(&mut decoder);
+        assert_eq!(
+            words.iter().map(|w| w.value).collect::<Vec<_>>(),
+            vec![0x21, 0x43]
+        );
+        // Word timestamped at its first cycle.
+        assert_eq!(
+            words.iter().map(|w| w.timing.position).collect::<Vec<_>>(),
+            vec![1, 9]
+        );
+    }
+
+    #[test]
+    fn word_assembly_big_endian() {
+        let mut decoder = ParallelDecoder::new(4, StrobeMode::RisingEdge, CsPolarity::Disabled)
+            .with_word_assembly(2, Endianness::Big);
+        let words = run_4bit(&mut decoder);
+        assert_eq!(
+            words.iter().map(|w| w.value).collect::<Vec<_>>(),
+            vec![0x12, 0x34]
+        );
     }
 }

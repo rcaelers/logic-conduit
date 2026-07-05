@@ -2,6 +2,7 @@
 
 pub mod capture;
 pub mod errors;
+pub mod events;
 pub mod graph;
 pub mod node;
 pub mod pipeline;
@@ -22,6 +23,7 @@ pub use capture::{
     DslWaveformSegment, packed_bit,
 };
 pub use errors::{ConnectionError, PortError, WorkError, WorkResult};
+pub use events::{NumberSample, TextSample, Trigger};
 pub use graph::{Connection, GraphBuilder, NodeId};
 pub use node::ProcessNode;
 pub use ports::{InputPort, OutputPort, Pipeline, PortDirection, PortSchema, register_type};

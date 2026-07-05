@@ -54,6 +54,26 @@ pub enum CsPolarity {
     Disabled,
 }
 
+/// Bit order for serial decoders
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BitOrder {
+    /// Most significant bit first (standard SPI)
+    #[default]
+    MsbFirst,
+    /// Least significant bit first
+    LsbFirst,
+}
+
+/// Byte/cycle order when assembling multi-cycle words
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Endianness {
+    /// First cycle is the least-significant part
+    #[default]
+    Little,
+    /// First cycle is the most-significant part
+    Big,
+}
+
 /// Strobe signal mode for parallel decoder
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StrobeMode {
