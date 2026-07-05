@@ -14,7 +14,8 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(_cc: &eframe::CreationContext) -> Self {
+    pub fn new(cc: &eframe::CreationContext) -> Self {
+        install_fonts(&cc.egui_ctx);
         let registry = build_registry();
         let mut widget = NodeGraphWidget::new(registry);
         populate_demo(&mut widget);
@@ -23,6 +24,55 @@ impl App {
             logic_analyzer: LogicAnalyzerViewer::demo(),
             analyzer_split: 0.42,
         }
+    }
+}
+
+/// Adds Noto Sans Symbols 2 as a fallback font: the single, consistent
+/// source for menu icon glyphs (modifier keys, undo/redo, cut/copy/paste/
+/// duplicate) that egui's bundled fonts don't cover.
+fn install_fonts(ctx: &egui::Context) {
+    const FONT_NAME: &str = "noto-sans-symbols-2";
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        FONT_NAME.to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/NotoSansSymbols2-Regular.ttf"
+        ))),
+    );
+    fonts
+        .families
+        .get_mut(&egui::FontFamily::Proportional)
+        .unwrap()
+        .push(FONT_NAME.to_owned());
+    ctx.set_fonts(fonts);
+}
+
+#[cfg(test)]
+mod font_tests {
+    use super::install_fonts;
+
+    #[test]
+    fn menu_icon_glyphs_are_available() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        // `set_fonts` only takes effect at the start of the *next* pass.
+        ctx.begin_pass(Default::default());
+        let _ = ctx.end_pass();
+        ctx.begin_pass(Default::default());
+        let font_id = egui::FontId::proportional(14.0);
+        ctx.fonts_mut(|fonts| {
+            // Every glyph sourced from our bundled Noto Sans Symbols 2 font
+            // (as opposed to egui's own bundled fonts, which already cover
+            // e.g. ✂ 🗐 ▣ and aren't ours to regression-test here).
+            for c in ['⇧', '⌘', '⌥', '⇪', '⏎', '⭮', '⭯', '🗎'] {
+                assert!(
+                    fonts.has_glyph(&font_id, c),
+                    "missing glyph for {c:?} (U+{:04X})",
+                    c as u32
+                );
+            }
+        });
+        let _ = ctx.end_pass();
     }
 }
 
