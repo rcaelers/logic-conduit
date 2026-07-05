@@ -93,17 +93,21 @@ pub fn draw_minimap(
         if clamped.area() < 0.3 {
             continue;
         }
-        let col = if node.selected {
-            Color32::from_rgba_unmultiplied(180, 180, 255, 220)
-        } else {
-            Color32::from_rgba_unmultiplied(
-                node.header_color.r(),
-                node.header_color.g(),
-                node.header_color.b(),
-                200,
-            )
-        };
+        let col = Color32::from_rgba_unmultiplied(
+            node.header_color.r(),
+            node.header_color.g(),
+            node.header_color.b(),
+            200,
+        );
         painter.rect_filled(clamped, CornerRadius::same(1), col);
+        if node.selected {
+            painter.rect_stroke(
+                clamped,
+                CornerRadius::same(1),
+                Stroke::new(1.0_f32, Color32::WHITE),
+                egui::StrokeKind::Outside,
+            );
+        }
     }
 
     let origin = canvas_rect.min;
