@@ -6,6 +6,7 @@ use egui::{
     Align2, Color32, CursorIcon, FontId, Painter, PointerButton, Pos2, Rect, Response, Sense,
     Shape, Stroke, StrokeKind, Ui, vec2,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 
@@ -67,6 +68,8 @@ impl ColorProfile {
 
 pub struct LogicAnalyzerViewer {
     channels: Vec<LogicChannel>,
+    channel_names: HashMap<usize, String>,
+    channel_rename: Option<ChannelRenameState>,
     /// Synchronous sampler over the waveform index; present once the index
     /// build (which runs on a worker thread) has completed. Sampling the
     /// visible window happens on the UI thread every frame the view changes,
@@ -94,6 +97,23 @@ pub struct LogicAnalyzerViewer {
     /// Index into `cursors` of the cursor currently being dragged.
     drag_cursor: Option<usize>,
     color_profile: ColorProfile,
+}
+
+struct ChannelRenameState {
+    channel_index: usize,
+    text: String,
+    screen_pos: Pos2,
+}
+
+#[derive(Clone, Copy)]
+struct AnalyzerLayout {
+    header_rect: Rect,
+    ruler_rect: Rect,
+    labels_rect: Rect,
+    wave_rect: Rect,
+    row_height: f32,
+    name_col_width: f32,
+    badge_width: f32,
 }
 
 /// A vertical time marker (DSView-style "cursor"), added by double-clicking
@@ -167,11 +187,13 @@ impl PulseMeasurement {
     }
 
     fn period_us(self) -> Option<f64> {
-        self.period_end_us.map(|period_end_us| period_end_us - self.start_us)
+        self.period_end_us
+            .map(|period_end_us| period_end_us - self.start_us)
     }
 
     fn duty_cycle(self) -> Option<f64> {
-        self.period_us().map(|period_us| self.width_us() / period_us)
+        self.period_us()
+            .map(|period_us| self.width_us() / period_us)
     }
 }
 
@@ -247,7 +269,7 @@ impl LogicAnalyzerViewer {
             let offset = index as f64 * 11.0;
             channels.push(LogicChannel::square_wave(
                 index,
-                format!("Ch {index}"),
+                index.to_string(),
                 period,
                 offset,
                 index % 3 == 0,
@@ -256,6 +278,8 @@ impl LogicAnalyzerViewer {
 
         Self {
             channels,
+            channel_names: HashMap::new(),
+            channel_rename: None,
             sampler: None,
             sampled_key: None,
             hover_measurement: None,
@@ -290,6 +314,8 @@ impl LogicAnalyzerViewer {
                 self.capture_path = Some(path.clone());
                 self.capture_info = None;
                 self.channels.clear();
+                self.channel_names.clear();
+                self.channel_rename = None;
                 self.sampler = None;
                 self.sampled_key = None;
                 self.index_progress = None;
@@ -305,6 +331,8 @@ impl LogicAnalyzerViewer {
         self.capture_path = Some(path.clone());
         self.capture_info = None;
         self.channels.clear();
+        self.channel_names.clear();
+        self.channel_rename = None;
         self.sampler = None;
         self.sampled_key = None;
         self.index_progress = None;
@@ -325,27 +353,33 @@ impl LogicAnalyzerViewer {
         let painter = ui.painter_at(rect);
 
         self.process_worker_responses();
-        let cursor_input = self.handle_cursor_input(ui, &response, rect);
-        if (response.double_clicked() && !cursor_input.ruler_double_click)
+        let mut layout = self.layout(ui, rect);
+        let channel_rename_started = self.handle_channel_label_input(ui, &response, layout);
+        let cursor_input = self.handle_cursor_input(ui, &response, layout);
+        if (response.double_clicked()
+            && !cursor_input.ruler_double_click
+            && !channel_rename_started)
             || (response.hovered() && ui.input(|input| input.key_pressed(egui::Key::F)))
         {
             self.fit_capture();
         }
         self.handle_input(
             ui,
-            rect,
+            layout,
             response.hovered(),
             response.dragged_by(PointerButton::Primary) && !cursor_input.blocks_pan,
         );
-        self.sample_visible_window(rect);
+        self.sample_visible_window(layout);
+        layout = self.layout(ui, rect);
         let hover_pointer = if cursor_input.blocks_pan {
             None
         } else {
             response.hover_pos()
         };
-        self.sample_hover_measurement(rect, hover_pointer);
-        self.draw(&painter, rect, hover_pointer, cursor_input.active);
+        self.sample_hover_measurement(layout, hover_pointer);
+        self.draw(&painter, layout, hover_pointer, cursor_input.active);
         self.show_profile_selector(ui, rect);
+        self.show_channel_rename(ui.ctx());
         if self.capture_path.is_some() && self.capture_info.is_none() {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(16));
@@ -377,11 +411,184 @@ impl LogicAnalyzerViewer {
             });
     }
 
+    fn layout(&self, ui: &Ui, rect: Rect) -> AnalyzerLayout {
+        let title_height = 26.0;
+        let ruler_height = 34.0;
+        let row_height = 30.0;
+        let label_pad = 12.0;
+        let name_badge_gap = 10.0;
+        let label_right_pad = 10.0;
+        let name_font = FontId::proportional(12.0);
+        let badge_font = FontId::monospace(10.0);
+        let (name_col_width, badge_width) = ui.ctx().fonts_mut(|fonts| {
+            let name_col_width = self
+                .channels
+                .iter()
+                .map(|channel| {
+                    fonts
+                        .layout_no_wrap(channel.name.clone(), name_font.clone(), Color32::WHITE)
+                        .size()
+                        .x
+                })
+                .fold(0.0, f32::max);
+            let badge_width = self
+                .channels
+                .iter()
+                .map(|channel| {
+                    fonts
+                        .layout_no_wrap(
+                            channel.index.to_string(),
+                            badge_font.clone(),
+                            Color32::WHITE,
+                        )
+                        .size()
+                        .x
+                        + 14.0
+                })
+                .fold(26.0, f32::max);
+            (name_col_width, badge_width)
+        });
+        let desired_left_width =
+            label_pad + name_col_width + name_badge_gap + badge_width + label_right_pad;
+        let left_width = desired_left_width.max(72.0).min(rect.width().max(0.0));
+
+        let header_rect = Rect::from_min_size(rect.min, vec2(rect.width(), title_height));
+        let ruler_rect = Rect::from_min_max(
+            Pos2::new(rect.left() + left_width, rect.top() + title_height),
+            Pos2::new(rect.right(), rect.top() + title_height + ruler_height),
+        );
+        let labels_rect = Rect::from_min_max(
+            Pos2::new(rect.left(), rect.top() + title_height + ruler_height),
+            Pos2::new(rect.left() + left_width, rect.bottom()),
+        );
+        let wave_rect = Rect::from_min_max(
+            Pos2::new(
+                rect.left() + left_width,
+                rect.top() + title_height + ruler_height,
+            ),
+            rect.max,
+        );
+
+        AnalyzerLayout {
+            header_rect,
+            ruler_rect,
+            labels_rect,
+            wave_rect,
+            row_height,
+            name_col_width,
+            badge_width,
+        }
+    }
+
+    fn handle_channel_label_input(
+        &mut self,
+        ui: &Ui,
+        response: &Response,
+        layout: AnalyzerLayout,
+    ) -> bool {
+        if !response.double_clicked() {
+            return false;
+        }
+        let Some(pointer) = response.interact_pointer_pos() else {
+            return false;
+        };
+        if !layout.labels_rect.contains(pointer) {
+            return false;
+        }
+        let row = ((pointer.y - layout.labels_rect.top()) / layout.row_height).floor() as usize;
+        let Some(channel) = self.channels.get(row) else {
+            return false;
+        };
+        let row_top = layout.labels_rect.top() + row as f32 * layout.row_height;
+        self.channel_rename = Some(ChannelRenameState {
+            channel_index: channel.index,
+            text: channel.name.clone(),
+            screen_pos: Pos2::new(layout.labels_rect.left() + 8.0, row_top + 4.0),
+        });
+        ui.ctx().set_cursor_icon(CursorIcon::Text);
+        true
+    }
+
+    fn show_channel_rename(&mut self, ctx: &egui::Context) {
+        let Some(state) = &mut self.channel_rename else {
+            return;
+        };
+
+        let mut apply = false;
+        let mut cancel = false;
+        egui::Window::new("Rename Channel")
+            .id(egui::Id::new("logic_analyzer_rename_channel"))
+            .fixed_pos(state.screen_pos)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut state.text)
+                        .desired_width(240.0)
+                        .hint_text("Channel name"),
+                );
+                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    apply = true;
+                } else {
+                    response.request_focus();
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("OK").clicked() {
+                        apply = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            cancel = true;
+        }
+        if apply {
+            if let Some(state) = self.channel_rename.take() {
+                self.set_channel_name(state.channel_index, state.text);
+            }
+        } else if cancel {
+            self.channel_rename = None;
+        }
+    }
+
+    fn set_channel_name(&mut self, channel_index: usize, name: String) {
+        let name = name.trim().to_string();
+        if name.is_empty() || name == channel_index.to_string() {
+            self.channel_names.remove(&channel_index);
+        } else {
+            self.channel_names.insert(channel_index, name);
+        }
+        let display_name = self.channel_display_name(channel_index);
+        if let Some(channel) = self
+            .channels
+            .iter_mut()
+            .find(|channel| channel.index == channel_index)
+        {
+            channel.name = display_name;
+        }
+    }
+
+    fn channel_display_name(&self, channel_index: usize) -> String {
+        self.channel_names
+            .get(&channel_index)
+            .cloned()
+            .unwrap_or_else(|| channel_index.to_string())
+    }
+
+    fn apply_channel_names(&self, channels: &mut [LogicChannel]) {
+        for channel in channels {
+            channel.name = self.channel_display_name(channel.index);
+        }
+    }
+
     /// Samples the visible window from the index synchronously, so the drawn
     /// waveform always matches the current view exactly. Skipped when neither
     /// the view nor the viewport size changed since the last sampling.
-    fn sample_visible_window(&mut self, rect: Rect) {
-        if rect.width() <= 1.0 {
+    fn sample_visible_window(&mut self, layout: AnalyzerLayout) {
+        if layout.wave_rect.width() <= 1.0 {
             return;
         }
         let Some(capture) = self.capture_info.as_ref() else {
@@ -391,8 +598,7 @@ impl LogicAnalyzerViewer {
         let channel_count = capture.header.total_probes.min(16);
         let (visible_start, visible_end) =
             visible_sample_range(capture, self.visible_start_us, self.visible_span_us);
-        let left_width = 145.0_f32.min(rect.width() * 0.35);
-        let target_points = (rect.width() - left_width).max(1.0).round() as usize;
+        let target_points = layout.wave_rect.width().max(1.0).round() as usize;
 
         let key = (visible_start, visible_end, target_points);
         if self.sampled_key == Some(key) {
@@ -405,7 +611,9 @@ impl LogicAnalyzerViewer {
         let channels: Vec<usize> = (0..channel_count).collect();
         match sampler.sampled_window(&channels, visible_start, visible_end, target_points) {
             Ok(window) => {
-                self.channels = channels_from_window(&window, samplerate_hz);
+                let mut channels = channels_from_window(&window, samplerate_hz);
+                self.apply_channel_names(&mut channels);
+                self.channels = channels;
             }
             Err(err) => {
                 self.status = format!("Could not read capture window: {err}");
@@ -423,17 +631,17 @@ impl LogicAnalyzerViewer {
     /// measurement accurate at any zoom, this pulls a small exact window
     /// straight from the index around the pointer instead of reusing the
     /// (possibly summarized) data backing the main view.
-    fn sample_hover_measurement(&mut self, rect: Rect, pointer: Option<Pos2>) {
+    fn sample_hover_measurement(&mut self, layout: AnalyzerLayout, pointer: Option<Pos2>) {
         let previous = self.hover_measurement.take();
         let Some(pointer) = pointer else {
             return;
         };
-        let wave_rect = waveform_rect(rect);
+        let wave_rect = layout.wave_rect;
         if !wave_rect.contains(pointer) || wave_rect.width() <= 1.0 {
             return;
         }
 
-        let row_height = 30.0;
+        let row_height = layout.row_height;
         let channel_row = ((pointer.y - wave_rect.top()) / row_height).floor() as usize;
         let Some(channel) = self.channels.get(channel_row) else {
             return;
@@ -520,8 +728,7 @@ impl LogicAnalyzerViewer {
                 // the narrow window; one more search finds it.
                 if measurement.period_end_us.is_none() && end_is_toggle {
                     let end_sample = us_to_sample(measurement.end_us, samplerate_hz);
-                    if let Some((sample, _)) =
-                        self.next_transition_after(channel_index, end_sample)
+                    if let Some((sample, _)) = self.next_transition_after(channel_index, end_sample)
                     {
                         let period_end_us = sample_to_us(sample, samplerate_hz);
                         if period_end_us - measurement.start_us > measurement.width_us() {
@@ -670,10 +877,9 @@ impl LogicAnalyzerViewer {
         let total_samples = capture.header.total_samples;
         let sampler = self.sampler.as_mut()?;
 
-        let samples_per_pixel = (self.visible_span_us * samplerate_hz
-            / 1_000_000.0
-            / wave_rect.width() as f64)
-            .max(1.0);
+        let samples_per_pixel =
+            (self.visible_span_us * samplerate_hz / 1_000_000.0 / wave_rect.width() as f64)
+                .max(1.0);
         let half_window_samples =
             ((samples_per_pixel * neighborhood_px) as u64).clamp(4_096, 2_000_000);
         let center_sample = us_to_sample(time_us, samplerate_hz);
@@ -708,10 +914,15 @@ impl LogicAnalyzerViewer {
     /// Runs before pan/zoom handling so an active cursor drag can suppress
     /// panning, and before the fit-on-double-click check so a ruler
     /// double-click means "add cursor" instead.
-    fn handle_cursor_input(&mut self, ui: &Ui, response: &Response, rect: Rect) -> CursorInput {
+    fn handle_cursor_input(
+        &mut self,
+        ui: &Ui,
+        response: &Response,
+        layout: AnalyzerLayout,
+    ) -> CursorInput {
         let mut state = CursorInput::default();
-        let wave_rect = waveform_rect(rect);
-        let ruler_rect = ruler_rect(rect);
+        let wave_rect = layout.wave_rect;
+        let ruler_rect = layout.ruler_rect;
         if wave_rect.width() <= 1.0 {
             self.drag_cursor = None;
             return state;
@@ -745,10 +956,10 @@ impl LogicAnalyzerViewer {
             return state;
         }
 
-        let over_close_box = pointer
-            .is_some_and(|pointer| flags.iter().any(|(_, close)| close.contains(pointer)));
-        let hovered_cursor =
-            pointer.and_then(|pointer| self.cursor_at_pointer(wave_rect, ruler_rect, &flags, pointer));
+        let over_close_box =
+            pointer.is_some_and(|pointer| flags.iter().any(|(_, close)| close.contains(pointer)));
+        let hovered_cursor = pointer
+            .and_then(|pointer| self.cursor_at_pointer(wave_rect, ruler_rect, &flags, pointer));
 
         if response.drag_started_by(PointerButton::Primary) {
             // Hit-test where the button went down, not where the pointer is
@@ -756,8 +967,8 @@ impl LogicAnalyzerViewer {
             // past the click-vs-drag threshold, by which time it may already
             // have left the narrow line hit zone.
             let grab_pos = ui.input(|input| input.pointer.press_origin()).or(pointer);
-            self.drag_cursor = grab_pos
-                .and_then(|pos| self.cursor_at_pointer(wave_rect, ruler_rect, &flags, pos));
+            self.drag_cursor =
+                grab_pos.and_then(|pos| self.cursor_at_pointer(wave_rect, ruler_rect, &flags, pos));
         }
         if self.drag_cursor.is_some() {
             if response.dragged_by(PointerButton::Primary) {
@@ -881,12 +1092,8 @@ impl LogicAnalyzerViewer {
         }
     }
 
-    fn handle_input(&mut self, ui: &Ui, rect: Rect, hovered: bool, dragging: bool) {
-        if rect.width() <= 1.0 {
-            return;
-        }
-
-        let wave_rect = waveform_rect(rect);
+    fn handle_input(&mut self, ui: &Ui, layout: AnalyzerLayout, hovered: bool, dragging: bool) {
+        let wave_rect = layout.wave_rect;
         if wave_rect.width() <= 1.0 {
             return;
         }
@@ -983,7 +1190,9 @@ impl LogicAnalyzerViewer {
                     if let Some(capture) = self.capture_info.as_ref() {
                         self.status = capture_status(capture);
                     }
-                    self.channels = placeholder_channels(&header);
+                    let mut channels = placeholder_channels(&header);
+                    self.apply_channel_names(&mut channels);
+                    self.channels = channels;
                     self.sampler = None;
                     self.sampled_key = None;
                     self.index_progress = None;
@@ -1042,7 +1251,14 @@ impl LogicAnalyzerViewer {
         }
     }
 
-    fn draw(&self, painter: &Painter, rect: Rect, pointer: Option<Pos2>, active_cursor: Option<usize>) {
+    fn draw(
+        &self,
+        painter: &Painter,
+        layout: AnalyzerLayout,
+        pointer: Option<Pos2>,
+        active_cursor: Option<usize>,
+    ) {
+        let rect = Rect::from_min_max(layout.header_rect.min, layout.wave_rect.right_bottom());
         if rect.width() <= 1.0 || rect.height() <= 1.0 {
             return;
         }
@@ -1056,26 +1272,11 @@ impl LogicAnalyzerViewer {
 
         painter.rect_filled(rect, 0.0, background);
 
-        let left_width = 145.0_f32.min(rect.width() * 0.35);
-        let title_height = 26.0;
-        let ruler_height = 34.0;
-        let row_height = 30.0;
-        let header_rect = Rect::from_min_size(rect.min, vec2(rect.width(), title_height));
-        let ruler_rect = Rect::from_min_max(
-            Pos2::new(rect.left() + left_width, rect.top() + title_height),
-            Pos2::new(rect.right(), rect.top() + title_height + ruler_height),
-        );
-        let labels_rect = Rect::from_min_max(
-            Pos2::new(rect.left(), rect.top() + title_height + ruler_height),
-            Pos2::new(rect.left() + left_width, rect.bottom()),
-        );
-        let wave_rect = Rect::from_min_max(
-            Pos2::new(
-                rect.left() + left_width,
-                rect.top() + title_height + ruler_height,
-            ),
-            rect.max,
-        );
+        let header_rect = layout.header_rect;
+        let ruler_rect = layout.ruler_rect;
+        let labels_rect = layout.labels_rect;
+        let wave_rect = layout.wave_rect;
+        let row_height = layout.row_height;
 
         painter.rect_filled(header_rect, 0.0, panel);
         painter.text(
@@ -1117,8 +1318,8 @@ impl LogicAnalyzerViewer {
         painter.rect_filled(labels_rect, 0.0, Color32::from_rgb(25, 25, 25));
         painter.line_segment(
             [
-                Pos2::new(rect.left() + left_width, rect.top()),
-                Pos2::new(rect.left() + left_width, rect.bottom()),
+                Pos2::new(wave_rect.left(), rect.top()),
+                Pos2::new(wave_rect.left(), rect.bottom()),
             ],
             Stroke::new(1.0, Color32::from_rgb(45, 45, 45)),
         );
@@ -1130,6 +1331,8 @@ impl LogicAnalyzerViewer {
             labels_rect,
             wave_rect,
             row_height,
+            layout.name_col_width,
+            layout.badge_width,
             text,
             trace,
             grid,
@@ -1194,7 +1397,12 @@ impl LogicAnalyzerViewer {
 
             painter.rect_filled(flag, 3.0, color);
             if is_active {
-                painter.rect_stroke(flag, 3.0, Stroke::new(1.0, Color32::WHITE), StrokeKind::Outside);
+                painter.rect_stroke(
+                    flag,
+                    3.0,
+                    Stroke::new(1.0, Color32::WHITE),
+                    StrokeKind::Outside,
+                );
             }
             painter.add(Shape::convex_polygon(
                 vec![
@@ -1301,6 +1509,8 @@ impl LogicAnalyzerViewer {
         labels_rect: Rect,
         wave_rect: Rect,
         row_height: f32,
+        name_col_width: f32,
+        badge_width: f32,
         text: Color32,
         trace: Color32,
         grid: Color32,
@@ -1325,9 +1535,21 @@ impl LogicAnalyzerViewer {
                 Stroke::new(1.0, Color32::from_rgb(42, 42, 42)),
             );
 
+            let name_pos = Pos2::new(labels_rect.left() + 12.0, row_rect.center().y);
+            painter.text(
+                name_pos,
+                Align2::LEFT_CENTER,
+                &channel.name,
+                FontId::proportional(12.0),
+                text,
+            );
+
             let badge_rect = Rect::from_min_size(
-                Pos2::new(labels_rect.left() + 8.0, row_rect.center().y - 8.0),
-                vec2(26.0, 16.0),
+                Pos2::new(
+                    labels_rect.left() + 12.0 + name_col_width + 10.0,
+                    row_rect.center().y - 8.0,
+                ),
+                vec2(badge_width, 16.0),
             );
             let badge_color = self.color_profile.channel_color(channel.index);
             painter.rect_filled(badge_rect, 2.0, badge_color);
@@ -1337,13 +1559,6 @@ impl LogicAnalyzerViewer {
                 channel.index.to_string(),
                 FontId::monospace(10.0),
                 badge_text_color(badge_color),
-            );
-            painter.text(
-                Pos2::new(labels_rect.left() + 43.0, row_rect.center().y),
-                Align2::LEFT_CENTER,
-                &channel.name,
-                FontId::proportional(12.0),
-                text,
             );
 
             let center_y = row_rect.center().y;
@@ -1535,9 +1750,9 @@ impl LogicAnalyzerViewer {
         // Without a following transition to close a full period, fall back to
         // a Width-only bracket spanning just the measured pulse.
         let has_period = measurement.period_end_us.is_some();
-        let x2_raw = measurement
-            .period_end_us
-            .map_or(x1, |period_end_us| self.time_to_x_unclamped(wave_rect, period_end_us));
+        let x2_raw = measurement.period_end_us.map_or(x1, |period_end_us| {
+            self.time_to_x_unclamped(wave_rect, period_end_us)
+        });
         if (x2_raw - x0_raw).abs() < 2.0 {
             return;
         }
@@ -1549,9 +1764,8 @@ impl LogicAnalyzerViewer {
         // any other side the plain line simply runs off the viewport edge.
         let x0 = x0_raw.clamp(wave_rect.left(), wave_rect.right());
         let x2 = x2_raw.clamp(wave_rect.left(), wave_rect.right());
-        let start_edge_in_view = !measurement.start_open
-            && x0_raw >= wave_rect.left()
-            && x0_raw <= wave_rect.right();
+        let start_edge_in_view =
+            !measurement.start_open && x0_raw >= wave_rect.left() && x0_raw <= wave_rect.right();
         let end_edge_in_view = !(measurement.end_open && !has_period)
             && x2_raw >= wave_rect.left()
             && x2_raw <= wave_rect.right();
@@ -1723,8 +1937,8 @@ fn spawn_capture_worker(
                 let now = std::time::Instant::now();
                 let is_first = progress.completed_roots == 0;
                 let is_done = progress.completed_roots >= progress.total_roots;
-                let enough_time = now.duration_since(last_progress_sent)
-                    >= std::time::Duration::from_millis(100);
+                let enough_time =
+                    now.duration_since(last_progress_sent) >= std::time::Duration::from_millis(100);
                 let enough_work = progress
                     .completed_roots
                     .saturating_sub(last_progress_completed)
@@ -1807,7 +2021,6 @@ impl LogicChannel {
             .map_or(self.initial, |transition| transition.value);
         (&self.transitions[start_index..end_index], value)
     }
-
 }
 
 /// Measures the run (high or low) under `time_us` from transitions covering
@@ -1964,29 +2177,6 @@ fn visible_sample_range(capture: &CaptureInfo, start_us: f64, span_us: f64) -> (
     (visible_start, visible_end)
 }
 
-fn waveform_rect(rect: Rect) -> Rect {
-    let left_width = 145.0_f32.min(rect.width() * 0.35);
-    let title_height = 26.0;
-    let ruler_height = 34.0;
-    Rect::from_min_max(
-        Pos2::new(
-            rect.left() + left_width,
-            rect.top() + title_height + ruler_height,
-        ),
-        rect.max,
-    )
-}
-
-fn ruler_rect(rect: Rect) -> Rect {
-    let left_width = 145.0_f32.min(rect.width() * 0.35);
-    let title_height = 26.0;
-    let ruler_height = 34.0;
-    Rect::from_min_max(
-        Pos2::new(rect.left() + left_width, rect.top() + title_height),
-        Pos2::new(rect.right(), rect.top() + title_height + ruler_height),
-    )
-}
-
 /// Flag box and its embedded close-box for a cursor whose line is at `x`,
 /// clamped to stay inside the ruler. Shared by hit-testing and drawing so
 /// they can never disagree.
@@ -2035,13 +2225,11 @@ fn nearest_transition_time(transitions: &[Transition], time_us: f64) -> Option<f
         .and_then(|index| transitions.get(index))
         .map(|transition| transition.time_us);
     match (before, after) {
-        (Some(before), Some(after)) => {
-            Some(if time_us - before <= after - time_us {
-                before
-            } else {
-                after
-            })
-        }
+        (Some(before), Some(after)) => Some(if time_us - before <= after - time_us {
+            before
+        } else {
+            after
+        }),
         (before, after) => before.or(after),
     }
 }
