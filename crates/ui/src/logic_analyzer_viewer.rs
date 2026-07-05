@@ -68,6 +68,8 @@ impl ColorProfile {
 
 pub struct LogicAnalyzerViewer {
     channels: Vec<LogicChannel>,
+    channel_order: Vec<usize>,
+    channel_drag: Option<ChannelDragState>,
     channel_names: HashMap<usize, String>,
     channel_rename: Option<ChannelRenameState>,
     /// Synchronous sampler over the waveform index; present once the index
@@ -103,6 +105,10 @@ struct ChannelRenameState {
     channel_index: usize,
     text: String,
     screen_pos: Pos2,
+}
+
+struct ChannelDragState {
+    channel_index: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -278,6 +284,8 @@ impl LogicAnalyzerViewer {
 
         Self {
             channels,
+            channel_order: (0..10).collect(),
+            channel_drag: None,
             channel_names: HashMap::new(),
             channel_rename: None,
             sampler: None,
@@ -314,6 +322,8 @@ impl LogicAnalyzerViewer {
                 self.capture_path = Some(path.clone());
                 self.capture_info = None;
                 self.channels.clear();
+                self.channel_order.clear();
+                self.channel_drag = None;
                 self.channel_names.clear();
                 self.channel_rename = None;
                 self.sampler = None;
@@ -331,6 +341,8 @@ impl LogicAnalyzerViewer {
         self.capture_path = Some(path.clone());
         self.capture_info = None;
         self.channels.clear();
+        self.channel_order.clear();
+        self.channel_drag = None;
         self.channel_names.clear();
         self.channel_rename = None;
         self.sampler = None;
@@ -355,6 +367,7 @@ impl LogicAnalyzerViewer {
         self.process_worker_responses();
         let mut layout = self.layout(ui, rect);
         let channel_rename_started = self.handle_channel_label_input(ui, &response, layout);
+        let channel_dragging = self.handle_channel_reorder(ui, &response, layout);
         let cursor_input = self.handle_cursor_input(ui, &response, layout);
         if (response.double_clicked()
             && !cursor_input.ruler_double_click
@@ -367,7 +380,9 @@ impl LogicAnalyzerViewer {
             ui,
             layout,
             response.hovered(),
-            response.dragged_by(PointerButton::Primary) && !cursor_input.blocks_pan,
+            response.dragged_by(PointerButton::Primary)
+                && !cursor_input.blocks_pan
+                && !channel_dragging,
         );
         self.sample_visible_window(layout);
         layout = self.layout(ui, rect);
@@ -509,6 +524,79 @@ impl LogicAnalyzerViewer {
         true
     }
 
+    fn handle_channel_reorder(
+        &mut self,
+        ui: &Ui,
+        response: &Response,
+        layout: AnalyzerLayout,
+    ) -> bool {
+        let pointer = response
+            .interact_pointer_pos()
+            .or_else(|| ui.input(|input| input.pointer.hover_pos()));
+
+        if self.channel_drag.is_none()
+            && let Some(pointer) = pointer
+            && let Some(row) = self.channel_row_at_pointer(layout, pointer)
+            && self.channel_badge_rect(layout, row).contains(pointer)
+        {
+            ui.ctx().set_cursor_icon(CursorIcon::Grab);
+        }
+
+        if response.drag_started_by(PointerButton::Primary)
+            && let Some(grab_pos) = ui.input(|input| input.pointer.press_origin()).or(pointer)
+            && let Some(row) = self.channel_row_at_pointer(layout, grab_pos)
+            && self.channel_badge_rect(layout, row).contains(grab_pos)
+        {
+            self.channel_drag = self.channels.get(row).map(|channel| ChannelDragState {
+                channel_index: channel.index,
+            });
+        }
+
+        let Some(drag_channel_index) = self.channel_drag.as_ref().map(|drag| drag.channel_index)
+        else {
+            return false;
+        };
+
+        if !response.dragged_by(PointerButton::Primary) {
+            self.channel_drag = None;
+            return false;
+        }
+
+        ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+        if let Some(pointer) = response.interact_pointer_pos()
+            && let Some(target_row) = self.channel_row_at_y(layout, pointer.y)
+        {
+            self.move_channel_to_row(drag_channel_index, target_row);
+        }
+        true
+    }
+
+    fn channel_row_at_pointer(&self, layout: AnalyzerLayout, pointer: Pos2) -> Option<usize> {
+        if !layout.labels_rect.contains(pointer) {
+            return None;
+        }
+        self.channel_row_at_y(layout, pointer.y)
+    }
+
+    fn channel_row_at_y(&self, layout: AnalyzerLayout, y: f32) -> Option<usize> {
+        if y < layout.labels_rect.top() || y > layout.labels_rect.bottom() {
+            return None;
+        }
+        let row = ((y - layout.labels_rect.top()) / layout.row_height).floor() as usize;
+        self.channels.get(row).map(|_| row)
+    }
+
+    fn channel_badge_rect(&self, layout: AnalyzerLayout, row: usize) -> Rect {
+        let row_top = layout.labels_rect.top() + row as f32 * layout.row_height;
+        Rect::from_min_size(
+            Pos2::new(
+                layout.labels_rect.left() + 12.0 + layout.name_col_width + 10.0,
+                row_top + layout.row_height * 0.5 - 8.0,
+            ),
+            vec2(layout.badge_width, 16.0),
+        )
+    }
+
     fn show_channel_rename(&mut self, ctx: &egui::Context) {
         let Some(state) = &mut self.channel_rename else {
             return;
@@ -584,6 +672,55 @@ impl LogicAnalyzerViewer {
         }
     }
 
+    fn ensure_channel_order(&mut self, channel_count: usize) {
+        let mut seen = vec![false; channel_count];
+        let mut order = Vec::with_capacity(channel_count);
+        for channel_index in self.channel_order.iter().copied() {
+            if channel_index < channel_count && !seen[channel_index] {
+                seen[channel_index] = true;
+                order.push(channel_index);
+            }
+        }
+        for (channel_index, seen) in seen.iter().enumerate() {
+            if !*seen {
+                order.push(channel_index);
+            }
+        }
+        if self.channel_order != order {
+            self.channel_order = order;
+            self.sampled_key = None;
+        }
+    }
+
+    fn apply_channel_order(&self, channels: &mut Vec<LogicChannel>) {
+        channels.sort_by_key(|channel| {
+            self.channel_order
+                .iter()
+                .position(|&channel_index| channel_index == channel.index)
+                .unwrap_or(usize::MAX)
+        });
+    }
+
+    fn move_channel_to_row(&mut self, channel_index: usize, target_row: usize) {
+        let Some(from_row) = self
+            .channels
+            .iter()
+            .position(|channel| channel.index == channel_index)
+        else {
+            return;
+        };
+        let target_row = target_row.min(self.channels.len().saturating_sub(1));
+        if from_row == target_row {
+            return;
+        }
+
+        let channel = self.channels.remove(from_row);
+        self.channels.insert(target_row, channel);
+        self.channel_order = self.channels.iter().map(|channel| channel.index).collect();
+        self.hover_measurement = None;
+        self.sampled_key = None;
+    }
+
     /// Samples the visible window from the index synchronously, so the drawn
     /// waveform always matches the current view exactly. Skipped when neither
     /// the view nor the viewport size changed since the last sampling.
@@ -599,6 +736,7 @@ impl LogicAnalyzerViewer {
         let (visible_start, visible_end) =
             visible_sample_range(capture, self.visible_start_us, self.visible_span_us);
         let target_points = layout.wave_rect.width().max(1.0).round() as usize;
+        self.ensure_channel_order(channel_count);
 
         let key = (visible_start, visible_end, target_points);
         if self.sampled_key == Some(key) {
@@ -608,11 +746,17 @@ impl LogicAnalyzerViewer {
             return;
         };
 
-        let channels: Vec<usize> = (0..channel_count).collect();
-        match sampler.sampled_window(&channels, visible_start, visible_end, target_points) {
+        let requested_channels = self.channel_order.clone();
+        match sampler.sampled_window(
+            &requested_channels,
+            visible_start,
+            visible_end,
+            target_points,
+        ) {
             Ok(window) => {
                 let mut channels = channels_from_window(&window, samplerate_hz);
                 self.apply_channel_names(&mut channels);
+                self.apply_channel_order(&mut channels);
                 self.channels = channels;
             }
             Err(err) => {
@@ -1190,8 +1334,10 @@ impl LogicAnalyzerViewer {
                     if let Some(capture) = self.capture_info.as_ref() {
                         self.status = capture_status(capture);
                     }
+                    self.ensure_channel_order(header.total_probes.min(16));
                     let mut channels = placeholder_channels(&header);
                     self.apply_channel_names(&mut channels);
+                    self.apply_channel_order(&mut channels);
                     self.channels = channels;
                     self.sampler = None;
                     self.sampled_key = None;
