@@ -153,8 +153,15 @@ pub fn draw_wire(painter: &Painter, from: Pos2, to: Pos2, color: Color32, width:
     let dx = (to.x - from.x).abs().max(50.0) * 0.5;
     let cp1 = from + Vec2::new(dx, 0.0);
     let cp2 = to - Vec2::new(dx, 0.0);
+    let points = [from, cp1, cp2, to];
     painter.add(CubicBezierShape::from_points_stroke(
-        [from, cp1, cp2, to],
+        points,
+        false,
+        Color32::TRANSPARENT,
+        Stroke::new(width + 2.0, Color32::from_rgba_premultiplied(0, 0, 0, 170)),
+    ));
+    painter.add(CubicBezierShape::from_points_stroke(
+        points,
         false,
         Color32::TRANSPARENT,
         Stroke::new(width, color),
