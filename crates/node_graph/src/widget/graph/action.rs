@@ -33,6 +33,7 @@ pub(super) enum ActionEffect {
 pub(super) enum GraphAction {
     Undo,
     Redo,
+    OpenAddSearch,
     AddNode {
         name: String,
         pos: Pos2,
@@ -146,6 +147,7 @@ impl NodeGraphWidget {
                 self.redo();
                 ActionEffect::ResetInteraction
             }
+            GraphAction::OpenAddSearch => ActionEffect::None,
             GraphAction::AddNode { name, pos } => {
                 self.push_undo_snapshot();
                 self.add_node_at(&name, pos);

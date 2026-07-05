@@ -214,6 +214,7 @@ pub(crate) fn dispatch_menu_shortcut<T: Clone>(
 pub(crate) struct Menu<T> {
     area_id: egui::Id,
     entries: Vec<MenuEntry<T>>,
+    title: Option<String>,
     /// Keyboard nav path: `sel[d]` = selected item index at depth `d`.
     sel: Vec<usize>,
     /// SubMenuButton IDs captured last frame: `btn_ids[d][i]`.
@@ -231,6 +232,7 @@ impl<T: Clone> Menu<T> {
         Self {
             area_id,
             entries: Vec::new(),
+            title: None,
             sel: Vec::new(),
             btn_ids: Vec::new(),
             visible: false,
@@ -241,6 +243,12 @@ impl<T: Clone> Menu<T> {
 
     pub fn set_entries(&mut self, entries: Vec<MenuEntry<T>>) {
         self.entries = entries;
+        self.title = None;
+    }
+
+    pub fn set_entries_with_title(&mut self, title: impl Into<String>, entries: Vec<MenuEntry<T>>) {
+        self.entries = entries;
+        self.title = Some(title.into());
     }
 
     pub fn open(&mut self, pos: Pos2) {
@@ -385,6 +393,7 @@ impl<T: Clone> Menu<T> {
     /// Standalone `Area` popup.  Returns `(area_response, activated_action)`.
     pub fn show_popup(&mut self, ui: &mut egui::Ui) -> (egui::Response, Option<T>) {
         let entries = std::mem::take(&mut self.entries);
+        let title = self.title.clone();
         let mut sel = self.sel.clone();
         let area_id = self.area_id;
         let pos = self.pos;
@@ -425,6 +434,7 @@ impl<T: Clone> Menu<T> {
                                             depth_entries,
                                             &mut sel,
                                             depth,
+                                            (depth == 0).then_some(title.as_deref()).flatten(),
                                             &mut result,
                                         )
                                         .map(|offset| column_offset + offset);
@@ -580,12 +590,18 @@ impl<T: Clone> Menu<T> {
         entries: &[MenuEntry<T>],
         sel: &mut Vec<usize>,
         depth: usize,
+        title: Option<&str>,
         result: &mut Option<T>,
     ) -> Option<f32> {
         ui.set_min_width(Self::MIN_WIDTH);
 
         let sel_bg = ui.visuals().selection.bg_fill;
         let sel_at_depth = sel.get(depth).copied();
+        if let Some(title) = title {
+            ui.add_space(2.0);
+            ui.label(egui::RichText::new(title).strong());
+            ui.separator();
+        }
         let column_top = ui.next_widget_position().y;
         let mut selected_submenu_offset = None;
 
@@ -705,6 +721,16 @@ impl<T: Clone> PopupMenu<T> {
     /// Open the standalone popup at screen position `pos` with the given entries.
     pub fn open_popup(&mut self, pos: Pos2, entries: Vec<MenuEntry<T>>) {
         self.popup.set_entries(entries);
+        self.popup.open(pos);
+    }
+
+    pub fn open_popup_with_title(
+        &mut self,
+        pos: Pos2,
+        title: impl Into<String>,
+        entries: Vec<MenuEntry<T>>,
+    ) {
+        self.popup.set_entries_with_title(title, entries);
         self.popup.open(pos);
     }
 

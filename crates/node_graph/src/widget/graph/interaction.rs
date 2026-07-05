@@ -1,8 +1,5 @@
 use super::{
-    NodeGraphWidget,
-    action::ActionEffect,
-    layout::GraphWidgetLayout,
-    menu::{build_add_entries, build_context_entries},
+    NodeGraphWidget, action::ActionEffect, layout::GraphWidgetLayout, menu::build_context_entries,
     minimap,
 };
 use crate::{
@@ -833,6 +830,7 @@ impl NodeGraphWidget {
         let response = &responses.canvas;
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll.abs() > 0.1
+            && !self.menu.blocks_canvas_scroll(ui)
             && let Some(cursor) = ui.input(|i| i.pointer.hover_pos())
             && canvas_rect.contains(cursor)
         {
@@ -924,17 +922,12 @@ impl NodeGraphWidget {
         }
 
         if no_focus
-            && ui.input(|i| {
-                i.key_pressed(egui::Key::A)
-                    && i.modifiers.shift
-                    && !i.modifiers.ctrl
-                    && !i.modifiers.alt
-            })
+            && ui.input(|i| i.key_pressed(egui::Key::A) && !i.modifiers.ctrl && !i.modifiers.alt)
         {
             let screen_pos = pointer.unwrap_or(canvas_rect.center());
             let canvas_pos = self.view.screen_to_canvas(origin, screen_pos);
             self.menu
-                .open_popup(screen_pos, build_add_entries(&self.registry, canvas_pos));
+                .open_add_popup(screen_pos, &self.registry, canvas_pos);
         }
 
         if let Some(action) = self.menu.update(ui, response, pointer, !cutting) {
