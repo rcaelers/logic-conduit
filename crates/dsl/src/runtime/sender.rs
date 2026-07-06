@@ -200,7 +200,10 @@ impl<T: Clone + Send> SharedSenders<T> {
                         }
                     }
                 }
-                match subscriber.tx.try_send(ChannelMessage::Sample(value.clone())) {
+                match subscriber
+                    .tx
+                    .try_send(ChannelMessage::Sample(value.clone()))
+                {
                     Ok(()) => {}
                     Err(TrySendError::Full(_)) => match subscriber.policy {
                         OverflowPolicy::Block => blocked.push(BlockedSend {

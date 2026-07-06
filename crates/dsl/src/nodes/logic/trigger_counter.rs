@@ -52,7 +52,11 @@ impl ProcessNode for TriggerCounter {
     }
 
     fn input_schema(&self) -> Vec<PortSchema> {
-        vec![PortSchema::new::<Trigger>("trigger", 0, PortDirection::Input)]
+        vec![PortSchema::new::<Trigger>(
+            "trigger",
+            0,
+            PortDirection::Input,
+        )]
     }
 
     fn output_schema(&self) -> Vec<PortSchema> {

@@ -396,11 +396,7 @@ mod tests {
 
     #[test]
     fn decodes_8n1_frames() {
-        let edges = frames_to_edges(
-            &[(10_000, 0x55, None), (50_000, 0xA3, None)],
-            8,
-            false,
-        );
+        let edges = frames_to_edges(&[(10_000, 0x55, None), (50_000, 0xA3, None)], 8, false);
         let mut decoder = UartDecoder::new(1_000_000, 8);
         let out = run_decoder(&mut decoder, edges);
         assert_eq!(
@@ -424,16 +420,14 @@ mod tests {
     fn even_parity_ok_and_error() {
         // 0x03 has two ones — even parity bit is 0.
         let good = frames_to_edges(&[(10_000, 0x03, Some(false))], 8, false);
-        let mut decoder =
-            UartDecoder::new(1_000_000, 8).with_parity(UartParity::Even, true);
+        let mut decoder = UartDecoder::new(1_000_000, 8).with_parity(UartParity::Even, true);
         let out = run_decoder(&mut decoder, good);
         assert_eq!(out.words[0].value, 0x03);
         assert!(out.errors.is_empty());
 
         // Wrong parity bit → error trigger, word still emitted.
         let bad = frames_to_edges(&[(10_000, 0x03, Some(true))], 8, false);
-        let mut decoder =
-            UartDecoder::new(1_000_000, 8).with_parity(UartParity::Even, true);
+        let mut decoder = UartDecoder::new(1_000_000, 8).with_parity(UartParity::Even, true);
         let out = run_decoder(&mut decoder, bad);
         assert_eq!(out.words[0].value, 0x03);
         assert_eq!(out.errors, vec![Trigger::new(10_000)]);

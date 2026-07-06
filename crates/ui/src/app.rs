@@ -1,19 +1,26 @@
+#[cfg(not(target_arch = "wasm32"))]
 use crate::compile;
 use crate::logic_analyzer_viewer::LogicAnalyzerViewer;
 use crate::nodes;
-use node_graph::{NodeBadge, NodeGraphWidget, NodeId};
+use node_graph::NodeGraphWidget;
+#[cfg(not(target_arch = "wasm32"))]
+use node_graph::{NodeBadge, NodeId};
 
 pub struct App {
     node_graph: NodeGraphWidget,
     logic_analyzer: LogicAnalyzerViewer,
     analyzer_split: f32,
+    #[cfg(not(target_arch = "wasm32"))]
     builders: compile::BuilderRegistry,
+    #[cfg(not(target_arch = "wasm32"))]
     run: Option<compile::LiveRun>,
     /// Last global compile/run message shown in the toolbar.
     run_message: Option<(String, bool /* is_error */)>,
     /// Nodes badged with compile errors; cleared on the next Run.
+    #[cfg(not(target_arch = "wasm32"))]
     error_badges: Vec<NodeId>,
     /// Last time the running pipeline was diffed against the edited graph.
+    #[cfg(not(target_arch = "wasm32"))]
     last_live_sync: f64,
 }
 
@@ -22,19 +29,27 @@ impl App {
         install_fonts(&cc.egui_ctx);
         let registry = nodes::build_registry();
         let mut widget = NodeGraphWidget::new(registry);
+        #[cfg(not(target_arch = "wasm32"))]
         nodes::populate_startup(&mut widget);
+        #[cfg(target_arch = "wasm32")]
+        nodes::populate_uart_demo(&mut widget);
         Self {
             node_graph: widget,
             logic_analyzer: LogicAnalyzerViewer::demo(),
             analyzer_split: 0.42,
+            #[cfg(not(target_arch = "wasm32"))]
             builders: compile::BuilderRegistry::standard(),
+            #[cfg(not(target_arch = "wasm32"))]
             run: None,
             run_message: None,
+            #[cfg(not(target_arch = "wasm32"))]
             error_badges: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             last_live_sync: 0.0,
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn report_compile_errors(&mut self, errors: &[compile::CompileError]) {
         for error in errors {
             if let Some(id) = error.node {
@@ -58,6 +73,7 @@ impl App {
         ));
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn start_run(&mut self) {
         for id in self.error_badges.drain(..) {
             self.node_graph.set_node_badge(id, None);
@@ -82,6 +98,7 @@ impl App {
     /// pipeline and apply what can be applied (§6.5): taps, branch
     /// removals, hot prop changes, in-place restarts. Edits that need a
     /// full restart leave the run untouched and say so.
+    #[cfg(not(target_arch = "wasm32"))]
     fn sync_live_edits(&mut self, ctx: &egui::Context) {
         const SYNC_INTERVAL_S: f64 = 0.5;
         let Some(run) = &mut self.run else {
@@ -141,9 +158,9 @@ impl App {
                 self.error_badges.push(id);
             }
         }
-
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn show_toolbar(&mut self, ui: &mut egui::Ui) {
         self.sync_live_edits(ui.ctx());
         ui.horizontal(|ui| {
@@ -168,6 +185,26 @@ impl App {
                     ui.label("Finished");
                 }
             }
+            if let Some((message, is_error)) = &self.run_message {
+                let color = if *is_error {
+                    egui::Color32::from_rgb(230, 120, 120)
+                } else {
+                    egui::Color32::from_rgb(180, 180, 180)
+                };
+                ui.colored_label(color, message);
+            }
+        });
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn show_toolbar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.add_space(6.0);
+            ui.label("Web demo");
+            ui.colored_label(
+                egui::Color32::from_rgb(180, 180, 180),
+                "native capture and pipeline execution are disabled in this build",
+            );
             if let Some((message, is_error)) = &self.run_message {
                 let color = if *is_error {
                     egui::Color32::from_rgb(230, 120, 120)
@@ -209,6 +246,12 @@ fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
+#[cfg(target_arch = "wasm32")]
+fn load_symbol_font() -> Option<egui::FontData> {
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn load_symbol_font() -> Option<egui::FontData> {
     symbol_font_paths()
         .iter()
@@ -236,7 +279,12 @@ fn symbol_font_paths() -> &'static [&'static str] {
     ]
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "linux",
+    target_arch = "wasm32"
+)))]
 fn symbol_font_paths() -> &'static [&'static str] {
     &[]
 }
@@ -286,6 +334,7 @@ impl eframe::App for App {
             analyzer_height = analyzer_height.clamp(analyzer_min, usable_height - graph_min);
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(file) = nodes::dsl_file_source_path(self.node_graph.graph()) {
             self.logic_analyzer.set_capture_path(file);
         }

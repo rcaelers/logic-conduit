@@ -119,11 +119,7 @@ impl<T: NodeDef> NodeInstance for TypedNode<T> {
             .iter()
             .map(|section| PanelSectionMeta {
                 title: section.title,
-                prop_heights: section
-                    .props
-                    .iter()
-                    .map(|prop| prop.panel_height)
-                    .collect(),
+                prop_heights: section.props.iter().map(|prop| prop.panel_height).collect(),
             })
             .collect()
     }

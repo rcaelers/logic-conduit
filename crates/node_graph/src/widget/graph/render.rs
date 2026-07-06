@@ -95,12 +95,14 @@ impl NodeGraphWidget {
                 wire_w,
             );
             if let Some((target, target_canvas)) = snap {
-                let target_socket = self.graph.nodes.get(&target.node).and_then(|node| {
-                    match target.direction {
-                        SocketDirection::Input => node.inputs.get(target.index),
-                        SocketDirection::Output => node.outputs.get(target.index),
-                    }
-                });
+                let target_socket =
+                    self.graph
+                        .nodes
+                        .get(&target.node)
+                        .and_then(|node| match target.direction {
+                            SocketDirection::Input => node.inputs.get(target.index),
+                            SocketDirection::Output => node.outputs.get(target.index),
+                        });
                 // Preview what a multi-accepting input would resolve to: the
                 // dragged output's type identity instead of the idle look.
                 let from_type = self
@@ -145,7 +147,15 @@ impl NodeGraphWidget {
             if let (Some(widget), Some(node)) = (layout.nodes.get(&id), self.graph.nodes.get(&id)) {
                 let badge = self.external_badges.get(&id).or(node.badge.as_ref());
                 let status = self.node_statuses.get(&id).map(String::as_str);
-                widget.draw(painter, node, badge, status, &self.registry, &self.view, origin);
+                widget.draw(
+                    painter,
+                    node,
+                    badge,
+                    status,
+                    &self.registry,
+                    &self.view,
+                    origin,
+                );
             }
             if self.view.zoom >= 0.6 {
                 let changed = if let (Some(widget), Some(node), Some(instance)) = (

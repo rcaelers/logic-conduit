@@ -434,8 +434,11 @@ mod tests {
     }
 
     fn unconnected(wd: &Watchdog, name: &str) -> InputPort {
-        InputPort::from_type_erased(Box::new(()) as Box<dyn std::any::Any + Send>)
-            .with_watchdog(wd.clone(), "pd".to_string(), name.to_string())
+        InputPort::from_type_erased(Box::new(()) as Box<dyn std::any::Any + Send>).with_watchdog(
+            wd.clone(),
+            "pd".to_string(),
+            name.to_string(),
+        )
     }
 
     /// 4-bit bus, strobe rising at positions 1,5,9,13, bus values 1,2,3,4.

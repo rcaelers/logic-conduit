@@ -193,10 +193,7 @@ mod tests {
     use crate::runtime::watchdog::Watchdog;
     use crossbeam_channel::bounded;
 
-    fn run_gate(
-        gate: &mut LogicGate,
-        input_edges: Vec<Vec<Sample>>,
-    ) -> Vec<Sample> {
+    fn run_gate(gate: &mut LogicGate, input_edges: Vec<Vec<Sample>>) -> Vec<Sample> {
         let wd = Watchdog::new();
         let mut inputs = Vec::new();
         for (i, edges) in input_edges.iter().enumerate() {

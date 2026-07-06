@@ -1,10 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod app;
-mod compile;
-mod logic_analyzer_viewer;
-mod nodes;
-
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -15,6 +11,9 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "DSL Pipeline Editor",
         options,
-        Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
+        Box::new(|cc| Ok(Box::new(dsl_ui::App::new(cc)))),
     )
 }
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}

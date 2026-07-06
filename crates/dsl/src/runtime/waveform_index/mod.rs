@@ -482,7 +482,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(cursor, window.end_sample, "segments do not cover window ({context})");
+        assert_eq!(
+            cursor, window.end_sample,
+            "segments do not cover window ({context})"
+        );
     }
 
     fn run_randomized_rounds(
@@ -516,7 +519,10 @@ mod tests {
 
                 if window.sample_step == 1 {
                     // Exact path: transitions must match ground truth exactly.
-                    assert_eq!(window.channels[0].initial, samples[start as usize], "{context}");
+                    assert_eq!(
+                        window.channels[0].initial, samples[start as usize],
+                        "{context}"
+                    );
                     let mut value = samples[start as usize];
                     let mut expected = Vec::new();
                     for sample in (start + 1)..end {
@@ -544,7 +550,15 @@ mod tests {
     #[test]
     fn randomized_indexed_windows_match_ground_truth() -> Result<()> {
         let mut rng = XorShift(0x1234_5678_9abc_def0);
-        run_randomized_rounds(&mut rng, 40, &[4_096, 16_384, 65_536], 60_000, 400_000, 13, 200)
+        run_randomized_rounds(
+            &mut rng,
+            40,
+            &[4_096, 16_384, 65_536],
+            60_000,
+            400_000,
+            13,
+            200,
+        )
     }
 
     /// Large blocks (several L3 groups each) with runs long enough to produce

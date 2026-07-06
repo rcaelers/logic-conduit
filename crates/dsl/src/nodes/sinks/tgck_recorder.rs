@@ -369,8 +369,8 @@ mod tests {
             }
         }
 
-        let csv_a =
-            std::fs::read_to_string(dir.path().join("capture_0001_tgck.csv")).expect("window A csv");
+        let csv_a = std::fs::read_to_string(dir.path().join("capture_0001_tgck.csv"))
+            .expect("window A csv");
         let mut lines = csv_a.lines();
         assert!(lines.next().unwrap().starts_with("rising_byte_index"));
         // Edges ≤ a word's position are drained before that word counts:

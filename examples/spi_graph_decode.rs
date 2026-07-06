@@ -27,11 +27,13 @@
 //!       --output-dir output_graph
 
 use clap::Parser;
-use dsl::nodes::decoders::{CsPolarity, ParallelDecoder, SpiDecoder, SpiMode, SpiTransfer, StrobeMode};
+use dsl::DslFileSource;
+use dsl::nodes::decoders::{
+    CsPolarity, ParallelDecoder, SpiDecoder, SpiMode, SpiTransfer, StrobeMode,
+};
 use dsl::nodes::logic::{SrLatch, TextFormatter, TriggerCounter, WordMatcher};
 use dsl::nodes::sinks::BinaryFileWriter;
 use dsl::runtime::Pipeline;
-use dsl::DslFileSource;
 use std::path::PathBuf;
 use tracing::info;
 
@@ -87,11 +89,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
 
-    let max_channel = *[args.spi_cs, args.spi_clk, args.spi_mosi, args.parallel_strobe]
-        .iter()
-        .chain(args.parallel_data.iter())
-        .max()
-        .unwrap();
+    let max_channel = *[
+        args.spi_cs,
+        args.spi_clk,
+        args.spi_mosi,
+        args.parallel_strobe,
+    ]
+    .iter()
+    .chain(args.parallel_data.iter())
+    .max()
+    .unwrap();
     let num_channels = (max_channel + 1) as u8;
 
     info!("File: {} ({} channels)", args.file, num_channels);
@@ -136,11 +143,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     pipeline.add_process("writer", BinaryFileWriter::new().with_index_csv(true))?;
 
     // ── SPI control path ─────────────────────────────────────────────────
-    pipeline.connect("source", &format!("d{}", args.spi_clk), "spi_decoder", "clk")?;
+    pipeline.connect(
+        "source",
+        &format!("d{}", args.spi_clk),
+        "spi_decoder",
+        "clk",
+    )?;
     pipeline.connect("source", &format!("d{}", args.spi_cs), "spi_decoder", "cs")?;
-    pipeline.connect("source", &format!("d{}", args.spi_mosi), "spi_decoder", "mosi")?;
-    pipeline.connect_with_buffer("spi_decoder", "spi_transfers", "start_matcher", "words", 1_000)?;
-    pipeline.connect_with_buffer("spi_decoder", "spi_transfers", "stop_matcher", "words", 1_000)?;
+    pipeline.connect(
+        "source",
+        &format!("d{}", args.spi_mosi),
+        "spi_decoder",
+        "mosi",
+    )?;
+    pipeline.connect_with_buffer(
+        "spi_decoder",
+        "spi_transfers",
+        "start_matcher",
+        "words",
+        1_000,
+    )?;
+    pipeline.connect_with_buffer(
+        "spi_decoder",
+        "spi_transfers",
+        "stop_matcher",
+        "words",
+        1_000,
+    )?;
     pipeline.connect_with_buffer("start_matcher", "trigger", "latch", "set", 100)?;
     pipeline.connect_with_buffer("stop_matcher", "trigger", "latch", "reset", 100)?;
     pipeline.connect_with_buffer("latch", "q", "parallel_decoder", "enable_signal", 100)?;

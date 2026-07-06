@@ -196,7 +196,10 @@ impl PipelineManager {
                         .get(&sub.from_node)
                         .ok_or_else(|| format!("producer '{}' not running", sub.from_node))?;
                     let output = producer.outputs.get(&sub.from_port).ok_or_else(|| {
-                        format!("producer '{}' has no port '{}'", sub.from_node, sub.from_port)
+                        format!(
+                            "producer '{}' has no port '{}'",
+                            sub.from_node, sub.from_port
+                        )
                     })?;
                     if output.type_id != input_schemas[index].type_id {
                         return Err(format!(
@@ -228,7 +231,15 @@ impl PipelineManager {
             })
             .collect();
 
-        self.register(name, node, input_ports, output_ports, outputs, input_subs, 0);
+        self.register(
+            name,
+            node,
+            input_ports,
+            output_ports,
+            outputs,
+            input_subs,
+            0,
+        );
         Ok(())
     }
 
@@ -461,7 +472,10 @@ impl PipelineManager {
                         .get(&sub.from_node)
                         .ok_or_else(|| format!("producer '{}' not running", sub.from_node))?;
                     let output = producer.outputs.get(&sub.from_port).ok_or_else(|| {
-                        format!("producer '{}' has no port '{}'", sub.from_node, sub.from_port)
+                        format!(
+                            "producer '{}' has no port '{}'",
+                            sub.from_node, sub.from_port
+                        )
                     })?;
                     if output.type_id != input_schemas[index].type_id {
                         return Err(format!(
@@ -478,11 +492,7 @@ impl PipelineManager {
                 .get(index)
                 .map(|schema| schema.name.clone())
                 .unwrap_or_else(|| format!("in{index}"));
-            input_ports.push(port.with_watchdog(
-                self.watchdog.clone(),
-                name.to_owned(),
-                port_name,
-            ));
+            input_ports.push(port.with_watchdog(self.watchdog.clone(), name.to_owned(), port_name));
         }
 
         let output_schemas = node.output_schema();
@@ -892,7 +902,10 @@ mod tests {
 
         let values = out.lock().unwrap();
         assert_eq!(values.len(), 60);
-        assert!(values.first().copied().unwrap() < 1000, "config applied too early?");
+        assert!(
+            values.first().copied().unwrap() < 1000,
+            "config applied too early?"
+        );
         assert!(
             values.last().copied().unwrap() >= 1000,
             "config never applied"

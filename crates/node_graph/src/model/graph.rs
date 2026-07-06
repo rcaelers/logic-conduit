@@ -25,7 +25,8 @@ impl GraphState {
 
     pub fn remove_node(&mut self, id: NodeId) {
         self.nodes.remove(&id);
-        self.connections.retain(|connection| connection.to.node != id);
+        self.connections
+            .retain(|connection| connection.to.node != id);
         // Outgoing connections are dropped one by one so each downstream
         // input reverts properly (resolution cleared, variadic members
         // removed with index fixup).

@@ -122,7 +122,10 @@ fn input_sockets_match_defs<S>(sockets: &[Socket], defs: &[InputDef<S>]) -> bool
             Some(max) => {
                 let mut members = 0usize;
                 let mut placeholders = 0usize;
-                while iter.peek().is_some_and(|socket| socket.def_index == def_index) {
+                while iter
+                    .peek()
+                    .is_some_and(|socket| socket.def_index == def_index)
+                {
                     let socket = iter.next().expect("peeked");
                     match &socket.variadic {
                         Some(info) if info.placeholder => placeholders += 1,

@@ -259,11 +259,7 @@ mod tests {
         }
     }
 
-    fn run_to_shutdown(
-        node: &mut dyn ProcessNode,
-        inputs: &[InputPort],
-        outputs: &[OutputPort],
-    ) {
+    fn run_to_shutdown(node: &mut dyn ProcessNode, inputs: &[InputPort], outputs: &[OutputPort]) {
         loop {
             match node.work(inputs, outputs) {
                 Ok(_) => {}
@@ -284,9 +280,12 @@ mod tests {
         let (ptx, prx) = bounded::<ChannelMessage<Sample>>(16);
         let pulse_out = OutputPort::new_with_watchdog(Sender::new(vec![ptx]), &wd, "m", "matched");
 
-        tx.send(ChannelMessage::Sample(transfer(0x600081, 100))).unwrap();
-        tx.send(ChannelMessage::Sample(transfer(0x600000, 200))).unwrap();
-        tx.send(ChannelMessage::Sample(transfer(0x600081, 300_000))).unwrap();
+        tx.send(ChannelMessage::Sample(transfer(0x600081, 100)))
+            .unwrap();
+        tx.send(ChannelMessage::Sample(transfer(0x600000, 200)))
+            .unwrap();
+        tx.send(ChannelMessage::Sample(transfer(0x600081, 300_000)))
+            .unwrap();
         drop(tx);
 
         let mut m = WordMatcher::<SpiTransfer>::new(0x600081, 0xFFFFFF);
@@ -327,9 +326,12 @@ mod tests {
         let pulse_out = OutputPort::new_with_watchdog(Sender::new(vec![ptx]), &wd, "m", "matched");
 
         // Match on register byte only (0x60xxxx)
-        tx.send(ChannelMessage::Sample(transfer(0x600081, 1))).unwrap();
-        tx.send(ChannelMessage::Sample(transfer(0x600000, 2))).unwrap();
-        tx.send(ChannelMessage::Sample(transfer(0x6A0000, 3))).unwrap();
+        tx.send(ChannelMessage::Sample(transfer(0x600081, 1)))
+            .unwrap();
+        tx.send(ChannelMessage::Sample(transfer(0x600000, 2)))
+            .unwrap();
+        tx.send(ChannelMessage::Sample(transfer(0x6A0000, 3)))
+            .unwrap();
         drop(tx);
 
         let mut m = WordMatcher::<SpiTransfer>::new(0x600000, 0xFF0000);

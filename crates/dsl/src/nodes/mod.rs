@@ -25,24 +25,33 @@
 //! ```
 
 pub mod decoders;
+#[cfg(not(target_arch = "wasm32"))]
 mod dsl_file;
+#[cfg(not(target_arch = "wasm32"))]
 mod dslogic_u3pro16;
 pub mod logic;
+#[cfg(not(target_arch = "wasm32"))]
 mod logic_analyzer;
 pub mod sinks;
+mod uart_demo_source;
 
 // Export DslFileSource and related types for file I/O
+#[cfg(not(target_arch = "wasm32"))]
 pub use dsl_file::{
     DslCaptureReader, DslChunkedCaptureReader, DslFileCaptureDataSource, DslFileSource,
 };
+#[cfg(not(target_arch = "wasm32"))]
 pub use dslogic_u3pro16::{DsLogicU3Pro16, LinkSpeed, RusbTransport, UsbTransport};
+#[cfg(not(target_arch = "wasm32"))]
 pub use logic_analyzer::{
     CaptureMode, ClockEdge, ClockSource, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
     LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
     LogicEncodingRequest, LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic,
 };
+pub use uart_demo_source::UartDemoSource;
 
 /// Convenient name for the production DSLogic source node.
+#[cfg(not(target_arch = "wasm32"))]
 pub type DsLogicU3Pro16Source = LogicAnalyzerSource<DsLogicU3Pro16<RusbTransport>>;
 
 // Re-export Sample from runtime

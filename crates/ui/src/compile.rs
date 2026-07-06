@@ -185,6 +185,7 @@ impl BuilderRegistry {
     pub fn standard() -> Self {
         let mut builders: HashMap<String, Box<dyn RuntimeBuilder>> = HashMap::new();
         builders.insert("DSL File Source".into(), Box::new(FileSourceBuilder));
+        builders.insert("UART Demo Source".into(), Box::new(UartDemoSourceBuilder));
         builders.insert("SPI Decoder".into(), Box::new(SpiDecoderBuilder));
         builders.insert("UART Decoder".into(), Box::new(UartDecoderBuilder));
         builders.insert("Binary Decoder".into(), Box::new(BinaryDecoderBuilder));
@@ -277,10 +278,7 @@ fn resolve_reroute_edges(graph: &GraphState) -> Vec<Wire> {
             let mut from = connection.from;
             let mut hops = 0;
             while graph.nodes.get(&from.node)?.kind == NodeKind::Reroute {
-                let upstream = graph
-                    .connections
-                    .iter()
-                    .find(|c| c.to.node == from.node)?;
+                let upstream = graph.connections.iter().find(|c| c.to.node == from.node)?;
                 from = upstream.from;
                 hops += 1;
                 if hops > graph.connections.len() {
@@ -310,7 +308,10 @@ fn member_index(node: &Node, socket_index: usize) -> usize {
         .count()
 }
 
-pub fn lower(graph: &GraphState, registry: &BuilderRegistry) -> Result<CompiledGraph, Vec<CompileError>> {
+pub fn lower(
+    graph: &GraphState,
+    registry: &BuilderRegistry,
+) -> Result<CompiledGraph, Vec<CompileError>> {
     let mut errors: Vec<CompileError> = Vec::new();
     let wires = resolve_reroute_edges(graph);
 
@@ -542,9 +543,9 @@ pub fn materialize(
     let mut names: HashMap<NodeId, &str> = HashMap::new();
 
     for node in &compiled.nodes {
-        let builder = registry
-            .get(&node.builder)
-            .ok_or_else(|| CompileError::on(node.id, format!("unknown builder '{}'", node.builder)))?;
+        let builder = registry.get(&node.builder).ok_or_else(|| {
+            CompileError::on(node.id, format!("unknown builder '{}'", node.builder))
+        })?;
         let process = builder
             .build(&node.runtime_name, &node.state, &node.resolved, ctx)
             .map_err(|message| CompileError::on(node.id, message))?;
@@ -818,9 +819,12 @@ pub fn start_live(
 
     for id in topo_order(&compiled) {
         let node = compiled_node(&compiled, id);
-        let builder = registry
-            .get(&node.builder)
-            .ok_or_else(|| vec![CompileError::on(id, format!("unknown builder '{}'", node.builder))])?;
+        let builder = registry.get(&node.builder).ok_or_else(|| {
+            vec![CompileError::on(
+                id,
+                format!("unknown builder '{}'", node.builder),
+            )]
+        })?;
         let process = builder
             .build(&node.runtime_name, &node.state, &node.resolved, ctx)
             .map_err(|message| vec![CompileError::on(id, message)])?;
@@ -874,17 +878,15 @@ impl LiveRun {
             match edit {
                 LiveEdit::Remove(id) => {
                     if let Some(name) = self.names.remove(&id) {
-                        self.manager
-                            .remove_node(&name)
-                            .map_err(ApplyError::Apply)?;
+                        self.manager.remove_node(&name).map_err(ApplyError::Apply)?;
                     }
                     summary.removed += 1;
                 }
                 LiveEdit::Add(id) => {
                     let node = compiled_node(&new, id);
-                    let builder = registry
-                        .get(&node.builder)
-                        .ok_or_else(|| ApplyError::Apply(format!("no builder '{}'", node.builder)))?;
+                    let builder = registry.get(&node.builder).ok_or_else(|| {
+                        ApplyError::Apply(format!("no builder '{}'", node.builder))
+                    })?;
                     let process = builder
                         .build(&node.runtime_name, &node.state, &node.resolved, &mut ctx)
                         .map_err(ApplyError::Apply)?;
@@ -917,9 +919,9 @@ impl LiveRun {
                         .get(&id)
                         .cloned()
                         .ok_or_else(|| ApplyError::Apply(format!("n{} not running", id.0)))?;
-                    let builder = registry
-                        .get(&node.builder)
-                        .ok_or_else(|| ApplyError::Apply(format!("no builder '{}'", node.builder)))?;
+                    let builder = registry.get(&node.builder).ok_or_else(|| {
+                        ApplyError::Apply(format!("no builder '{}'", node.builder))
+                    })?;
                     let process = builder
                         .build(&name, &node.state, &node.resolved, &mut ctx)
                         .map_err(ApplyError::Apply)?;
@@ -1019,6 +1021,44 @@ impl RuntimeBuilder for FileSourceBuilder {
         let source = dsl::DslFileSource::new(&state.file.value, channels)
             .map_err(|e| format!("cannot open '{}': {e}", state.file.value))?
             .with_name(name);
+        Ok(Box::new(source))
+    }
+}
+
+struct UartDemoSourceBuilder;
+
+impl RuntimeBuilder for UartDemoSourceBuilder {
+    fn is_source(&self) -> bool {
+        true
+    }
+    fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
+        vec![]
+    }
+    fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
+        vec![PortKind::SampleEdge]
+    }
+    fn input_port(&self, _: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
+        None
+    }
+    fn output_port(&self, _socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
+        (kind == PortKind::SampleEdge).then(|| "rx".into())
+    }
+    fn input_required(&self, _: &Socket, _: &Value) -> bool {
+        false
+    }
+    fn build(
+        &self,
+        name: &str,
+        state: &Value,
+        _resolved: &ResolvedInputs,
+        _ctx: &mut CompileCtx,
+    ) -> Result<Box<dyn ProcessNode>, String> {
+        let state: nodes::UartDemoSourceState = parse_state(state)?;
+        let source = dsl::UartDemoSource::new(
+            state.message.value.into_bytes(),
+            state.baud_rate.value.max(1) as u64,
+        )
+        .with_name(name);
         Ok(Box::new(source))
     }
 }
@@ -1456,8 +1496,7 @@ impl RuntimeBuilder for CounterBuilder {
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: nodes::CounterState = parse_state(state)?;
         Ok(Box::new(
-            TriggerCounter::new(state.start.value as i64, state.step.value as i64)
-                .with_name(name),
+            TriggerCounter::new(state.start.value as i64, state.step.value as i64).with_name(name),
         ))
     }
 }
@@ -1675,6 +1714,12 @@ mod tests {
         widget
     }
 
+    fn uart_demo_widget() -> NodeGraphWidget {
+        let mut widget = NodeGraphWidget::new(nodes::build_registry());
+        nodes::populate_uart_demo(&mut widget);
+        widget
+    }
+
     #[test]
     fn startup_graph_lowers() {
         let widget = startup_widget();
@@ -1695,15 +1740,14 @@ mod tests {
         assert_eq!(lanes.len(), 5);
         assert_eq!(lanes[0].1.kind, PortKind::SampleEdge);
         assert!(
-            lanes.iter().any(|(_, input)| input.kind == PortKind::ParallelWords
-                && input.source == "Binary Decoder.Words")
-        );
-        assert!(
             lanes
                 .iter()
-                .any(|(_, input)| input.kind == PortKind::Trigger
-                    && input.source == "Match Start.Match")
+                .any(|(_, input)| input.kind == PortKind::ParallelWords
+                    && input.source == "Binary Decoder.Words")
         );
+        assert!(lanes.iter().any(
+            |(_, input)| input.kind == PortKind::Trigger && input.source == "Match Start.Match"
+        ));
 
         // Kind negotiation spot checks: SPI clk reads edges, the binary
         // decoder reads blocks — both fed from the same UI sockets.
@@ -1735,6 +1779,33 @@ mod tests {
                 .iter()
                 .any(|e| e.to.1 == "enable_signal" && e.buffer == 1_000)
         );
+    }
+
+    #[test]
+    fn uart_demo_graph_lowers() {
+        let widget = uart_demo_widget();
+        let compiled = lower(widget.graph(), &BuilderRegistry::standard())
+            .unwrap_or_else(|errors| panic!("lower failed: {errors:?}"));
+
+        assert_eq!(compiled.nodes.len(), 3);
+        assert_eq!(compiled.edges.len(), 3);
+        assert!(
+            compiled
+                .nodes
+                .iter()
+                .any(|n| n.builder == "UART Demo Source")
+        );
+        assert!(compiled.nodes.iter().any(|n| n.builder == "UART Decoder"));
+
+        let viewer = compiled
+            .nodes
+            .iter()
+            .find(|n| n.builder == "Viewer")
+            .unwrap();
+        let lanes = viewer.resolved.members(0);
+        assert_eq!(lanes.len(), 2);
+        assert_eq!(lanes[0].1.kind, PortKind::SampleEdge);
+        assert_eq!(lanes[1].1.kind, PortKind::ParallelWords);
     }
 
     #[test]
@@ -1948,7 +2019,9 @@ mod tests {
     }
 
     fn repo_path(relative: &str) -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(relative)
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(relative)
     }
 
     /// Reference pipeline: the byte-exact Phase-1 wiring of
@@ -1966,10 +2039,7 @@ mod tests {
             .add_process("spi", SpiDecoder::new(SpiMode::Mode0, 24, true, false))
             .unwrap();
         pipeline
-            .add_process(
-                "start",
-                WordMatcher::<SpiTransfer>::new(0x600081, u64::MAX),
-            )
+            .add_process("start", WordMatcher::<SpiTransfer>::new(0x600081, u64::MAX))
             .unwrap();
         pipeline
             .add_process("stop", WordMatcher::<SpiTransfer>::new(0x600000, u64::MAX))
@@ -2026,7 +2096,13 @@ mod tests {
             .unwrap();
         for bit in 0..8 {
             pipeline
-                .connect_with_buffer("source", &format!("b{bit}"), "decoder", &format!("d{bit}"), 4)
+                .connect_with_buffer(
+                    "source",
+                    &format!("b{bit}"),
+                    "decoder",
+                    &format!("d{bit}"),
+                    4,
+                )
                 .unwrap();
         }
         pipeline

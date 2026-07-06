@@ -403,17 +403,20 @@ impl InlineControl for FileValue {
                         .desired_width((rect.width() - button_width - 6.0).max(24.0)),
                 );
                 if ui.button("…").clicked() {
-                    let mut dialog = rfd::FileDialog::new();
-                    if !self.dialog_title.is_empty() {
-                        dialog = dialog.set_title(&self.dialog_title);
-                    }
-                    for filter in &self.filters {
-                        let extensions: Vec<&str> =
-                            filter.extensions.iter().map(String::as_str).collect();
-                        dialog = dialog.add_filter(&filter.name, &extensions);
-                    }
-                    if let Some(path) = dialog.pick_file() {
-                        self.value = path.display().to_string();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let mut dialog = rfd::FileDialog::new();
+                        if !self.dialog_title.is_empty() {
+                            dialog = dialog.set_title(&self.dialog_title);
+                        }
+                        for filter in &self.filters {
+                            let extensions: Vec<&str> =
+                                filter.extensions.iter().map(String::as_str).collect();
+                            dialog = dialog.add_filter(&filter.name, &extensions);
+                        }
+                        if let Some(path) = dialog.pick_file() {
+                            self.value = path.display().to_string();
+                        }
                     }
                 }
             },

@@ -33,6 +33,8 @@ pub use runtime::SampleBlock;
 pub use runtime::{NumberSample, TextSample, Trigger};
 
 // Re-export streaming nodes - DslFileSource only (SpiCommandController is application-specific)
+pub use nodes::UartDemoSource;
+#[cfg(not(target_arch = "wasm32"))]
 pub use nodes::{
     CaptureMode, ClockEdge, ClockSource, DsLogicU3Pro16, DsLogicU3Pro16Source, DslCaptureReader,
     DslChunkedCaptureReader, DslFileCaptureDataSource, DslFileSource, LinkSpeed, LogicAnalyzer,
@@ -41,11 +43,19 @@ pub use nodes::{
     LogicTriggerStage, RusbTransport, TriggerCondition, TriggerLogic, UsbTransport,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use runtime::{
     BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureIndexProgress,
     CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,
     CaptureWaveformSegment, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
     DslWaveformSegment, IndexSampler, exact_window_sample_limit,
+};
+#[cfg(target_arch = "wasm32")]
+pub use runtime::{
+    BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureMetadata,
+    CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,
+    CaptureWaveformSegment, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
+    DslWaveformSegment,
 };
 
 // Re-export streaming decoders

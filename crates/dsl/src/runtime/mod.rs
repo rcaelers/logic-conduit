@@ -8,6 +8,7 @@ pub mod manager;
 pub mod node;
 pub mod pipeline;
 pub mod ports;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod raw_block_cache;
 pub mod receiver;
 pub mod sample;
@@ -15,6 +16,7 @@ pub mod scheduler;
 pub mod sender;
 pub mod type_registry;
 pub mod watchdog;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod waveform_index;
 
 pub use capture::{
@@ -36,4 +38,5 @@ pub use scheduler::{Scheduler, StopHandle};
 pub use sender::ChannelMessage;
 pub use sender::{OverflowPolicy, Sender, SharedSenders};
 pub use watchdog::Watchdog;
+#[cfg(not(target_arch = "wasm32"))]
 pub use waveform_index::{CaptureIndexProgress, IndexSampler, exact_window_sample_limit};

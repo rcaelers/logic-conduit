@@ -494,7 +494,10 @@ mod tests {
             .send(ChannelMessage::Sample(word(0xBEEF, 100)))
             .unwrap();
 
-        run(rig, &mut BinaryFileWriter::new().with_width(WriteWidth::U16Le));
+        run(
+            rig,
+            &mut BinaryFileWriter::new().with_width(WriteWidth::U16Le),
+        );
 
         assert_eq!(std::fs::read(&path).unwrap(), vec![0xEF, 0xBE]);
     }

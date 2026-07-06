@@ -157,6 +157,7 @@ pub trait CaptureSource {
 /// cache file, where only the pages actually touched are faulted in.
 pub enum BlockData {
     Owned(Arc<[u8]>),
+    #[cfg(not(target_arch = "wasm32"))]
     Mapped {
         map: Arc<memmap2::Mmap>,
         offset: usize,
@@ -170,6 +171,7 @@ impl std::ops::Deref for BlockData {
     fn deref(&self) -> &[u8] {
         match self {
             BlockData::Owned(data) => data,
+            #[cfg(not(target_arch = "wasm32"))]
             BlockData::Mapped { map, offset, len } => &map[*offset..*offset + *len],
         }
     }

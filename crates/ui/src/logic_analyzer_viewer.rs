@@ -1,15 +1,18 @@
 use dsl::nodes::sinks::MAX_ANNOTATION_NS;
+use dsl::{Annotation, CaptureMetadata, DerivedLaneData, DerivedLanes, Sample};
+#[cfg(not(target_arch = "wasm32"))]
 use dsl::{
-    Annotation, CaptureDataSource, CaptureIndexProgress, CaptureMetadata, CaptureSampledWindow,
-    CaptureWaveformSegment, DerivedLaneData, DerivedLanes, DslCaptureReader,
-    DslFileCaptureDataSource, IndexSampler, Sample,
+    CaptureDataSource, CaptureIndexProgress, CaptureSampledWindow, CaptureWaveformSegment,
+    DslCaptureReader, DslFileCaptureDataSource, IndexSampler,
 };
 use egui::{
     Align2, Color32, CursorIcon, FontId, Painter, PointerButton, Pos2, Rect, Response, Sense,
     Shape, Stroke, StrokeKind, Ui, vec2,
 };
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc::{self, Receiver, Sender};
 
 const SCROLL_INPUT_EPSILON: f32 = 0.5;
@@ -79,6 +82,7 @@ pub struct LogicAnalyzerViewer {
     /// visible window happens on the UI thread every frame the view changes,
     /// so what is drawn is always the current view at the current zoom —
     /// there is no asynchronous refinement that could disagree with it.
+    #[cfg(not(target_arch = "wasm32"))]
     sampler: Option<IndexSampler<DslCaptureReader>>,
     /// (start_sample, end_sample, target_points) of the sampled `channels`.
     sampled_key: Option<(u64, u64, usize)>,
@@ -90,8 +94,10 @@ pub struct LogicAnalyzerViewer {
     hover_measurement: Option<PulseMeasurement>,
     visible_start_us: f64,
     visible_span_us: f64,
+    #[cfg(not(target_arch = "wasm32"))]
     capture_path: Option<PathBuf>,
     capture_info: Option<CaptureInfo>,
+    #[cfg(not(target_arch = "wasm32"))]
     worker_responses: Option<Receiver<WorkerResponse>>,
     status: String,
     index_progress: Option<IndexBuildProgress>,
@@ -220,6 +226,7 @@ struct ExactWindow {
 
 #[derive(Debug, Clone)]
 struct CaptureInfo {
+    #[cfg(not(target_arch = "wasm32"))]
     path: PathBuf,
     header: CaptureMetadata,
     duration_us: f64,
@@ -241,6 +248,7 @@ impl IndexBuildProgress {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 enum WorkerResponse {
     Opened {
         path: PathBuf,
@@ -266,10 +274,9 @@ enum WorkerResponse {
 
 impl LogicAnalyzerViewer {
     pub fn demo() -> Self {
-        let mut channels = Vec::new();
-        for index in 0..10 {
+        let mut channels = vec![LogicChannel::uart_demo(0, "serial.rx", b"HELLO\n")];
+        for index in 1..10 {
             let period = match index {
-                0 => 180.0,
                 1 => 90.0,
                 2 => 135.0,
                 3 => 260.0,
@@ -286,20 +293,22 @@ impl LogicAnalyzerViewer {
                 index % 3 == 0,
             ));
         }
-
         Self {
             channels,
             channel_order: (0..10).collect(),
             channel_drag: None,
             channel_names: HashMap::new(),
             channel_rename: None,
+            #[cfg(not(target_arch = "wasm32"))]
             sampler: None,
             sampled_key: None,
             hover_measurement: None,
             visible_start_us: 0.0,
             visible_span_us: 900.0,
+            #[cfg(not(target_arch = "wasm32"))]
             capture_path: None,
             capture_info: None,
+            #[cfg(not(target_arch = "wasm32"))]
             worker_responses: None,
             status: "Demo data".to_string(),
             index_progress: None,
@@ -318,6 +327,7 @@ impl LogicAnalyzerViewer {
         self.derived = Some(lanes);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_capture_path(&mut self, path: impl AsRef<Path>) {
         let path = path.as_ref();
         if path.as_os_str().is_empty() {
@@ -377,6 +387,7 @@ impl LogicAnalyzerViewer {
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         let painter = ui.painter_at(rect);
 
+        #[cfg(not(target_arch = "wasm32"))]
         self.process_worker_responses();
         let mut layout = self.layout(ui, rect);
         let channel_rename_started = self.handle_channel_label_input(ui, &response, layout);
@@ -408,14 +419,17 @@ impl LogicAnalyzerViewer {
         self.draw(&painter, layout, hover_pointer, cursor_input.active);
         self.show_profile_selector(ui, rect);
         self.show_channel_rename(ui.ctx());
-        if self.capture_path.is_some() && self.capture_info.is_none() {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(16));
-        } else if self.index_progress.is_some()
-            || (self.capture_info.is_some() && self.sampler.is_none())
+        #[cfg(not(target_arch = "wasm32"))]
         {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(100));
+            if self.capture_path.is_some() && self.capture_info.is_none() {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(16));
+            } else if self.index_progress.is_some()
+                || (self.capture_info.is_some() && self.sampler.is_none())
+            {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(100));
+            }
         }
     }
 
@@ -744,6 +758,10 @@ impl LogicAnalyzerViewer {
     /// Samples the visible window from the index synchronously, so the drawn
     /// waveform always matches the current view exactly. Skipped when neither
     /// the view nor the viewport size changed since the last sampling.
+    #[cfg(target_arch = "wasm32")]
+    fn sample_visible_window(&mut self, _layout: AnalyzerLayout) {}
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn sample_visible_window(&mut self, layout: AnalyzerLayout) {
         if layout.wave_rect.width() <= 1.0 {
             return;
@@ -831,7 +849,7 @@ impl LogicAnalyzerViewer {
         // with a capture loaded the index path always runs, since even at
         // zoom levels where the visible window is exact, the run or its
         // period may close beyond the viewport.
-        let measurement = if self.sampler.is_none() {
+        let measurement = if !self.has_index_sampler() {
             pulse_measurement_from_window(
                 &channel.transitions,
                 channel.initial,
@@ -840,68 +858,76 @@ impl LogicAnalyzerViewer {
                 time_us,
             )
         } else {
-            let channel_index = channel.index;
-            let Some(capture) = self.capture_info.as_ref() else {
-                return;
-            };
-            let samplerate_hz = capture.header.samplerate_hz;
-            let duration_us = capture.duration_us;
+            #[cfg(target_arch = "wasm32")]
+            {
+                None
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let channel_index = channel.index;
+                let Some(capture) = self.capture_info.as_ref() else {
+                    return;
+                };
+                let samplerate_hz = capture.header.samplerate_hz;
+                let duration_us = capture.duration_us;
 
-            let window = self.exact_transitions_around(wave_rect, channel_index, time_us, 24.0);
-            let mut measurement = window.as_ref().and_then(|window| {
-                pulse_measurement_from_window(
-                    &window.transitions,
-                    window.initial,
-                    window.start_us,
-                    window.end_us,
-                    time_us,
-                )
-            });
+                let window = self.exact_transitions_around(wave_rect, channel_index, time_us, 24.0);
+                let mut measurement = window.as_ref().and_then(|window| {
+                    pulse_measurement_from_window(
+                        &window.transitions,
+                        window.initial,
+                        window.start_us,
+                        window.end_us,
+                        time_us,
+                    )
+                });
 
-            if let Some(measurement) = measurement.as_mut() {
-                let pointer_sample = us_to_sample(time_us, samplerate_hz);
-                let mut end_is_toggle = !measurement.end_open;
-                // Resolve open sides exactly: search the index for the true
-                // bounding toggles, however far away. The measured width
-                // must never depend on the zoom level or query window size.
-                if measurement.start_open {
-                    measurement.start_open = false;
-                    if let Some((sample, value)) =
-                        self.prev_transition_at_or_before(channel_index, pointer_sample)
-                    {
-                        measurement.start_us = sample_to_us(sample, samplerate_hz);
-                        measurement.value = value;
-                    } else {
-                        // The run reaches back to the start of the capture.
-                        measurement.start_us = 0.0;
+                if let Some(measurement) = measurement.as_mut() {
+                    let pointer_sample = us_to_sample(time_us, samplerate_hz);
+                    let mut end_is_toggle = !measurement.end_open;
+                    // Resolve open sides exactly: search the index for the true
+                    // bounding toggles, however far away. The measured width
+                    // must never depend on the zoom level or query window size.
+                    if measurement.start_open {
+                        measurement.start_open = false;
+                        if let Some((sample, value)) =
+                            self.prev_transition_at_or_before(channel_index, pointer_sample)
+                        {
+                            measurement.start_us = sample_to_us(sample, samplerate_hz);
+                            measurement.value = value;
+                        } else {
+                            // The run reaches back to the start of the capture.
+                            measurement.start_us = 0.0;
+                        }
                     }
-                }
-                if measurement.end_open {
-                    measurement.end_open = false;
-                    if let Some((sample, _)) =
-                        self.next_transition_after(channel_index, pointer_sample)
-                    {
-                        measurement.end_us = sample_to_us(sample, samplerate_hz);
-                        end_is_toggle = true;
-                    } else {
-                        // The run reaches to the end of the capture.
-                        measurement.end_us = duration_us;
+                    if measurement.end_open {
+                        measurement.end_open = false;
+                        if let Some((sample, _)) =
+                            self.next_transition_after(channel_index, pointer_sample)
+                        {
+                            measurement.end_us = sample_to_us(sample, samplerate_hz);
+                            end_is_toggle = true;
+                        } else {
+                            // The run reaches to the end of the capture.
+                            measurement.end_us = duration_us;
+                        }
                     }
-                }
-                // With the end edge exact, the period may still close beyond
-                // the narrow window; one more search finds it.
-                if measurement.period_end_us.is_none() && end_is_toggle {
-                    let end_sample = us_to_sample(measurement.end_us, samplerate_hz);
-                    if let Some((sample, _)) = self.next_transition_after(channel_index, end_sample)
-                    {
-                        let period_end_us = sample_to_us(sample, samplerate_hz);
-                        if period_end_us - measurement.start_us > measurement.width_us() {
-                            measurement.period_end_us = Some(period_end_us);
+                    // With the end edge exact, the period may still close beyond
+                    // the narrow window; one more search finds it.
+                    if measurement.period_end_us.is_none() && end_is_toggle {
+                        let end_sample = us_to_sample(measurement.end_us, samplerate_hz);
+                        if let Some((sample, _)) =
+                            self.next_transition_after(channel_index, end_sample)
+                        {
+                            let period_end_us = sample_to_us(sample, samplerate_hz);
+                            if period_end_us - measurement.start_us > measurement.width_us() {
+                                measurement.period_end_us = Some(period_end_us);
+                            }
                         }
                     }
                 }
+                measurement
             }
-            measurement
         };
 
         self.hover_measurement = measurement.map(|measurement| PulseMeasurement {
@@ -910,14 +936,26 @@ impl LogicAnalyzerViewer {
         });
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn has_index_sampler(&self) -> bool {
+        false
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn has_index_sampler(&self) -> bool {
+        self.sampler.is_some()
+    }
+
     /// First toggle strictly after `sample`, searched across the whole
     /// capture.
+    #[cfg(not(target_arch = "wasm32"))]
     fn next_transition_after(&mut self, channel_index: usize, sample: u64) -> Option<(u64, bool)> {
         let total_samples = self.capture_info.as_ref()?.header.total_samples;
         self.find_transition(channel_index, sample, sample, total_samples, false)
     }
 
     /// Last toggle at or before `sample`, searched across the whole capture.
+    #[cfg(not(target_arch = "wasm32"))]
     fn prev_transition_at_or_before(
         &mut self,
         channel_index: usize,
@@ -932,6 +970,7 @@ impl LogicAnalyzerViewer {
     /// skipped wholesale, so even a bounding toggle many seconds away costs
     /// only a handful of coarse queries. Returns the toggle's sample and the
     /// level after it.
+    #[cfg(not(target_arch = "wasm32"))]
     fn find_transition(
         &mut self,
         channel_index: usize,
@@ -1029,6 +1068,7 @@ impl LogicAnalyzerViewer {
     /// need band rendering still has its real edges captured. Bounded below
     /// (very zoomed in) and above (very zoomed out) to keep the raw scan
     /// cheap.
+    #[cfg(not(target_arch = "wasm32"))]
     fn exact_transitions_around(
         &mut self,
         wave_rect: Rect,
@@ -1225,7 +1265,7 @@ impl LogicAnalyzerViewer {
             return time_us;
         }
         let channel_row = ((pointer.y - wave_rect.top()) / row_height).floor() as usize;
-        let (channel_index, needs_exact_query, nearest_visible) = {
+        let (_channel_index, needs_exact_query, nearest_visible) = {
             let Some(channel) = self.channels.get(channel_row) else {
                 return time_us;
             };
@@ -1237,10 +1277,16 @@ impl LogicAnalyzerViewer {
         };
         // Band-rendered channels don't carry exact edge times on screen;
         // query the index around the pointer, as hover measurement does.
+        #[cfg(not(target_arch = "wasm32"))]
         let nearest = if needs_exact_query {
-            self.exact_transitions_around(wave_rect, channel_index, time_us, 24.0)
+            self.exact_transitions_around(wave_rect, _channel_index, time_us, 24.0)
                 .and_then(|window| nearest_transition_time(&window.transitions, time_us))
         } else {
+            nearest_visible
+        };
+        #[cfg(target_arch = "wasm32")]
+        let nearest = {
+            let _ = needs_exact_query;
             nearest_visible
         };
         let Some(nearest) = nearest else {
@@ -1327,6 +1373,7 @@ impl LogicAnalyzerViewer {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn process_worker_responses(&mut self) {
         let mut responses = Vec::new();
         if let Some(receiver) = &self.worker_responses {
@@ -1803,15 +1850,13 @@ impl LogicAnalyzerViewer {
             } else {
                 lane.name.clone()
             };
-            painter
-                .with_clip_rect(labels_rect)
-                .text(
-                    Pos2::new(badge_rect.right() + 8.0, row_rect.center().y),
-                    Align2::LEFT_CENTER,
-                    name,
-                    FontId::proportional(12.0),
-                    text,
-                );
+            painter.with_clip_rect(labels_rect).text(
+                Pos2::new(badge_rect.right() + 8.0, row_rect.center().y),
+                Align2::LEFT_CENTER,
+                name,
+                FontId::proportional(12.0),
+                text,
+            );
 
             match &lane.data {
                 DerivedLaneData::Digital(samples) => {
@@ -1837,7 +1882,8 @@ impl LogicAnalyzerViewer {
 
     fn visible_window_ns(&self) -> (u64, u64) {
         let start_ns = (self.visible_start_us.max(0.0) * 1_000.0) as u64;
-        let end_ns = ((self.visible_start_us + self.visible_span_us).max(0.0) * 1_000.0).ceil() as u64;
+        let end_ns =
+            ((self.visible_start_us + self.visible_span_us).max(0.0) * 1_000.0).ceil() as u64;
         (start_ns, end_ns)
     }
 
@@ -1906,8 +1952,8 @@ impl LogicAnalyzerViewer {
             let x0 = wave_rect.left() + column as f32;
             let column_end_ns =
                 start_ns + ((column + 1) as u64).saturating_mul(span_ns) / width as u64;
-            let step = samples[index..last]
-                .partition_point(|sample| sample.start_time < column_end_ns);
+            let step =
+                samples[index..last].partition_point(|sample| sample.start_time < column_end_ns);
             if step > 0 {
                 painter.line_segment(
                     [
@@ -1972,10 +2018,7 @@ impl LogicAnalyzerViewer {
                 if step > 0 {
                     let x0 = wave_rect.left() + column as f32;
                     painter.rect_filled(
-                        Rect::from_min_max(
-                            Pos2::new(x0, box_top),
-                            Pos2::new(x0 + 1.0, box_bottom),
-                        ),
+                        Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(x0 + 1.0, box_bottom)),
                         0.0,
                         border.color,
                     );
@@ -2389,6 +2432,7 @@ impl LogicAnalyzerViewer {
 /// Opens the capture and builds (or validates) the waveform index on a
 /// background thread, reporting progress. Window sampling itself happens
 /// synchronously on the UI thread once the index is ready.
+#[cfg(not(target_arch = "wasm32"))]
 fn spawn_capture_worker(
     identity: PathBuf,
     data_source: impl CaptureDataSource,
@@ -2458,6 +2502,7 @@ fn spawn_capture_worker(
         .expect("capture indexer thread should start");
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn capture_status(capture: &CaptureInfo) -> String {
     format!(
         "{} · {} · {:.1} MHz · {} samples",
@@ -2473,6 +2518,45 @@ fn capture_status(capture: &CaptureInfo) -> String {
 }
 
 impl LogicChannel {
+    fn uart_demo(index: usize, name: &str, bytes: &[u8]) -> Self {
+        const BAUD: f64 = 115_200.0;
+        const FIRST_START_NS: u64 = 60_000;
+        let bit_ns = (1_000_000_000.0 / BAUD).round() as u64;
+        let mut transitions = Vec::new();
+        let mut raw_level = true;
+        let mut time_ns = FIRST_START_NS;
+
+        for &byte in bytes {
+            let frame_start = time_ns;
+            let mut bits = Vec::with_capacity(10);
+            bits.push(false);
+            for bit in 0..8 {
+                bits.push(((byte >> bit) & 1) == 1);
+            }
+            bits.push(true);
+
+            for (bit_index, bit_value) in bits.into_iter().enumerate() {
+                let bit_time_ns = frame_start + bit_index as u64 * bit_ns;
+                if raw_level != bit_value {
+                    raw_level = bit_value;
+                    transitions.push(Transition {
+                        time_us: bit_time_ns as f64 / 1_000.0,
+                        value: raw_level,
+                    });
+                }
+            }
+            time_ns = frame_start + 10 * bit_ns;
+        }
+
+        Self {
+            index,
+            name: name.to_owned(),
+            initial: true,
+            transitions,
+            waveform: Vec::new(),
+        }
+    }
+
     fn square_wave(
         index: usize,
         name: String,
@@ -2567,6 +2651,7 @@ fn pulse_measurement_from_window(
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn channels_from_window(window: &CaptureSampledWindow, samplerate_hz: f64) -> Vec<LogicChannel> {
     window
         .channels

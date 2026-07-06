@@ -60,10 +60,10 @@ impl NodeGraphWidget {
             return None;
         }
         self.panel_target()?;
-        let width = self
-            .panel
-            .width
-            .clamp(PANEL_MIN_WIDTH, (canvas_rect.width() - 160.0).max(PANEL_MIN_WIDTH));
+        let width = self.panel.width.clamp(
+            PANEL_MIN_WIDTH,
+            (canvas_rect.width() - 160.0).max(PANEL_MIN_WIDTH),
+        );
         Some(Rect::from_min_max(
             Pos2::new(canvas_rect.max.x - width, canvas_rect.min.y),
             canvas_rect.max,
@@ -96,7 +96,8 @@ impl NodeGraphWidget {
         if splitter.dragged()
             && let Some(pointer) = splitter.interact_pointer_pos()
         {
-            self.panel.width = (panel_rect.right() - pointer.x).clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
+            self.panel.width =
+                (panel_rect.right() - pointer.x).clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
         }
     }
 

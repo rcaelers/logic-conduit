@@ -13,13 +13,15 @@ name = "dsl"
 path = "src/lib.rs"
 
 [dependencies]
-zip = "8.0.0"
+zip = { version = "8.0.0", default-features = false, features = ["deflate"] }
 thiserror = "2.0"
 clap = { version = "4.5", features = ["derive"] }
 crossbeam-channel = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 lazy_static = "1.5"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 memmap2 = "0.9"
 minifb = "0.28"
 rusb = "0.9"

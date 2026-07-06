@@ -297,9 +297,13 @@ impl ProcessNode for ViewerSink {
 
             match &mut lane.buffer {
                 LaneBuffer::Signal(buffer) => {
-                    drain!(Sample, buffer, |store: &DerivedLanes, lane, item: Sample| {
-                        store.append_digital(lane, item)
-                    })
+                    drain!(
+                        Sample,
+                        buffer,
+                        |store: &DerivedLanes, lane, item: Sample| {
+                            store.append_digital(lane, item)
+                        }
+                    )
                 }
                 LaneBuffer::Spi(buffer) => {
                     drain!(
@@ -345,10 +349,10 @@ impl ProcessNode for ViewerSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::sender::ChannelMessage;
-    use crate::runtime::watchdog::Watchdog;
     use crate::TimingInfo;
     use crate::runtime::OutputPort as OutPort;
+    use crate::runtime::sender::ChannelMessage;
+    use crate::runtime::watchdog::Watchdog;
     use crossbeam_channel::bounded;
 
     fn run_sink(sink: &mut ViewerSink, inputs: Vec<InputPort>) {

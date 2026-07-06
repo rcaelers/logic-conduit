@@ -241,7 +241,9 @@ mod tests {
         assert_eq!(format_template("{2} missing", &[7, 9]), "{2} missing");
     }
 
-    fn collect(out_rx: &crossbeam_channel::Receiver<ChannelMessage<TextSample>>) -> Vec<TextSample> {
+    fn collect(
+        out_rx: &crossbeam_channel::Receiver<ChannelMessage<TextSample>>,
+    ) -> Vec<TextSample> {
         out_rx
             .try_iter()
             .filter_map(|m| match m {
@@ -323,8 +325,8 @@ mod tests {
         assert_eq!(
             collect(&out_rx),
             vec![
-                TextSample::new("0/0", 0),  // input 0's t=0 initial
-                TextSample::new("0/5", 0),  // input 1's t=0 initial
+                TextSample::new("0/0", 0), // input 0's t=0 initial
+                TextSample::new("0/5", 0), // input 1's t=0 initial
                 TextSample::new("0/6", 200),
                 TextSample::new("1/6", 300),
             ]
