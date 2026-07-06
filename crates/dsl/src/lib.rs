@@ -56,7 +56,10 @@ pub use nodes::decoders::SpiDecoder;
 pub use nodes::logic::{
     GateOp, LogicGate, SrLatch, TextFormatter, TriggerCounter, WordField, WordMatcher, WordSource,
 };
-pub use nodes::sinks::{BinaryFileWriter, WriteWidth};
+pub use nodes::sinks::{
+    Annotation, BinaryFileWriter, DerivedLane, DerivedLaneData, DerivedLanes, ViewerLaneKind,
+    ViewerSink, WriteWidth,
+};
 
 // Re-export streaming runtime components
 pub use runtime::{

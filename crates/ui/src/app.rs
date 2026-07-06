@@ -38,7 +38,12 @@ impl App {
         }
         self.run_message = None;
 
-        match compile::compile(self.node_graph.graph(), &self.builders) {
+        // Fresh lane store per run: stale lanes vanish atomically (§5.5).
+        let mut ctx = compile::CompileCtx::default();
+        self.logic_analyzer
+            .set_derived_lanes(ctx.derived_lanes.clone());
+
+        match compile::compile(self.node_graph.graph(), &self.builders, &mut ctx) {
             Ok(scheduler) => {
                 self.run = Some(compile::start(scheduler));
             }

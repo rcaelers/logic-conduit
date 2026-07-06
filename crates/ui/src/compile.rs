@@ -13,9 +13,9 @@
 use dsl::nodes::decoders::{BitOrder, Endianness, UartParity, UartStopBits};
 use dsl::runtime::{Pipeline, ProcessNode, Scheduler, StopHandle};
 use dsl::{
-    BinaryFileWriter, CsPolarity, GateOp, LogicGate, ParallelWord, SpiDecoder, SpiMode,
-    SpiTransfer, SrLatch, StrobeMode, TextFormatter, TriggerCounter, WordField, WordMatcher,
-    WriteWidth,
+    BinaryFileWriter, CsPolarity, DerivedLanes, GateOp, LogicGate, ParallelWord, SpiDecoder,
+    SpiMode, SpiTransfer, SrLatch, StrobeMode, TextFormatter, TriggerCounter, ViewerLaneKind,
+    ViewerSink, WordField, WordMatcher, WriteWidth,
 };
 use node_graph::{GraphState, Node, NodeId, NodeKind, Socket, SocketId};
 use serde_json::Value;
@@ -87,23 +87,44 @@ impl CompileError {
     }
 }
 
-/// Shared resources handed to builders (Phase 4 adds the `DerivedLanes`
-/// store for viewer sinks).
+/// Shared resources handed to builders. A fresh `DerivedLanes` store per
+/// run makes stale viewer lanes vanish atomically on re-run (§5.5).
 #[derive(Default)]
-pub struct CompileCtx {}
+pub struct CompileCtx {
+    pub derived_lanes: DerivedLanes,
+}
 
-/// Per input socket, keyed `(def_index, member_index)`: the `PortKind` its
-/// incoming edge settled on. Keys are def-relative so variadic growth does
-/// not shift them.
+/// What one input edge settled on: the negotiated stream kind plus a
+/// human-readable producer label (`"{node title}.{socket}"`, used for
+/// viewer lane names).
+#[derive(Debug, Clone)]
+pub struct ResolvedInput {
+    pub kind: PortKind,
+    pub source: String,
+}
+
+/// Per input socket, keyed `(def_index, member_index)`. Keys are
+/// def-relative so variadic growth does not shift them.
 #[derive(Debug, Clone, Default)]
-pub struct ResolvedInputs(HashMap<(usize, usize), PortKind>);
+pub struct ResolvedInputs(HashMap<(usize, usize), ResolvedInput>);
 
 impl ResolvedInputs {
     pub fn kind(&self, def_index: usize) -> Option<PortKind> {
-        self.0.get(&(def_index, 0)).copied()
+        self.0.get(&(def_index, 0)).map(|input| input.kind)
     }
     pub fn member_count(&self, def_index: usize) -> usize {
         self.0.keys().filter(|(def, _)| *def == def_index).count()
+    }
+    /// Members of a variadic group in port order.
+    pub fn members(&self, def_index: usize) -> Vec<(usize, &ResolvedInput)> {
+        let mut members: Vec<(usize, &ResolvedInput)> = self
+            .0
+            .iter()
+            .filter(|((def, _), _)| *def == def_index)
+            .map(|((_, member), input)| (*member, input))
+            .collect();
+        members.sort_by_key(|(member, _)| *member);
+        members
     }
 }
 
@@ -164,6 +185,7 @@ impl BuilderRegistry {
         builders.insert("Counter".into(), Box::new(CounterBuilder));
         builders.insert("String Formatter".into(), Box::new(FormatterBuilder));
         builders.insert("File Writer".into(), Box::new(FileWriterBuilder));
+        builders.insert("Viewer".into(), Box::new(ViewerBuilder));
         Self(builders)
     }
 
@@ -396,11 +418,13 @@ pub fn lower(graph: &GraphState, registry: &BuilderRegistry) -> Result<CompiledG
             continue;
         };
 
-        resolved
-            .entry(wire.to.node)
-            .or_default()
-            .0
-            .insert((to_socket.def_index, member), kind);
+        resolved.entry(wire.to.node).or_default().0.insert(
+            (to_socket.def_index, member),
+            ResolvedInput {
+                kind,
+                source: format!("{}.{}", from_node.title, from_socket.name),
+            },
+        );
         edges.push(CompiledEdge {
             from: (wire.from.node, out_port),
             to: (wire.to.node, in_port),
@@ -533,9 +557,10 @@ pub fn materialize(
 pub fn compile(
     graph: &GraphState,
     registry: &BuilderRegistry,
+    ctx: &mut CompileCtx,
 ) -> Result<Scheduler, Vec<CompileError>> {
     let compiled = lower(graph, registry)?;
-    materialize(&compiled, registry, &mut CompileCtx::default()).map_err(|e| vec![e])
+    materialize(&compiled, registry, ctx).map_err(|e| vec![e])
 }
 
 // ── Run lifecycle (§5.5) ─────────────────────────────────────────────────────
@@ -1097,6 +1122,68 @@ impl RuntimeBuilder for FileWriterBuilder {
     }
 }
 
+struct ViewerBuilder;
+
+impl RuntimeBuilder for ViewerBuilder {
+    fn is_sink(&self) -> bool {
+        true
+    }
+    fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
+        vec![
+            PortKind::SampleEdge,
+            PortKind::SpiWords,
+            PortKind::ParallelWords,
+            PortKind::Trigger,
+        ]
+    }
+    fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
+        vec![]
+    }
+    fn input_port(
+        &self,
+        _socket: &Socket,
+        member_index: usize,
+        _state: &Value,
+        _kind: PortKind,
+    ) -> Option<String> {
+        Some(format!("in{member_index}"))
+    }
+    fn output_port(&self, _: &Socket, _: &Value, _: PortKind) -> Option<String> {
+        None
+    }
+    fn input_required(&self, _: &Socket, _: &Value) -> bool {
+        // A lane-less viewer is pointless but harmless.
+        false
+    }
+    fn build(
+        &self,
+        name: &str,
+        state: &Value,
+        resolved: &ResolvedInputs,
+        ctx: &mut CompileCtx,
+    ) -> Result<Box<dyn ProcessNode>, String> {
+        let state: nodes::ViewerState = parse_state(state)?;
+        let prefix = state.label.value.trim().to_owned();
+        let mut sink = ViewerSink::new(ctx.derived_lanes.clone()).with_name(name);
+        for (_, input) in resolved.members(0) {
+            let kind = match input.kind {
+                PortKind::SampleEdge => ViewerLaneKind::Signal,
+                PortKind::SpiWords => ViewerLaneKind::SpiWords,
+                PortKind::ParallelWords => ViewerLaneKind::ParallelWords,
+                PortKind::Trigger => ViewerLaneKind::Trigger,
+                other => return Err(format!("viewer cannot display {other:?}")),
+            };
+            let lane_name = if prefix.is_empty() {
+                input.source.clone()
+            } else {
+                format!("{prefix}: {}", input.source)
+            };
+            sink = sink.with_lane(kind, lane_name);
+        }
+        Ok(Box::new(sink))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1116,10 +1203,29 @@ mod tests {
         let compiled = lower(widget.graph(), &BuilderRegistry::standard())
             .unwrap_or_else(|errors| panic!("lower failed: {errors:?}"));
 
-        // The viewer has no builder yet (Phase 4); everything else runs.
-        assert_eq!(compiled.nodes.len(), 10);
-        // 28 UI wires minus the 5 viewer lanes.
-        assert_eq!(compiled.edges.len(), 23);
+        // Every startup node has a runtime, including the viewer sink.
+        assert_eq!(compiled.nodes.len(), 11);
+        assert_eq!(compiled.edges.len(), 28);
+
+        // Viewer lanes resolve with per-lane kinds and producer labels.
+        let viewer = compiled
+            .nodes
+            .iter()
+            .find(|n| n.builder == "Viewer")
+            .unwrap();
+        let lanes = viewer.resolved.members(0);
+        assert_eq!(lanes.len(), 5);
+        assert_eq!(lanes[0].1.kind, PortKind::SampleEdge);
+        assert!(
+            lanes.iter().any(|(_, input)| input.kind == PortKind::ParallelWords
+                && input.source == "Binary Decoder.Words")
+        );
+        assert!(
+            lanes
+                .iter()
+                .any(|(_, input)| input.kind == PortKind::Trigger
+                    && input.source == "Match Start.Match")
+        );
 
         // Kind negotiation spot checks: SPI clk reads edges, the binary
         // decoder reads blocks — both fed from the same UI sockets.
@@ -1349,9 +1455,34 @@ mod tests {
             .unwrap(),
         );
 
-        let scheduler = compile(widget.graph(), &BuilderRegistry::standard())
+        let mut ctx = CompileCtx::default();
+        let lanes = ctx.derived_lanes.clone();
+        let scheduler = compile(widget.graph(), &BuilderRegistry::standard(), &mut ctx)
             .unwrap_or_else(|errors| panic!("compile failed: {errors:?}"));
         scheduler.wait();
+
+        // The viewer lanes filled while the pipeline ran.
+        {
+            let lanes = lanes.read();
+            assert_eq!(lanes.len(), 5, "expected 5 viewer lanes");
+            let annotations = lanes
+                .iter()
+                .find_map(|lane| match &lane.data {
+                    dsl::DerivedLaneData::Annotations(a) => Some(a.len()),
+                    _ => None,
+                })
+                .expect("a words lane");
+            assert!(annotations > 0, "words lane stayed empty");
+            let markers: usize = lanes
+                .iter()
+                .filter_map(|lane| match &lane.data {
+                    dsl::DerivedLaneData::Markers(m) => Some(m.len()),
+                    _ => None,
+                })
+                .sum();
+            // 26 windows → at least 26 start + 26 stop triggers.
+            assert!(markers >= 52, "expected ≥52 trigger markers, got {markers}");
+        }
 
         run_reference(&capture, &ref_dir);
 
