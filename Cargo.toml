@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/dsl", "crates/logic_analyzer_viewer", "crates/node_graph", "crates/ui"]
+members = [".", "crates/app", "crates/dsl", "crates/logic_analyzer_viewer", "crates/node_graph", "crates/ui"]
 default-members = ["."]
 resolver = "2"
 
@@ -13,7 +13,7 @@ default-run = "dsl-ui"
 
 [[bin]]
 name = "dsl-ui"
-path = "crates/ui/src/main.rs"
+path = "crates/app/src/main.rs"
 
 [dependencies]
 dsl = { path = "crates/dsl" }

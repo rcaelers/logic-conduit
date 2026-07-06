@@ -7,11 +7,6 @@ authors = ["Rob Caelers <rob.caelers@gmail.com>"]
 [lib]
 name = "dsl_ui"
 path = "src/lib.rs"
-crate-type = ["cdylib", "rlib"]
-
-[[bin]]
-name = "dsl-ui"
-path = "src/main.rs"
 
 [dependencies]
 dsl = { path = "../dsl" }
@@ -19,15 +14,9 @@ logic-analyzer-viewer = { path = "../logic_analyzer_viewer" }
 node-graph = { path = "../node_graph" }
 eframe = "0.35"
 egui = "0.35"
-log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 crossbeam-channel = "0.5"
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "=0.2.126"
-wasm-bindgen-futures = "0.4.58"
-web-sys = { version = "0.3.85", features = ["HtmlCanvasElement"] }
 
 [dev-dependencies]
 tempfile = "3"

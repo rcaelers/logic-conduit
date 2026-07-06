@@ -932,6 +932,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dsl-app"
+version = "0.1.0"
+dependencies = [
+ "dsl-ui",
+ "eframe",
+ "egui",
+ "log",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "dsl-examples"
 version = "0.1.0"
 dependencies = [
@@ -959,15 +972,11 @@ dependencies = [
  "dsl",
  "eframe",
  "egui",
- "log",
  "logic-analyzer-viewer",
  "node-graph",
  "serde",
  "serde_json",
  "tempfile",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
