@@ -6,7 +6,7 @@ const loading = document.getElementById("loading");
 const canvas = document.getElementById("dsl-ui");
 
 try {
-  await init();
+  await init(`./pkg/dsl_ui_bg.wasm?v=${encodeURIComponent(buildVersion)}`);
   const handle = new WebHandle();
   await handle.start(canvas);
   window.dslUi = handle;

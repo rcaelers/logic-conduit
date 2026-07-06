@@ -182,6 +182,11 @@ impl<'a, T> Receiver<'a, T> {
         !self.buffer.is_empty()
     }
 
+    /// Whether this receiver has observed end-of-stream.
+    pub fn is_shutdown(&self) -> bool {
+        self.eos.load(Ordering::Relaxed)
+    }
+
     /// Discard all items whose end time is `<= before`, blocking until the
     /// first item that extends past the threshold is buffered.
     ///

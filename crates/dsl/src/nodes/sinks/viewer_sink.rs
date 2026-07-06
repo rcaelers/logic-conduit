@@ -222,6 +222,10 @@ impl ProcessNode for ViewerSink {
         &self.name
     }
 
+    fn should_stop(&self) -> bool {
+        !self.lanes.is_empty() && self.lanes.iter().all(|lane| lane.eos)
+    }
+
     fn num_inputs(&self) -> usize {
         self.lanes.len()
     }

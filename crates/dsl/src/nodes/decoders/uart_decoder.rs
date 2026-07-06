@@ -71,6 +71,7 @@ pub struct UartDecoder {
     /// Start edges before this time are mid-frame remnants, not new frames.
     resume_after: u64,
     frames: u64,
+    finished: bool,
 }
 
 impl UartDecoder {
@@ -92,6 +93,7 @@ impl UartDecoder {
             input_buffer: VecDeque::new(),
             resume_after: 0,
             frames: 0,
+            finished: false,
         }
     }
 
@@ -162,6 +164,10 @@ impl ProcessNode for UartDecoder {
         &self.name
     }
 
+    fn should_stop(&self) -> bool {
+        self.finished
+    }
+
     fn num_inputs(&self) -> usize {
         1
     }
@@ -229,6 +235,7 @@ impl ProcessNode for UartDecoder {
             let t = sample_time(1.0 + i as f64);
             let Some(raw) = Self::value_at(&mut rx, t)? else {
                 debug!("[{}] channel exhausted mid-frame", self.name);
+                self.finished = true;
                 return Err(WorkError::Shutdown);
             };
             if logical(raw) {
@@ -247,6 +254,7 @@ impl ProcessNode for UartDecoder {
             let t = sample_time(1.0 + data_bits as f64);
             let Some(raw) = Self::value_at(&mut rx, t)? else {
                 debug!("[{}] channel exhausted at parity bit", self.name);
+                self.finished = true;
                 return Err(WorkError::Shutdown);
             };
             let parity_bit = logical(raw);
@@ -273,6 +281,7 @@ impl ProcessNode for UartDecoder {
             let t = t0 + ((stop_start + stop_bits.bits().min(1.0) / 2.0) * bit_ns).round() as u64;
             let Some(raw) = Self::value_at(&mut rx, t)? else {
                 debug!("[{}] channel exhausted at stop bit", self.name);
+                self.finished = true;
                 return Err(WorkError::Shutdown);
             };
             if !logical(raw) {
@@ -302,6 +311,7 @@ impl ProcessNode for UartDecoder {
             value,
             timing: TimingInfo::new(t0 as f64 / 1_000.0, t0),
         })?;
+        self.finished = rx.is_shutdown();
         Ok(1)
     }
 }
