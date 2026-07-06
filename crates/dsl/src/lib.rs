@@ -54,11 +54,12 @@ pub use nodes::decoders::SpiDecoder;
 
 // Re-export control-path logic nodes and sinks
 pub use nodes::logic::{
-    GateOp, LogicGate, SrLatch, TextFormatter, TriggerCounter, WordField, WordMatcher, WordSource,
+    GateOp, LogicGate, MatchOp, SrLatch, TextFormatter, TriggerCounter, WordField, WordMatcher,
+    WordSource,
 };
 pub use nodes::sinks::{
-    Annotation, BinaryFileWriter, DerivedLane, DerivedLaneData, DerivedLanes, ViewerLaneKind,
-    ViewerSink, WriteWidth,
+    Annotation, BinaryFileWriter, DerivedLane, DerivedLaneData, DerivedLanes, TgckRecorder,
+    ViewerLaneKind, ViewerSink, WriteWidth,
 };
 
 // Re-export streaming runtime components

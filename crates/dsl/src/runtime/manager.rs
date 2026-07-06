@@ -28,7 +28,7 @@ use crate::runtime::errors::WorkError;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use tracing::{debug, error, info};
 
@@ -92,6 +92,8 @@ struct RunningNode {
     /// Set before a restart-kill so the exiting thread does not close the
     /// output lists the replacement will reuse.
     keep_outputs_open: Arc<AtomicBool>,
+    /// Items produced across `work()` calls (survives restarts in place).
+    items: Arc<AtomicU64>,
     outputs: HashMap<String, OutputList>,
     /// `(producer node, producer port, subscription id)` per connected input.
     input_subs: Vec<(String, String, u64)>,
@@ -243,6 +245,7 @@ impl PipelineManager {
         generation: u64,
     ) {
         let (control_tx, control_rx) = crossbeam_channel::unbounded::<NodeConfig>();
+        let items = Arc::new(AtomicU64::new(0));
         self.nodes.insert(
             name,
             RunningNode {
@@ -257,6 +260,7 @@ impl PipelineManager {
                 control_tx,
                 stop_flag: Arc::new(AtomicBool::new(false)),
                 keep_outputs_open: Arc::new(AtomicBool::new(false)),
+                items,
                 outputs: output_lists,
                 input_subs,
             },
@@ -296,6 +300,7 @@ impl PipelineManager {
         let thread_name = format!("{name}@{generation}");
         let thread_stop = Arc::clone(&entry.stop_flag);
         let thread_keep_open = Arc::clone(&entry.keep_outputs_open);
+        let thread_items = Arc::clone(&entry.items);
         let close_handles: Vec<Arc<dyn ErasedSharedSenders>> = entry
             .outputs
             .values()
@@ -333,7 +338,11 @@ impl PipelineManager {
                             break;
                         }
                         match node.work(&inputs, &outputs) {
-                            Ok(_) => {}
+                            Ok(items) => {
+                                if items > 0 {
+                                    thread_items.fetch_add(items as u64, Ordering::Relaxed);
+                                }
+                            }
                             Err(WorkError::Shutdown) => {
                                 debug!("[{thread_name}] shutdown");
                                 break;
@@ -499,7 +508,20 @@ impl PipelineManager {
             input_subs,
             generation,
         );
+        // Same logical node: the progress count carries across the restart.
+        if let Some(entry) = self.nodes.get_mut(name) {
+            entry.items = Arc::clone(&old.items);
+        }
         self.start_node(name)
+    }
+
+    /// Items produced per node (sum of `work()` return values), for
+    /// progress display. Self-threading sources report 0.
+    pub fn progress(&self) -> Vec<(String, u64)> {
+        self.nodes
+            .iter()
+            .map(|(name, node)| (name.clone(), node.items.load(Ordering::Relaxed)))
+            .collect()
     }
 
     /// Consumers dropped by `OverflowPolicy::Disconnect` since the last call.

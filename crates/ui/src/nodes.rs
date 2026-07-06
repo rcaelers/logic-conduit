@@ -682,10 +682,19 @@ impl NodeDef for BinaryDecoder {
 
 // ── Word Matcher (§4.2) ──────────────────────────────────────────────────────
 
+pub const MATCH_OPS: &[&str] = &["==", "≠", "<", "≤", ">", "≥"];
+
+fn default_match_op() -> EnumValue {
+    EnumValue::new(0, MATCH_OPS)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WordMatcherState {
     pub pattern: StringValue,
     pub mask: StringValue,
+    /// Comparison of the masked word against the masked pattern.
+    #[serde(default = "default_match_op")]
+    pub op: EnumValue,
     pub field: EnumValue,
     pub pulse_output: BoolValue,
 }
@@ -719,6 +728,7 @@ impl NodeDef for WordMatcher {
         WordMatcherState {
             pattern: StringValue::new("0x000000"),
             mask: StringValue::new("0xFFFFFF"),
+            op: default_match_op(),
             field: EnumValue::new(0, &["MOSI", "MISO"]),
             pulse_output: BoolValue::new(false),
         }
@@ -734,6 +744,7 @@ impl NodeDef for WordMatcher {
         vec![PanelSection::new(
             "Options",
             vec![
+                PropDef::control("op", "Compare", |state| &mut state.op),
                 PropDef::control("mask", "Mask", |state| &mut state.mask),
                 PropDef::control("field", "Field", |state| &mut state.field),
                 PropDef::control("pulse_output", "Pulse output", |state| {
@@ -940,7 +951,9 @@ impl NodeDef for StringFormatter {
     }
 
     fn inputs() -> Vec<InputDef<Self::State>> {
-        vec![InputDef::new::<Number>("Value")]
+        // Additional values appear in the template as {1}, {2}, … ({0} and
+        // the legacy {n} are the first input).
+        vec![InputDef::new::<Number>("Value").variadic(4)]
     }
 
     fn outputs() -> Vec<OutputDef<Self::State>> {
@@ -1011,6 +1024,37 @@ impl NodeDef for FileWriter {
     }
 }
 
+// ── TGCK Recorder (§7 Phase 6) ───────────────────────────────────────────────
+
+pub struct TgckRecorder;
+impl NodeDef for TgckRecorder {
+    type State = ();
+
+    fn name() -> &'static str {
+        "TGCK Recorder"
+    }
+    fn category() -> &'static str {
+        "Output"
+    }
+    fn color() -> Color32 {
+        COLOR_OUTPUT
+    }
+
+    fn inputs() -> Vec<InputDef<Self::State>> {
+        vec![
+            InputDef::new::<Words>("Words"),
+            InputDef::new::<Signal>("TGCK"),
+            InputDef::new::<Text>("Filename"),
+        ]
+    }
+
+    fn outputs() -> Vec<OutputDef<Self::State>> {
+        vec![]
+    }
+
+    fn state() -> Self::State {}
+}
+
 // ── Viewer (§4.9) ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1077,6 +1121,7 @@ pub fn build_registry() -> NodeTypeRegistry {
     registry.register::<Counter>();
     registry.register::<StringFormatter>();
     registry.register::<FileWriter>();
+    registry.register::<TgckRecorder>();
     registry.register::<Viewer>();
     registry
 }
@@ -1164,6 +1209,7 @@ pub fn populate_startup(widget: &mut NodeGraphWidget) {
         serde_json::to_value(WordMatcherState {
             pattern: StringValue::new(pattern),
             mask: StringValue::new("0xFFFFFF"),
+            op: default_match_op(),
             field: EnumValue::new(0, &["MOSI", "MISO"]),
             pulse_output: BoolValue::new(false),
         })
@@ -1270,6 +1316,49 @@ mod tests {
                 to.type_name,
             );
         }
+    }
+
+    /// Save/load round-trip (§7 Phase 6): serializing the graph to JSON and
+    /// restoring it through the registry (the Ctrl+S/Ctrl+O path) must
+    /// compile to the same pipeline.
+    #[test]
+    fn graph_json_round_trip_compiles_identically() {
+        use crate::compile::{BuilderRegistry, lower};
+
+        let mut widget = NodeGraphWidget::new(build_registry());
+        populate_startup(&mut widget);
+        let registry = BuilderRegistry::standard();
+        let original = lower(widget.graph(), &registry).expect("original lowers");
+
+        let json = serde_json::to_string(widget.graph()).expect("graph serializes");
+        let restored_state: node_graph::GraphState =
+            serde_json::from_str(&json).expect("graph deserializes");
+        let mut restored = NodeGraphWidget::new(build_registry());
+        restored.set_graph(restored_state);
+
+        let reloaded = lower(restored.graph(), &registry).expect("restored lowers");
+
+        assert_eq!(original.nodes.len(), reloaded.nodes.len());
+        for (a, b) in original.nodes.iter().zip(&reloaded.nodes) {
+            assert_eq!(a.id, b.id);
+            assert_eq!(a.builder, b.builder);
+            assert_eq!(a.state, b.state, "state of {} changed in round-trip", a.builder);
+        }
+        let edges = |compiled: &crate::compile::CompiledGraph| {
+            let mut edges: Vec<String> = compiled
+                .edges
+                .iter()
+                .map(|edge| {
+                    format!(
+                        "n{}:{} -> n{}:{} ({})",
+                        edge.from.0.0, edge.from.1, edge.to.0.0, edge.to.1, edge.buffer
+                    )
+                })
+                .collect();
+            edges.sort();
+            edges
+        };
+        assert_eq!(edges(&original), edges(&reloaded));
     }
 
     #[test]

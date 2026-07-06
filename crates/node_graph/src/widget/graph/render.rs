@@ -144,7 +144,8 @@ impl NodeGraphWidget {
         for id in sorted {
             if let (Some(widget), Some(node)) = (layout.nodes.get(&id), self.graph.nodes.get(&id)) {
                 let badge = self.external_badges.get(&id).or(node.badge.as_ref());
-                widget.draw(painter, node, badge, &self.registry, &self.view, origin);
+                let status = self.node_statuses.get(&id).map(String::as_str);
+                widget.draw(painter, node, badge, status, &self.registry, &self.view, origin);
             }
             if self.view.zoom >= 0.6 {
                 let changed = if let (Some(widget), Some(node), Some(instance)) = (

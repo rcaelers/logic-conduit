@@ -255,6 +255,7 @@ impl NodeWidget {
         painter: &Painter,
         node: &Node,
         badge: Option<&NodeBadge>,
+        status: Option<&str>,
         registry: &NodeTypeRegistry,
         view: &ViewState,
         origin: Pos2,
@@ -341,6 +342,20 @@ impl NodeWidget {
             FontId::proportional(title_sz),
             Color32::WHITE,
         );
+
+        // Live status (progress counter), small at the header's right edge.
+        if let Some(status) = status
+            && !node.collapsed
+            && view.zoom >= 0.5
+        {
+            painter.text(
+                Pos2::new(header_s.right() - sz(6.0), header_s.center().y),
+                egui::Align2::RIGHT_CENTER,
+                status,
+                FontId::proportional((10.0 * view.zoom).clamp(7.0, 12.0)),
+                Color32::from_rgba_premultiplied(230, 230, 230, 220),
+            );
+        }
 
         if node.collapsed {
             for (i, sock) in node.outputs.iter().enumerate() {

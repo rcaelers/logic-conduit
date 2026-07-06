@@ -43,6 +43,9 @@ pub struct NodeGraphWidget {
     /// Badges set from outside the graph (compiler errors, runtime status);
     /// they take precedence over def-driven badges.
     external_badges: HashMap<NodeId, NodeBadge>,
+    /// Short live-status texts (e.g. items-produced counters) drawn small
+    /// in the node header.
+    node_statuses: HashMap<NodeId, String>,
 }
 
 struct FrameRenameState {
@@ -71,6 +74,7 @@ impl NodeGraphWidget {
             active_node: None,
             panel: PanelState::default(),
             external_badges: HashMap::new(),
+            node_statuses: HashMap::new(),
         }
     }
 
@@ -129,6 +133,37 @@ impl NodeGraphWidget {
                 self.external_badges.remove(&id);
             }
         }
+    }
+
+    /// Sets (or clears) the short live-status text drawn in a node's header
+    /// (e.g. "1.2M" items while a pipeline runs).
+    pub fn set_node_status(&mut self, id: NodeId, status: Option<String>) {
+        match status {
+            Some(status) => {
+                self.node_statuses.insert(id, status);
+            }
+            None => {
+                self.node_statuses.remove(&id);
+            }
+        }
+    }
+
+    /// Clears every live-status text (e.g. when a new run starts).
+    pub fn clear_node_statuses(&mut self) {
+        self.node_statuses.clear();
+    }
+
+    /// Replaces the whole graph and rebuilds every node's runtime instance
+    /// from the registry — the programmatic equivalent of loading a saved
+    /// file. State restore runs through the same reconcile path as
+    /// Ctrl+O (`restore_node`): sockets validated against current defs,
+    /// `on_update` re-run, badges recomputed.
+    pub fn set_graph(&mut self, graph: GraphState) {
+        self.graph = graph;
+        self.external_badges.clear();
+        self.node_statuses.clear();
+        self.active_node = None;
+        self.restore_runtime();
     }
 
     fn run_update(&mut self, id: NodeId) {

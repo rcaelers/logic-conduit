@@ -45,7 +45,46 @@ impl WordSource for ParallelWord {
     }
 }
 
-/// Emits a [`Trigger`] for every word where `(word & mask) == (pattern & mask)`.
+/// Comparison applied between the masked word and the masked pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MatchOp {
+    #[default]
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl MatchOp {
+    fn matches(&self, word: u64, pattern: u64) -> bool {
+        match self {
+            MatchOp::Eq => word == pattern,
+            MatchOp::Ne => word != pattern,
+            MatchOp::Lt => word < pattern,
+            MatchOp::Le => word <= pattern,
+            MatchOp::Gt => word > pattern,
+            MatchOp::Ge => word >= pattern,
+        }
+    }
+
+    /// Parse from the wire names used by node configs ("eq", "ne", …).
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "eq" => MatchOp::Eq,
+            "ne" => MatchOp::Ne,
+            "lt" => MatchOp::Lt,
+            "le" => MatchOp::Le,
+            "gt" => MatchOp::Gt,
+            "ge" => MatchOp::Ge,
+            _ => return None,
+        })
+    }
+}
+
+/// Emits a [`Trigger`] for every word where `(word & mask) OP (pattern &
+/// mask)` holds (`OP` = [`MatchOp`], `==` by default).
 ///
 /// Inputs: `words` — a [`WordSource`] stream (`SpiTransfer` or `ParallelWord`)
 /// Outputs: `trigger` — `Trigger` per match;
@@ -54,6 +93,7 @@ pub struct WordMatcher<T: WordSource> {
     name: String,
     pattern: u64,
     mask: u64,
+    op: MatchOp,
     field: WordField,
     /// Width of the visualization pulse on the `matched` output.
     pulse_ns: u64,
@@ -70,6 +110,7 @@ impl<T: WordSource> WordMatcher<T> {
             name: "word_matcher".to_string(),
             pattern,
             mask,
+            op: MatchOp::default(),
             field: WordField::default(),
             pulse_ns: 1_000,
             input_buffer: VecDeque::new(),
@@ -86,6 +127,11 @@ impl<T: WordSource> WordMatcher<T> {
 
     pub fn with_field(mut self, field: WordField) -> Self {
         self.field = field;
+        self
+    }
+
+    pub fn with_op(mut self, op: MatchOp) -> Self {
+        self.op = op;
         self
     }
 
@@ -131,6 +177,10 @@ impl<T: WordSource> ProcessNode for WordMatcher<T> {
                         WordField::Mosi
                     };
                 }
+                ("op", ConfigValue::Text(op)) => match MatchOp::parse(op) {
+                    Some(op) => self.op = op,
+                    None => return ConfigOutcome::NeedsRestart,
+                },
                 _ => return ConfigOutcome::NeedsRestart,
             }
         }
@@ -167,7 +217,7 @@ impl<T: WordSource> ProcessNode for WordMatcher<T> {
 
         let word = input.recv()?;
         let value = word.word(self.field);
-        if (value & self.mask) == (self.pattern & self.mask) {
+        if self.op.matches(value & self.mask, self.pattern & self.mask) {
             let ts = word.timestamp_ns();
             self.matches += 1;
             debug!(
@@ -326,5 +376,44 @@ mod tests {
             })
             .collect();
         assert_eq!(triggers, vec![10, 30]);
+    }
+
+    #[test]
+    fn inequality_ops_compare_masked_values() {
+        let words: Vec<(u64, u64)> = vec![(0x10, 1), (0x20, 2), (0x30, 3)];
+        let run_with_op = |op: MatchOp| -> Vec<u64> {
+            let wd = Watchdog::new();
+            let (tx, rx) = bounded::<ChannelMessage<ParallelWord>>(16);
+            let input = InputPort::new_with_watchdog(rx, &wd, "m", "words");
+            let (ttx, trx) = bounded::<ChannelMessage<Trigger>>(16);
+            let trigger_out =
+                OutputPort::new_with_watchdog(Sender::new(vec![ttx]), &wd, "m", "trigger");
+            let (ptx, _prx) = bounded::<ChannelMessage<Sample>>(16);
+            let pulse_out =
+                OutputPort::new_with_watchdog(Sender::new(vec![ptx]), &wd, "m", "matched");
+            for (v, ts) in &words {
+                tx.send(ChannelMessage::Sample(ParallelWord {
+                    value: *v,
+                    timing: TimingInfo::new(*ts as f64 / 1_000.0, *ts),
+                }))
+                .unwrap();
+            }
+            drop(tx);
+            let mut m = WordMatcher::<ParallelWord>::new(0x20, u64::MAX).with_op(op);
+            run_to_shutdown(&mut m, &[input], &[trigger_out, pulse_out]);
+            trx.try_iter()
+                .filter_map(|m| match m {
+                    ChannelMessage::Sample(t) => Some(t.timestamp_ns),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        assert_eq!(run_with_op(MatchOp::Eq), vec![2]);
+        assert_eq!(run_with_op(MatchOp::Ne), vec![1, 3]);
+        assert_eq!(run_with_op(MatchOp::Lt), vec![1]);
+        assert_eq!(run_with_op(MatchOp::Le), vec![1, 2]);
+        assert_eq!(run_with_op(MatchOp::Gt), vec![3]);
+        assert_eq!(run_with_op(MatchOp::Ge), vec![2, 3]);
     }
 }

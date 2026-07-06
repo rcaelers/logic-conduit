@@ -62,6 +62,7 @@ impl App {
         for id in self.error_badges.drain(..) {
             self.node_graph.set_node_badge(id, None);
         }
+        self.node_graph.clear_node_statuses();
         self.run_message = None;
 
         // Fresh lane store per run: stale lanes vanish atomically (§5.5).
@@ -86,14 +87,24 @@ impl App {
         let Some(run) = &mut self.run else {
             return;
         };
-        if run.is_finished() {
-            return;
-        }
         let now = ctx.input(|input| input.time);
         if now - self.last_live_sync < SYNC_INTERVAL_S {
             return;
         }
         self.last_live_sync = now;
+
+        // Per-node progress in the headers (§7 Phase 6) — also after the
+        // run finished, so the final counts stick.
+        for (id, items) in run.progress() {
+            let status = (items > 0).then(|| format_count(items));
+            self.node_graph.set_node_status(id, status);
+        }
+        let Some(run) = &mut self.run else {
+            return;
+        };
+        if run.is_finished() {
+            return;
+        }
 
         match run.apply(self.node_graph.graph(), &self.builders) {
             Ok(summary) if summary.is_empty() => {}
@@ -130,6 +141,7 @@ impl App {
                 self.error_badges.push(id);
             }
         }
+
     }
 
     fn show_toolbar(&mut self, ui: &mut egui::Ui) {
@@ -165,6 +177,17 @@ impl App {
                 ui.colored_label(color, message);
             }
         });
+    }
+}
+
+/// Compact item-count formatting for node headers: 950 → "950", 12_345 →
+/// "12.3k", 5_600_000 → "5.6M", 2_100_000_000 → "2.1G".
+fn format_count(items: u64) -> String {
+    match items {
+        0..=999 => items.to_string(),
+        1_000..=999_999 => format!("{:.1}k", items as f64 / 1_000.0),
+        1_000_000..=999_999_999 => format!("{:.1}M", items as f64 / 1_000_000.0),
+        _ => format!("{:.1}G", items as f64 / 1_000_000_000.0),
     }
 }
 

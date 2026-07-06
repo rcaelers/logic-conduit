@@ -16,9 +16,9 @@ use dsl::runtime::{
     ProcessNode, Scheduler, StopHandle,
 };
 use dsl::{
-    BinaryFileWriter, CsPolarity, DerivedLanes, GateOp, LogicGate, ParallelWord, SpiDecoder,
-    SpiMode, SpiTransfer, SrLatch, StrobeMode, TextFormatter, TriggerCounter, ViewerLaneKind,
-    ViewerSink, WordField, WordMatcher, WriteWidth,
+    BinaryFileWriter, CsPolarity, DerivedLanes, GateOp, LogicGate, MatchOp, ParallelWord,
+    SpiDecoder, SpiMode, SpiTransfer, SrLatch, StrobeMode, TextFormatter, TriggerCounter,
+    ViewerLaneKind, ViewerSink, WordField, WordMatcher, WriteWidth,
 };
 use node_graph::{GraphState, Node, NodeId, NodeKind, Socket, SocketId};
 use serde_json::Value;
@@ -194,6 +194,7 @@ impl BuilderRegistry {
         builders.insert("Counter".into(), Box::new(CounterBuilder));
         builders.insert("String Formatter".into(), Box::new(FormatterBuilder));
         builders.insert("File Writer".into(), Box::new(FileWriterBuilder));
+        builders.insert("TGCK Recorder".into(), Box::new(TgckRecorderBuilder));
         builders.insert("Viewer".into(), Box::new(ViewerBuilder));
         Self(builders)
     }
@@ -949,6 +950,16 @@ impl LiveRun {
         self.manager.wait();
     }
 
+    /// Items produced per UI node (sum of `work()` returns), for header
+    /// progress display.
+    pub fn progress(&self) -> Vec<(NodeId, u64)> {
+        let by_name: HashMap<String, u64> = self.manager.progress().into_iter().collect();
+        self.names
+            .iter()
+            .filter_map(|(id, name)| by_name.get(name).map(|items| (*id, *items)))
+            .collect()
+    }
+
     /// Consumers dropped by backpressure policy since the last call, mapped
     /// back to UI nodes where possible.
     pub fn take_disconnected(&self) -> Vec<(Option<NodeId>, DisconnectEvent)> {
@@ -1246,6 +1257,20 @@ impl RuntimeBuilder for BinaryDecoderBuilder {
 
 struct WordMatcherBuilder;
 
+impl WordMatcherBuilder {
+    /// UI op glyph → runtime `MatchOp` and its config wire name.
+    fn match_op(selected: &str) -> (MatchOp, &'static str) {
+        match selected {
+            "≠" => (MatchOp::Ne, "ne"),
+            "<" => (MatchOp::Lt, "lt"),
+            "≤" => (MatchOp::Le, "le"),
+            ">" => (MatchOp::Gt, "gt"),
+            "≥" => (MatchOp::Ge, "ge"),
+            _ => (MatchOp::Eq, "eq"),
+        }
+    }
+}
+
 impl RuntimeBuilder for WordMatcherBuilder {
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
         vec![PortKind::SpiWords, PortKind::ParallelWords]
@@ -1277,6 +1302,7 @@ impl RuntimeBuilder for WordMatcherBuilder {
         let state: nodes::WordMatcherState = parse_state(state)?;
         let pattern = parse_hex(&state.pattern.value)?;
         let mask = parse_hex(&state.mask.value)?;
+        let (op, _) = Self::match_op(state.op.selected());
         let field = if state.field.selected() == "MISO" {
             WordField::Miso
         } else {
@@ -1287,11 +1313,13 @@ impl RuntimeBuilder for WordMatcherBuilder {
             Some(PortKind::SpiWords) => Ok(Box::new(
                 WordMatcher::<SpiTransfer>::new(pattern, mask)
                     .with_field(field)
+                    .with_op(op)
                     .with_name(name),
             )),
             Some(PortKind::ParallelWords) => Ok(Box::new(
                 WordMatcher::<ParallelWord>::new(pattern, mask)
                     .with_field(field)
+                    .with_op(op)
                     .with_name(name),
             )),
             _ => Err("words input is not connected".into()),
@@ -1309,6 +1337,8 @@ impl RuntimeBuilder for WordMatcherBuilder {
             "mask".into(),
             ConfigValue::U64(parse_hex(&state.mask.value).ok()?),
         );
+        let (_, op_name) = Self::match_op(state.op.selected());
+        config.insert("op".into(), ConfigValue::Text(op_name.into()));
         config.insert(
             "field".into(),
             ConfigValue::Text(if state.field.selected() == "MISO" {
@@ -1441,8 +1471,19 @@ impl RuntimeBuilder for FormatterBuilder {
     fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
         vec![PortKind::Text]
     }
-    fn input_port(&self, _: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
-        Some("value".into())
+    fn input_port(
+        &self,
+        _socket: &Socket,
+        member_index: usize,
+        _: &Value,
+        _: PortKind,
+    ) -> Option<String> {
+        // First value keeps the historic port name.
+        Some(if member_index == 0 {
+            "value".into()
+        } else {
+            format!("value{member_index}")
+        })
     }
     fn output_port(&self, _socket: &Socket, _state: &Value, _kind: PortKind) -> Option<String> {
         Some("text".into())
@@ -1451,12 +1492,13 @@ impl RuntimeBuilder for FormatterBuilder {
         &self,
         name: &str,
         state: &Value,
-        _resolved: &ResolvedInputs,
+        resolved: &ResolvedInputs,
         _ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: nodes::StringFormatterState = parse_state(state)?;
+        let values = resolved.member_count(0).max(1);
         Ok(Box::new(
-            TextFormatter::new(state.template.value.clone()).with_name(name),
+            TextFormatter::with_num_values(state.template.value.clone(), values).with_name(name),
         ))
     }
 
@@ -1516,6 +1558,45 @@ impl RuntimeBuilder for FileWriterBuilder {
                 .with_index_csv(state.index_csv.value)
                 .with_name(name),
         ))
+    }
+}
+
+struct TgckRecorderBuilder;
+
+impl RuntimeBuilder for TgckRecorderBuilder {
+    fn is_sink(&self) -> bool {
+        true
+    }
+    fn accepted_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
+        match socket.def_index {
+            0 => vec![PortKind::ParallelWords],
+            1 => vec![PortKind::SampleEdge],
+            2 => vec![PortKind::Text],
+            _ => vec![],
+        }
+    }
+    fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
+        vec![]
+    }
+    fn input_port(&self, socket: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
+        match socket.def_index {
+            0 => Some("words".into()),
+            1 => Some("tgck".into()),
+            2 => Some("filename".into()),
+            _ => None,
+        }
+    }
+    fn output_port(&self, _: &Socket, _: &Value, _: PortKind) -> Option<String> {
+        None
+    }
+    fn build(
+        &self,
+        name: &str,
+        _state: &Value,
+        _resolved: &ResolvedInputs,
+        _ctx: &mut CompileCtx,
+    ) -> Result<Box<dyn ProcessNode>, String> {
+        Ok(Box::new(dsl::TgckRecorder::new().with_name(name)))
     }
 }
 
