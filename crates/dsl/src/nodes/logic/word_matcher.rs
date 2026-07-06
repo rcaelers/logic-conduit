@@ -112,6 +112,31 @@ impl<T: WordSource> ProcessNode for WordMatcher<T> {
         vec![PortSchema::new::<T>("words", 0, PortDirection::Input)]
     }
 
+    /// Hot-appliable: `pattern` / `mask` (U64) and `field` ("mosi"/"miso").
+    /// Takes effect for the next word; in-flight words already consumed keep
+    /// the old match result (accepted §6.2 semantics).
+    fn apply_config(
+        &mut self,
+        config: &crate::runtime::node::NodeConfig,
+    ) -> crate::runtime::node::ConfigOutcome {
+        use crate::runtime::node::{ConfigOutcome, ConfigValue};
+        for (key, value) in config {
+            match (key.as_str(), value) {
+                ("pattern", ConfigValue::U64(pattern)) => self.pattern = *pattern,
+                ("mask", ConfigValue::U64(mask)) => self.mask = *mask,
+                ("field", ConfigValue::Text(field)) => {
+                    self.field = if field == "miso" {
+                        WordField::Miso
+                    } else {
+                        WordField::Mosi
+                    };
+                }
+                _ => return ConfigOutcome::NeedsRestart,
+            }
+        }
+        ConfigOutcome::Applied
+    }
+
     fn output_schema(&self) -> Vec<PortSchema> {
         vec![
             PortSchema::new::<Trigger>("trigger", 0, PortDirection::Output),

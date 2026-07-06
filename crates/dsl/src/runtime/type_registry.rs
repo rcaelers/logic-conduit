@@ -1,20 +1,57 @@
 //! Type registry for dynamic channel creation
 
-use super::sender::{ChannelMessage, Sender};
+use super::sender::{ChannelMessage, OverflowPolicy, Sender, SharedSenders};
 use crossbeam_channel::{Sender as CrossbeamSender, bounded};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+
+/// Type-erased view of a [`SharedSenders<T>`] so the `PipelineManager` can
+/// own and rewire subscriber lists without knowing `T`.
+pub trait ErasedSharedSenders: Send + Sync {
+    /// Adds a subscriber channel; returns `(subscription id, boxed
+    /// crossbeam receiver)` suitable for `InputPort::from_type_erased`.
+    fn subscribe(&self, buffer: usize, policy: OverflowPolicy) -> (u64, Box<dyn Any + Send>);
+    fn unsubscribe(&self, id: u64);
+    /// EOS to all subscribers; late joiners get an immediate EOS.
+    fn close(&self);
+    /// A boxed `Sender<T>` broadcasting through this list, for
+    /// `OutputPort::from_type_erased`.
+    fn sender_box(&self) -> Box<dyn Any + Send>;
+    /// Subscription ids dropped by `OverflowPolicy::Disconnect`.
+    fn take_disconnected(&self) -> Vec<u64>;
+}
+
+impl<T: Clone + Send + Sync + 'static> ErasedSharedSenders for SharedSenders<T> {
+    fn subscribe(&self, buffer: usize, policy: OverflowPolicy) -> (u64, Box<dyn Any + Send>) {
+        let (id, rx) = SharedSenders::subscribe(self, buffer, policy);
+        (id, Box::new(rx) as Box<dyn Any + Send>)
+    }
+    fn unsubscribe(&self, id: u64) {
+        SharedSenders::unsubscribe(self, id);
+    }
+    fn close(&self) {
+        SharedSenders::close(self);
+    }
+    fn sender_box(&self) -> Box<dyn Any + Send> {
+        Box::new(Sender::from_shared(self.clone())) as Box<dyn Any + Send>
+    }
+    fn take_disconnected(&self) -> Vec<u64> {
+        SharedSenders::take_disconnected(self)
+    }
+}
 
 /// Type registry for creating channels dynamically based on TypeId
 type ChannelCreatorFn =
     Box<dyn Fn(usize) -> (Box<dyn Any + Send>, Box<dyn Any + Send>) + Send + Sync>;
 type OutputWrapperFn =
     Box<dyn Fn(Vec<Box<dyn Any + Send>>) -> Result<Box<dyn Any + Send>, String> + Send + Sync>;
+type SharedCreatorFn = Box<dyn Fn(bool) -> Arc<dyn ErasedSharedSenders> + Send + Sync>;
 
 pub(crate) struct TypeRegistry {
     channel_creators: HashMap<TypeId, ChannelCreatorFn>,
     output_wrappers: HashMap<TypeId, OutputWrapperFn>,
+    shared_creators: HashMap<TypeId, SharedCreatorFn>,
 }
 
 impl TypeRegistry {
@@ -22,12 +59,20 @@ impl TypeRegistry {
         Self {
             channel_creators: HashMap::new(),
             output_wrappers: HashMap::new(),
+            shared_creators: HashMap::new(),
         }
     }
 
     /// Register a type for use in channels
-    fn register<T: 'static + Send + Clone>(&mut self) {
+    fn register<T: 'static + Send + Sync + Clone>(&mut self) {
         let type_id = TypeId::of::<T>();
+
+        self.shared_creators.insert(
+            type_id,
+            Box::new(|sticky: bool| {
+                Arc::new(SharedSenders::<T>::new(sticky)) as Arc<dyn ErasedSharedSenders>
+            }),
+        );
 
         // Register channel creator — channels carry ChannelMessage<T> internally
         self.channel_creators.insert(
@@ -84,6 +129,17 @@ impl TypeRegistry {
             .get(&type_id)
             .ok_or_else(|| format!("Type {:?} not registered", type_id))?(senders)
     }
+
+    /// Creates a supervisor-owned subscriber list for `type_id`.
+    pub(crate) fn create_shared(
+        &self,
+        type_id: TypeId,
+        sticky: bool,
+    ) -> Option<Arc<dyn ErasedSharedSenders>> {
+        self.shared_creators
+            .get(&type_id)
+            .map(|creator| creator(sticky))
+    }
 }
 
 // Global type registry
@@ -112,6 +168,6 @@ lazy_static::lazy_static! {
 
 /// Register a custom type for use in pipelines
 /// Call this before building pipelines that use custom types
-pub fn register_type<T: 'static + Send + Clone>() {
+pub fn register_type<T: 'static + Send + Sync + Clone>() {
     TYPE_REGISTRY.lock().unwrap().register::<T>();
 }

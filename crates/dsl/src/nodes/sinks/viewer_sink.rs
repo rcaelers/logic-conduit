@@ -64,11 +64,22 @@ impl DerivedLanes {
     }
 
     /// Adds an empty lane and returns its index. Lane order is registration
-    /// order (= viewer wiring order).
+    /// order (= viewer wiring order). Registering an existing name reuses
+    /// that lane (keeping its data when the kind matches), so a viewer
+    /// restarted in place by live reconfiguration continues its lanes
+    /// instead of duplicating them.
     pub fn register(&self, name: impl Into<String>, data: DerivedLaneData) -> usize {
+        let name = name.into();
         let mut lanes = self.inner.write().unwrap();
+        if let Some(index) = lanes.iter().position(|lane| lane.name == name) {
+            if std::mem::discriminant(&lanes[index].data) != std::mem::discriminant(&data) {
+                lanes[index].data = data;
+                lanes[index].dropped = 0;
+            }
+            return index;
+        }
         lanes.push(DerivedLane {
-            name: name.into(),
+            name,
             data,
             dropped: 0,
         });

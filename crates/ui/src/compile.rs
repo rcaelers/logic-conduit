@@ -11,7 +11,10 @@
 //! `SpiTransfer` vs `ParallelWord` consumers.
 
 use dsl::nodes::decoders::{BitOrder, Endianness, UartParity, UartStopBits};
-use dsl::runtime::{Pipeline, ProcessNode, Scheduler, StopHandle};
+use dsl::runtime::{
+    ConfigValue, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy, Pipeline, PipelineManager,
+    ProcessNode, Scheduler, StopHandle,
+};
 use dsl::{
     BinaryFileWriter, CsPolarity, DerivedLanes, GateOp, LogicGate, ParallelWord, SpiDecoder,
     SpiMode, SpiTransfer, SrLatch, StrobeMode, TextFormatter, TriggerCounter, ViewerLaneKind,
@@ -19,8 +22,7 @@ use dsl::{
 };
 use node_graph::{GraphState, Node, NodeId, NodeKind, Socket, SocketId};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::nodes;
 
@@ -168,6 +170,13 @@ pub trait RuntimeBuilder {
         resolved: &ResolvedInputs,
         ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String>;
+
+    /// Runtime configuration for a *hot* state change, if this node type can
+    /// apply the whole state without restarting (§6.2 "Prop change" row).
+    /// `None` (default) means a state change restarts the node in place.
+    fn hot_config(&self, _state: &Value) -> Option<NodeConfig> {
+        None
+    }
 }
 
 pub struct BuilderRegistry(HashMap<String, Box<dyn RuntimeBuilder>>);
@@ -233,6 +242,7 @@ pub struct CompiledEdge {
     pub from: (NodeId, String),
     pub to: (NodeId, String),
     pub buffer: usize,
+    pub kind: PortKind,
 }
 
 fn runtime_name(node: &Node) -> String {
@@ -429,6 +439,7 @@ pub fn lower(graph: &GraphState, registry: &BuilderRegistry) -> Result<CompiledG
             from: (wire.from.node, out_port),
             to: (wire.to.node, in_port),
             buffer: buffer_size(kind, from_builder.is_source()),
+            kind,
         });
     }
 
@@ -515,8 +526,12 @@ fn has_cycle(nodes: &[NodeId], edges: &[CompiledEdge]) -> bool {
     visited != nodes.len()
 }
 
-// ── Stage 2: materialize ─────────────────────────────────────────────────────
+// ── Stage 2: materialize (offline `Pipeline` path) ───────────────────────────
 
+/// Builds the classic thread-per-node `Pipeline` from the IR. The UI uses
+/// the live path ([`start_live`]); this stays as the §5.2 offline
+/// materializer for headless/scripted use.
+#[allow(dead_code)]
 pub fn materialize(
     compiled: &CompiledGraph,
     registry: &BuilderRegistry,
@@ -553,55 +568,404 @@ pub fn materialize(
     pipeline.build().map_err(CompileError::global)
 }
 
-/// `lower` + `materialize` in one shot (offline runs).
-pub fn compile(
+// Silence the unused-import lint for the offline-only types above.
+#[allow(dead_code)]
+fn _offline_types(_: &Scheduler, _: &StopHandle) {}
+
+// ── Live pipeline (§6) ───────────────────────────────────────────────────────
+
+/// Producers-before-consumers order; `lower` already rejected cycles.
+fn topo_order(compiled: &CompiledGraph) -> Vec<NodeId> {
+    let mut indegree: HashMap<NodeId, usize> =
+        compiled.nodes.iter().map(|node| (node.id, 0)).collect();
+    for edge in &compiled.edges {
+        *indegree.entry(edge.to.0).or_default() += 1;
+    }
+    let mut queue: Vec<NodeId> = compiled
+        .nodes
+        .iter()
+        .map(|node| node.id)
+        .filter(|id| indegree[id] == 0)
+        .collect();
+    queue.sort_by_key(|id| id.0);
+    let mut order = Vec::with_capacity(compiled.nodes.len());
+    while let Some(id) = queue.pop() {
+        order.push(id);
+        for edge in compiled.edges.iter().filter(|edge| edge.from.0 == id) {
+            let degree = indegree.get_mut(&edge.to.0).expect("kept node");
+            *degree -= 1;
+            if *degree == 0 {
+                queue.push(edge.to.0);
+            }
+        }
+    }
+    order
+}
+
+fn compiled_node<'a>(compiled: &'a CompiledGraph, id: NodeId) -> &'a CompiledNode {
+    compiled
+        .nodes
+        .iter()
+        .find(|node| node.id == id)
+        .expect("node in compiled graph")
+}
+
+/// Input subscriptions for `id`, matched to the built node's input schema.
+fn input_subs(
+    compiled: &CompiledGraph,
+    id: NodeId,
+    built: &dyn ProcessNode,
+    names: &HashMap<NodeId, String>,
+) -> Result<Vec<Option<InputSub>>, String> {
+    built
+        .input_schema()
+        .iter()
+        .map(|schema| {
+            let edge = compiled
+                .edges
+                .iter()
+                .find(|edge| edge.to.0 == id && edge.to.1 == schema.name);
+            match edge {
+                None => Ok(None),
+                Some(edge) => {
+                    let from_node = names
+                        .get(&edge.from.0)
+                        .ok_or_else(|| format!("producer n{} not materialized", edge.from.0.0))?;
+                    Ok(Some(InputSub {
+                        from_node: from_node.clone(),
+                        from_port: edge.from.1.clone(),
+                        buffer: edge.buffer,
+                        policy: OverflowPolicy::Block,
+                    }))
+                }
+            }
+        })
+        .collect()
+}
+
+/// One live edit, in application order (removals reverse-topological,
+/// additions topological, then hot configs and in-place restarts).
+#[derive(Debug)]
+enum LiveEdit {
+    Remove(NodeId),
+    Add(NodeId),
+    Configure(NodeId, NodeConfig),
+    Restart(NodeId),
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ApplySummary {
+    pub added: usize,
+    pub removed: usize,
+    pub configured: usize,
+    pub restarted: usize,
+}
+
+impl ApplySummary {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+#[derive(Debug)]
+#[allow(dead_code)] // payloads carried for logs/tests
+pub enum ApplyError {
+    /// The edited graph does not lower; the running pipeline is untouched.
+    Compile(Vec<CompileError>),
+    /// The edit class cannot be applied live (§6.2 bottom row); the running
+    /// pipeline is untouched — stop and rerun to pick it up.
+    NeedsFullRestart(String),
+    /// A live edit failed midway (e.g. a node failed to build).
+    Apply(String),
+}
+
+/// Wiring signature of a node's inputs, for diffing.
+fn wiring_of(compiled: &CompiledGraph, id: NodeId) -> BTreeSet<(String, u32, String, usize)> {
+    compiled
+        .edges
+        .iter()
+        .filter(|edge| edge.to.0 == id)
+        .map(|edge| {
+            (
+                edge.to.1.clone(),
+                edge.from.0.0,
+                edge.from.1.clone(),
+                edge.buffer,
+            )
+        })
+        .collect()
+}
+
+/// Classifies the difference between the running IR and the edited one
+/// (§6.2). Returns the edit list, or the reason a full restart is needed.
+fn diff(
+    old: &CompiledGraph,
+    new: &CompiledGraph,
+    registry: &BuilderRegistry,
+) -> Result<Vec<LiveEdit>, String> {
+    let old_ids: HashSet<NodeId> = old.nodes.iter().map(|node| node.id).collect();
+    let new_ids: HashSet<NodeId> = new.nodes.iter().map(|node| node.id).collect();
+    let is_source = |compiled: &CompiledGraph, id: NodeId| {
+        registry
+            .get(&compiled_node(compiled, id).builder)
+            .is_some_and(|builder| builder.is_source())
+    };
+
+    let mut edits: Vec<LiveEdit> = Vec::new();
+
+    // Removals, consumers before producers.
+    let mut removals: Vec<NodeId> = topo_order(old)
+        .into_iter()
+        .rev()
+        .filter(|id| !new_ids.contains(id))
+        .collect();
+    for &id in &removals {
+        if is_source(old, id) {
+            return Err("the source node was removed".into());
+        }
+    }
+    edits.extend(removals.drain(..).map(LiveEdit::Remove));
+
+    // Additions, producers before consumers.
+    for id in topo_order(new) {
+        if old_ids.contains(&id) {
+            continue;
+        }
+        for edge in new.edges.iter().filter(|edge| edge.to.0 == id) {
+            if edge.kind == PortKind::Block {
+                return Err(format!(
+                    "new node consumes block channels; block subscriptions cannot join mid-stream"
+                ));
+            }
+            if is_source(new, edge.from.0) {
+                return Err(
+                    "new connection directly to the source; source destinations are fixed at start"
+                        .into(),
+                );
+            }
+        }
+        edits.push(LiveEdit::Add(id));
+    }
+
+    // Changed nodes: hot config, or restart in place.
+    for id in topo_order(new) {
+        if !old_ids.contains(&id) {
+            continue;
+        }
+        let old_node = compiled_node(old, id);
+        let new_node = compiled_node(new, id);
+        let wiring_changed = wiring_of(old, id) != wiring_of(new, id);
+        let state_changed = old_node.state != new_node.state;
+        if !wiring_changed && !state_changed {
+            continue;
+        }
+        if is_source(new, id) {
+            return Err("the source node changed".into());
+        }
+        let builder = registry
+            .get(&new_node.builder)
+            .ok_or_else(|| format!("no builder for '{}'", new_node.builder))?;
+        if !wiring_changed
+            && state_changed
+            && let Some(config) = builder.hot_config(&new_node.state)
+        {
+            edits.push(LiveEdit::Configure(id, config));
+            continue;
+        }
+        // Restart in place: the node re-subscribes to its producers, which
+        // is invisible to block streams and to source ports (their worker
+        // threads snapshot destinations at start).
+        for edge in new.edges.iter().filter(|edge| edge.to.0 == id) {
+            if edge.kind == PortKind::Block {
+                return Err(format!(
+                    "'{}' consumes block channels and cannot restart mid-stream",
+                    new_node.runtime_name
+                ));
+            }
+            if is_source(new, edge.from.0) {
+                return Err(format!(
+                    "'{}' is fed directly by the source and cannot restart mid-stream",
+                    new_node.runtime_name
+                ));
+            }
+        }
+        edits.push(LiveEdit::Restart(id));
+    }
+
+    Ok(edits)
+}
+
+/// A pipeline running under the live supervisor: editable while it runs.
+pub struct LiveRun {
+    manager: PipelineManager,
+    compiled: CompiledGraph,
+    /// Supervisor key per UI node — assigned at add time and stable across
+    /// title renames and in-place restarts.
+    names: HashMap<NodeId, String>,
+    lanes: DerivedLanes,
+}
+
+/// Lowers and materializes `graph` under a `PipelineManager`.
+pub fn start_live(
     graph: &GraphState,
     registry: &BuilderRegistry,
     ctx: &mut CompileCtx,
-) -> Result<Scheduler, Vec<CompileError>> {
+) -> Result<LiveRun, Vec<CompileError>> {
     let compiled = lower(graph, registry)?;
-    materialize(&compiled, registry, ctx).map_err(|e| vec![e])
-}
+    let mut manager = PipelineManager::new();
+    let mut names: HashMap<NodeId, String> = HashMap::new();
 
-// ── Run lifecycle (§5.5) ─────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RunStatus {
-    Running,
-    Finished,
-}
-
-pub struct RunHandle {
-    status: Arc<Mutex<RunStatus>>,
-    stop: StopHandle,
-}
-
-impl RunHandle {
-    pub fn status(&self) -> RunStatus {
-        self.status.lock().unwrap().clone()
+    for id in topo_order(&compiled) {
+        let node = compiled_node(&compiled, id);
+        let builder = registry
+            .get(&node.builder)
+            .ok_or_else(|| vec![CompileError::on(id, format!("unknown builder '{}'", node.builder))])?;
+        let process = builder
+            .build(&node.runtime_name, &node.state, &node.resolved, ctx)
+            .map_err(|message| vec![CompileError::on(id, message)])?;
+        let inputs = input_subs(&compiled, id, process.as_ref(), &names)
+            .map_err(|message| vec![CompileError::on(id, message)])?;
+        manager
+            .add_node_deferred(dsl::runtime::NodeSpec {
+                name: node.runtime_name.clone(),
+                node: process,
+                inputs,
+            })
+            .map_err(|message| vec![CompileError::on(id, message)])?;
+        names.insert(id, node.runtime_name.clone());
     }
-    pub fn is_running(&self) -> bool {
-        self.status() == RunStatus::Running
-    }
-    pub fn stop(&self) {
-        self.stop.stop();
-    }
+    // All initial subscriptions exist; only now may threads start (a
+    // self-threading source snapshots its subscriber lists on first work()).
+    manager
+        .start_all_deferred()
+        .map_err(|message| vec![CompileError::global(message)])?;
+
+    Ok(LiveRun {
+        manager,
+        compiled,
+        names,
+        lanes: ctx.derived_lanes.clone(),
+    })
 }
 
-/// Moves `Scheduler::wait()` to a background thread and returns a handle the
-/// UI can poll each frame.
-pub fn start(scheduler: Scheduler) -> RunHandle {
-    let stop = scheduler.stop_handle();
-    let status = Arc::new(Mutex::new(RunStatus::Running));
-    let thread_status = Arc::clone(&status);
-    std::thread::Builder::new()
-        .name("pipeline-wait".into())
-        .spawn(move || {
-            scheduler.wait();
-            *thread_status.lock().unwrap() = RunStatus::Finished;
-        })
-        .expect("spawn pipeline-wait thread");
-    RunHandle { status, stop }
+impl LiveRun {
+    /// Diffs the edited graph against what is running and applies the
+    /// difference live. On any error the running pipeline is untouched
+    /// (edits either fail up front in `diff`, or — for build failures midway
+    /// — leave already-applied edits in place and report).
+    pub fn apply(
+        &mut self,
+        graph: &GraphState,
+        registry: &BuilderRegistry,
+    ) -> Result<ApplySummary, ApplyError> {
+        let new = lower(graph, registry).map_err(ApplyError::Compile)?;
+        let edits = diff(&self.compiled, &new, registry).map_err(ApplyError::NeedsFullRestart)?;
+        if edits.is_empty() {
+            self.compiled = new;
+            return Ok(ApplySummary::default());
+        }
+
+        let mut ctx = CompileCtx {
+            derived_lanes: self.lanes.clone(),
+        };
+        let mut summary = ApplySummary::default();
+        for edit in edits {
+            match edit {
+                LiveEdit::Remove(id) => {
+                    if let Some(name) = self.names.remove(&id) {
+                        self.manager
+                            .remove_node(&name)
+                            .map_err(ApplyError::Apply)?;
+                    }
+                    summary.removed += 1;
+                }
+                LiveEdit::Add(id) => {
+                    let node = compiled_node(&new, id);
+                    let builder = registry
+                        .get(&node.builder)
+                        .ok_or_else(|| ApplyError::Apply(format!("no builder '{}'", node.builder)))?;
+                    let process = builder
+                        .build(&node.runtime_name, &node.state, &node.resolved, &mut ctx)
+                        .map_err(ApplyError::Apply)?;
+                    let inputs = input_subs(&new, id, process.as_ref(), &self.names)
+                        .map_err(ApplyError::Apply)?;
+                    self.manager
+                        .add_node(dsl::runtime::NodeSpec {
+                            name: node.runtime_name.clone(),
+                            node: process,
+                            inputs,
+                        })
+                        .map_err(ApplyError::Apply)?;
+                    self.names.insert(id, node.runtime_name.clone());
+                    summary.added += 1;
+                }
+                LiveEdit::Configure(id, config) => {
+                    let name = self
+                        .names
+                        .get(&id)
+                        .ok_or_else(|| ApplyError::Apply(format!("n{} not running", id.0)))?;
+                    self.manager
+                        .reconfigure(name, config)
+                        .map_err(ApplyError::Apply)?;
+                    summary.configured += 1;
+                }
+                LiveEdit::Restart(id) => {
+                    let node = compiled_node(&new, id);
+                    let name = self
+                        .names
+                        .get(&id)
+                        .cloned()
+                        .ok_or_else(|| ApplyError::Apply(format!("n{} not running", id.0)))?;
+                    let builder = registry
+                        .get(&node.builder)
+                        .ok_or_else(|| ApplyError::Apply(format!("no builder '{}'", node.builder)))?;
+                    let process = builder
+                        .build(&name, &node.state, &node.resolved, &mut ctx)
+                        .map_err(ApplyError::Apply)?;
+                    let inputs = input_subs(&new, id, process.as_ref(), &self.names)
+                        .map_err(ApplyError::Apply)?;
+                    self.manager
+                        .restart_node(&name, process, inputs)
+                        .map_err(ApplyError::Apply)?;
+                    summary.restarted += 1;
+                }
+            }
+        }
+        self.compiled = new;
+        Ok(summary)
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.manager.is_finished()
+    }
+
+    pub fn stop(&mut self) {
+        self.manager.stop_all();
+    }
+
+    /// Blocks until the run completes naturally (tests / headless).
+    #[allow(dead_code)]
+    pub fn wait(&mut self) {
+        self.manager.wait();
+    }
+
+    /// Consumers dropped by backpressure policy since the last call, mapped
+    /// back to UI nodes where possible.
+    pub fn take_disconnected(&self) -> Vec<(Option<NodeId>, DisconnectEvent)> {
+        self.manager
+            .take_disconnected()
+            .into_iter()
+            .map(|event| {
+                let id = event.consumer.as_ref().and_then(|consumer| {
+                    self.names
+                        .iter()
+                        .find(|(_, name)| *name == consumer)
+                        .map(|(id, _)| *id)
+                });
+                (id, event)
+            })
+            .collect()
+    }
 }
 
 // ── Builders ─────────────────────────────────────────────────────────────────
@@ -933,6 +1297,29 @@ impl RuntimeBuilder for WordMatcherBuilder {
             _ => Err("words input is not connected".into()),
         }
     }
+
+    fn hot_config(&self, state: &Value) -> Option<NodeConfig> {
+        let state: nodes::WordMatcherState = parse_state(state).ok()?;
+        let mut config = NodeConfig::new();
+        config.insert(
+            "pattern".into(),
+            ConfigValue::U64(parse_hex(&state.pattern.value).ok()?),
+        );
+        config.insert(
+            "mask".into(),
+            ConfigValue::U64(parse_hex(&state.mask.value).ok()?),
+        );
+        config.insert(
+            "field".into(),
+            ConfigValue::Text(if state.field.selected() == "MISO" {
+                "miso".into()
+            } else {
+                "mosi".into()
+            }),
+        );
+        // The pulse-output toggle only affects UI socket visibility.
+        Some(config)
+    }
 }
 
 struct SrFlipFlopBuilder;
@@ -1071,6 +1458,16 @@ impl RuntimeBuilder for FormatterBuilder {
         Ok(Box::new(
             TextFormatter::new(state.template.value.clone()).with_name(name),
         ))
+    }
+
+    fn hot_config(&self, state: &Value) -> Option<NodeConfig> {
+        let state: nodes::StringFormatterState = parse_state(state).ok()?;
+        let mut config = NodeConfig::new();
+        config.insert(
+            "template".into(),
+            ConfigValue::Text(state.template.value.clone()),
+        );
+        Some(config)
     }
 }
 
@@ -1286,6 +1683,189 @@ mod tests {
         );
     }
 
+    fn node_by_def(widget: &NodeGraphWidget, def: &str) -> NodeId {
+        widget
+            .graph()
+            .nodes
+            .values()
+            .find(|node| node.def_name() == def)
+            .unwrap_or_else(|| panic!("no '{def}' node"))
+            .id
+    }
+
+    // ── diff classification (§6.2) ───────────────────────────────────────────
+
+    #[test]
+    fn diff_classifies_matcher_pattern_change_as_hot_config() {
+        let registry = BuilderRegistry::standard();
+        let mut widget = startup_widget();
+        let old = lower(widget.graph(), &registry).unwrap();
+
+        let matcher = widget
+            .graph()
+            .nodes
+            .values()
+            .find(|node| node.title == "Match Start")
+            .unwrap()
+            .id;
+        let mut state: nodes::WordMatcherState =
+            serde_json::from_value(widget.graph().nodes[&matcher].state.clone()).unwrap();
+        state.pattern = node_graph::StringValue::new("0x600082");
+        widget.set_node_state(matcher, serde_json::to_value(state).unwrap());
+
+        let new = lower(widget.graph(), &registry).unwrap();
+        let edits = diff(&old, &new, &registry).unwrap();
+        assert_eq!(edits.len(), 1);
+        match &edits[0] {
+            LiveEdit::Configure(id, config) => {
+                assert_eq!(*id, matcher);
+                assert_eq!(config.get("pattern"), Some(&ConfigValue::U64(0x600082)));
+            }
+            other => panic!("expected Configure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn diff_rejects_source_fed_restart() {
+        let registry = BuilderRegistry::standard();
+        let mut widget = startup_widget();
+        let old = lower(widget.graph(), &registry).unwrap();
+
+        // SPI word size has no hot config and the decoder is source-fed.
+        let spi = node_by_def(&widget, "SPI Decoder");
+        let mut state: nodes::SpiDecoderState =
+            serde_json::from_value(widget.graph().nodes[&spi].state.clone()).unwrap();
+        state.word_size = node_graph::IntValue::new(16, 1, 32);
+        widget.set_node_state(spi, serde_json::to_value(state).unwrap());
+
+        let new = lower(widget.graph(), &registry).unwrap();
+        let error = diff(&old, &new, &registry).unwrap_err();
+        assert!(error.contains("fed directly by the source"), "{error}");
+    }
+
+    /// Wires a fresh Word Matcher (start pattern) into the SPI words stream
+    /// and its trigger into the existing viewer; returns the matcher id.
+    fn attach_matcher_tap(widget: &mut NodeGraphWidget) -> NodeId {
+        let matcher = widget
+            .add_node_at("Word Matcher", egui::Pos2::new(620.0, 600.0))
+            .unwrap();
+        let mut state: nodes::WordMatcherState =
+            serde_json::from_value(widget.graph().nodes[&matcher].state.clone()).unwrap();
+        state.pattern = node_graph::StringValue::new("0x600081");
+        widget.set_node_state(matcher, serde_json::to_value(state).unwrap());
+
+        let spi = node_by_def(widget, "SPI Decoder");
+        let viewer = node_by_def(widget, "Viewer");
+        let out_idx = |graph: &node_graph::GraphState, id: NodeId, name: &str| {
+            graph.nodes[&id]
+                .outputs
+                .iter()
+                .position(|s| s.name == name)
+                .unwrap()
+        };
+        let in_idx = |graph: &node_graph::GraphState, id: NodeId, name: &str| {
+            graph.nodes[&id]
+                .inputs
+                .iter()
+                .position(|s| s.name == name && s.visible)
+                .unwrap()
+        };
+        let graph = widget.graph_mut();
+        let spi_words = out_idx(graph, spi, "MOSI Words");
+        let matcher_in = in_idx(graph, matcher, "Words");
+        graph.add_connection(
+            SocketId {
+                node: spi,
+                index: spi_words,
+                direction: node_graph::SocketDirection::Output,
+            },
+            SocketId {
+                node: matcher,
+                index: matcher_in,
+                direction: node_graph::SocketDirection::Input,
+            },
+        );
+        let matcher_out = out_idx(graph, matcher, "Match");
+        let viewer_in = in_idx(graph, viewer, "In");
+        graph.add_connection(
+            SocketId {
+                node: matcher,
+                index: matcher_out,
+                direction: node_graph::SocketDirection::Output,
+            },
+            SocketId {
+                node: viewer,
+                index: viewer_in,
+                direction: node_graph::SocketDirection::Input,
+            },
+        );
+        matcher
+    }
+
+    #[test]
+    fn diff_classifies_tap_attach_as_add_plus_viewer_restart() {
+        let registry = BuilderRegistry::standard();
+        let mut widget = startup_widget();
+        let old = lower(widget.graph(), &registry).unwrap();
+
+        let matcher = attach_matcher_tap(&mut widget);
+        let viewer = node_by_def(&widget, "Viewer");
+        let new = lower(widget.graph(), &registry).unwrap();
+        let edits = diff(&old, &new, &registry).unwrap();
+
+        assert!(
+            edits
+                .iter()
+                .any(|edit| matches!(edit, LiveEdit::Add(id) if *id == matcher)),
+            "{edits:?}"
+        );
+        assert!(
+            edits
+                .iter()
+                .any(|edit| matches!(edit, LiveEdit::Restart(id) if *id == viewer)),
+            "{edits:?}"
+        );
+        assert_eq!(edits.len(), 2, "{edits:?}");
+    }
+
+    #[test]
+    fn diff_rejects_new_source_connections() {
+        let registry = BuilderRegistry::standard();
+        let mut widget = startup_widget();
+        let old = lower(widget.graph(), &registry).unwrap();
+
+        // New viewer lane fed straight from a source channel: the source's
+        // worker threads snapshot destinations at start, so this cannot
+        // join live.
+        let source = node_by_def(&widget, "DSL File Source");
+        let viewer = node_by_def(&widget, "Viewer");
+        let graph = widget.graph_mut();
+        let viewer_in = graph.nodes[&viewer]
+            .inputs
+            .iter()
+            .position(|s| s.is_variadic_placeholder())
+            .unwrap();
+        graph.add_connection(
+            SocketId {
+                node: source,
+                index: 9, // Ch 9 (TGCK), unused elsewhere
+                direction: node_graph::SocketDirection::Output,
+            },
+            SocketId {
+                node: viewer,
+                index: viewer_in,
+                direction: node_graph::SocketDirection::Input,
+            },
+        );
+
+        let new = lower(widget.graph(), &registry).unwrap();
+        let error = diff(&old, &new, &registry).unwrap_err();
+        assert!(
+            error.contains("source") || error.contains("block"),
+            "{error}"
+        );
+    }
+
     fn repo_path(relative: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(relative)
     }
@@ -1405,6 +1985,108 @@ mod tests {
             .collect()
     }
 
+    /// Startup graph pointed at `capture` with the writer template in
+    /// `out_dir`.
+    fn golden_widget(capture: &Path, out_dir: &Path) -> NodeGraphWidget {
+        let mut widget = startup_widget();
+        let source_id = node_by_def(&widget, "DSL File Source");
+        let formatter_id = node_by_def(&widget, "String Formatter");
+        widget.set_node_state(
+            source_id,
+            serde_json::to_value(nodes::DslFileSourceState {
+                file: node_graph::FileValue::new(capture.display().to_string()),
+                channels: node_graph::IntValue::new(11, 1, 32),
+            })
+            .unwrap(),
+        );
+        widget.set_node_state(
+            formatter_id,
+            serde_json::to_value(nodes::StringFormatterState {
+                template: node_graph::StringValue::new(format!(
+                    "{}/capture_{{n:04}}.bin",
+                    out_dir.display()
+                )),
+            })
+            .unwrap(),
+        );
+        widget
+    }
+
+    /// The §7 Phase-5 gate: attach a matcher tap mid-run and detach it
+    /// again; the untouched writer branch must produce byte-identical
+    /// output to an uninterrupted reference run, and the tap must actually
+    /// have collected data while attached.
+    #[test]
+    #[ignore = "runs the full wipneus5.dsl capture; use --release"]
+    fn live_attach_detach_preserves_writer_output() {
+        let capture = repo_path("_captures/wipneus5.dsl");
+        assert!(capture.exists(), "capture not found: {}", capture.display());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let graph_dir = tmp.path().join("graph");
+        let ref_dir = tmp.path().join("reference");
+        std::fs::create_dir_all(&graph_dir).unwrap();
+        std::fs::create_dir_all(&ref_dir).unwrap();
+
+        let registry = BuilderRegistry::standard();
+        let mut widget = golden_widget(&capture, &graph_dir);
+        let mut ctx = CompileCtx::default();
+        let lanes = ctx.derived_lanes.clone();
+        let mut run = start_live(widget.graph(), &registry, &mut ctx)
+            .unwrap_or_else(|errors| panic!("compile failed: {errors:?}"));
+
+        // Wait until the pipeline demonstrably produces output, then attach.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(900);
+        while bin_files(&graph_dir).is_empty() {
+            assert!(!run.is_finished(), "run finished before any capture file");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no capture file within deadline"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+
+        let matcher = attach_matcher_tap(&mut widget);
+        let summary = run.apply(widget.graph(), &registry).expect("attach tap");
+        assert_eq!(summary.added, 1, "{summary:?}");
+        assert_eq!(summary.restarted, 1, "{summary:?}"); // viewer rewired
+
+        // Let the tap observe some windows, then detach it.
+        std::thread::sleep(std::time::Duration::from_secs(20));
+        widget.graph_mut().remove_node(matcher);
+        let summary = run.apply(widget.graph(), &registry).expect("detach tap");
+        assert_eq!(summary.removed, 1, "{summary:?}");
+        assert_eq!(summary.restarted, 1, "{summary:?}");
+
+        run.wait();
+        run_reference(&capture, &ref_dir);
+
+        // The writer branch never noticed any of it.
+        let graph_files = bin_files(&graph_dir);
+        let ref_files = bin_files(&ref_dir);
+        assert!(!ref_files.is_empty());
+        assert_eq!(graph_files, ref_files, "different file sets");
+        for name in &ref_files {
+            let a = std::fs::read(graph_dir.join(name)).unwrap();
+            let b = std::fs::read(ref_dir.join(name)).unwrap();
+            assert_eq!(a, b, "{name} differs");
+        }
+        assert_eq!(normalized_csv(&graph_dir), normalized_csv(&ref_dir));
+
+        // The tap collected triggers while attached.
+        let lanes = lanes.read();
+        let tap_lane = lanes
+            .iter()
+            .find(|lane| lane.name.contains("Word Matcher.Match"))
+            .expect("tap lane registered");
+        match &tap_lane.data {
+            dsl::DerivedLaneData::Markers(markers) => {
+                assert!(!markers.is_empty(), "tap never fired while attached");
+            }
+            other => panic!("expected marker lane, got {other:?}"),
+        }
+    }
+
     /// The Phase-3 correctness gate (§7): the compiled startup graph must
     /// produce byte-identical output to the hand-built Phase-1 pipeline.
     /// Slow (full 12.7B-sample capture) — run explicitly:
@@ -1423,43 +2105,15 @@ mod tests {
 
         // Compiled-graph run: startup graph with capture path + output
         // template pointed at the temp dirs.
-        let mut widget = startup_widget();
-        let (source_id, formatter_id) = {
-            let graph = widget.graph();
-            let find = |name: &str| {
-                graph
-                    .nodes
-                    .values()
-                    .find(|n| n.def_name() == name)
-                    .unwrap()
-                    .id
-            };
-            (find("DSL File Source"), find("String Formatter"))
-        };
-        widget.set_node_state(
-            source_id,
-            serde_json::to_value(nodes::DslFileSourceState {
-                file: node_graph::FileValue::new(capture.display().to_string()),
-                channels: node_graph::IntValue::new(11, 1, 32),
-            })
-            .unwrap(),
-        );
-        widget.set_node_state(
-            formatter_id,
-            serde_json::to_value(nodes::StringFormatterState {
-                template: node_graph::StringValue::new(format!(
-                    "{}/capture_{{n:04}}.bin",
-                    graph_dir.display()
-                )),
-            })
-            .unwrap(),
-        );
+        let widget = golden_widget(&capture, &graph_dir);
 
+        // Through the live path: shared sender lists + supervisor-driven
+        // shutdown must reproduce the offline byte-exact behavior (§7.5.1).
         let mut ctx = CompileCtx::default();
         let lanes = ctx.derived_lanes.clone();
-        let scheduler = compile(widget.graph(), &BuilderRegistry::standard(), &mut ctx)
+        let mut run = start_live(widget.graph(), &BuilderRegistry::standard(), &mut ctx)
             .unwrap_or_else(|errors| panic!("compile failed: {errors:?}"));
-        scheduler.wait();
+        run.wait();
 
         // The viewer lanes filled while the pipeline ran.
         {

@@ -8,11 +8,13 @@ pub struct App {
     logic_analyzer: LogicAnalyzerViewer,
     analyzer_split: f32,
     builders: compile::BuilderRegistry,
-    run: Option<compile::RunHandle>,
+    run: Option<compile::LiveRun>,
     /// Last global compile/run message shown in the toolbar.
     run_message: Option<(String, bool /* is_error */)>,
     /// Nodes badged with compile errors; cleared on the next Run.
     error_badges: Vec<NodeId>,
+    /// Last time the running pipeline was diffed against the edited graph.
+    last_live_sync: f64,
 }
 
 impl App {
@@ -29,7 +31,31 @@ impl App {
             run: None,
             run_message: None,
             error_badges: Vec::new(),
+            last_live_sync: 0.0,
         }
+    }
+
+    fn report_compile_errors(&mut self, errors: &[compile::CompileError]) {
+        for error in errors {
+            if let Some(id) = error.node {
+                self.node_graph
+                    .set_node_badge(id, Some(NodeBadge::error(&error.message)));
+                self.error_badges.push(id);
+            }
+        }
+        let summary = errors
+            .first()
+            .map(|e| e.message.clone())
+            .unwrap_or_else(|| "compile failed".to_owned());
+        let extra = errors.len().saturating_sub(1);
+        self.run_message = Some((
+            if extra > 0 {
+                format!("{summary} (+{extra} more)")
+            } else {
+                summary
+            },
+            true,
+        ));
     }
 
     fn start_run(&mut self) {
@@ -43,47 +69,82 @@ impl App {
         self.logic_analyzer
             .set_derived_lanes(ctx.derived_lanes.clone());
 
-        match compile::compile(self.node_graph.graph(), &self.builders, &mut ctx) {
-            Ok(scheduler) => {
-                self.run = Some(compile::start(scheduler));
+        match compile::start_live(self.node_graph.graph(), &self.builders, &mut ctx) {
+            Ok(run) => {
+                self.run = Some(run);
             }
-            Err(errors) => {
-                for error in &errors {
-                    if let Some(id) = error.node {
-                        self.node_graph
-                            .set_node_badge(id, Some(NodeBadge::error(&error.message)));
-                        self.error_badges.push(id);
-                    }
-                }
-                let summary = errors
-                    .first()
-                    .map(|e| e.message.clone())
-                    .unwrap_or_else(|| "compile failed".to_owned());
-                let extra = errors.len().saturating_sub(1);
+            Err(errors) => self.report_compile_errors(&errors),
+        }
+    }
+
+    /// While running, periodically diff the edited graph against the live
+    /// pipeline and apply what can be applied (§6.5): taps, branch
+    /// removals, hot prop changes, in-place restarts. Edits that need a
+    /// full restart leave the run untouched and say so.
+    fn sync_live_edits(&mut self, ctx: &egui::Context) {
+        const SYNC_INTERVAL_S: f64 = 0.5;
+        let Some(run) = &mut self.run else {
+            return;
+        };
+        if run.is_finished() {
+            return;
+        }
+        let now = ctx.input(|input| input.time);
+        if now - self.last_live_sync < SYNC_INTERVAL_S {
+            return;
+        }
+        self.last_live_sync = now;
+
+        match run.apply(self.node_graph.graph(), &self.builders) {
+            Ok(summary) if summary.is_empty() => {}
+            Ok(summary) => {
                 self.run_message = Some((
-                    if extra > 0 {
-                        format!("{summary} (+{extra} more)")
-                    } else {
-                        summary
-                    },
-                    true,
+                    format!(
+                        "live: +{} −{} cfg {} restart {}",
+                        summary.added, summary.removed, summary.configured, summary.restarted
+                    ),
+                    false,
                 ));
+            }
+            Err(compile::ApplyError::Compile(_)) => {
+                // Mid-edit graphs are often momentarily invalid; keep the
+                // running pipeline and wait for the graph to become valid.
+            }
+            Err(compile::ApplyError::NeedsFullRestart(reason)) => {
+                self.run_message = Some((format!("stop & rerun to apply: {reason}"), false));
+            }
+            Err(compile::ApplyError::Apply(message)) => {
+                self.run_message = Some((format!("live edit failed: {message}"), true));
+            }
+        }
+
+        for (node, event) in run.take_disconnected() {
+            if let Some(id) = node {
+                self.node_graph.set_node_badge(
+                    id,
+                    Some(NodeBadge::warning(format!(
+                        "Disconnected: can't keep up with {}.{}",
+                        event.producer, event.port
+                    ))),
+                );
+                self.error_badges.push(id);
             }
         }
     }
 
     fn show_toolbar(&mut self, ui: &mut egui::Ui) {
+        self.sync_live_edits(ui.ctx());
         ui.horizontal(|ui| {
             ui.add_space(6.0);
-            let running = self.run.as_ref().is_some_and(compile::RunHandle::is_running);
+            let running = self.run.as_ref().is_some_and(|run| !run.is_finished());
             if running {
                 if ui.button("⏹ Stop").clicked() {
-                    if let Some(run) = &self.run {
+                    if let Some(run) = &mut self.run {
                         run.stop();
                     }
                 }
                 ui.spinner();
-                ui.label("Running…");
+                ui.label("Live");
                 // Keep polling the background run without user input.
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_millis(250));

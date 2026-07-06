@@ -13,6 +13,31 @@ pub use super::ports::{InputPort, OutputPort};
 pub use super::receiver::Receiver;
 pub use super::sender::Sender;
 
+/// A configuration value delivered to a running node (live reconfiguration,
+/// design §6.2). Deliberately a tiny bespoke type: the runtime crate stays
+/// serde-free and nodes match on plain fields.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConfigValue {
+    U64(u64),
+    I64(i64),
+    Bool(bool),
+    Text(String),
+}
+
+/// Named configuration fields for [`ProcessNode::apply_config`]; produced by
+/// the app-layer builders that know how UI state maps onto runtime knobs.
+pub type NodeConfig = std::collections::HashMap<String, ConfigValue>;
+
+/// Outcome of a hot configuration attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigOutcome {
+    /// The change is in effect from the next `work()` on.
+    Applied,
+    /// The node cannot apply this change while running; the supervisor
+    /// restarts it in place.
+    NeedsRestart,
+}
+
 /// A processing node that transforms data
 /// - Sources have 0 inputs and N outputs
 /// - Sinks have N inputs and 0 outputs
@@ -61,6 +86,13 @@ pub trait ProcessNode: Send {
     /// The scheduler provides references to input and output port slices
     /// Returns Ok(n) where n is the number of items produced, or Err on failure
     fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize>;
+
+    /// Apply a configuration change while running (between `work()` calls).
+    /// The default declines, telling the supervisor to restart the node
+    /// in place with a freshly built instance.
+    fn apply_config(&mut self, _config: &NodeConfig) -> ConfigOutcome {
+        ConfigOutcome::NeedsRestart
+    }
 }
 
 /// Forwarding impl so factories (e.g. the graph compiler) can hand
@@ -92,5 +124,8 @@ impl ProcessNode for Box<dyn ProcessNode> {
     }
     fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
         (**self).work(inputs, outputs)
+    }
+    fn apply_config(&mut self, config: &NodeConfig) -> ConfigOutcome {
+        (**self).apply_config(config)
     }
 }

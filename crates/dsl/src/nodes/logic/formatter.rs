@@ -66,6 +66,22 @@ impl ProcessNode for TextFormatter {
         &self.name
     }
 
+    /// Hot-appliable: `template` (Text). Applies to the next value change;
+    /// the current text level keeps the old formatting until then.
+    fn apply_config(
+        &mut self,
+        config: &crate::runtime::node::NodeConfig,
+    ) -> crate::runtime::node::ConfigOutcome {
+        use crate::runtime::node::{ConfigOutcome, ConfigValue};
+        for (key, value) in config {
+            match (key.as_str(), value) {
+                ("template", ConfigValue::Text(template)) => self.template = template.clone(),
+                _ => return ConfigOutcome::NeedsRestart,
+            }
+        }
+        ConfigOutcome::Applied
+    }
+
     fn num_inputs(&self) -> usize {
         1
     }
