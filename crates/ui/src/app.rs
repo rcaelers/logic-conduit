@@ -1,6 +1,6 @@
 use crate::compile;
-use crate::logic_analyzer_viewer::LogicAnalyzerViewer;
 use crate::nodes;
+use logic_analyzer_viewer::LogicAnalyzerViewer;
 use node_graph::{NodeBadge, NodeGraphWidget, NodeId};
 
 pub struct App {

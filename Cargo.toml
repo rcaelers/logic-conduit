@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/dsl", "crates/node_graph", "crates/ui"]
+members = [".", "crates/dsl", "crates/logic_analyzer_viewer", "crates/node_graph", "crates/ui"]
 default-members = ["."]
 resolver = "2"
 

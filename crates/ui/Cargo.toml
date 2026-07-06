@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 dsl = { path = "../dsl" }
+logic-analyzer-viewer = { path = "../logic_analyzer_viewer" }
 node-graph = { path = "../node_graph" }
 eframe = "0.35"
 egui = "0.35"

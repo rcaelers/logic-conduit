@@ -1,0 +1,13 @@
+[package]
+name = "logic-analyzer-viewer"
+version = "0.1.0"
+edition = "2024"
+authors = ["Rob Caelers <rob.caelers@gmail.com>"]
+
+[lib]
+name = "logic_analyzer_viewer"
+path = "src/lib.rs"
+
+[dependencies]
+dsl = { path = "../dsl" }
+egui = "0.35"

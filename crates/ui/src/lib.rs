@@ -2,7 +2,6 @@
 
 mod app;
 mod compile;
-mod logic_analyzer_viewer;
 mod nodes;
 
 pub use app::App;
