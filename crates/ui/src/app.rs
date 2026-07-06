@@ -1,23 +1,17 @@
-#[cfg(not(target_arch = "wasm32"))]
 use crate::compile;
 use crate::logic_analyzer_viewer::LogicAnalyzerViewer;
 use crate::nodes;
-use node_graph::NodeGraphWidget;
-#[cfg(not(target_arch = "wasm32"))]
-use node_graph::{NodeBadge, NodeId};
+use node_graph::{NodeBadge, NodeGraphWidget, NodeId};
 
 pub struct App {
     node_graph: NodeGraphWidget,
     logic_analyzer: LogicAnalyzerViewer,
     analyzer_split: f32,
-    #[cfg(not(target_arch = "wasm32"))]
     builders: compile::BuilderRegistry,
-    #[cfg(not(target_arch = "wasm32"))]
-    run: Option<compile::LiveRun>,
+    run: Option<compile::AppRun>,
     /// Last global compile/run message shown in the toolbar.
     run_message: Option<(String, bool /* is_error */)>,
     /// Nodes badged with compile errors; cleared on the next Run.
-    #[cfg(not(target_arch = "wasm32"))]
     error_badges: Vec<NodeId>,
     /// Last time the running pipeline was diffed against the edited graph.
     #[cfg(not(target_arch = "wasm32"))]
@@ -37,19 +31,15 @@ impl App {
             node_graph: widget,
             logic_analyzer: LogicAnalyzerViewer::demo(),
             analyzer_split: 0.42,
-            #[cfg(not(target_arch = "wasm32"))]
             builders: compile::BuilderRegistry::standard(),
-            #[cfg(not(target_arch = "wasm32"))]
             run: None,
             run_message: None,
-            #[cfg(not(target_arch = "wasm32"))]
             error_badges: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             last_live_sync: 0.0,
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn report_compile_errors(&mut self, errors: &[compile::CompileError]) {
         for error in errors {
             if let Some(id) = error.node {
@@ -73,7 +63,6 @@ impl App {
         ));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn start_run(&mut self) {
         for id in self.error_badges.drain(..) {
             self.node_graph.set_node_badge(id, None);
@@ -86,11 +75,34 @@ impl App {
         self.logic_analyzer
             .set_derived_lanes(ctx.derived_lanes.clone());
 
-        match compile::start_live(self.node_graph.graph(), &self.builders, &mut ctx) {
+        match compile::start_app_run(self.node_graph.graph(), &self.builders, &mut ctx) {
             Ok(run) => {
                 self.run = Some(run);
             }
             Err(errors) => self.report_compile_errors(&errors),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn step_wasm_run(&mut self, ctx: &egui::Context) {
+        let Some(run) = &mut self.run else {
+            return;
+        };
+        if run.is_finished() {
+            return;
+        }
+        match run.step(256) {
+            Ok(()) => {
+                for (id, items) in run.progress() {
+                    let status = (items > 0).then(|| format_count(items));
+                    self.node_graph.set_node_status(id, status);
+                }
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
+            Err(message) => {
+                self.run_message = Some((format!("run failed: {message}"), true));
+                run.stop();
+            }
         }
     }
 
@@ -198,13 +210,26 @@ impl App {
 
     #[cfg(target_arch = "wasm32")]
     fn show_toolbar(&mut self, ui: &mut egui::Ui) {
+        self.step_wasm_run(ui.ctx());
         ui.horizontal(|ui| {
             ui.add_space(6.0);
-            ui.label("Web demo");
-            ui.colored_label(
-                egui::Color32::from_rgb(180, 180, 180),
-                "native capture and pipeline execution are disabled in this build",
-            );
+            let running = self.run.as_ref().is_some_and(|run| !run.is_finished());
+            if running {
+                if ui.button("⏹ Stop").clicked()
+                    && let Some(run) = &mut self.run
+                {
+                    run.stop();
+                }
+                ui.spinner();
+                ui.label("Running");
+            } else {
+                if ui.button("▶ Run").clicked() {
+                    self.start_run();
+                }
+                if self.run.is_some() {
+                    ui.label("Finished");
+                }
+            }
             if let Some((message, is_error)) = &self.run_message {
                 let color = if *is_error {
                     egui::Color32::from_rgb(230, 120, 120)

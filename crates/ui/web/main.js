@@ -1,4 +1,6 @@
-import init, { WebHandle } from "./pkg/dsl_ui.js";
+const buildVersion = document.currentScript?.dataset.buildVersion ?? `${Date.now()}`;
+const wasmModule = await import(`./pkg/dsl_ui.js?v=${encodeURIComponent(buildVersion)}`);
+const { default: init, WebHandle } = wasmModule;
 
 const loading = document.getElementById("loading");
 const canvas = document.getElementById("dsl-ui");
@@ -14,4 +16,3 @@ try {
   loading.classList.add("error");
   console.error(error);
 }
-

@@ -11,18 +11,27 @@
 //! `SpiTransfer` vs `ParallelWord` consumers.
 
 use dsl::nodes::decoders::{BitOrder, Endianness, UartParity, UartStopBits};
+#[cfg(target_arch = "wasm32")]
+use dsl::runtime::ChannelMessage;
+use dsl::runtime::{ConfigValue, NodeConfig, ProcessNode};
+#[cfg(not(target_arch = "wasm32"))]
 use dsl::runtime::{
-    ConfigValue, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy, Pipeline, PipelineManager,
-    ProcessNode, Scheduler, StopHandle,
+    DisconnectEvent, InputSub, OverflowPolicy, Pipeline, PipelineManager, Scheduler, StopHandle,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use dsl::{BinaryFileWriter, WriteWidth};
 use dsl::{
-    BinaryFileWriter, CsPolarity, DerivedLanes, GateOp, LogicGate, MatchOp, ParallelWord,
-    SpiDecoder, SpiMode, SpiTransfer, SrLatch, StrobeMode, TextFormatter, TriggerCounter,
-    ViewerLaneKind, ViewerSink, WordField, WordMatcher, WriteWidth,
+    CsPolarity, DerivedLanes, GateOp, LogicGate, MatchOp, ParallelWord, SpiDecoder, SpiMode,
+    SpiTransfer, SrLatch, StrobeMode, TextFormatter, TriggerCounter, ViewerLaneKind, ViewerSink,
+    WordField, WordMatcher,
 };
 use node_graph::{GraphState, Node, NodeId, NodeKind, Socket, SocketId};
 use serde_json::Value;
-use std::collections::{BTreeSet, HashMap, HashSet};
+#[cfg(target_arch = "wasm32")]
+use std::any::TypeId;
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::BTreeSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::nodes;
 
@@ -184,6 +193,7 @@ pub struct BuilderRegistry(HashMap<String, Box<dyn RuntimeBuilder>>);
 impl BuilderRegistry {
     pub fn standard() -> Self {
         let mut builders: HashMap<String, Box<dyn RuntimeBuilder>> = HashMap::new();
+        #[cfg(not(target_arch = "wasm32"))]
         builders.insert("DSL File Source".into(), Box::new(FileSourceBuilder));
         builders.insert("UART Demo Source".into(), Box::new(UartDemoSourceBuilder));
         builders.insert("SPI Decoder".into(), Box::new(SpiDecoderBuilder));
@@ -194,7 +204,9 @@ impl BuilderRegistry {
         builders.insert("Logic Gate".into(), Box::new(LogicGateBuilder));
         builders.insert("Counter".into(), Box::new(CounterBuilder));
         builders.insert("String Formatter".into(), Box::new(FormatterBuilder));
+        #[cfg(not(target_arch = "wasm32"))]
         builders.insert("File Writer".into(), Box::new(FileWriterBuilder));
+        #[cfg(not(target_arch = "wasm32"))]
         builders.insert("TGCK Recorder".into(), Box::new(TgckRecorderBuilder));
         builders.insert("Viewer".into(), Box::new(ViewerBuilder));
         Self(builders)
@@ -534,6 +546,7 @@ fn has_cycle(nodes: &[NodeId], edges: &[CompiledEdge]) -> bool {
 /// the live path ([`start_live`]); this stays as the §5.2 offline
 /// materializer for headless/scripted use.
 #[allow(dead_code)]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn materialize(
     compiled: &CompiledGraph,
     registry: &BuilderRegistry,
@@ -572,6 +585,7 @@ pub fn materialize(
 
 // Silence the unused-import lint for the offline-only types above.
 #[allow(dead_code)]
+#[cfg(not(target_arch = "wasm32"))]
 fn _offline_types(_: &Scheduler, _: &StopHandle) {}
 
 // ── Live pipeline (§6) ───────────────────────────────────────────────────────
@@ -613,6 +627,7 @@ fn compiled_node<'a>(compiled: &'a CompiledGraph, id: NodeId) -> &'a CompiledNod
 }
 
 /// Input subscriptions for `id`, matched to the built node's input schema.
+#[cfg(not(target_arch = "wasm32"))]
 fn input_subs(
     compiled: &CompiledGraph,
     id: NodeId,
@@ -647,6 +662,7 @@ fn input_subs(
 
 /// One live edit, in application order (removals reverse-topological,
 /// additions topological, then hot configs and in-place restarts).
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 enum LiveEdit {
     Remove(NodeId),
@@ -655,6 +671,7 @@ enum LiveEdit {
     Restart(NodeId),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ApplySummary {
     pub added: usize,
@@ -663,12 +680,14 @@ pub struct ApplySummary {
     pub restarted: usize,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ApplySummary {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 #[allow(dead_code)] // payloads carried for logs/tests
 pub enum ApplyError {
@@ -682,6 +701,7 @@ pub enum ApplyError {
 }
 
 /// Wiring signature of a node's inputs, for diffing.
+#[cfg(not(target_arch = "wasm32"))]
 fn wiring_of(compiled: &CompiledGraph, id: NodeId) -> BTreeSet<(String, u32, String, usize)> {
     compiled
         .edges
@@ -700,6 +720,7 @@ fn wiring_of(compiled: &CompiledGraph, id: NodeId) -> BTreeSet<(String, u32, Str
 
 /// Classifies the difference between the running IR and the edited one
 /// (§6.2). Returns the edit list, or the reason a full restart is needed.
+#[cfg(not(target_arch = "wasm32"))]
 fn diff(
     old: &CompiledGraph,
     new: &CompiledGraph,
@@ -798,6 +819,7 @@ fn diff(
 }
 
 /// A pipeline running under the live supervisor: editable while it runs.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct LiveRun {
     manager: PipelineManager,
     compiled: CompiledGraph,
@@ -808,6 +830,7 @@ pub struct LiveRun {
 }
 
 /// Lowers and materializes `graph` under a `PipelineManager`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn start_live(
     graph: &GraphState,
     registry: &BuilderRegistry,
@@ -853,6 +876,7 @@ pub fn start_live(
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl LiveRun {
     /// Diffs the edited graph against what is running and applies the
     /// difference live. On any error the running pipeline is untouched
@@ -981,10 +1005,438 @@ impl LiveRun {
     }
 }
 
+// ── Browser pipeline ────────────────────────────────────────────────────────
+
+#[cfg(target_arch = "wasm32")]
+enum WasmSender {
+    Sample(crossbeam_channel::Sender<ChannelMessage<dsl::Sample>>),
+    Spi(crossbeam_channel::Sender<ChannelMessage<SpiTransfer>>),
+    Parallel(crossbeam_channel::Sender<ChannelMessage<ParallelWord>>),
+    Trigger(crossbeam_channel::Sender<ChannelMessage<dsl::Trigger>>),
+    Number(crossbeam_channel::Sender<ChannelMessage<dsl::NumberSample>>),
+    Text(crossbeam_channel::Sender<ChannelMessage<dsl::TextSample>>),
+}
+
+#[cfg(target_arch = "wasm32")]
+enum WasmReceiver {
+    Sample(crossbeam_channel::Receiver<ChannelMessage<dsl::Sample>>),
+    Spi(crossbeam_channel::Receiver<ChannelMessage<SpiTransfer>>),
+    Parallel(crossbeam_channel::Receiver<ChannelMessage<ParallelWord>>),
+    Trigger(crossbeam_channel::Receiver<ChannelMessage<dsl::Trigger>>),
+    Number(crossbeam_channel::Receiver<ChannelMessage<dsl::NumberSample>>),
+    Text(crossbeam_channel::Receiver<ChannelMessage<dsl::TextSample>>),
+}
+
+#[cfg(target_arch = "wasm32")]
+enum WasmInputProbe {
+    Disconnected,
+    Sample(crossbeam_channel::Receiver<ChannelMessage<dsl::Sample>>),
+    Spi(crossbeam_channel::Receiver<ChannelMessage<SpiTransfer>>),
+    Parallel(crossbeam_channel::Receiver<ChannelMessage<ParallelWord>>),
+    Trigger(crossbeam_channel::Receiver<ChannelMessage<dsl::Trigger>>),
+    Number(crossbeam_channel::Receiver<ChannelMessage<dsl::NumberSample>>),
+    Text(crossbeam_channel::Receiver<ChannelMessage<dsl::TextSample>>),
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WasmInputProbe {
+    fn is_ready(&self) -> bool {
+        match self {
+            Self::Disconnected => true,
+            Self::Sample(rx) => !rx.is_empty(),
+            Self::Spi(rx) => !rx.is_empty(),
+            Self::Parallel(rx) => !rx.is_empty(),
+            Self::Trigger(rx) => !rx.is_empty(),
+            Self::Number(rx) => !rx.is_empty(),
+            Self::Text(rx) => !rx.is_empty(),
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn probe_from_receiver(receiver: &WasmReceiver) -> WasmInputProbe {
+    match receiver {
+        WasmReceiver::Sample(rx) => WasmInputProbe::Sample(rx.clone()),
+        WasmReceiver::Spi(rx) => WasmInputProbe::Spi(rx.clone()),
+        WasmReceiver::Parallel(rx) => WasmInputProbe::Parallel(rx.clone()),
+        WasmReceiver::Trigger(rx) => WasmInputProbe::Trigger(rx.clone()),
+        WasmReceiver::Number(rx) => WasmInputProbe::Number(rx.clone()),
+        WasmReceiver::Text(rx) => WasmInputProbe::Text(rx.clone()),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn wasm_channel(kind: PortKind, buffer: usize) -> (WasmSender, WasmReceiver) {
+    match kind {
+        PortKind::SampleEdge | PortKind::Block => {
+            let (tx, rx) = crossbeam_channel::bounded(buffer.max(1));
+            (WasmSender::Sample(tx), WasmReceiver::Sample(rx))
+        }
+        PortKind::SpiWords => {
+            let (tx, rx) = crossbeam_channel::bounded(buffer.max(1));
+            (WasmSender::Spi(tx), WasmReceiver::Spi(rx))
+        }
+        PortKind::ParallelWords => {
+            let (tx, rx) = crossbeam_channel::bounded(buffer.max(1));
+            (WasmSender::Parallel(tx), WasmReceiver::Parallel(rx))
+        }
+        PortKind::Trigger => {
+            let (tx, rx) = crossbeam_channel::bounded(buffer.max(1));
+            (WasmSender::Trigger(tx), WasmReceiver::Trigger(rx))
+        }
+        PortKind::Number => {
+            let (tx, rx) = crossbeam_channel::bounded(buffer.max(1));
+            (WasmSender::Number(tx), WasmReceiver::Number(rx))
+        }
+        PortKind::Text => {
+            let (tx, rx) = crossbeam_channel::bounded(buffer.max(1));
+            (WasmSender::Text(tx), WasmReceiver::Text(rx))
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn input_from_receiver(
+    receiver: WasmReceiver,
+    watchdog: &dsl::runtime::Watchdog,
+    node: &str,
+    port: &str,
+) -> dsl::InputPort {
+    match receiver {
+        WasmReceiver::Sample(rx) => dsl::InputPort::new_with_watchdog(rx, watchdog, node, port),
+        WasmReceiver::Spi(rx) => dsl::InputPort::new_with_watchdog(rx, watchdog, node, port),
+        WasmReceiver::Parallel(rx) => dsl::InputPort::new_with_watchdog(rx, watchdog, node, port),
+        WasmReceiver::Trigger(rx) => dsl::InputPort::new_with_watchdog(rx, watchdog, node, port),
+        WasmReceiver::Number(rx) => dsl::InputPort::new_with_watchdog(rx, watchdog, node, port),
+        WasmReceiver::Text(rx) => dsl::InputPort::new_with_watchdog(rx, watchdog, node, port),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn output_from_senders(
+    type_id: TypeId,
+    senders: Vec<WasmSender>,
+    watchdog: &dsl::runtime::Watchdog,
+    node: &str,
+    port: &str,
+) -> Result<(dsl::OutputPort, Box<dyn Fn()>), String> {
+    if type_id == TypeId::of::<dsl::Sample>() {
+        let typed = senders
+            .into_iter()
+            .map(|sender| match sender {
+                WasmSender::Sample(sender) => Ok(sender),
+                _ => Err(format!("type mismatch for output {node}.{port}")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let sender = dsl::runtime::Sender::new(typed);
+        let closer = sender.clone();
+        return Ok((
+            dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
+            Box::new(move || closer.close()),
+        ));
+    }
+    if type_id == TypeId::of::<SpiTransfer>() {
+        let typed = senders
+            .into_iter()
+            .map(|sender| match sender {
+                WasmSender::Spi(sender) => Ok(sender),
+                _ => Err(format!("type mismatch for output {node}.{port}")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let sender = dsl::runtime::Sender::new(typed);
+        let closer = sender.clone();
+        return Ok((
+            dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
+            Box::new(move || closer.close()),
+        ));
+    }
+    if type_id == TypeId::of::<ParallelWord>() {
+        let typed = senders
+            .into_iter()
+            .map(|sender| match sender {
+                WasmSender::Parallel(sender) => Ok(sender),
+                _ => Err(format!("type mismatch for output {node}.{port}")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let sender = dsl::runtime::Sender::new(typed);
+        let closer = sender.clone();
+        return Ok((
+            dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
+            Box::new(move || closer.close()),
+        ));
+    }
+    if type_id == TypeId::of::<dsl::Trigger>() {
+        let typed = senders
+            .into_iter()
+            .map(|sender| match sender {
+                WasmSender::Trigger(sender) => Ok(sender),
+                _ => Err(format!("type mismatch for output {node}.{port}")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let sender = dsl::runtime::Sender::new(typed);
+        let closer = sender.clone();
+        return Ok((
+            dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
+            Box::new(move || closer.close()),
+        ));
+    }
+    if type_id == TypeId::of::<dsl::NumberSample>() {
+        let typed = senders
+            .into_iter()
+            .map(|sender| match sender {
+                WasmSender::Number(sender) => Ok(sender),
+                _ => Err(format!("type mismatch for output {node}.{port}")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let sender = dsl::runtime::Sender::new(typed);
+        let closer = sender.clone();
+        return Ok((
+            dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
+            Box::new(move || closer.close()),
+        ));
+    }
+    if type_id == TypeId::of::<dsl::TextSample>() {
+        let typed = senders
+            .into_iter()
+            .map(|sender| match sender {
+                WasmSender::Text(sender) => Ok(sender),
+                _ => Err(format!("type mismatch for output {node}.{port}")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let sender = dsl::runtime::Sender::new(typed);
+        let closer = sender.clone();
+        return Ok((
+            dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
+            Box::new(move || closer.close()),
+        ));
+    }
+    Err(format!("unsupported output type for {node}.{port}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+struct WasmNode {
+    id: NodeId,
+    node: Box<dyn ProcessNode>,
+    input_probes: Vec<WasmInputProbe>,
+    inputs: Vec<dsl::InputPort>,
+    outputs: Vec<dsl::OutputPort>,
+    close_outputs: Vec<Box<dyn Fn()>>,
+    done: bool,
+    items: u64,
+}
+
+/// Browser runner for finite, WASM-safe process graphs. It uses the same
+/// lowered IR and node builders as native, but steps nodes cooperatively
+/// from the UI frame loop instead of spawning worker threads.
+#[cfg(target_arch = "wasm32")]
+pub struct WasmRun {
+    nodes: Vec<WasmNode>,
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn start_wasm(
+    graph: &GraphState,
+    registry: &BuilderRegistry,
+    ctx: &mut CompileCtx,
+) -> Result<WasmRun, Vec<CompileError>> {
+    let compiled = lower(graph, registry)?;
+    let mut receivers: HashMap<(NodeId, String), WasmReceiver> = HashMap::new();
+    let mut senders: HashMap<(NodeId, String), Vec<WasmSender>> = HashMap::new();
+
+    for edge in &compiled.edges {
+        if edge.kind == PortKind::Block {
+            return Err(vec![CompileError::on(
+                edge.to.0,
+                "block streams are native-only in the browser runner",
+            )]);
+        }
+        let (sender, receiver) = wasm_channel(edge.kind, edge.buffer);
+        senders
+            .entry((edge.from.0, edge.from.1.clone()))
+            .or_default()
+            .push(sender);
+        if receivers
+            .insert((edge.to.0, edge.to.1.clone()), receiver)
+            .is_some()
+        {
+            return Err(vec![CompileError::on(
+                edge.to.0,
+                format!("duplicate input port '{}'", edge.to.1),
+            )]);
+        }
+    }
+
+    let watchdog = dsl::runtime::Watchdog::new();
+    let mut nodes = Vec::new();
+    for id in topo_order(&compiled) {
+        let compiled_node = compiled_node(&compiled, id);
+        let builder = registry.get(&compiled_node.builder).ok_or_else(|| {
+            vec![CompileError::on(
+                id,
+                format!("unknown builder '{}'", compiled_node.builder),
+            )]
+        })?;
+        let process = builder
+            .build(
+                &compiled_node.runtime_name,
+                &compiled_node.state,
+                &compiled_node.resolved,
+                ctx,
+            )
+            .map_err(|message| vec![CompileError::on(id, message)])?;
+
+        let mut input_probes = Vec::new();
+        let inputs = process
+            .input_schema()
+            .iter()
+            .map(
+                |schema| match receivers.remove(&(id, schema.name.clone())) {
+                    Some(receiver) => {
+                        input_probes.push(probe_from_receiver(&receiver));
+                        input_from_receiver(
+                            receiver,
+                            &watchdog,
+                            &compiled_node.runtime_name,
+                            &schema.name,
+                        )
+                    }
+                    None => {
+                        input_probes.push(WasmInputProbe::Disconnected);
+                        dsl::InputPort::disconnected()
+                    }
+                },
+            )
+            .collect();
+
+        let mut outputs = Vec::new();
+        let mut close_outputs = Vec::new();
+        for schema in process.output_schema() {
+            let outbound = senders
+                .remove(&(id, schema.name.clone()))
+                .unwrap_or_default();
+            let (output, close) = output_from_senders(
+                schema.type_id,
+                outbound,
+                &watchdog,
+                &compiled_node.runtime_name,
+                &schema.name,
+            )
+            .map_err(|message| vec![CompileError::on(id, message)])?;
+            outputs.push(output);
+            close_outputs.push(close);
+        }
+
+        nodes.push(WasmNode {
+            id,
+            node: process,
+            input_probes,
+            inputs,
+            outputs,
+            close_outputs,
+            done: false,
+            items: 0,
+        });
+    }
+
+    Ok(WasmRun { nodes })
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WasmRun {
+    pub fn step(&mut self, budget: usize) -> Result<(), String> {
+        let mut calls = 0usize;
+        while calls < budget && !self.is_finished() {
+            let mut made_progress = false;
+            for node in &mut self.nodes {
+                if node.done {
+                    continue;
+                }
+                if !node.input_probes.iter().all(WasmInputProbe::is_ready) {
+                    continue;
+                }
+                calls += 1;
+                match node.node.work(&node.inputs, &node.outputs) {
+                    Ok(items) => {
+                        if items > 0 {
+                            node.items += items as u64;
+                            made_progress = true;
+                        }
+                        if node.node.should_stop() {
+                            node.done = true;
+                            for close in &node.close_outputs {
+                                close();
+                            }
+                        }
+                    }
+                    Err(dsl::WorkError::Shutdown) => {
+                        node.done = true;
+                        for close in &node.close_outputs {
+                            close();
+                        }
+                    }
+                    Err(error) => return Err(format!("{}: {error}", node.node.name())),
+                }
+                if calls >= budget {
+                    break;
+                }
+            }
+            if !made_progress {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.nodes.iter().all(|node| node.done)
+    }
+
+    pub fn stop(&mut self) {
+        for node in &mut self.nodes {
+            if !node.done {
+                node.done = true;
+                for close in &node.close_outputs {
+                    close();
+                }
+            }
+        }
+    }
+
+    pub fn progress(&self) -> Vec<(NodeId, u64)> {
+        self.nodes
+            .iter()
+            .map(|node| (node.id, node.items))
+            .collect()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub type AppRun = LiveRun;
+
+#[cfg(target_arch = "wasm32")]
+pub type AppRun = WasmRun;
+
+pub fn start_app_run(
+    graph: &GraphState,
+    registry: &BuilderRegistry,
+    ctx: &mut CompileCtx,
+) -> Result<AppRun, Vec<CompileError>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        start_live(graph, registry, ctx)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        start_wasm(graph, registry, ctx)
+    }
+}
+
 // ── Builders ─────────────────────────────────────────────────────────────────
 
+#[cfg(not(target_arch = "wasm32"))]
 struct FileSourceBuilder;
 
+#[cfg(not(target_arch = "wasm32"))]
 impl RuntimeBuilder for FileSourceBuilder {
     fn is_source(&self) -> bool {
         true
@@ -1552,8 +2004,10 @@ impl RuntimeBuilder for FormatterBuilder {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct FileWriterBuilder;
 
+#[cfg(not(target_arch = "wasm32"))]
 impl RuntimeBuilder for FileWriterBuilder {
     fn is_sink(&self) -> bool {
         true
@@ -1600,8 +2054,10 @@ impl RuntimeBuilder for FileWriterBuilder {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct TgckRecorderBuilder;
 
+#[cfg(not(target_arch = "wasm32"))]
 impl RuntimeBuilder for TgckRecorderBuilder {
     fn is_sink(&self) -> bool {
         true

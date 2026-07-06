@@ -75,6 +75,12 @@ impl InputPort {
         }
     }
 
+    /// Create an intentionally disconnected input. Typed `get()` calls will
+    /// return `None`, matching an optional/unconnected port.
+    pub fn disconnected() -> Self {
+        Self::from_type_erased(Box::new(()))
+    }
+
     /// Create a new InputPort with a watchdog (for testing).
     pub fn new_with_watchdog<T: Send + 'static>(
         receiver: CrossbeamReceiver<ChannelMessage<T>>,

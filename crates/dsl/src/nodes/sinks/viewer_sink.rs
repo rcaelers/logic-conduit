@@ -340,6 +340,7 @@ impl ProcessNode for ViewerSink {
                 return Err(WorkError::Shutdown);
             }
             // All lanes momentarily quiet; don't spin.
+            #[cfg(not(target_arch = "wasm32"))]
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
         Ok(progress)
