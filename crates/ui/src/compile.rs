@@ -1030,12 +1030,45 @@ enum WasmReceiver {
 #[cfg(target_arch = "wasm32")]
 enum WasmInputProbe {
     Disconnected,
-    Sample(crossbeam_channel::Receiver<ChannelMessage<dsl::Sample>>),
-    Spi(crossbeam_channel::Receiver<ChannelMessage<SpiTransfer>>),
-    Parallel(crossbeam_channel::Receiver<ChannelMessage<ParallelWord>>),
-    Trigger(crossbeam_channel::Receiver<ChannelMessage<dsl::Trigger>>),
-    Number(crossbeam_channel::Receiver<ChannelMessage<dsl::NumberSample>>),
-    Text(crossbeam_channel::Receiver<ChannelMessage<dsl::TextSample>>),
+    Sample(
+        crossbeam_channel::Receiver<ChannelMessage<dsl::Sample>>,
+        ClosedFlag,
+    ),
+    Spi(
+        crossbeam_channel::Receiver<ChannelMessage<SpiTransfer>>,
+        ClosedFlag,
+    ),
+    Parallel(
+        crossbeam_channel::Receiver<ChannelMessage<ParallelWord>>,
+        ClosedFlag,
+    ),
+    Trigger(
+        crossbeam_channel::Receiver<ChannelMessage<dsl::Trigger>>,
+        ClosedFlag,
+    ),
+    Number(
+        crossbeam_channel::Receiver<ChannelMessage<dsl::NumberSample>>,
+        ClosedFlag,
+    ),
+    Text(
+        crossbeam_channel::Receiver<ChannelMessage<dsl::TextSample>>,
+        ClosedFlag,
+    ),
+}
+
+/// Shared flag flipped by a producer's `close()`, so a fully-drained input
+/// still counts as "ready" for one more `work()` call. Producers keep their
+/// `crossbeam_channel::Sender` alive for the run's lifetime (see
+/// `close_outputs`), so the channel itself never reports disconnected —
+/// this flag is the only reliable end-of-stream signal available to a
+/// probe without stealing the real `EndOfStream` message from the
+/// consumer's own receiver.
+#[cfg(target_arch = "wasm32")]
+type ClosedFlag = std::sync::Arc<std::sync::atomic::AtomicBool>;
+
+#[cfg(target_arch = "wasm32")]
+fn probe_ready<T>(rx: &crossbeam_channel::Receiver<T>, closed: &ClosedFlag) -> bool {
+    !rx.is_empty() || closed.load(std::sync::atomic::Ordering::Acquire)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1043,25 +1076,25 @@ impl WasmInputProbe {
     fn is_ready(&self) -> bool {
         match self {
             Self::Disconnected => true,
-            Self::Sample(rx) => !rx.is_empty(),
-            Self::Spi(rx) => !rx.is_empty(),
-            Self::Parallel(rx) => !rx.is_empty(),
-            Self::Trigger(rx) => !rx.is_empty(),
-            Self::Number(rx) => !rx.is_empty(),
-            Self::Text(rx) => !rx.is_empty(),
+            Self::Sample(rx, closed) => probe_ready(rx, closed),
+            Self::Spi(rx, closed) => probe_ready(rx, closed),
+            Self::Parallel(rx, closed) => probe_ready(rx, closed),
+            Self::Trigger(rx, closed) => probe_ready(rx, closed),
+            Self::Number(rx, closed) => probe_ready(rx, closed),
+            Self::Text(rx, closed) => probe_ready(rx, closed),
         }
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn probe_from_receiver(receiver: &WasmReceiver) -> WasmInputProbe {
+fn probe_from_receiver(receiver: &WasmReceiver, closed: ClosedFlag) -> WasmInputProbe {
     match receiver {
-        WasmReceiver::Sample(rx) => WasmInputProbe::Sample(rx.clone()),
-        WasmReceiver::Spi(rx) => WasmInputProbe::Spi(rx.clone()),
-        WasmReceiver::Parallel(rx) => WasmInputProbe::Parallel(rx.clone()),
-        WasmReceiver::Trigger(rx) => WasmInputProbe::Trigger(rx.clone()),
-        WasmReceiver::Number(rx) => WasmInputProbe::Number(rx.clone()),
-        WasmReceiver::Text(rx) => WasmInputProbe::Text(rx.clone()),
+        WasmReceiver::Sample(rx) => WasmInputProbe::Sample(rx.clone(), closed),
+        WasmReceiver::Spi(rx) => WasmInputProbe::Spi(rx.clone(), closed),
+        WasmReceiver::Parallel(rx) => WasmInputProbe::Parallel(rx.clone(), closed),
+        WasmReceiver::Trigger(rx) => WasmInputProbe::Trigger(rx.clone(), closed),
+        WasmReceiver::Number(rx) => WasmInputProbe::Number(rx.clone(), closed),
+        WasmReceiver::Text(rx) => WasmInputProbe::Text(rx.clone(), closed),
     }
 }
 
@@ -1119,6 +1152,7 @@ fn output_from_senders(
     watchdog: &dsl::runtime::Watchdog,
     node: &str,
     port: &str,
+    closed: ClosedFlag,
 ) -> Result<(dsl::OutputPort, Box<dyn Fn()>), String> {
     if type_id == TypeId::of::<dsl::Sample>() {
         let typed = senders
@@ -1132,7 +1166,10 @@ fn output_from_senders(
         let closer = sender.clone();
         return Ok((
             dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
-            Box::new(move || closer.close()),
+            Box::new(move || {
+                closer.close();
+                closed.store(true, std::sync::atomic::Ordering::Release);
+            }),
         ));
     }
     if type_id == TypeId::of::<SpiTransfer>() {
@@ -1147,7 +1184,10 @@ fn output_from_senders(
         let closer = sender.clone();
         return Ok((
             dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
-            Box::new(move || closer.close()),
+            Box::new(move || {
+                closer.close();
+                closed.store(true, std::sync::atomic::Ordering::Release);
+            }),
         ));
     }
     if type_id == TypeId::of::<ParallelWord>() {
@@ -1162,7 +1202,10 @@ fn output_from_senders(
         let closer = sender.clone();
         return Ok((
             dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
-            Box::new(move || closer.close()),
+            Box::new(move || {
+                closer.close();
+                closed.store(true, std::sync::atomic::Ordering::Release);
+            }),
         ));
     }
     if type_id == TypeId::of::<dsl::Trigger>() {
@@ -1177,7 +1220,10 @@ fn output_from_senders(
         let closer = sender.clone();
         return Ok((
             dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
-            Box::new(move || closer.close()),
+            Box::new(move || {
+                closer.close();
+                closed.store(true, std::sync::atomic::Ordering::Release);
+            }),
         ));
     }
     if type_id == TypeId::of::<dsl::NumberSample>() {
@@ -1192,7 +1238,10 @@ fn output_from_senders(
         let closer = sender.clone();
         return Ok((
             dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
-            Box::new(move || closer.close()),
+            Box::new(move || {
+                closer.close();
+                closed.store(true, std::sync::atomic::Ordering::Release);
+            }),
         ));
     }
     if type_id == TypeId::of::<dsl::TextSample>() {
@@ -1207,7 +1256,10 @@ fn output_from_senders(
         let closer = sender.clone();
         return Ok((
             dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
-            Box::new(move || closer.close()),
+            Box::new(move || {
+                closer.close();
+                closed.store(true, std::sync::atomic::Ordering::Release);
+            }),
         ));
     }
     Err(format!("unsupported output type for {node}.{port}"))
@@ -1242,6 +1294,11 @@ pub fn start_wasm(
     let compiled = lower(graph, registry)?;
     let mut receivers: HashMap<(NodeId, String), WasmReceiver> = HashMap::new();
     let mut senders: HashMap<(NodeId, String), Vec<WasmSender>> = HashMap::new();
+    // One flag per producer output port, flipped by that port's `close()`.
+    let mut closed_flags: HashMap<(NodeId, String), ClosedFlag> = HashMap::new();
+    // Same flag, keyed by each consumer input it feeds (looked up when
+    // building that node's probes).
+    let mut receiver_closed_flags: HashMap<(NodeId, String), ClosedFlag> = HashMap::new();
 
     for edge in &compiled.edges {
         if edge.kind == PortKind::Block {
@@ -1255,6 +1312,11 @@ pub fn start_wasm(
             .entry((edge.from.0, edge.from.1.clone()))
             .or_default()
             .push(sender);
+        let closed = closed_flags
+            .entry((edge.from.0, edge.from.1.clone()))
+            .or_insert_with(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)))
+            .clone();
+        receiver_closed_flags.insert((edge.to.0, edge.to.1.clone()), closed);
         if receivers
             .insert((edge.to.0, edge.to.1.clone()), receiver)
             .is_some()
@@ -1292,7 +1354,12 @@ pub fn start_wasm(
             .map(
                 |schema| match receivers.remove(&(id, schema.name.clone())) {
                     Some(receiver) => {
-                        input_probes.push(probe_from_receiver(&receiver));
+                        let closed = receiver_closed_flags
+                            .remove(&(id, schema.name.clone()))
+                            .unwrap_or_else(|| {
+                                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
+                            });
+                        input_probes.push(probe_from_receiver(&receiver, closed));
                         input_from_receiver(
                             receiver,
                             &watchdog,
@@ -1314,12 +1381,16 @@ pub fn start_wasm(
             let outbound = senders
                 .remove(&(id, schema.name.clone()))
                 .unwrap_or_default();
+            let closed = closed_flags
+                .remove(&(id, schema.name.clone()))
+                .unwrap_or_else(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
             let (output, close) = output_from_senders(
                 schema.type_id,
                 outbound,
                 &watchdog,
                 &compiled_node.runtime_name,
                 &schema.name,
+                closed,
             )
             .map_err(|message| vec![CompileError::on(id, message)])?;
             outputs.push(output);
