@@ -1,10 +1,7 @@
 use crate::channel::placeholder_channels;
 use crate::types::{CaptureInfo, IndexBuildProgress};
 use crate::viewer::LogicAnalyzerViewer;
-use dsl::{
-    CaptureDataSource, CaptureIndexProgress, CaptureMetadata, DslFileCaptureDataSource,
-    IndexSampler,
-};
+use dsl::{CaptureDataSource, CaptureIndex, CaptureIndexProgress, CaptureMetadata, IndexSampler};
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
@@ -22,8 +19,12 @@ pub(crate) enum WorkerResponse {
         path: PathBuf,
         progress: CaptureIndexProgress,
     },
+    /// The worker's own sampler, handed straight to the UI thread — no
+    /// second open needed, unlike a path-keyed re-open this doesn't need to
+    /// know how the source was constructed in the first place.
     IndexReady {
         path: PathBuf,
+        sampler: Box<dyn CaptureIndex + Send>,
     },
     Error {
         path: PathBuf,
@@ -85,33 +86,21 @@ impl LogicAnalyzerViewer {
                         );
                     }
                 }
-                WorkerResponse::IndexReady { path } => {
+                WorkerResponse::IndexReady { path, sampler } => {
                     if self.capture_path.as_deref() != Some(path.as_path()) {
                         continue;
                     }
                     self.index_progress = None;
-                    // The worker validated/built the index; opening it here is
-                    // cheap (header + directory read) and gives the UI thread
-                    // its own sampler for synchronous per-frame sampling.
-                    match DslFileCaptureDataSource::open(&path)
-                        .and_then(IndexSampler::open_data_source)
-                    {
-                        Ok(sampler) => {
-                            self.sampler = Some(Box::new(sampler));
-                            self.sampled_key = None;
-                            if self.fit_to_capture {
-                                self.fit_capture();
-                            }
-                            self.status = self
-                                .capture_info
-                                .as_ref()
-                                .map(capture_status)
-                                .unwrap_or_else(|| "Capture ready".to_string());
-                        }
-                        Err(err) => {
-                            self.status = format!("Could not open capture: {err}");
-                        }
+                    self.sampler = Some(sampler);
+                    self.sampled_key = None;
+                    if self.fit_to_capture {
+                        self.fit_capture();
                     }
+                    self.status = self
+                        .capture_info
+                        .as_ref()
+                        .map(capture_status)
+                        .unwrap_or_else(|| "Capture ready".to_string());
                 }
                 WorkerResponse::Error { path, message } => {
                     if self.capture_path.as_deref() == Some(path.as_path()) {
@@ -184,7 +173,10 @@ pub(crate) fn spawn_capture_worker(
             });
 
             let response = match result {
-                Ok(_) => WorkerResponse::IndexReady { path: identity },
+                Ok(sampler) => WorkerResponse::IndexReady {
+                    path: identity,
+                    sampler: Box::new(sampler),
+                },
                 Err(err) => WorkerResponse::Error {
                     path: identity,
                     message: format!("Could not open capture: {err}"),

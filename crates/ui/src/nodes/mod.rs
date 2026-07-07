@@ -28,6 +28,7 @@ mod i2c_decoder;
 mod logic_gate;
 mod spi_decoder;
 mod sr_flip_flop;
+#[cfg(not(target_arch = "wasm32"))]
 mod text_file_writer;
 mod tgck_recorder;
 mod uart_decoder;
@@ -38,7 +39,9 @@ mod word_matcher;
 pub use binary_decoder::{BinaryDecoder, BinaryDecoderState};
 pub use counter::{Counter, CounterState};
 pub use dslogic_u3pro16::DsLogicU3Pro16;
-pub use file_source::{DslFileSource, DslFileSourceState};
+pub use file_source::DslFileSource;
+#[cfg(not(target_arch = "wasm32"))]
+pub use file_source::DslFileSourceState;
 pub use file_writer::FileWriter;
 #[cfg(not(target_arch = "wasm32"))]
 pub use file_writer::FileWriterState;
@@ -374,7 +377,9 @@ pub fn populate_uart_demo(widget: &mut node_graph::NodeGraphWidget) {
 }
 
 /// Path of the first DSL File Source node with a non-empty file, for the
-/// logic-analyzer view.
+/// logic-analyzer view. Native-only: `DslFileSource` itself isn't
+/// registered on wasm (no filesystem), so no graph can ever have one there.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn dsl_file_source_path(graph: &node_graph::GraphState) -> Option<String> {
     graph
         .nodes

@@ -5,7 +5,7 @@ use crate::types::{
 };
 use dsl::{CaptureIndex, DerivedLanes};
 #[cfg(not(target_arch = "wasm32"))]
-use dsl::{CaptureDataSource, DslFileCaptureDataSource};
+use dsl::CaptureDataSource;
 use egui::{FontId, Pos2, Rect, Sense, Ui, vec2};
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
@@ -107,8 +107,15 @@ impl LogicAnalyzerViewer {
         self.derived = Some(lanes);
     }
 
+    /// `open` constructs the capture-specific [`CaptureDataSource`] for
+    /// `path` — the viewer only knows the generic trait, not which concrete
+    /// source (file format, live capture, …) produced it.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn set_capture_path(&mut self, path: impl AsRef<Path>) {
+    pub fn set_capture_path<S: CaptureDataSource>(
+        &mut self,
+        path: impl AsRef<Path>,
+        open: impl FnOnce(&Path) -> Result<S, String>,
+    ) {
         let path = path.as_ref();
         if path.as_os_str().is_empty() {
             return;
@@ -119,7 +126,7 @@ impl LogicAnalyzerViewer {
         }
 
         let path = path.to_path_buf();
-        let data_source = match DslFileCaptureDataSource::open(&path) {
+        let data_source = match open(&path) {
             Ok(data_source) => data_source,
             Err(err) => {
                 self.capture_path = Some(path.clone());
