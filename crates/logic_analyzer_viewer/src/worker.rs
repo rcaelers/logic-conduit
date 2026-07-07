@@ -97,7 +97,7 @@ impl LogicAnalyzerViewer {
                         .and_then(IndexSampler::open_data_source)
                     {
                         Ok(sampler) => {
-                            self.sampler = Some(sampler);
+                            self.sampler = Some(Box::new(sampler));
                             self.sampled_key = None;
                             if self.fit_to_capture {
                                 self.fit_capture();

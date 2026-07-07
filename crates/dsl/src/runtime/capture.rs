@@ -1,5 +1,5 @@
 use crate::Result;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -205,6 +205,29 @@ pub trait CaptureDataSource: Clone + Send + Sync + 'static {
     fn fingerprint(&self) -> CaptureFingerprint;
     fn index_path(&self) -> Option<PathBuf>;
     fn display_name(&self) -> String;
+}
+
+/// Windowed access to an already-opened capture's sample data.
+///
+/// The only implementation ([`IndexSampler`](super::waveform_index::IndexSampler))
+/// is native-only — it depends on a persistent on-disk index, which wasm has
+/// no filesystem to hold. This trait exists so consumers (the viewer) can
+/// hold `Box<dyn CaptureIndex>` on both targets: on wasm nothing ever
+/// constructs one, so the field simply stays `None` and every call site that
+/// already handles "no sampler yet" continues to work unchanged, without
+/// needing to know why.
+pub trait CaptureIndex {
+    fn display_name(&self) -> String;
+    fn index_path(&self) -> &Path;
+    fn header(&self) -> &CaptureMetadata;
+    fn capture_duration_us(&self) -> f64;
+    fn sampled_window(
+        &mut self,
+        channels: &[usize],
+        start_sample: u64,
+        end_sample: u64,
+        target_points: usize,
+    ) -> Result<CaptureSampledWindow>;
 }
 
 pub fn packed_bit(data: &[u8], bit_index: usize) -> bool {

@@ -43,20 +43,14 @@ pub use nodes::{
     LogicTriggerStage, RusbTransport, TriggerCondition, TriggerLogic, UsbTransport,
 };
 
-#[cfg(not(target_arch = "wasm32"))]
 pub use runtime::{
-    BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureIndexProgress,
-    CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,
-    CaptureWaveformSegment, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
-    DslWaveformSegment, IndexSampler, exact_window_sample_limit,
-};
-#[cfg(target_arch = "wasm32")]
-pub use runtime::{
-    BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureMetadata,
+    BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureIndex, CaptureMetadata,
     CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,
     CaptureWaveformSegment, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
     DslWaveformSegment,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use runtime::{CaptureIndexProgress, IndexSampler, exact_window_sample_limit};
 
 // Re-export streaming decoders
 pub use nodes::decoders::ParallelDecoder;
@@ -68,8 +62,8 @@ pub use nodes::logic::{
     WordSource,
 };
 pub use nodes::sinks::{
-    Annotation, BinaryFileWriter, DerivedLane, DerivedLaneData, DerivedLanes, TgckRecorder,
-    ViewerLaneKind, ViewerSink, WriteWidth,
+    Annotation, BinaryFileWriter, DerivedLane, DerivedLaneData, DerivedLanes, TextFileWriter,
+    TgckRecorder, ViewerLaneKind, ViewerSink, WriteWidth,
 };
 
 // Re-export streaming runtime components

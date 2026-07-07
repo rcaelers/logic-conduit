@@ -1,4 +1,4 @@
-use crate::compile;
+use crate::compiler;
 use crate::nodes;
 use logic_analyzer_viewer::LogicAnalyzerViewer;
 use node_graph::{NodeBadge, NodeGraphWidget, NodeId};
@@ -7,14 +7,13 @@ pub struct App {
     node_graph: NodeGraphWidget,
     logic_analyzer: LogicAnalyzerViewer,
     analyzer_split: f32,
-    builders: compile::BuilderRegistry,
-    run: Option<compile::AppRun>,
+    builders: compiler::BuilderRegistry,
+    run: Option<compiler::AppRun>,
     /// Last global compile/run message shown in the toolbar.
     run_message: Option<(String, bool /* is_error */)>,
     /// Nodes badged with compile errors; cleared on the next Run.
     error_badges: Vec<NodeId>,
     /// Last time the running pipeline was diffed against the edited graph.
-    #[cfg(not(target_arch = "wasm32"))]
     last_live_sync: f64,
 }
 
@@ -31,16 +30,15 @@ impl App {
             node_graph: widget,
             logic_analyzer: LogicAnalyzerViewer::demo(),
             analyzer_split: 0.42,
-            builders: compile::BuilderRegistry::standard(),
+            builders: compiler::BuilderRegistry::standard(),
             run: None,
             run_message: None,
             error_badges: Vec::new(),
-            #[cfg(not(target_arch = "wasm32"))]
             last_live_sync: 0.0,
         }
     }
 
-    fn report_compile_errors(&mut self, errors: &[compile::CompileError]) {
+    fn report_compile_errors(&mut self, errors: &[compiler::CompileError]) {
         for error in errors {
             if let Some(id) = error.node {
                 self.node_graph
@@ -71,11 +69,11 @@ impl App {
         self.run_message = None;
 
         // Fresh lane store per run: stale lanes vanish atomically (§5.5).
-        let mut ctx = compile::CompileCtx::default();
+        let mut ctx = compiler::CompileCtx::default();
         self.logic_analyzer
             .set_derived_lanes(ctx.derived_lanes.clone());
 
-        match compile::start_app_run(self.node_graph.graph(), &self.builders, &mut ctx) {
+        match compiler::start_app_run(self.node_graph.graph(), &self.builders, &mut ctx) {
             Ok(run) => {
                 self.run = Some(run);
             }
@@ -83,39 +81,25 @@ impl App {
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn step_wasm_run(&mut self, ctx: &egui::Context) {
-        let Some(run) = &mut self.run else {
-            return;
-        };
-        if run.is_finished() {
-            return;
-        }
-        match run.step(256) {
-            Ok(()) => {
-                for (id, items) in run.progress() {
-                    let status = (items > 0).then(|| format_count(items));
-                    self.node_graph.set_node_status(id, status);
-                }
-                ctx.request_repaint_after(std::time::Duration::from_millis(16));
-            }
-            Err(message) => {
-                self.run_message = Some((format!("run failed: {message}"), true));
-                run.stop();
-            }
-        }
-    }
-
-    /// While running, periodically diff the edited graph against the live
-    /// pipeline and apply what can be applied (§6.5): taps, branch
-    /// removals, hot prop changes, in-place restarts. Edits that need a
-    /// full restart leave the run untouched and say so.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn sync_live_edits(&mut self, ctx: &egui::Context) {
+    /// Drives the run forward and, periodically, diffs the edited graph
+    /// against it and applies what can be applied live (§6.5): taps, branch
+    /// removals, hot prop changes, in-place restarts. Edits that need a full
+    /// restart leave the run untouched and say so.
+    ///
+    /// `pump()` is called every frame — a no-op on the native threaded
+    /// manager (its nodes run themselves in the background), but on wasm's
+    /// cooperative manager it's what actually executes node `work()`, so it
+    /// can't be gated behind the same throttle as the `apply()` diff below.
+    fn sync_run(&mut self, ctx: &egui::Context) {
         const SYNC_INTERVAL_S: f64 = 0.5;
         let Some(run) = &mut self.run else {
             return;
         };
+        run.pump(256);
+        if !run.is_finished() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+
         let now = ctx.input(|input| input.time);
         if now - self.last_live_sync < SYNC_INTERVAL_S {
             return;
@@ -146,14 +130,14 @@ impl App {
                     false,
                 ));
             }
-            Err(compile::ApplyError::Compile(_)) => {
+            Err(compiler::ApplyError::Compile(_)) => {
                 // Mid-edit graphs are often momentarily invalid; keep the
                 // running pipeline and wait for the graph to become valid.
             }
-            Err(compile::ApplyError::NeedsFullRestart(reason)) => {
+            Err(compiler::ApplyError::NeedsFullRestart(reason)) => {
                 self.run_message = Some((format!("stop & rerun to apply: {reason}"), false));
             }
-            Err(compile::ApplyError::Apply(message)) => {
+            Err(compiler::ApplyError::Apply(message)) => {
                 self.run_message = Some((format!("live edit failed: {message}"), true));
             }
         }
@@ -172,45 +156,8 @@ impl App {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn show_toolbar(&mut self, ui: &mut egui::Ui) {
-        self.sync_live_edits(ui.ctx());
-        ui.horizontal(|ui| {
-            ui.add_space(6.0);
-            let running = self.run.as_ref().is_some_and(|run| !run.is_finished());
-            if running {
-                if ui.button("⏹ Stop").clicked() {
-                    if let Some(run) = &mut self.run {
-                        run.stop();
-                    }
-                }
-                ui.spinner();
-                ui.label("Live");
-                // Keep polling the background run without user input.
-                ui.ctx()
-                    .request_repaint_after(std::time::Duration::from_millis(250));
-            } else {
-                if ui.button("▶ Run").clicked() {
-                    self.start_run();
-                }
-                if self.run.is_some() {
-                    ui.label("Finished");
-                }
-            }
-            if let Some((message, is_error)) = &self.run_message {
-                let color = if *is_error {
-                    egui::Color32::from_rgb(230, 120, 120)
-                } else {
-                    egui::Color32::from_rgb(180, 180, 180)
-                };
-                ui.colored_label(color, message);
-            }
-        });
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn show_toolbar(&mut self, ui: &mut egui::Ui) {
-        self.step_wasm_run(ui.ctx());
+        self.sync_run(ui.ctx());
         ui.horizontal(|ui| {
             ui.add_space(6.0);
             let running = self.run.as_ref().is_some_and(|run| !run.is_finished());
@@ -221,7 +168,7 @@ impl App {
                     run.stop();
                 }
                 ui.spinner();
-                ui.label("Running");
+                ui.label("Live");
             } else {
                 if ui.button("▶ Run").clicked() {
                     self.start_run();

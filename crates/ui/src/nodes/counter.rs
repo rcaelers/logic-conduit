@@ -1,0 +1,52 @@
+//! `Counter` node (§4.6).
+
+use super::{COLOR_LOGIC, Number, Trigger};
+use egui::Color32;
+use node_graph::{InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CounterState {
+    pub start: IntValue,
+    pub step: IntValue,
+}
+
+pub struct Counter;
+impl NodeDef for Counter {
+    type State = CounterState;
+
+    fn name() -> &'static str {
+        "Counter"
+    }
+    fn category() -> &'static str {
+        "Logic"
+    }
+    fn color() -> Color32 {
+        COLOR_LOGIC
+    }
+
+    fn inputs() -> Vec<InputDef<Self::State>> {
+        vec![InputDef::new::<Trigger>("Trigger")]
+    }
+
+    fn outputs() -> Vec<OutputDef<Self::State>> {
+        vec![OutputDef::new::<Number>("Count")]
+    }
+
+    fn state() -> Self::State {
+        CounterState {
+            start: IntValue::plain(0),
+            step: IntValue::plain(1),
+        }
+    }
+
+    fn panel() -> Vec<PanelSection<Self::State>> {
+        vec![PanelSection::new(
+            "Options",
+            vec![
+                PropDef::control("start", "Start", |state| &mut state.start),
+                PropDef::control("step", "Step", |state| &mut state.step),
+            ],
+        )]
+    }
+}

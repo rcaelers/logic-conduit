@@ -6,8 +6,9 @@ use super::types::{
 };
 use crate::runtime::raw_block_cache::RawBlockCache;
 use crate::runtime::{
-    BlockCaptureSource, BlockData, CaptureDataSource, CaptureMetadata, CaptureSampledChannel,
-    CaptureSampledWindow, CaptureTransition, CaptureWaveformSegment, packed_bit,
+    BlockCaptureSource, BlockData, CaptureDataSource, CaptureIndex, CaptureMetadata,
+    CaptureSampledChannel, CaptureSampledWindow, CaptureTransition, CaptureWaveformSegment,
+    packed_bit,
 };
 use crate::{Error, Result};
 use std::path::Path;
@@ -648,4 +649,28 @@ fn bit_range_any(words: &[u64], first_bit: usize, last_bit: usize) -> bool {
         }
     }
     false
+}
+
+impl<R: BlockCaptureSource> CaptureIndex for IndexSampler<R> {
+    fn display_name(&self) -> String {
+        self.display_name()
+    }
+    fn index_path(&self) -> &Path {
+        self.index_path()
+    }
+    fn header(&self) -> &CaptureMetadata {
+        self.header()
+    }
+    fn capture_duration_us(&self) -> f64 {
+        self.capture_duration_us()
+    }
+    fn sampled_window(
+        &mut self,
+        channels: &[usize],
+        start_sample: u64,
+        end_sample: u64,
+        target_points: usize,
+    ) -> Result<CaptureSampledWindow> {
+        self.sampled_window(channels, start_sample, end_sample, target_points)
+    }
 }

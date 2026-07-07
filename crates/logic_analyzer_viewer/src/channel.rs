@@ -1,12 +1,10 @@
-#[cfg(not(target_arch = "wasm32"))]
 use crate::sampling::sample_to_us;
-use crate::types::{AnalyzerLayout, ChannelDragState, ChannelRenameState, Transition, WaveformSegment};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::types::WaveformSegmentKind;
+use crate::types::{
+    AnalyzerLayout, ChannelDragState, ChannelRenameState, Transition, WaveformSegment,
+    WaveformSegmentKind,
+};
 use crate::viewer::LogicAnalyzerViewer;
-use dsl::CaptureMetadata;
-#[cfg(not(target_arch = "wasm32"))]
-use dsl::{CaptureSampledWindow, CaptureWaveformSegment};
+use dsl::{CaptureMetadata, CaptureSampledWindow, CaptureWaveformSegment};
 use egui::{CursorIcon, PointerButton, Pos2, Rect, Response, Ui, vec2};
 
 #[derive(Debug, Clone)]
@@ -333,7 +331,6 @@ impl LogicAnalyzerViewer {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn channels_from_window(
     window: &CaptureSampledWindow,
     samplerate_hz: f64,

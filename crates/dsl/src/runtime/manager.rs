@@ -120,6 +120,11 @@ impl PipelineManager {
         self.nodes.keys().cloned().collect()
     }
 
+    /// No-op: threads drive themselves. Exists so callers that hold
+    /// [`super::AppManager`] can call `pump` unconditionally — it only does
+    /// real work on [`CooperativeManager`](super::CooperativeManager).
+    pub fn pump(&mut self, _budget: usize) {}
+
     pub fn contains(&self, name: &str) -> bool {
         self.nodes.contains_key(name)
     }

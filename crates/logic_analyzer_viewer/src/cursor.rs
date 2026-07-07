@@ -160,7 +160,7 @@ impl LogicAnalyzerViewer {
             return time_us;
         }
         let channel_row = ((pointer.y - wave_rect.top()) / row_height).floor() as usize;
-        let (_channel_index, needs_exact_query, nearest_visible) = {
+        let (channel_index, needs_exact_query, nearest_visible) = {
             let Some(channel) = self.channels.get(channel_row) else {
                 return time_us;
             };
@@ -172,16 +172,14 @@ impl LogicAnalyzerViewer {
         };
         // Band-rendered channels don't carry exact edge times on screen;
         // query the index around the pointer, as hover measurement does.
-        #[cfg(not(target_arch = "wasm32"))]
+        // `waveform` is only ever populated from an indexed capture window
+        // (see `channels_from_window`), so `needs_exact_query` is always
+        // false when there is no sampler (e.g. on wasm) and this always
+        // falls through to `nearest_visible`.
         let nearest = if needs_exact_query {
-            self.exact_transitions_around(wave_rect, _channel_index, time_us, 24.0)
+            self.exact_transitions_around(wave_rect, channel_index, time_us, 24.0)
                 .and_then(|window| nearest_transition_time(&window.transitions, time_us))
         } else {
-            nearest_visible
-        };
-        #[cfg(target_arch = "wasm32")]
-        let nearest = {
-            let _ = needs_exact_query;
             nearest_visible
         };
         let Some(nearest) = nearest else {

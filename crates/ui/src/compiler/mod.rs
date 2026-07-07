@@ -2,38 +2,42 @@
 //!
 //! Two stages: `lower()` turns the UI graph into a pure, diffable
 //! `CompiledGraph` IR (prune to sink-reachable nodes, follow reroutes,
-//! validate, negotiate per-edge stream kinds); `materialize()` builds the
-//! runtime `Pipeline` from the IR and returns a ready `Scheduler`.
+//! validate, negotiate per-edge stream kinds); `start_live()` materializes
+//! it into a running [`LiveRun`], the supervisor-driven live path (§6) used
+//! by both the app and its own tests — nothing builds an offline `Pipeline`
+//! from this IR anymore; that's what `examples/*.rs` do directly against
+//! `dsl::Pipeline` for headless/scripted captures.
 //!
 //! Kind negotiation (§5.4): each edge picks `offered ∩ accepted`, producer
 //! preference order winning. That is what maps one UI `Signal` socket onto
 //! the source's dual `d{i}`/`b{i}` ports and one `Words` socket onto
 //! `SpiTransfer` vs `ParallelWord` consumers.
 
-use dsl::nodes::decoders::{BitOrder, Endianness, UartParity, UartStopBits};
-#[cfg(target_arch = "wasm32")]
-use dsl::runtime::ChannelMessage;
-use dsl::runtime::{ConfigValue, NodeConfig, ProcessNode};
-#[cfg(not(target_arch = "wasm32"))]
+use dsl::DerivedLanes;
 use dsl::runtime::{
-    DisconnectEvent, InputSub, OverflowPolicy, Pipeline, PipelineManager, Scheduler, StopHandle,
-};
-#[cfg(not(target_arch = "wasm32"))]
-use dsl::{BinaryFileWriter, WriteWidth};
-use dsl::{
-    CsPolarity, DerivedLanes, GateOp, LogicGate, MatchOp, ParallelWord, SpiDecoder, SpiMode,
-    SpiTransfer, SrLatch, StrobeMode, TextFormatter, TriggerCounter, ViewerLaneKind, ViewerSink,
-    WordField, WordMatcher,
+    AppManager, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy, ProcessNode,
 };
 use node_graph::{GraphState, Node, NodeId, NodeKind, Socket, SocketId};
 use serde_json::Value;
-#[cfg(target_arch = "wasm32")]
-use std::any::TypeId;
-#[cfg(not(target_arch = "wasm32"))]
-use std::collections::BTreeSet;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::nodes;
+mod binary_decoder;
+mod counter;
+#[cfg(not(target_arch = "wasm32"))]
+mod file_source;
+#[cfg(not(target_arch = "wasm32"))]
+mod file_writer;
+mod formatter;
+mod logic_gate;
+mod spi_decoder;
+mod sr_flip_flop;
+#[cfg(not(target_arch = "wasm32"))]
+mod text_file_writer;
+mod tgck_recorder;
+mod uart_decoder;
+mod uart_demo_source;
+mod viewer;
+mod word_matcher;
 
 // ── Stream kinds ─────────────────────────────────────────────────────────────
 
@@ -194,21 +198,58 @@ impl BuilderRegistry {
     pub fn standard() -> Self {
         let mut builders: HashMap<String, Box<dyn RuntimeBuilder>> = HashMap::new();
         #[cfg(not(target_arch = "wasm32"))]
-        builders.insert("DSL File Source".into(), Box::new(FileSourceBuilder));
-        builders.insert("UART Demo Source".into(), Box::new(UartDemoSourceBuilder));
-        builders.insert("SPI Decoder".into(), Box::new(SpiDecoderBuilder));
-        builders.insert("UART Decoder".into(), Box::new(UartDecoderBuilder));
-        builders.insert("Binary Decoder".into(), Box::new(BinaryDecoderBuilder));
-        builders.insert("Word Matcher".into(), Box::new(WordMatcherBuilder));
-        builders.insert("SR Flip-Flop".into(), Box::new(SrFlipFlopBuilder));
-        builders.insert("Logic Gate".into(), Box::new(LogicGateBuilder));
-        builders.insert("Counter".into(), Box::new(CounterBuilder));
-        builders.insert("String Formatter".into(), Box::new(FormatterBuilder));
+        builders.insert(
+            "DSL File Source".into(),
+            Box::new(file_source::FileSourceBuilder),
+        );
+        builders.insert(
+            "UART Demo Source".into(),
+            Box::new(uart_demo_source::UartDemoSourceBuilder),
+        );
+        builders.insert(
+            "SPI Decoder".into(),
+            Box::new(spi_decoder::SpiDecoderBuilder),
+        );
+        builders.insert(
+            "UART Decoder".into(),
+            Box::new(uart_decoder::UartDecoderBuilder),
+        );
+        builders.insert(
+            "Binary Decoder".into(),
+            Box::new(binary_decoder::BinaryDecoderBuilder),
+        );
+        builders.insert(
+            "Word Matcher".into(),
+            Box::new(word_matcher::WordMatcherBuilder),
+        );
+        builders.insert(
+            "SR Flip-Flop".into(),
+            Box::new(sr_flip_flop::SrFlipFlopBuilder),
+        );
+        builders.insert(
+            "Logic Gate".into(),
+            Box::new(logic_gate::LogicGateBuilder),
+        );
+        builders.insert("Counter".into(), Box::new(counter::CounterBuilder));
+        builders.insert(
+            "String Formatter".into(),
+            Box::new(formatter::FormatterBuilder),
+        );
         #[cfg(not(target_arch = "wasm32"))]
-        builders.insert("File Writer".into(), Box::new(FileWriterBuilder));
+        builders.insert(
+            "File Writer".into(),
+            Box::new(file_writer::FileWriterBuilder),
+        );
         #[cfg(not(target_arch = "wasm32"))]
-        builders.insert("TGCK Recorder".into(), Box::new(TgckRecorderBuilder));
-        builders.insert("Viewer".into(), Box::new(ViewerBuilder));
+        builders.insert(
+            "Text File Writer".into(),
+            Box::new(text_file_writer::TextFileWriterBuilder),
+        );
+        builders.insert(
+            "TGCK Recorder".into(),
+            Box::new(tgck_recorder::TgckRecorderBuilder),
+        );
+        builders.insert("Viewer".into(), Box::new(viewer::ViewerBuilder));
         Self(builders)
     }
 
@@ -217,11 +258,11 @@ impl BuilderRegistry {
     }
 }
 
-fn parse_state<T: serde::de::DeserializeOwned>(state: &Value) -> Result<T, String> {
+pub(super) fn parse_state<T: serde::de::DeserializeOwned>(state: &Value) -> Result<T, String> {
     serde_json::from_value(state.clone()).map_err(|e| format!("invalid node state: {e}"))
 }
 
-fn parse_hex(text: &str) -> Result<u64, String> {
+pub(super) fn parse_hex(text: &str) -> Result<u64, String> {
     let trimmed = text.trim();
     let digits = trimmed
         .strip_prefix("0x")
@@ -540,54 +581,6 @@ fn has_cycle(nodes: &[NodeId], edges: &[CompiledEdge]) -> bool {
     visited != nodes.len()
 }
 
-// ── Stage 2: materialize (offline `Pipeline` path) ───────────────────────────
-
-/// Builds the classic thread-per-node `Pipeline` from the IR. The UI uses
-/// the live path ([`start_live`]); this stays as the §5.2 offline
-/// materializer for headless/scripted use.
-#[allow(dead_code)]
-#[cfg(not(target_arch = "wasm32"))]
-pub fn materialize(
-    compiled: &CompiledGraph,
-    registry: &BuilderRegistry,
-    ctx: &mut CompileCtx,
-) -> Result<Scheduler, CompileError> {
-    let mut pipeline = Pipeline::new();
-    let mut names: HashMap<NodeId, &str> = HashMap::new();
-
-    for node in &compiled.nodes {
-        let builder = registry.get(&node.builder).ok_or_else(|| {
-            CompileError::on(node.id, format!("unknown builder '{}'", node.builder))
-        })?;
-        let process = builder
-            .build(&node.runtime_name, &node.state, &node.resolved, ctx)
-            .map_err(|message| CompileError::on(node.id, message))?;
-        pipeline
-            .add_process(node.runtime_name.clone(), process)
-            .map_err(|message| CompileError::on(node.id, message))?;
-        names.insert(node.id, &node.runtime_name);
-    }
-
-    for edge in &compiled.edges {
-        pipeline
-            .connect_with_buffer(
-                names[&edge.from.0],
-                &edge.from.1,
-                names[&edge.to.0],
-                &edge.to.1,
-                edge.buffer,
-            )
-            .map_err(|e| CompileError::on(edge.to.0, e.to_string()))?;
-    }
-
-    pipeline.build().map_err(CompileError::global)
-}
-
-// Silence the unused-import lint for the offline-only types above.
-#[allow(dead_code)]
-#[cfg(not(target_arch = "wasm32"))]
-fn _offline_types(_: &Scheduler, _: &StopHandle) {}
-
 // ── Live pipeline (§6) ───────────────────────────────────────────────────────
 
 /// Producers-before-consumers order; `lower` already rejected cycles.
@@ -627,7 +620,6 @@ fn compiled_node<'a>(compiled: &'a CompiledGraph, id: NodeId) -> &'a CompiledNod
 }
 
 /// Input subscriptions for `id`, matched to the built node's input schema.
-#[cfg(not(target_arch = "wasm32"))]
 fn input_subs(
     compiled: &CompiledGraph,
     id: NodeId,
@@ -662,7 +654,6 @@ fn input_subs(
 
 /// One live edit, in application order (removals reverse-topological,
 /// additions topological, then hot configs and in-place restarts).
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 enum LiveEdit {
     Remove(NodeId),
@@ -671,7 +662,6 @@ enum LiveEdit {
     Restart(NodeId),
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ApplySummary {
     pub added: usize,
@@ -680,14 +670,12 @@ pub struct ApplySummary {
     pub restarted: usize,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl ApplySummary {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 #[allow(dead_code)] // payloads carried for logs/tests
 pub enum ApplyError {
@@ -701,7 +689,6 @@ pub enum ApplyError {
 }
 
 /// Wiring signature of a node's inputs, for diffing.
-#[cfg(not(target_arch = "wasm32"))]
 fn wiring_of(compiled: &CompiledGraph, id: NodeId) -> BTreeSet<(String, u32, String, usize)> {
     compiled
         .edges
@@ -720,7 +707,6 @@ fn wiring_of(compiled: &CompiledGraph, id: NodeId) -> BTreeSet<(String, u32, Str
 
 /// Classifies the difference between the running IR and the edited one
 /// (§6.2). Returns the edit list, or the reason a full restart is needed.
-#[cfg(not(target_arch = "wasm32"))]
 fn diff(
     old: &CompiledGraph,
     new: &CompiledGraph,
@@ -819,9 +805,8 @@ fn diff(
 }
 
 /// A pipeline running under the live supervisor: editable while it runs.
-#[cfg(not(target_arch = "wasm32"))]
 pub struct LiveRun {
-    manager: PipelineManager,
+    manager: AppManager,
     compiled: CompiledGraph,
     /// Supervisor key per UI node — assigned at add time and stable across
     /// title renames and in-place restarts.
@@ -829,15 +814,15 @@ pub struct LiveRun {
     lanes: DerivedLanes,
 }
 
-/// Lowers and materializes `graph` under a `PipelineManager`.
-#[cfg(not(target_arch = "wasm32"))]
+/// Lowers and materializes `graph` under an [`AppManager`] — real OS threads
+/// natively, a cooperative single-thread runner on wasm.
 pub fn start_live(
     graph: &GraphState,
     registry: &BuilderRegistry,
     ctx: &mut CompileCtx,
 ) -> Result<LiveRun, Vec<CompileError>> {
     let compiled = lower(graph, registry)?;
-    let mut manager = PipelineManager::new();
+    let mut manager = AppManager::new();
     let mut names: HashMap<NodeId, String> = HashMap::new();
 
     for id in topo_order(&compiled) {
@@ -876,7 +861,6 @@ pub fn start_live(
     })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl LiveRun {
     /// Diffs the edited graph against what is running and applies the
     /// difference live. On any error the running pipeline is untouched
@@ -970,6 +954,14 @@ impl LiveRun {
         self.manager.stop_all();
     }
 
+    /// Drives up to `budget` `work()` calls forward. A no-op on the
+    /// threaded native manager (its nodes run themselves); on wasm's
+    /// cooperative manager this is what actually advances the run, so the
+    /// UI frame loop must call it every frame regardless of target.
+    pub fn pump(&mut self, budget: usize) {
+        self.manager.pump(budget);
+    }
+
     /// Blocks until the run completes naturally (tests / headless).
     #[allow(dead_code)]
     pub fn wait(&mut self) {
@@ -1005,1233 +997,23 @@ impl LiveRun {
     }
 }
 
-// ── Browser pipeline ────────────────────────────────────────────────────────
-
-#[cfg(target_arch = "wasm32")]
-enum WasmSender {
-    Sample(crossbeam_channel::Sender<ChannelMessage<dsl::Sample>>),
-    Spi(crossbeam_channel::Sender<ChannelMessage<SpiTransfer>>),
-    Parallel(crossbeam_channel::Sender<ChannelMessage<ParallelWord>>),
-    Trigger(crossbeam_channel::Sender<ChannelMessage<dsl::Trigger>>),
-    Number(crossbeam_channel::Sender<ChannelMessage<dsl::NumberSample>>),
-    Text(crossbeam_channel::Sender<ChannelMessage<dsl::TextSample>>),
-}
-
-#[cfg(target_arch = "wasm32")]
-enum WasmReceiver {
-    Sample(crossbeam_channel::Receiver<ChannelMessage<dsl::Sample>>),
-    Spi(crossbeam_channel::Receiver<ChannelMessage<SpiTransfer>>),
-    Parallel(crossbeam_channel::Receiver<ChannelMessage<ParallelWord>>),
-    Trigger(crossbeam_channel::Receiver<ChannelMessage<dsl::Trigger>>),
-    Number(crossbeam_channel::Receiver<ChannelMessage<dsl::NumberSample>>),
-    Text(crossbeam_channel::Receiver<ChannelMessage<dsl::TextSample>>),
-}
-
-#[cfg(target_arch = "wasm32")]
-enum WasmInputProbe {
-    Disconnected,
-    Sample(
-        crossbeam_channel::Receiver<ChannelMessage<dsl::Sample>>,
-        ClosedFlag,
-    ),
-    Spi(
-        crossbeam_channel::Receiver<ChannelMessage<SpiTransfer>>,
-        ClosedFlag,
-    ),
-    Parallel(
-        crossbeam_channel::Receiver<ChannelMessage<ParallelWord>>,
-        ClosedFlag,
-    ),
-    Trigger(
-        crossbeam_channel::Receiver<ChannelMessage<dsl::Trigger>>,
-        ClosedFlag,
-    ),
-    Number(
-        crossbeam_channel::Receiver<ChannelMessage<dsl::NumberSample>>,
-        ClosedFlag,
-    ),
-    Text(
-        crossbeam_channel::Receiver<ChannelMessage<dsl::TextSample>>,
-        ClosedFlag,
-    ),
-}
-
-/// Shared flag flipped by a producer's `close()`, so a fully-drained input
-/// still counts as "ready" for one more `work()` call. Producers keep their
-/// `crossbeam_channel::Sender` alive for the run's lifetime (see
-/// `close_outputs`), so the channel itself never reports disconnected —
-/// this flag is the only reliable end-of-stream signal available to a
-/// probe without stealing the real `EndOfStream` message from the
-/// consumer's own receiver.
-#[cfg(target_arch = "wasm32")]
-type ClosedFlag = std::sync::Arc<std::sync::atomic::AtomicBool>;
-
-#[cfg(target_arch = "wasm32")]
-fn probe_ready<T>(rx: &crossbeam_channel::Receiver<T>, closed: &ClosedFlag) -> bool {
-    !rx.is_empty() || closed.load(std::sync::atomic::Ordering::Acquire)
-}
-
-#[cfg(target_arch = "wasm32")]
-impl WasmInputProbe {
-    fn is_ready(&self) -> bool {
-        match self {
-            Self::Disconnected => true,
-            Self::Sample(rx, closed) => probe_ready(rx, closed),
-            Self::Spi(rx, closed) => probe_ready(rx, closed),
-            Self::Parallel(rx, closed) => probe_ready(rx, closed),
-            Self::Trigger(rx, closed) => probe_ready(rx, closed),
-            Self::Number(rx, closed) => probe_ready(rx, closed),
-            Self::Text(rx, closed) => probe_ready(rx, closed),
-        }
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn probe_from_receiver(receiver: &WasmReceiver, closed: ClosedFlag) -> WasmInputProbe {
-    match receiver {
-        WasmReceiver::Sample(rx) => WasmInputProbe::Sample(rx.clone(), closed),
-        WasmReceiver::Spi(rx) => WasmInputProbe::Spi(rx.clone(), closed),
-        WasmReceiver::Parallel(rx) => WasmInputProbe::Parallel(rx.clone(), closed),
-        WasmReceiver::Trigger(rx) => WasmInputProbe::Trigger(rx.clone(), closed),
-        WasmReceiver::Number(rx) => WasmInputProbe::Number(rx.clone(), closed),
-        WasmReceiver::Text(rx) => WasmInputProbe::Text(rx.clone(), closed),
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn wasm_channel(kind: PortKind, buffer: usize) -> (WasmSender, WasmReceiver) {
-    match kind {
-        PortKind::SampleEdge | PortKind::Block => {
-            let (tx, rx) = crossbeam_channel::bounded(buffer.max(1));
-            (WasmSender::Sample(tx), WasmReceiver::Sample(rx))
-        }
-        PortKind::SpiWords => {
-            let (tx, rx) = crossbeam_channel::bounded(buffer.max(1));
-            (WasmSender::Spi(tx), WasmReceiver::Spi(rx))
-        }
-        PortKind::ParallelWords => {
-            let (tx, rx) = crossbeam_channel::bounded(buffer.max(1));
-            (WasmSender::Parallel(tx), WasmReceiver::Parallel(rx))
-        }
-        PortKind::Trigger => {
-            let (tx, rx) = crossbeam_channel::bounded(buffer.max(1));
-            (WasmSender::Trigger(tx), WasmReceiver::Trigger(rx))
-        }
-        PortKind::Number => {
-            let (tx, rx) = crossbeam_channel::bounded(buffer.max(1));
-            (WasmSender::Number(tx), WasmReceiver::Number(rx))
-        }
-        PortKind::Text => {
-            let (tx, rx) = crossbeam_channel::bounded(buffer.max(1));
-            (WasmSender::Text(tx), WasmReceiver::Text(rx))
-        }
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn input_from_receiver(
-    receiver: WasmReceiver,
-    watchdog: &dsl::runtime::Watchdog,
-    node: &str,
-    port: &str,
-) -> dsl::InputPort {
-    match receiver {
-        WasmReceiver::Sample(rx) => dsl::InputPort::new_with_watchdog(rx, watchdog, node, port),
-        WasmReceiver::Spi(rx) => dsl::InputPort::new_with_watchdog(rx, watchdog, node, port),
-        WasmReceiver::Parallel(rx) => dsl::InputPort::new_with_watchdog(rx, watchdog, node, port),
-        WasmReceiver::Trigger(rx) => dsl::InputPort::new_with_watchdog(rx, watchdog, node, port),
-        WasmReceiver::Number(rx) => dsl::InputPort::new_with_watchdog(rx, watchdog, node, port),
-        WasmReceiver::Text(rx) => dsl::InputPort::new_with_watchdog(rx, watchdog, node, port),
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn output_from_senders(
-    type_id: TypeId,
-    senders: Vec<WasmSender>,
-    watchdog: &dsl::runtime::Watchdog,
-    node: &str,
-    port: &str,
-    closed: ClosedFlag,
-) -> Result<(dsl::OutputPort, Box<dyn Fn()>), String> {
-    if type_id == TypeId::of::<dsl::Sample>() {
-        let typed = senders
-            .into_iter()
-            .map(|sender| match sender {
-                WasmSender::Sample(sender) => Ok(sender),
-                _ => Err(format!("type mismatch for output {node}.{port}")),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let sender = dsl::runtime::Sender::new(typed);
-        let closer = sender.clone();
-        return Ok((
-            dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
-            Box::new(move || {
-                closer.close();
-                closed.store(true, std::sync::atomic::Ordering::Release);
-            }),
-        ));
-    }
-    if type_id == TypeId::of::<SpiTransfer>() {
-        let typed = senders
-            .into_iter()
-            .map(|sender| match sender {
-                WasmSender::Spi(sender) => Ok(sender),
-                _ => Err(format!("type mismatch for output {node}.{port}")),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let sender = dsl::runtime::Sender::new(typed);
-        let closer = sender.clone();
-        return Ok((
-            dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
-            Box::new(move || {
-                closer.close();
-                closed.store(true, std::sync::atomic::Ordering::Release);
-            }),
-        ));
-    }
-    if type_id == TypeId::of::<ParallelWord>() {
-        let typed = senders
-            .into_iter()
-            .map(|sender| match sender {
-                WasmSender::Parallel(sender) => Ok(sender),
-                _ => Err(format!("type mismatch for output {node}.{port}")),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let sender = dsl::runtime::Sender::new(typed);
-        let closer = sender.clone();
-        return Ok((
-            dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
-            Box::new(move || {
-                closer.close();
-                closed.store(true, std::sync::atomic::Ordering::Release);
-            }),
-        ));
-    }
-    if type_id == TypeId::of::<dsl::Trigger>() {
-        let typed = senders
-            .into_iter()
-            .map(|sender| match sender {
-                WasmSender::Trigger(sender) => Ok(sender),
-                _ => Err(format!("type mismatch for output {node}.{port}")),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let sender = dsl::runtime::Sender::new(typed);
-        let closer = sender.clone();
-        return Ok((
-            dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
-            Box::new(move || {
-                closer.close();
-                closed.store(true, std::sync::atomic::Ordering::Release);
-            }),
-        ));
-    }
-    if type_id == TypeId::of::<dsl::NumberSample>() {
-        let typed = senders
-            .into_iter()
-            .map(|sender| match sender {
-                WasmSender::Number(sender) => Ok(sender),
-                _ => Err(format!("type mismatch for output {node}.{port}")),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let sender = dsl::runtime::Sender::new(typed);
-        let closer = sender.clone();
-        return Ok((
-            dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
-            Box::new(move || {
-                closer.close();
-                closed.store(true, std::sync::atomic::Ordering::Release);
-            }),
-        ));
-    }
-    if type_id == TypeId::of::<dsl::TextSample>() {
-        let typed = senders
-            .into_iter()
-            .map(|sender| match sender {
-                WasmSender::Text(sender) => Ok(sender),
-                _ => Err(format!("type mismatch for output {node}.{port}")),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let sender = dsl::runtime::Sender::new(typed);
-        let closer = sender.clone();
-        return Ok((
-            dsl::OutputPort::new_with_watchdog(sender, watchdog, node, port),
-            Box::new(move || {
-                closer.close();
-                closed.store(true, std::sync::atomic::Ordering::Release);
-            }),
-        ));
-    }
-    Err(format!("unsupported output type for {node}.{port}"))
-}
-
-#[cfg(target_arch = "wasm32")]
-struct WasmNode {
-    id: NodeId,
-    node: Box<dyn ProcessNode>,
-    input_probes: Vec<WasmInputProbe>,
-    inputs: Vec<dsl::InputPort>,
-    outputs: Vec<dsl::OutputPort>,
-    close_outputs: Vec<Box<dyn Fn()>>,
-    done: bool,
-    items: u64,
-}
-
-/// Browser runner for finite, WASM-safe process graphs. It uses the same
-/// lowered IR and node builders as native, but steps nodes cooperatively
-/// from the UI frame loop instead of spawning worker threads.
-#[cfg(target_arch = "wasm32")]
-pub struct WasmRun {
-    nodes: Vec<WasmNode>,
-}
-
-#[cfg(target_arch = "wasm32")]
-pub fn start_wasm(
-    graph: &GraphState,
-    registry: &BuilderRegistry,
-    ctx: &mut CompileCtx,
-) -> Result<WasmRun, Vec<CompileError>> {
-    let compiled = lower(graph, registry)?;
-    let mut receivers: HashMap<(NodeId, String), WasmReceiver> = HashMap::new();
-    let mut senders: HashMap<(NodeId, String), Vec<WasmSender>> = HashMap::new();
-    // One flag per producer output port, flipped by that port's `close()`.
-    let mut closed_flags: HashMap<(NodeId, String), ClosedFlag> = HashMap::new();
-    // Same flag, keyed by each consumer input it feeds (looked up when
-    // building that node's probes).
-    let mut receiver_closed_flags: HashMap<(NodeId, String), ClosedFlag> = HashMap::new();
-
-    for edge in &compiled.edges {
-        if edge.kind == PortKind::Block {
-            return Err(vec![CompileError::on(
-                edge.to.0,
-                "block streams are native-only in the browser runner",
-            )]);
-        }
-        let (sender, receiver) = wasm_channel(edge.kind, edge.buffer);
-        senders
-            .entry((edge.from.0, edge.from.1.clone()))
-            .or_default()
-            .push(sender);
-        let closed = closed_flags
-            .entry((edge.from.0, edge.from.1.clone()))
-            .or_insert_with(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)))
-            .clone();
-        receiver_closed_flags.insert((edge.to.0, edge.to.1.clone()), closed);
-        if receivers
-            .insert((edge.to.0, edge.to.1.clone()), receiver)
-            .is_some()
-        {
-            return Err(vec![CompileError::on(
-                edge.to.0,
-                format!("duplicate input port '{}'", edge.to.1),
-            )]);
-        }
-    }
-
-    let watchdog = dsl::runtime::Watchdog::new();
-    let mut nodes = Vec::new();
-    for id in topo_order(&compiled) {
-        let compiled_node = compiled_node(&compiled, id);
-        let builder = registry.get(&compiled_node.builder).ok_or_else(|| {
-            vec![CompileError::on(
-                id,
-                format!("unknown builder '{}'", compiled_node.builder),
-            )]
-        })?;
-        let process = builder
-            .build(
-                &compiled_node.runtime_name,
-                &compiled_node.state,
-                &compiled_node.resolved,
-                ctx,
-            )
-            .map_err(|message| vec![CompileError::on(id, message)])?;
-
-        let mut input_probes = Vec::new();
-        let inputs = process
-            .input_schema()
-            .iter()
-            .map(
-                |schema| match receivers.remove(&(id, schema.name.clone())) {
-                    Some(receiver) => {
-                        let closed = receiver_closed_flags
-                            .remove(&(id, schema.name.clone()))
-                            .unwrap_or_else(|| {
-                                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
-                            });
-                        input_probes.push(probe_from_receiver(&receiver, closed));
-                        input_from_receiver(
-                            receiver,
-                            &watchdog,
-                            &compiled_node.runtime_name,
-                            &schema.name,
-                        )
-                    }
-                    None => {
-                        input_probes.push(WasmInputProbe::Disconnected);
-                        dsl::InputPort::disconnected()
-                    }
-                },
-            )
-            .collect();
-
-        let mut outputs = Vec::new();
-        let mut close_outputs = Vec::new();
-        for schema in process.output_schema() {
-            let outbound = senders
-                .remove(&(id, schema.name.clone()))
-                .unwrap_or_default();
-            let closed = closed_flags
-                .remove(&(id, schema.name.clone()))
-                .unwrap_or_else(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
-            let (output, close) = output_from_senders(
-                schema.type_id,
-                outbound,
-                &watchdog,
-                &compiled_node.runtime_name,
-                &schema.name,
-                closed,
-            )
-            .map_err(|message| vec![CompileError::on(id, message)])?;
-            outputs.push(output);
-            close_outputs.push(close);
-        }
-
-        nodes.push(WasmNode {
-            id,
-            node: process,
-            input_probes,
-            inputs,
-            outputs,
-            close_outputs,
-            done: false,
-            items: 0,
-        });
-    }
-
-    Ok(WasmRun { nodes })
-}
-
-#[cfg(target_arch = "wasm32")]
-impl WasmRun {
-    pub fn step(&mut self, budget: usize) -> Result<(), String> {
-        let mut calls = 0usize;
-        while calls < budget && !self.is_finished() {
-            let mut made_progress = false;
-            for node in &mut self.nodes {
-                if node.done {
-                    continue;
-                }
-                if !node.input_probes.iter().all(WasmInputProbe::is_ready) {
-                    continue;
-                }
-                calls += 1;
-                match node.node.work(&node.inputs, &node.outputs) {
-                    Ok(items) => {
-                        if items > 0 {
-                            node.items += items as u64;
-                            made_progress = true;
-                        }
-                        if node.node.should_stop() {
-                            node.done = true;
-                            for close in &node.close_outputs {
-                                close();
-                            }
-                        }
-                    }
-                    Err(dsl::WorkError::Shutdown) => {
-                        node.done = true;
-                        for close in &node.close_outputs {
-                            close();
-                        }
-                    }
-                    Err(error) => return Err(format!("{}: {error}", node.node.name())),
-                }
-                if calls >= budget {
-                    break;
-                }
-            }
-            if !made_progress {
-                break;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn is_finished(&self) -> bool {
-        self.nodes.iter().all(|node| node.done)
-    }
-
-    pub fn stop(&mut self) {
-        for node in &mut self.nodes {
-            if !node.done {
-                node.done = true;
-                for close in &node.close_outputs {
-                    close();
-                }
-            }
-        }
-    }
-
-    pub fn progress(&self) -> Vec<(NodeId, u64)> {
-        self.nodes
-            .iter()
-            .map(|node| (node.id, node.items))
-            .collect()
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub type AppRun = LiveRun;
-
-#[cfg(target_arch = "wasm32")]
-pub type AppRun = WasmRun;
 
 pub fn start_app_run(
     graph: &GraphState,
     registry: &BuilderRegistry,
     ctx: &mut CompileCtx,
 ) -> Result<AppRun, Vec<CompileError>> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        start_live(graph, registry, ctx)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        start_wasm(graph, registry, ctx)
-    }
-}
-
-// ── Builders ─────────────────────────────────────────────────────────────────
-
-#[cfg(not(target_arch = "wasm32"))]
-struct FileSourceBuilder;
-
-#[cfg(not(target_arch = "wasm32"))]
-impl RuntimeBuilder for FileSourceBuilder {
-    fn is_source(&self) -> bool {
-        true
-    }
-    fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![]
-    }
-    fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::SampleEdge, PortKind::Block]
-    }
-    fn input_port(&self, _: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
-        None
-    }
-    fn output_port(&self, socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
-        let channel = socket.def_index;
-        match kind {
-            PortKind::SampleEdge => Some(format!("d{channel}")),
-            PortKind::Block => Some(format!("b{channel}")),
-            _ => None,
-        }
-    }
-    fn input_required(&self, _: &Socket, _: &Value) -> bool {
-        false
-    }
-    fn build(
-        &self,
-        name: &str,
-        state: &Value,
-        _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
-    ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::DslFileSourceState = parse_state(state)?;
-        let channels = state.channels.value.clamp(1, 32) as u8;
-        let source = dsl::DslFileSource::new(&state.file.value, channels)
-            .map_err(|e| format!("cannot open '{}': {e}", state.file.value))?
-            .with_name(name);
-        Ok(Box::new(source))
-    }
-}
-
-struct UartDemoSourceBuilder;
-
-impl RuntimeBuilder for UartDemoSourceBuilder {
-    fn is_source(&self) -> bool {
-        true
-    }
-    fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![]
-    }
-    fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::SampleEdge]
-    }
-    fn input_port(&self, _: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
-        None
-    }
-    fn output_port(&self, _socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
-        (kind == PortKind::SampleEdge).then(|| "rx".into())
-    }
-    fn input_required(&self, _: &Socket, _: &Value) -> bool {
-        false
-    }
-    fn build(
-        &self,
-        name: &str,
-        state: &Value,
-        _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
-    ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::UartDemoSourceState = parse_state(state)?;
-        let source = dsl::UartDemoSource::new(
-            state.message.value.into_bytes(),
-            state.baud_rate.value.max(1) as u64,
-        )
-        .with_name(name);
-        Ok(Box::new(source))
-    }
-}
-
-struct SpiDecoderBuilder;
-
-impl SpiDecoderBuilder {
-    fn parsed(state: &Value) -> Result<nodes::SpiDecoderState, String> {
-        parse_state(state)
-    }
-    fn cs_polarity(state: &nodes::SpiDecoderState) -> CsPolarity {
-        match state.cs_polarity.selected() {
-            "Active high" => CsPolarity::ActiveHigh,
-            "Disabled" => CsPolarity::Disabled,
-            _ => CsPolarity::ActiveLow,
-        }
-    }
-}
-
-impl RuntimeBuilder for SpiDecoderBuilder {
-    fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::SampleEdge]
-    }
-    fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::SpiWords]
-    }
-    fn input_port(&self, socket: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
-        match socket.def_index {
-            0 => Some("clk".into()),
-            1 => Some("mosi".into()),
-            2 => Some("miso".into()),
-            3 => Some("cs".into()),
-            _ => None,
-        }
-    }
-    fn output_port(&self, _socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
-        // Both UI word outputs map to the single transfer stream; the
-        // MOSI/MISO split is the consumer's field selection (§4.2).
-        (kind == PortKind::SpiWords).then(|| "spi_transfers".into())
-    }
-    fn input_required(&self, socket: &Socket, state: &Value) -> bool {
-        let Ok(state) = Self::parsed(state) else {
-            return true;
-        };
-        match socket.def_index {
-            2 => state.has_miso.value,
-            3 => Self::cs_polarity(&state) != CsPolarity::Disabled,
-            _ => true,
-        }
-    }
-    fn build(
-        &self,
-        name: &str,
-        state: &Value,
-        _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
-    ) -> Result<Box<dyn ProcessNode>, String> {
-        let state = Self::parsed(state)?;
-        let mode = match (state.cpol.selected(), state.cpha.selected()) {
-            ("0", "0") => SpiMode::Mode0,
-            ("0", "1") => SpiMode::Mode1,
-            ("1", "0") => SpiMode::Mode2,
-            ("1", "1") => SpiMode::Mode3,
-            _ => return Err("invalid CPOL/CPHA".into()),
-        };
-        let bit_order = if state.bit_order.selected() == "LSB first" {
-            BitOrder::LsbFirst
-        } else {
-            BitOrder::MsbFirst
-        };
-        let decoder = SpiDecoder::with_cs_polarity(
-            mode,
-            state.word_size.value.clamp(1, 32) as usize,
-            true,
-            state.has_miso.value,
-            Self::cs_polarity(&state),
-        )
-        .with_bit_order(bit_order)
-        .with_name(name);
-        Ok(Box::new(decoder))
-    }
-}
-
-struct UartDecoderBuilder;
-
-impl RuntimeBuilder for UartDecoderBuilder {
-    fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::SampleEdge]
-    }
-    fn offered_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        match socket.def_index {
-            0 => vec![PortKind::ParallelWords],
-            1 => vec![PortKind::Trigger],
-            _ => vec![],
-        }
-    }
-    fn input_port(&self, socket: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
-        (socket.def_index == 0).then(|| "rx".into())
-    }
-    fn output_port(&self, socket: &Socket, _state: &Value, _kind: PortKind) -> Option<String> {
-        match socket.def_index {
-            0 => Some("words".into()),
-            1 => Some("error".into()),
-            _ => None,
-        }
-    }
-    fn input_required(&self, socket: &Socket, _state: &Value) -> bool {
-        socket.def_index == 0
-    }
-    fn build(
-        &self,
-        name: &str,
-        state: &Value,
-        _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
-    ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::UartDecoderState = parse_state(state)?;
-        let parity = match state.parity.selected() {
-            "Odd" => UartParity::Odd,
-            "Even" => UartParity::Even,
-            "Mark" => UartParity::Mark,
-            "Space" => UartParity::Space,
-            _ => UartParity::None,
-        };
-        let stop_bits = match state.stop_bits.selected() {
-            "0" => UartStopBits::S0,
-            "0.5" => UartStopBits::S0_5,
-            "1.5" => UartStopBits::S1_5,
-            "2" => UartStopBits::S2,
-            _ => UartStopBits::S1,
-        };
-        let bit_order = if state.bit_order.selected() == "MSB first" {
-            BitOrder::MsbFirst
-        } else {
-            BitOrder::LsbFirst
-        };
-        let decoder = dsl::nodes::decoders::UartDecoder::new(
-            state.baud_rate.value.max(1) as u64,
-            state.data_bits.value.clamp(5, 9) as usize,
-        )
-        .with_parity(parity, state.check_parity.value)
-        .with_stop_bits(stop_bits)
-        .with_bit_order(bit_order)
-        .with_invert(state.invert.value)
-        .with_name(name);
-        Ok(Box::new(decoder))
-    }
-}
-
-struct BinaryDecoderBuilder;
-
-impl BinaryDecoderBuilder {
-    fn parsed(state: &Value) -> Result<nodes::BinaryDecoderState, String> {
-        parse_state(state)
-    }
-    fn cs_polarity(state: &nodes::BinaryDecoderState) -> CsPolarity {
-        match state.cs_polarity.selected() {
-            "Active low" => CsPolarity::ActiveLow,
-            "Active high" => CsPolarity::ActiveHigh,
-            _ => CsPolarity::Disabled,
-        }
-    }
-}
-
-impl RuntimeBuilder for BinaryDecoderBuilder {
-    fn accepted_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        match socket.def_index {
-            3 => vec![PortKind::SampleEdge], // Enable is a level stream
-            _ => vec![PortKind::Block],      // Clock, D group, CS read blocks
-        }
-    }
-    fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::ParallelWords]
-    }
-    fn input_port(
-        &self,
-        socket: &Socket,
-        member_index: usize,
-        _state: &Value,
-        _kind: PortKind,
-    ) -> Option<String> {
-        match socket.def_index {
-            0 => Some("strobe".into()),
-            1 => Some(format!("d{member_index}")),
-            2 => Some("cs".into()),
-            3 => Some("enable_signal".into()),
-            _ => None,
-        }
-    }
-    fn output_port(&self, _socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
-        (kind == PortKind::ParallelWords).then(|| "words".into())
-    }
-    fn input_required(&self, socket: &Socket, state: &Value) -> bool {
-        match socket.def_index {
-            2 => Self::parsed(state)
-                .map(|s| Self::cs_polarity(&s) != CsPolarity::Disabled)
-                .unwrap_or(false),
-            3 => false, // unconnected Enable = always enabled
-            _ => true,
-        }
-    }
-    fn build(
-        &self,
-        name: &str,
-        state: &Value,
-        resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
-    ) -> Result<Box<dyn ProcessNode>, String> {
-        let state = Self::parsed(state)?;
-        let data_bits = resolved.member_count(1);
-        if data_bits == 0 {
-            return Err("no data channels connected".into());
-        }
-        let strobe_mode = match state.sample_on.selected() {
-            "Falling (SDR)" => StrobeMode::FallingEdge,
-            "Both (DDR)" => StrobeMode::AnyEdge,
-            "High level" => StrobeMode::HighLevel,
-            "Low level" => StrobeMode::LowLevel,
-            _ => StrobeMode::RisingEdge,
-        };
-        let mut decoder =
-            dsl::ParallelDecoder::new(data_bits, strobe_mode, Self::cs_polarity(&state))
-                .with_name(name);
-        let cycles = state.word_size.value.clamp(1, 8) as usize;
-        if cycles > 1 {
-            let endianness = if state.endianness.selected() == "Big" {
-                Endianness::Big
-            } else {
-                Endianness::Little
-            };
-            decoder = decoder.with_word_assembly(cycles, endianness);
-        }
-        Ok(Box::new(decoder))
-    }
-}
-
-struct WordMatcherBuilder;
-
-impl WordMatcherBuilder {
-    /// UI op glyph → runtime `MatchOp` and its config wire name.
-    fn match_op(selected: &str) -> (MatchOp, &'static str) {
-        match selected {
-            "≠" => (MatchOp::Ne, "ne"),
-            "<" => (MatchOp::Lt, "lt"),
-            "≤" => (MatchOp::Le, "le"),
-            ">" => (MatchOp::Gt, "gt"),
-            "≥" => (MatchOp::Ge, "ge"),
-            _ => (MatchOp::Eq, "eq"),
-        }
-    }
-}
-
-impl RuntimeBuilder for WordMatcherBuilder {
-    fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::SpiWords, PortKind::ParallelWords]
-    }
-    fn offered_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        match socket.def_index {
-            0 => vec![PortKind::Trigger],
-            1 => vec![PortKind::SampleEdge],
-            _ => vec![],
-        }
-    }
-    fn input_port(&self, socket: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
-        (socket.def_index == 0).then(|| "words".into())
-    }
-    fn output_port(&self, socket: &Socket, _state: &Value, _kind: PortKind) -> Option<String> {
-        match socket.def_index {
-            0 => Some("trigger".into()),
-            1 => Some("matched".into()),
-            _ => None,
-        }
-    }
-    fn build(
-        &self,
-        name: &str,
-        state: &Value,
-        resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
-    ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::WordMatcherState = parse_state(state)?;
-        let pattern = parse_hex(&state.pattern.value)?;
-        let mask = parse_hex(&state.mask.value)?;
-        let (op, _) = Self::match_op(state.op.selected());
-        let field = if state.field.selected() == "MISO" {
-            WordField::Miso
-        } else {
-            WordField::Mosi
-        };
-        // The words input kind picks the concrete consumer type (§5.4).
-        match resolved.kind(0) {
-            Some(PortKind::SpiWords) => Ok(Box::new(
-                WordMatcher::<SpiTransfer>::new(pattern, mask)
-                    .with_field(field)
-                    .with_op(op)
-                    .with_name(name),
-            )),
-            Some(PortKind::ParallelWords) => Ok(Box::new(
-                WordMatcher::<ParallelWord>::new(pattern, mask)
-                    .with_field(field)
-                    .with_op(op)
-                    .with_name(name),
-            )),
-            _ => Err("words input is not connected".into()),
-        }
-    }
-
-    fn hot_config(&self, state: &Value) -> Option<NodeConfig> {
-        let state: nodes::WordMatcherState = parse_state(state).ok()?;
-        let mut config = NodeConfig::new();
-        config.insert(
-            "pattern".into(),
-            ConfigValue::U64(parse_hex(&state.pattern.value).ok()?),
-        );
-        config.insert(
-            "mask".into(),
-            ConfigValue::U64(parse_hex(&state.mask.value).ok()?),
-        );
-        let (_, op_name) = Self::match_op(state.op.selected());
-        config.insert("op".into(), ConfigValue::Text(op_name.into()));
-        config.insert(
-            "field".into(),
-            ConfigValue::Text(if state.field.selected() == "MISO" {
-                "miso".into()
-            } else {
-                "mosi".into()
-            }),
-        );
-        // The pulse-output toggle only affects UI socket visibility.
-        Some(config)
-    }
-}
-
-struct SrFlipFlopBuilder;
-
-impl RuntimeBuilder for SrFlipFlopBuilder {
-    fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::Trigger]
-    }
-    fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::SampleEdge]
-    }
-    fn input_port(&self, socket: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
-        match socket.def_index {
-            0 => Some("set".into()),
-            1 => Some("reset".into()),
-            _ => None,
-        }
-    }
-    fn output_port(&self, _socket: &Socket, _state: &Value, _kind: PortKind) -> Option<String> {
-        Some("q".into())
-    }
-    fn build(
-        &self,
-        name: &str,
-        state: &Value,
-        _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
-    ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::SrFlipFlopState = parse_state(state)?;
-        Ok(Box::new(SrLatch::new(state.initial.value).with_name(name)))
-    }
-}
-
-struct LogicGateBuilder;
-
-impl RuntimeBuilder for LogicGateBuilder {
-    fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::SampleEdge]
-    }
-    fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::SampleEdge]
-    }
-    fn input_port(
-        &self,
-        _socket: &Socket,
-        member_index: usize,
-        _state: &Value,
-        _kind: PortKind,
-    ) -> Option<String> {
-        Some(format!("in{member_index}"))
-    }
-    fn output_port(&self, _socket: &Socket, _state: &Value, _kind: PortKind) -> Option<String> {
-        Some("out".into())
-    }
-    fn build(
-        &self,
-        name: &str,
-        state: &Value,
-        resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
-    ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::LogicGateState = parse_state(state)?;
-        let inputs = resolved.member_count(0);
-        if inputs == 0 {
-            return Err("no inputs connected".into());
-        }
-        let op = match state.op.selected() {
-            "NOT" => GateOp::Not,
-            "NAND" => GateOp::Nand,
-            "OR" => GateOp::Or,
-            "NOR" => GateOp::Nor,
-            "XOR" => GateOp::Xor,
-            "XNOR" => GateOp::Xnor,
-            _ => GateOp::And,
-        };
-        if op == GateOp::Not && inputs != 1 {
-            return Err("NOT takes exactly one input".into());
-        }
-        Ok(Box::new(LogicGate::new(op, inputs).with_name(name)))
-    }
-}
-
-struct CounterBuilder;
-
-impl RuntimeBuilder for CounterBuilder {
-    fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::Trigger]
-    }
-    fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::Number]
-    }
-    fn input_port(&self, _: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
-        Some("trigger".into())
-    }
-    fn output_port(&self, _socket: &Socket, _state: &Value, _kind: PortKind) -> Option<String> {
-        Some("count".into())
-    }
-    fn build(
-        &self,
-        name: &str,
-        state: &Value,
-        _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
-    ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::CounterState = parse_state(state)?;
-        Ok(Box::new(
-            TriggerCounter::new(state.start.value as i64, state.step.value as i64).with_name(name),
-        ))
-    }
-}
-
-struct FormatterBuilder;
-
-impl RuntimeBuilder for FormatterBuilder {
-    fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::Number]
-    }
-    fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::Text]
-    }
-    fn input_port(
-        &self,
-        _socket: &Socket,
-        member_index: usize,
-        _: &Value,
-        _: PortKind,
-    ) -> Option<String> {
-        // First value keeps the historic port name.
-        Some(if member_index == 0 {
-            "value".into()
-        } else {
-            format!("value{member_index}")
-        })
-    }
-    fn output_port(&self, _socket: &Socket, _state: &Value, _kind: PortKind) -> Option<String> {
-        Some("text".into())
-    }
-    fn build(
-        &self,
-        name: &str,
-        state: &Value,
-        resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
-    ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::StringFormatterState = parse_state(state)?;
-        let values = resolved.member_count(0).max(1);
-        Ok(Box::new(
-            TextFormatter::with_num_values(state.template.value.clone(), values).with_name(name),
-        ))
-    }
-
-    fn hot_config(&self, state: &Value) -> Option<NodeConfig> {
-        let state: nodes::StringFormatterState = parse_state(state).ok()?;
-        let mut config = NodeConfig::new();
-        config.insert(
-            "template".into(),
-            ConfigValue::Text(state.template.value.clone()),
-        );
-        Some(config)
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-struct FileWriterBuilder;
-
-#[cfg(not(target_arch = "wasm32"))]
-impl RuntimeBuilder for FileWriterBuilder {
-    fn is_sink(&self) -> bool {
-        true
-    }
-    fn accepted_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        match socket.def_index {
-            0 => vec![PortKind::ParallelWords],
-            1 => vec![PortKind::Text],
-            _ => vec![],
-        }
-    }
-    fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![]
-    }
-    fn input_port(&self, socket: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
-        match socket.def_index {
-            0 => Some("data".into()),
-            1 => Some("filename".into()),
-            _ => None,
-        }
-    }
-    fn output_port(&self, _: &Socket, _: &Value, _: PortKind) -> Option<String> {
-        None
-    }
-    fn build(
-        &self,
-        name: &str,
-        state: &Value,
-        _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
-    ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::FileWriterState = parse_state(state)?;
-        let width = match state.write_width.selected() {
-            "U16 LE" => WriteWidth::U16Le,
-            "U32 LE" => WriteWidth::U32Le,
-            _ => WriteWidth::U8,
-        };
-        Ok(Box::new(
-            BinaryFileWriter::new()
-                .with_width(width)
-                .with_index_csv(state.index_csv.value)
-                .with_name(name),
-        ))
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-struct TgckRecorderBuilder;
-
-#[cfg(not(target_arch = "wasm32"))]
-impl RuntimeBuilder for TgckRecorderBuilder {
-    fn is_sink(&self) -> bool {
-        true
-    }
-    fn accepted_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        match socket.def_index {
-            0 => vec![PortKind::ParallelWords],
-            1 => vec![PortKind::SampleEdge],
-            2 => vec![PortKind::Text],
-            _ => vec![],
-        }
-    }
-    fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![]
-    }
-    fn input_port(&self, socket: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
-        match socket.def_index {
-            0 => Some("words".into()),
-            1 => Some("tgck".into()),
-            2 => Some("filename".into()),
-            _ => None,
-        }
-    }
-    fn output_port(&self, _: &Socket, _: &Value, _: PortKind) -> Option<String> {
-        None
-    }
-    fn build(
-        &self,
-        name: &str,
-        _state: &Value,
-        _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
-    ) -> Result<Box<dyn ProcessNode>, String> {
-        Ok(Box::new(dsl::TgckRecorder::new().with_name(name)))
-    }
-}
-
-struct ViewerBuilder;
-
-impl RuntimeBuilder for ViewerBuilder {
-    fn is_sink(&self) -> bool {
-        true
-    }
-    fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![
-            PortKind::SampleEdge,
-            PortKind::SpiWords,
-            PortKind::ParallelWords,
-            PortKind::Trigger,
-        ]
-    }
-    fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![]
-    }
-    fn input_port(
-        &self,
-        _socket: &Socket,
-        member_index: usize,
-        _state: &Value,
-        _kind: PortKind,
-    ) -> Option<String> {
-        Some(format!("in{member_index}"))
-    }
-    fn output_port(&self, _: &Socket, _: &Value, _: PortKind) -> Option<String> {
-        None
-    }
-    fn input_required(&self, _: &Socket, _: &Value) -> bool {
-        // A lane-less viewer is pointless but harmless.
-        false
-    }
-    fn build(
-        &self,
-        name: &str,
-        state: &Value,
-        resolved: &ResolvedInputs,
-        ctx: &mut CompileCtx,
-    ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::ViewerState = parse_state(state)?;
-        let prefix = state.label.value.trim().to_owned();
-        let mut sink = ViewerSink::new(ctx.derived_lanes.clone()).with_name(name);
-        for (_, input) in resolved.members(0) {
-            let kind = match input.kind {
-                PortKind::SampleEdge => ViewerLaneKind::Signal,
-                PortKind::SpiWords => ViewerLaneKind::SpiWords,
-                PortKind::ParallelWords => ViewerLaneKind::ParallelWords,
-                PortKind::Trigger => ViewerLaneKind::Trigger,
-                other => return Err(format!("viewer cannot display {other:?}")),
-            };
-            let lane_name = if prefix.is_empty() {
-                input.source.clone()
-            } else {
-                format!("{prefix}: {}", input.source)
-            };
-            sink = sink.with_lane(kind, lane_name);
-        }
-        Ok(Box::new(sink))
-    }
+    start_live(graph, registry, ctx)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::nodes;
+    use dsl::runtime::{ConfigValue, Pipeline};
+    #[cfg(not(target_arch = "wasm32"))]
+    use dsl::BinaryFileWriter;
     use node_graph::NodeGraphWidget;
     use std::path::{Path, PathBuf};
 

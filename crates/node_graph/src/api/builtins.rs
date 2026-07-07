@@ -402,7 +402,13 @@ impl InlineControl for FileValue {
                         .hint_text(label)
                         .desired_width((rect.width() - button_width - 6.0).max(24.0)),
                 );
-                if ui.button("…").clicked() {
+                // No native file dialog in the browser; show the button
+                // disabled rather than a click that silently does nothing.
+                let can_browse = !cfg!(target_arch = "wasm32");
+                if ui
+                    .add_enabled(can_browse, egui::Button::new("…"))
+                    .clicked()
+                {
                     #[cfg(not(target_arch = "wasm32"))]
                     {
                         let mut dialog = rfd::FileDialog::new();

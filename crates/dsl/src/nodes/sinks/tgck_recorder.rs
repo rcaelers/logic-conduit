@@ -4,20 +4,26 @@
 //! `ControlledParallelWriter`: for every TGCK cycle it records where the
 //! line boundary fell in the captured byte stream — byte index and
 //! timestamp of the rising and falling edge, plus the first data word
-//! (ACDK strobe) after each. Windows are keyed on the `filename` level, so
-//! the recorder stays aligned with the `BinaryFileWriter` capturing the
-//! same stream: `output/capture_0001.bin` gets
-//! `output/capture_0001_tgck.csv`.
+//! (ACDK strobe) after each.
+//!
+//! This node does no file I/O itself — it correlates TGCK edges with the
+//! word stream and emits the result as two outputs: `filename` (a
+//! `_tgck.csv`-suffixed passthrough of its own `filename` input, so it
+//! stays keyed alongside whatever `BinaryFileWriter` is capturing the same
+//! stream) and `rows` (each CSV line as a `TextSample` event, header
+//! included). Connect both to a [`TextFileWriter`](super::text_file_writer::TextFileWriter)
+//! to actually persist them; that split keeps the edge-correlation logic
+//! here platform-agnostic (no filesystem needed to compute it) and reuses
+//! the same lazy-open-on-first-line file-rolling `TextFileWriter` already
+//! provides.
 
 use crate::nodes::decoders::ParallelWord;
 use crate::runtime::events::TextSample;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
-use crate::runtime::sample::Sample;
 use std::collections::VecDeque;
-use std::io::Write;
 use std::path::PathBuf;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 /// One complete TGCK cycle, positioned within the current capture window.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,9 +38,26 @@ pub struct TgckRecord {
     pub first_word_after_falling_timestamp: u64,
 }
 
+impl TgckRecord {
+    const CSV_HEADER: &'static str = "rising_byte_index,rising_timestamp,falling_byte_index,falling_timestamp,first_clock_rising_byte_index,first_clock_rising_timestamp,first_clock_falling_byte_index,first_clock_falling_timestamp";
+
+    fn csv_row(&self) -> String {
+        format!(
+            "{},{},{},{},{},{},{},{}",
+            self.rising_byte_index,
+            self.rising_timestamp,
+            self.falling_byte_index,
+            self.falling_timestamp,
+            self.first_word_after_rising_byte_index,
+            self.first_word_after_rising_timestamp,
+            self.first_word_after_falling_byte_index,
+            self.first_word_after_falling_timestamp,
+        )
+    }
+}
+
 #[derive(Default)]
 struct Window {
-    filename: String,
     words: usize,
     records: Vec<TgckRecord>,
     current_rising: Option<(usize, u64)>,
@@ -68,62 +91,42 @@ impl Window {
         self.need_after_falling = false;
     }
 
-    /// `output/capture_0001.bin` → `output/capture_0001_tgck.csv`.
-    fn csv_path(&self) -> PathBuf {
-        let path = PathBuf::from(&self.filename);
-        let stem = path
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "capture".to_string());
-        path.with_file_name(format!("{stem}_tgck.csv"))
-    }
-
-    fn write_csv(&self) -> std::io::Result<()> {
+    /// Header + one row per record, ready to send as `TextSample` lines.
+    /// `None` if the window never saw a complete cycle (matches the
+    /// original writer: name windows without TGCK activity produce no CSV).
+    fn csv_lines(&self) -> Option<Vec<String>> {
         if self.records.is_empty() {
-            return Ok(());
+            return None;
         }
-        let path = self.csv_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let file = std::fs::File::create(&path)?;
-        let mut writer = std::io::BufWriter::new(file);
-        writeln!(
-            writer,
-            "rising_byte_index,rising_timestamp,falling_byte_index,falling_timestamp,first_clock_rising_byte_index,first_clock_rising_timestamp,first_clock_falling_byte_index,first_clock_falling_timestamp"
-        )?;
-        for record in &self.records {
-            writeln!(
-                writer,
-                "{},{},{},{},{},{},{},{}",
-                record.rising_byte_index,
-                record.rising_timestamp,
-                record.falling_byte_index,
-                record.falling_timestamp,
-                record.first_word_after_rising_byte_index,
-                record.first_word_after_rising_timestamp,
-                record.first_word_after_falling_byte_index,
-                record.first_word_after_falling_timestamp,
-            )?;
-        }
-        writer.flush()?;
-        info!(
-            "Wrote TGCK CSV {} with {} records",
-            path.display(),
-            self.records.len()
-        );
-        Ok(())
+        let mut lines = Vec::with_capacity(self.records.len() + 1);
+        lines.push(TgckRecord::CSV_HEADER.to_string());
+        lines.extend(self.records.iter().map(TgckRecord::csv_row));
+        Some(lines)
     }
+}
+
+/// `output/capture_0001.bin` → `output/capture_0001_tgck.csv`.
+fn tgck_csv_path(filename: &str) -> String {
+    let path = PathBuf::from(filename);
+    let stem = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "capture".to_string());
+    path.with_file_name(format!("{stem}_tgck.csv"))
+        .display()
+        .to_string()
 }
 
 /// Sink correlating TGCK line-clock edges with the captured byte stream.
 ///
 /// Inputs: `words` — `ParallelWord` (the enable-gated data stream, same as
 /// the writer's); `tgck` — `Sample` edges; `filename` — `TextSample` level
-/// (never blocked on, §3.1). A window opens at the first word after a
-/// filename change and closes (writing its CSV) at the next change or at
-/// end-of-stream; TGCK edges outside an open window are ignored, matching
-/// the original writer.
+/// (never blocked on, §3.1). Outputs: `rows` — `TextSample` events, the CSV
+/// header and each finalized record; `filename` — `TextSample` level, the
+/// `_tgck.csv`-suffixed passthrough of the `filename` input. A window opens
+/// at the first word after a filename change and closes (emitting its rows,
+/// if any) at the next change or at end-of-stream; TGCK edges outside an
+/// open window are ignored, matching the original writer.
 pub struct TgckRecorder {
     name: String,
     window: Option<Window>,
@@ -132,8 +135,11 @@ pub struct TgckRecorder {
     last_tgck: bool,
     tgck_closed: bool,
     filename_closed: bool,
+    /// Timestamp of the last word processed; used to place the rows emitted
+    /// when end-of-stream force-closes the final window.
+    last_position: u64,
     words_buffer: VecDeque<ParallelWord>,
-    tgck_buffer: VecDeque<Sample>,
+    tgck_buffer: VecDeque<crate::runtime::sample::Sample>,
     name_buffer: VecDeque<TextSample>,
 }
 
@@ -147,6 +153,7 @@ impl TgckRecorder {
             last_tgck: false,
             tgck_closed: false,
             filename_closed: false,
+            last_position: 0,
             words_buffer: VecDeque::new(),
             tgck_buffer: VecDeque::new(),
             name_buffer: VecDeque::new(),
@@ -158,12 +165,23 @@ impl TgckRecorder {
         self
     }
 
-    fn close_window(&mut self) -> Result<(), WorkError> {
-        if let Some(mut window) = self.window.take() {
-            window.finalize_record();
-            window
-                .write_csv()
-                .map_err(|e| WorkError::NodeError(format!("TGCK CSV write failed: {e}")))?;
+    /// Closes the current window and, if it produced any records, sends its
+    /// CSV lines through `rows`.
+    fn close_window(&mut self, outputs: &[OutputPort], at: u64) -> WorkResult<()> {
+        let Some(mut window) = self.window.take() else {
+            return Ok(());
+        };
+        window.finalize_record();
+        let Some(lines) = window.csv_lines() else {
+            debug!("[{}] window closed with no TGCK cycles; no CSV", self.name);
+            return Ok(());
+        };
+        let rows = outputs
+            .first()
+            .and_then(|port| port.get::<TextSample>())
+            .ok_or_else(|| WorkError::NodeError("Missing rows output".to_string()))?;
+        for line in lines {
+            rows.send(TextSample::new(line, at))?;
         }
         Ok(())
     }
@@ -185,18 +203,25 @@ impl ProcessNode for TgckRecorder {
     }
 
     fn num_outputs(&self) -> usize {
-        0
+        2
     }
 
     fn input_schema(&self) -> Vec<PortSchema> {
         vec![
             PortSchema::new::<ParallelWord>("words", 0, PortDirection::Input),
-            PortSchema::new::<Sample>("tgck", 1, PortDirection::Input),
+            PortSchema::new::<crate::runtime::sample::Sample>("tgck", 1, PortDirection::Input),
             PortSchema::new::<TextSample>("filename", 2, PortDirection::Input),
         ]
     }
 
-    fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
+    fn output_schema(&self) -> Vec<PortSchema> {
+        vec![
+            PortSchema::new::<TextSample>("rows", 0, PortDirection::Output),
+            PortSchema::new::<TextSample>("filename", 1, PortDirection::Output),
+        ]
+    }
+
+    fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
         let word = {
             let mut words = inputs
                 .first()
@@ -205,16 +230,20 @@ impl ProcessNode for TgckRecorder {
             match words.recv() {
                 Ok(word) => word,
                 Err(WorkError::Shutdown) => {
-                    self.close_window()?;
+                    self.close_window(outputs, self.last_position)?;
                     return Err(WorkError::Shutdown);
                 }
                 Err(e) => return Err(e),
             }
         };
         let position = word.timing.position;
+        self.last_position = position;
 
         // Filename changes: never block (§3.1), apply those at or before
-        // this word — each one closes the current window.
+        // this word — each one closes the current window and, regardless of
+        // whether that window produced rows, passes the derived `_tgck.csv`
+        // name through immediately (the level-stream contract requires a
+        // downstream TextFileWriter always sees a name before any rows).
         if !self.filename_closed {
             let mut names = inputs
                 .get(2)
@@ -237,7 +266,13 @@ impl ProcessNode for TgckRecorder {
             }
             let sample = self.pending_names.pop_front().expect("peeked");
             debug!("[{}] filename -> '{}'", self.name, sample.value);
-            self.close_window()?;
+            self.close_window(outputs, sample.start_time)?;
+            let derived = tgck_csv_path(&sample.value);
+            let filename_out = outputs
+                .get(1)
+                .and_then(|port| port.get::<TextSample>())
+                .ok_or_else(|| WorkError::NodeError("Missing filename output".to_string()))?;
+            filename_out.send(TextSample::new(derived, sample.start_time))?;
             self.current_filename = Some(sample.value);
         }
 
@@ -247,7 +282,7 @@ impl ProcessNode for TgckRecorder {
         if !self.tgck_closed {
             let mut tgck = inputs
                 .get(1)
-                .and_then(|port| port.get::<Sample>(&mut self.tgck_buffer))
+                .and_then(|port| port.get::<crate::runtime::sample::Sample>(&mut self.tgck_buffer))
                 .ok_or_else(|| WorkError::NodeError("Missing tgck input".to_string()))?;
             loop {
                 match tgck.peek() {
@@ -279,14 +314,11 @@ impl ProcessNode for TgckRecorder {
         // The word itself: opens the window if needed, satisfies pending
         // first-word-after markers, advances the byte index.
         if self.window.is_none() {
-            let Some(filename) = self.current_filename.clone() else {
+            if self.current_filename.is_none() {
                 warn!("[{}] word before any filename; not recorded", self.name);
                 return Ok(1);
-            };
-            self.window = Some(Window {
-                filename,
-                ..Window::default()
-            });
+            }
+            self.window = Some(Window::default());
         }
         let window = self.window.as_mut().expect("window opened above");
         if window.need_after_rising {
@@ -307,6 +339,7 @@ impl ProcessNode for TgckRecorder {
 mod tests {
     use super::*;
     use crate::TimingInfo;
+    use crate::runtime::sample::Sample;
     use crate::runtime::sender::ChannelMessage;
     use crate::runtime::watchdog::Watchdog;
     use crossbeam_channel::bounded;
@@ -318,25 +351,24 @@ mod tests {
         }
     }
 
-    #[test]
-    fn records_line_boundaries_per_window() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_a = dir.path().join("capture_0001.bin");
-        let file_b = dir.path().join("capture_0002.bin");
+    struct Rig {
+        rows: crossbeam_channel::Receiver<ChannelMessage<TextSample>>,
+        filenames: crossbeam_channel::Receiver<ChannelMessage<TextSample>>,
+        inputs: Vec<InputPort>,
+        outputs: Vec<OutputPort>,
+    }
 
+    fn rig() -> Rig {
         let wd = Watchdog::new();
         let (words_tx, words_rx) = bounded::<ChannelMessage<ParallelWord>>(64);
         let (tgck_tx, tgck_rx) = bounded::<ChannelMessage<Sample>>(64);
         let (name_tx, name_rx) = bounded::<ChannelMessage<TextSample>>(64);
+        let (rows_tx, rows_rx) = bounded::<ChannelMessage<TextSample>>(64);
+        let (filename_tx, filename_rx) = bounded::<ChannelMessage<TextSample>>(64);
 
-        // Window A: words at 100..=104; TGCK rising 101, falling 103.
-        // Window B (name change at 200): words 200..=201; the rising at 200
-        // lands between windows (A closed by the name change, B not yet
-        // opened by a word) and is dropped — the original writer behaved
-        // the same way for edges before a window's first word.
         for message in [
-            ChannelMessage::Sample(TextSample::new(file_a.display().to_string(), 0)),
-            ChannelMessage::Sample(TextSample::new(file_b.display().to_string(), 200)),
+            ChannelMessage::Sample(TextSample::new("capture_0001.bin", 0)),
+            ChannelMessage::Sample(TextSample::new("capture_0002.bin", 200)),
         ] {
             name_tx.send(message).unwrap();
         }
@@ -355,47 +387,78 @@ mod tests {
         }
         drop(words_tx);
 
-        let inputs = [
-            InputPort::new_with_watchdog(words_rx, &wd, "tgck", "words"),
-            InputPort::new_with_watchdog(tgck_rx, &wd, "tgck", "tgck"),
-            InputPort::new_with_watchdog(name_rx, &wd, "tgck", "filename"),
-        ];
+        Rig {
+            rows: rows_rx,
+            filenames: filename_rx,
+            inputs: vec![
+                InputPort::new_with_watchdog(words_rx, &wd, "tgck", "words"),
+                InputPort::new_with_watchdog(tgck_rx, &wd, "tgck", "tgck"),
+                InputPort::new_with_watchdog(name_rx, &wd, "tgck", "filename"),
+            ],
+            outputs: vec![
+                OutputPort::new_with_watchdog(
+                    crate::runtime::Sender::new(vec![rows_tx]),
+                    &wd,
+                    "tgck",
+                    "rows",
+                ),
+                OutputPort::new_with_watchdog(
+                    crate::runtime::Sender::new(vec![filename_tx]),
+                    &wd,
+                    "tgck",
+                    "filename",
+                ),
+            ],
+        }
+    }
+
+    fn drain(rx: &crossbeam_channel::Receiver<ChannelMessage<TextSample>>) -> Vec<String> {
+        rx.try_iter()
+            .filter_map(|message| match message {
+                ChannelMessage::Sample(sample) => Some(sample.value),
+                ChannelMessage::EndOfStream => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn records_line_boundaries_per_window() {
+        let rig = rig();
         let mut recorder = TgckRecorder::new();
         loop {
-            match recorder.work(&inputs, &[]) {
+            match recorder.work(&rig.inputs, &rig.outputs) {
                 Ok(_) => {}
                 Err(WorkError::Shutdown) => break,
                 Err(e) => panic!("unexpected error: {e}"),
             }
         }
+        drop(rig.outputs);
 
-        let csv_a = std::fs::read_to_string(dir.path().join("capture_0001_tgck.csv"))
-            .expect("window A csv");
-        let mut lines = csv_a.lines();
-        assert!(lines.next().unwrap().starts_with("rising_byte_index"));
+        let filenames = drain(&rig.filenames);
+        assert_eq!(filenames, vec!["capture_0001_tgck.csv", "capture_0002_tgck.csv"]);
+
+        let rows = drain(&rig.rows);
+        assert_eq!(rows.len(), 2, "header + one record: {rows:?}");
+        assert!(rows[0].starts_with("rising_byte_index"));
         // Edges ≤ a word's position are drained before that word counts:
         // rising@101 lands at byte index 1 (only word@100 written) and the
         // word@101 is the first word after it; falling@103 at index 3 with
         // word@103 the first after.
-        assert_eq!(lines.next().unwrap(), "1,101,3,103,1,101,3,103");
-        assert!(lines.next().is_none());
-
-        // Window B saw no in-window TGCK cycle → no CSV.
-        assert!(!dir.path().join("capture_0002_tgck.csv").exists());
+        assert_eq!(rows[1], "1,101,3,103,1,101,3,103");
     }
 
     #[test]
-    fn no_csv_without_records() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("capture_0001.bin");
-
+    fn no_rows_without_records() {
         let wd = Watchdog::new();
         let (words_tx, words_rx) = bounded::<ChannelMessage<ParallelWord>>(16);
         let (tgck_tx, tgck_rx) = bounded::<ChannelMessage<Sample>>(16);
         let (name_tx, name_rx) = bounded::<ChannelMessage<TextSample>>(16);
+        let (rows_tx, rows_rx) = bounded::<ChannelMessage<TextSample>>(16);
+        let (filename_tx, filename_rx) = bounded::<ChannelMessage<TextSample>>(16);
+
         name_tx
             .send(ChannelMessage::Sample(TextSample::new(
-                file.display().to_string(),
+                "capture_0001.bin",
                 0,
             )))
             .unwrap();
@@ -404,19 +467,38 @@ mod tests {
         words_tx.send(ChannelMessage::Sample(word(100))).unwrap();
         drop(words_tx);
 
-        let inputs = [
+        let inputs = vec![
             InputPort::new_with_watchdog(words_rx, &wd, "tgck", "words"),
             InputPort::new_with_watchdog(tgck_rx, &wd, "tgck", "tgck"),
             InputPort::new_with_watchdog(name_rx, &wd, "tgck", "filename"),
         ];
+        let outputs = vec![
+            OutputPort::new_with_watchdog(
+                crate::runtime::Sender::new(vec![rows_tx]),
+                &wd,
+                "tgck",
+                "rows",
+            ),
+            OutputPort::new_with_watchdog(
+                crate::runtime::Sender::new(vec![filename_tx]),
+                &wd,
+                "tgck",
+                "filename",
+            ),
+        ];
         let mut recorder = TgckRecorder::new();
         loop {
-            match recorder.work(&inputs, &[]) {
+            match recorder.work(&inputs, &outputs) {
                 Ok(_) => {}
                 Err(WorkError::Shutdown) => break,
                 Err(e) => panic!("unexpected error: {e}"),
             }
         }
-        assert!(!dir.path().join("capture_0001_tgck.csv").exists());
+        drop(outputs);
+
+        // The filename still passes through (level contract)...
+        assert_eq!(drain(&filename_rx), vec!["capture_0001_tgck.csv"]);
+        // ...but no CSV rows were ever produced.
+        assert!(drain(&rows_rx).is_empty());
     }
 }

@@ -3,9 +3,9 @@ use crate::types::{
     AnalyzerLayout, CaptureInfo, ChannelDragState, ChannelRenameState, ColorProfile,
     IndexBuildProgress, PulseMeasurement, TimeCursor,
 };
-use dsl::DerivedLanes;
+use dsl::{CaptureIndex, DerivedLanes};
 #[cfg(not(target_arch = "wasm32"))]
-use dsl::{CaptureDataSource, DslCaptureReader, DslFileCaptureDataSource, IndexSampler};
+use dsl::{CaptureDataSource, DslFileCaptureDataSource};
 use egui::{FontId, Pos2, Rect, Sense, Ui, vec2};
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
@@ -24,8 +24,7 @@ pub struct LogicAnalyzerViewer {
     /// visible window happens on the UI thread every frame the view changes,
     /// so what is drawn is always the current view at the current zoom —
     /// there is no asynchronous refinement that could disagree with it.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) sampler: Option<IndexSampler<DslCaptureReader>>,
+    pub(crate) sampler: Option<Box<dyn CaptureIndex>>,
     /// (start_sample, end_sample, target_points) of the sampled `channels`.
     pub(crate) sampled_key: Option<(u64, u64, usize)>,
     /// Pulse measurement for the current hover position, refreshed each frame
@@ -81,7 +80,6 @@ impl LogicAnalyzerViewer {
             channel_drag: None,
             channel_names: HashMap::new(),
             channel_rename: None,
-            #[cfg(not(target_arch = "wasm32"))]
             sampler: None,
             sampled_key: None,
             hover_measurement: None,
