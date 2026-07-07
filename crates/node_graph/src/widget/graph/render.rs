@@ -18,6 +18,14 @@ impl NodeGraphWidget {
         pointer: Option<Pos2>,
         layout: &GraphWidgetLayout,
     ) {
+        // `painter` is already clipped to `rect`, but the inline node
+        // controls below (`show_controls`) place real egui widgets straight
+        // on `ui` at absolute screen positions — unclipped, those bleed
+        // outside the graph's own area (e.g. into a sibling panel above)
+        // once a node is panned off past the canvas edge.
+        let previous_clip = ui.clip_rect();
+        ui.set_clip_rect(rect.intersect(previous_clip));
+
         let pointer_canvas = pointer.map(|p| self.view.screen_to_canvas(origin, p));
 
         // While a node is dragged over a wire, that wire previews the drop:
@@ -227,6 +235,7 @@ impl NodeGraphWidget {
         }
 
         self.draw_io_status(painter, rect, ui.ctx());
+        ui.set_clip_rect(previous_clip);
     }
 
     fn draw_io_status(&mut self, painter: &egui::Painter, rect: Rect, ctx: &egui::Context) {

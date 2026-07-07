@@ -1054,7 +1054,13 @@ impl NodeGraphWidget {
         }
 
         let ctrl_held = ui.input(|i| i.modifiers.ctrl);
-        let middle_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
+        // `button_down` is global pointer state, not scoped to this widget —
+        // without the hover/already-panning check, a middle-drag started
+        // over a sibling widget (e.g. the logic analyzer above the graph)
+        // would also pan the graph. Once a pan has started, keep following
+        // the drag even if the pointer leaves the canvas rect.
+        let middle_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle))
+            && (response.hovered() || matches!(self.interaction_state, InteractionState::Panning { .. }));
         let right_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary));
 
         if middle_down {
