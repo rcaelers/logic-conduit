@@ -998,6 +998,12 @@ impl NodeGraphWidget {
     /// Socket indices (input, output) on `node_id` that would splice it into
     /// `conn`, or `None` if the node cannot be inserted there.
     fn wire_insert_sockets(&self, node_id: NodeId, conn: &Connection) -> Option<(usize, usize)> {
+        // Only a completely fresh, unconnected node gets spliced into a
+        // wire — a node already wired up elsewhere shouldn't have its
+        // existing topology silently rearranged by an incidental drag-over.
+        if node_has_any_connection(&self.graph.connections, node_id) {
+            return None;
+        }
         let src_type = self
             .graph
             .nodes
@@ -1156,5 +1162,52 @@ impl NodeGraphWidget {
                 self.update_cut_wire(ui, pointer_canvas, &layout.nodes, path)
             }
         };
+    }
+}
+
+/// Whether `node_id` is an endpoint of any existing connection.
+fn node_has_any_connection(connections: &[Connection], node_id: NodeId) -> bool {
+    connections
+        .iter()
+        .any(|c| c.from.node == node_id || c.to.node == node_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn socket(node: u32, index: usize, direction: SocketDirection) -> SocketId {
+        SocketId {
+            node: NodeId(node),
+            index,
+            direction,
+        }
+    }
+
+    #[test]
+    fn node_with_no_connections_has_none() {
+        let connections = vec![Connection {
+            from: socket(1, 0, SocketDirection::Output),
+            to: socket(2, 0, SocketDirection::Input),
+        }];
+        assert!(!node_has_any_connection(&connections, NodeId(3)));
+    }
+
+    #[test]
+    fn node_as_connection_source_counts() {
+        let connections = vec![Connection {
+            from: socket(1, 0, SocketDirection::Output),
+            to: socket(2, 0, SocketDirection::Input),
+        }];
+        assert!(node_has_any_connection(&connections, NodeId(1)));
+    }
+
+    #[test]
+    fn node_as_connection_target_counts() {
+        let connections = vec![Connection {
+            from: socket(1, 0, SocketDirection::Output),
+            to: socket(2, 0, SocketDirection::Input),
+        }];
+        assert!(node_has_any_connection(&connections, NodeId(2)));
     }
 }
