@@ -11,4 +11,4 @@ mod viewer;
 #[cfg(not(target_arch = "wasm32"))]
 mod worker;
 
-pub use viewer::LogicAnalyzerViewer;
+pub use viewer::{ChannelSignal, LogicAnalyzerViewer};

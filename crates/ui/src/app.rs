@@ -1,4 +1,5 @@
 use crate::compiler;
+use crate::demo_signals;
 use crate::nodes;
 use logic_analyzer_viewer::LogicAnalyzerViewer;
 use node_graph::{NodeBadge, NodeGraphWidget, NodeId};
@@ -26,9 +27,11 @@ impl App {
         nodes::populate_startup(&mut widget);
         #[cfg(target_arch = "wasm32")]
         nodes::populate_uart_demo(&mut widget);
+        let mut logic_analyzer = LogicAnalyzerViewer::new();
+        logic_analyzer.set_channels(demo_signals::channels());
         Self {
             node_graph: widget,
-            logic_analyzer: LogicAnalyzerViewer::demo(),
+            logic_analyzer,
             analyzer_split: 0.42,
             builders: compiler::BuilderRegistry::standard(),
             run: None,

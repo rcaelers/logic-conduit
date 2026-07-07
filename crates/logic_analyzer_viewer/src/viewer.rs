@@ -1,7 +1,7 @@
 use crate::channel::LogicChannel;
 use crate::types::{
     AnalyzerLayout, CaptureInfo, ColorProfile, IndexBuildProgress, PulseMeasurement, RowDragState,
-    RowKey, RowRenameState, TimeCursor,
+    RowKey, RowRenameState, TimeCursor, Transition,
 };
 use dsl::{CaptureIndex, DerivedLanes};
 #[cfg(not(target_arch = "wasm32"))]
@@ -12,6 +12,17 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc::{self, Receiver};
+
+/// One channel's digital waveform as raw (time, level) transitions — the
+/// generic way for a host application to hand [`LogicAnalyzerViewer::set_channels`]
+/// waveform data it already has in memory.
+pub struct ChannelSignal {
+    pub index: usize,
+    pub name: String,
+    pub initial: bool,
+    /// `(time_us, level after this transition)`, in increasing time order.
+    pub transitions: Vec<(f64, bool)>,
+}
 
 pub struct LogicAnalyzerViewer {
     pub(crate) channels: Vec<LogicChannel>,
@@ -56,30 +67,17 @@ pub struct LogicAnalyzerViewer {
     pub(crate) derived: Option<DerivedLanes>,
 }
 
+impl Default for LogicAnalyzerViewer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LogicAnalyzerViewer {
-    pub fn demo() -> Self {
-        let mut channels = vec![LogicChannel::uart_demo(0, "serial.rx", b"HELLO\n")];
-        for index in 1..10 {
-            let period = match index {
-                1 => 90.0,
-                2 => 135.0,
-                3 => 260.0,
-                6 => 42.0,
-                7 => 28.0,
-                _ => 220.0 + index as f64 * 35.0,
-            };
-            let offset = index as f64 * 11.0;
-            channels.push(LogicChannel::square_wave(
-                index,
-                index.to_string(),
-                period,
-                offset,
-                index % 3 == 0,
-            ));
-        }
+    pub fn new() -> Self {
         Self {
-            row_order: (0..channels.len()).map(RowKey::Channel).collect(),
-            channels,
+            row_order: Vec::new(),
+            channels: Vec::new(),
             row_drag: None,
             channel_names: HashMap::new(),
             derived_names: HashMap::new(),
@@ -94,7 +92,7 @@ impl LogicAnalyzerViewer {
             capture_info: None,
             #[cfg(not(target_arch = "wasm32"))]
             worker_responses: None,
-            status: "Demo data".to_string(),
+            status: "No capture loaded".to_string(),
             index_progress: None,
             fit_to_capture: false,
             cursors: Vec::new(),
@@ -111,6 +109,29 @@ impl LogicAnalyzerViewer {
     /// previous run's lanes.
     pub fn set_derived_lanes(&mut self, lanes: DerivedLanes) {
         self.derived = Some(lanes);
+    }
+
+    /// Replaces the raw channel rows with `signals` — the generic way for a
+    /// host application to hand the viewer waveform data it already has in
+    /// memory, independent of opening a capture file or wiring up a live
+    /// pipeline. `derived` lanes are untouched and keep sitting below
+    /// whatever channels are here.
+    pub fn set_channels(&mut self, signals: Vec<ChannelSignal>) {
+        self.channels = signals
+            .into_iter()
+            .map(|signal| LogicChannel {
+                index: signal.index,
+                name: signal.name,
+                initial: signal.initial,
+                transitions: signal
+                    .transitions
+                    .into_iter()
+                    .map(|(time_us, value)| Transition { time_us, value })
+                    .collect(),
+                waveform: Vec::new(),
+            })
+            .collect();
+        self.ensure_row_order();
     }
 
     /// `open` constructs the capture-specific [`CaptureDataSource`] for

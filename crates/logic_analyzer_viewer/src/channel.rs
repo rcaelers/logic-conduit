@@ -19,73 +19,6 @@ pub(crate) struct LogicChannel {
 }
 
 impl LogicChannel {
-    pub(crate) fn uart_demo(index: usize, name: &str, bytes: &[u8]) -> Self {
-        const BAUD: f64 = 115_200.0;
-        const FIRST_START_NS: u64 = 60_000;
-        let bit_ns = (1_000_000_000.0 / BAUD).round() as u64;
-        let mut transitions = Vec::new();
-        let mut raw_level = true;
-        let mut time_ns = FIRST_START_NS;
-
-        for &byte in bytes {
-            let frame_start = time_ns;
-            let mut bits = Vec::with_capacity(10);
-            bits.push(false);
-            for bit in 0..8 {
-                bits.push(((byte >> bit) & 1) == 1);
-            }
-            bits.push(true);
-
-            for (bit_index, bit_value) in bits.into_iter().enumerate() {
-                let bit_time_ns = frame_start + bit_index as u64 * bit_ns;
-                if raw_level != bit_value {
-                    raw_level = bit_value;
-                    transitions.push(Transition {
-                        time_us: bit_time_ns as f64 / 1_000.0,
-                        value: raw_level,
-                    });
-                }
-            }
-            time_ns = frame_start + 10 * bit_ns;
-        }
-
-        Self {
-            index,
-            name: name.to_owned(),
-            initial: true,
-            transitions,
-            waveform: Vec::new(),
-        }
-    }
-
-    pub(crate) fn square_wave(
-        index: usize,
-        name: String,
-        period_us: f64,
-        offset_us: f64,
-        initial: bool,
-    ) -> Self {
-        let mut transitions = Vec::new();
-        let mut value = initial;
-        let mut time = offset_us.max(0.0);
-        while time <= 60_000.0 {
-            value = !value;
-            transitions.push(Transition {
-                time_us: time,
-                value,
-            });
-            time += period_us * 0.5;
-        }
-
-        Self {
-            index,
-            name,
-            initial,
-            transitions,
-            waveform: Vec::new(),
-        }
-    }
-
     pub(crate) fn visible_transitions(&self, start_us: f64, end_us: f64) -> (&[Transition], bool) {
         let start_index = self
             .transitions
@@ -553,8 +486,26 @@ mod tests {
     use crate::viewer::LogicAnalyzerViewer;
     use dsl::{DerivedLanes, Sample};
 
+    /// A viewer with `count` bare channels (no transitions) — enough for the
+    /// row-order/labeling tests below, which only care about channel
+    /// identity and count, not waveform content.
+    fn viewer_with_channels(count: usize) -> LogicAnalyzerViewer {
+        let mut viewer = LogicAnalyzerViewer::new();
+        viewer.channels = (0..count)
+            .map(|index| LogicChannel {
+                index,
+                name: index.to_string(),
+                initial: false,
+                transitions: Vec::new(),
+                waveform: Vec::new(),
+            })
+            .collect();
+        viewer.ensure_row_order();
+        viewer
+    }
+
     fn viewer_with_derived() -> LogicAnalyzerViewer {
-        let mut viewer = LogicAnalyzerViewer::demo();
+        let mut viewer = viewer_with_channels(10);
         let lanes = DerivedLanes::new();
         lanes.register(
             "decoded.rx",
@@ -574,16 +525,16 @@ mod tests {
 
     #[test]
     fn real_channel_row_borrows_in_place() {
-        let viewer = LogicAnalyzerViewer::demo();
+        let viewer = viewer_with_channels(10);
         let channel = viewer.channel_at_row(0).expect("row 0 is a real channel");
         assert!(matches!(channel, Cow::Borrowed(_)));
     }
 
     #[test]
     fn set_derived_lanes_never_clears_existing_channels() {
-        let mut viewer = LogicAnalyzerViewer::demo();
+        let mut viewer = viewer_with_channels(10);
         let before = viewer.channels.len();
-        assert!(before > 0, "demo() should seed placeholders");
+        assert!(before > 0);
 
         // A run only adds derived lanes below whatever channels are already
         // on screen — repeatedly, including across restarts.
