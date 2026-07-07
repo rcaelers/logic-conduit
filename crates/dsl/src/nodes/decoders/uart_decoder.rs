@@ -468,6 +468,46 @@ mod tests {
     }
 
     #[test]
+    fn decodes_hello_newline() {
+        let text = b"HELLO\n";
+        let frames: Vec<(u64, u16, Option<bool>)> = text
+            .iter()
+            .enumerate()
+            .map(|(i, &byte)| (10_000 + i as u64 * 20_000, byte as u16, None))
+            .collect();
+        let edges = frames_to_edges(&frames, 8, false);
+        let mut decoder = UartDecoder::new(1_000_000, 8);
+        let out = run_decoder(&mut decoder, edges);
+        assert_eq!(
+            out.words.iter().map(|w| w.value as u8).collect::<Vec<_>>(),
+            text.to_vec()
+        );
+        assert!(out.errors.is_empty());
+    }
+
+    #[test]
+    fn decodes_last_frame_when_capture_ends_right_after_stop_bit() {
+        // Capture recording stops the instant the last byte's stop bit
+        // interval ends — no trailing idle margin, unlike `frames_to_edges`
+        // which always appends one.
+        let text = b"HELLO\n";
+        let frames: Vec<(u64, u16, Option<bool>)> = text
+            .iter()
+            .enumerate()
+            .map(|(i, &byte)| (10_000 + i as u64 * 20_000, byte as u16, None))
+            .collect();
+        let mut edges = frames_to_edges(&frames, 8, false);
+        let last_t0 = frames.last().unwrap().0;
+        edges.retain(|e| e.start_time <= last_t0 + 9 * BIT);
+        let mut decoder = UartDecoder::new(1_000_000, 8);
+        let out = run_decoder(&mut decoder, edges);
+        assert_eq!(
+            out.words.iter().map(|w| w.value as u8).collect::<Vec<_>>(),
+            text.to_vec()
+        );
+    }
+
+    #[test]
     fn resyncs_after_error() {
         // A framing-error frame followed by a clean frame.
         let mut edges = frames_to_edges(&[(10_000, 0x00, None)], 8, false);

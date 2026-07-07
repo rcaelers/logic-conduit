@@ -57,14 +57,35 @@ impl ColorProfile {
     }
 }
 
-pub(crate) struct ChannelRenameState {
-    pub(crate) channel_index: usize,
+/// Identifies one display row, whether it's a raw channel (by its stable
+/// capture index) or a derived lane (by its stable name —
+/// `DerivedLanes::register` reuses a lane by name across runs, so this
+/// survives a run restart the same way a channel index survives a
+/// re-sample). The single ordering, drag, and rename mechanism in
+/// `channel.rs` works on this — never on "channel" or "derived lane"
+/// specifically — so the two interleave freely.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum RowKey {
+    Channel(usize),
+    Derived(String),
+}
+
+pub(crate) struct RowRenameState {
+    pub(crate) key: RowKey,
     pub(crate) text: String,
     pub(crate) screen_pos: Pos2,
 }
 
-pub(crate) struct ChannelDragState {
-    pub(crate) channel_index: usize,
+pub(crate) struct RowDragState {
+    pub(crate) key: RowKey,
+}
+
+/// What a row's label needs, regardless of whether it's a channel or a
+/// derived lane — the shared drawing code never branches on which.
+pub(crate) struct RowLabel {
+    pub(crate) name: String,
+    pub(crate) badge_text: String,
+    pub(crate) badge_color: Color32,
 }
 
 #[derive(Clone, Copy)]
@@ -99,7 +120,7 @@ pub(crate) struct CursorInput {
     pub(crate) ruler_double_click: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Transition {
     pub(crate) time_us: f64,
     pub(crate) value: bool,

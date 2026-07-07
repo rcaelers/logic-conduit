@@ -18,21 +18,19 @@ impl LogicAnalyzerViewer {
             return;
         };
         let samplerate_hz = capture.header.samplerate_hz;
-        let channel_count = capture.header.total_probes.min(16);
         let (visible_start, visible_end) =
             visible_sample_range(capture, self.visible_start_us, self.visible_span_us);
         let target_points = layout.wave_rect.width().max(1.0).round() as usize;
-        self.ensure_channel_order(channel_count);
 
         let key = (visible_start, visible_end, target_points);
         if self.sampled_key == Some(key) {
             return;
         }
+        let requested_channels = self.requested_channel_order();
         let Some(sampler) = self.sampler.as_mut() else {
             return;
         };
 
-        let requested_channels = self.channel_order.clone();
         match sampler.sampled_window(
             &requested_channels,
             visible_start,
@@ -73,7 +71,7 @@ impl LogicAnalyzerViewer {
 
         let row_height = layout.row_height;
         let channel_row = ((pointer.y - wave_rect.top()) / row_height).floor() as usize;
-        let Some(channel) = self.channels.get(channel_row) else {
+        let Some(channel) = self.channel_at_row(channel_row) else {
             return;
         };
         let time_us = self.x_to_time(wave_rect, pointer.x);
@@ -93,11 +91,14 @@ impl LogicAnalyzerViewer {
         }
 
         let visible_end_us = self.visible_start_us + self.visible_span_us;
-        // Only demo data (no index) measures from the in-memory transitions;
-        // with a capture loaded the index path always runs, since even at
-        // zoom levels where the visible window is exact, the run or its
-        // period may close beyond the viewport.
-        let measurement = if !self.has_index_sampler() {
+        // Demo data, derived lanes (no index exists for them), and — with a
+        // capture loaded — anything past the raw-channel rows all measure
+        // from the in-memory transitions; a loaded capture's own channels
+        // always take the index path, since even at zoom levels where the
+        // visible window is exact, the run or its period may close beyond
+        // the viewport.
+        let row_is_indexed = channel_row < self.channels.len() && self.has_index_sampler();
+        let measurement = if !row_is_indexed {
             pulse_measurement_from_window(
                 &channel.transitions,
                 channel.initial,

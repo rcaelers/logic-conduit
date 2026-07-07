@@ -1,7 +1,7 @@
 use crate::channel::LogicChannel;
 use crate::types::{
-    AnalyzerLayout, CaptureInfo, ChannelDragState, ChannelRenameState, ColorProfile,
-    IndexBuildProgress, PulseMeasurement, TimeCursor,
+    AnalyzerLayout, CaptureInfo, ColorProfile, IndexBuildProgress, PulseMeasurement, RowDragState,
+    RowKey, RowRenameState, TimeCursor,
 };
 use dsl::{CaptureIndex, DerivedLanes};
 #[cfg(not(target_arch = "wasm32"))]
@@ -15,10 +15,13 @@ use std::sync::mpsc::{self, Receiver};
 
 pub struct LogicAnalyzerViewer {
     pub(crate) channels: Vec<LogicChannel>,
-    pub(crate) channel_order: Vec<usize>,
-    pub(crate) channel_drag: Option<ChannelDragState>,
+    /// Display order across both `channels` and `derived` lanes — the only
+    /// source of truth for row order, kept in sync by `ensure_row_order`.
+    pub(crate) row_order: Vec<RowKey>,
+    pub(crate) row_drag: Option<RowDragState>,
     pub(crate) channel_names: HashMap<usize, String>,
-    pub(crate) channel_rename: Option<ChannelRenameState>,
+    pub(crate) derived_names: HashMap<String, String>,
+    pub(crate) row_rename: Option<RowRenameState>,
     /// Synchronous sampler over the waveform index; present once the index
     /// build (which runs on a worker thread) has completed. Sampling the
     /// visible window happens on the UI thread every frame the view changes,
@@ -75,11 +78,12 @@ impl LogicAnalyzerViewer {
             ));
         }
         Self {
+            row_order: (0..channels.len()).map(RowKey::Channel).collect(),
             channels,
-            channel_order: (0..10).collect(),
-            channel_drag: None,
+            row_drag: None,
             channel_names: HashMap::new(),
-            channel_rename: None,
+            derived_names: HashMap::new(),
+            row_rename: None,
             sampler: None,
             sampled_key: None,
             hover_measurement: None,
@@ -101,8 +105,10 @@ impl LogicAnalyzerViewer {
     }
 
     /// Replaces the derived-lane store: the viewer renders whatever the
-    /// running pipeline pushes into it, live. A fresh (empty) store clears
-    /// the previous run's lanes.
+    /// running pipeline pushes into it, live, in rows below `channels` —
+    /// which stay exactly as they are; a run only adds lanes, it never
+    /// removes what was already on screen. A fresh (empty) store clears the
+    /// previous run's lanes.
     pub fn set_derived_lanes(&mut self, lanes: DerivedLanes) {
         self.derived = Some(lanes);
     }
@@ -131,11 +137,13 @@ impl LogicAnalyzerViewer {
             Err(err) => {
                 self.capture_path = Some(path.clone());
                 self.capture_info = None;
+                // Stale channel rows drop out of `row_order` on the next
+                // `ensure_row_order` pass; any derived-lane rows from an
+                // active run are left exactly where they are.
                 self.channels.clear();
-                self.channel_order.clear();
-                self.channel_drag = None;
+                self.row_drag = None;
                 self.channel_names.clear();
-                self.channel_rename = None;
+                self.row_rename = None;
                 self.sampler = None;
                 self.sampled_key = None;
                 self.index_progress = None;
@@ -151,10 +159,9 @@ impl LogicAnalyzerViewer {
         self.capture_path = Some(path.clone());
         self.capture_info = None;
         self.channels.clear();
-        self.channel_order.clear();
-        self.channel_drag = None;
+        self.row_drag = None;
         self.channel_names.clear();
-        self.channel_rename = None;
+        self.row_rename = None;
         self.sampler = None;
         self.sampled_key = None;
         self.index_progress = None;
@@ -176,13 +183,18 @@ impl LogicAnalyzerViewer {
 
         #[cfg(not(target_arch = "wasm32"))]
         self.process_worker_responses();
+        // Reconciles `row_order` against the current channels and derived
+        // lanes (drops stale rows, appends new ones) before anything this
+        // frame does row-position math, so hit-testing, drag, and layout
+        // all see the same order.
+        self.ensure_row_order();
         let mut layout = self.layout(ui, rect);
-        let channel_rename_started = self.handle_channel_label_input(ui, &response, layout);
-        let channel_dragging = self.handle_channel_reorder(ui, &response, layout);
+        let row_rename_started = self.handle_row_label_input(ui, &response, layout);
+        let row_dragging = self.handle_row_reorder(ui, &response, layout);
         let cursor_input = self.handle_cursor_input(ui, &response, layout);
         if (response.double_clicked()
             && !cursor_input.ruler_double_click
-            && !channel_rename_started)
+            && !row_rename_started)
             || (response.hovered() && ui.input(|input| input.key_pressed(egui::Key::F)))
         {
             self.fit_capture();
@@ -193,7 +205,7 @@ impl LogicAnalyzerViewer {
             response.hovered(),
             response.dragged_by(egui::PointerButton::Primary)
                 && !cursor_input.blocks_pan
-                && !channel_dragging,
+                && !row_dragging,
         );
         self.sample_visible_window(layout);
         layout = self.layout(ui, rect);
@@ -205,7 +217,7 @@ impl LogicAnalyzerViewer {
         self.sample_hover_measurement(layout, hover_pointer);
         self.draw(&painter, layout, hover_pointer, cursor_input.active);
         self.show_profile_selector(ui, rect);
-        self.show_channel_rename(ui.ctx());
+        self.show_row_rename(ui.ctx());
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.capture_path.is_some() && self.capture_info.is_none() {
@@ -249,31 +261,31 @@ impl LogicAnalyzerViewer {
         let label_right_pad = 10.0;
         let name_font = FontId::proportional(12.0);
         let badge_font = FontId::monospace(10.0);
-        let derived_names: Vec<String> = self
-            .derived
-            .as_ref()
-            .map(|store| store.read().iter().map(|lane| lane.name.clone()).collect())
-            .unwrap_or_default();
+        // Measured from the same `row_label` the draw pass uses, so a
+        // derived lane's text column is exactly as wide as what's actually
+        // drawn in it — text and badge share one label layout regardless of
+        // row kind (§ below).
+        let labels: Vec<_> = self
+            .row_order
+            .iter()
+            .filter_map(|key| self.row_label(key))
+            .collect();
         let (name_col_width, badge_width) = ui.ctx().fonts_mut(|fonts| {
-            let name_col_width = self
-                .channels
+            let name_col_width = labels
                 .iter()
-                .map(|channel| channel.name.clone())
-                .chain(derived_names.iter().cloned())
-                .map(|name| {
+                .map(|label| {
                     fonts
-                        .layout_no_wrap(name, name_font.clone(), egui::Color32::WHITE)
+                        .layout_no_wrap(label.name.clone(), name_font.clone(), egui::Color32::WHITE)
                         .size()
                         .x
                 })
                 .fold(0.0, f32::max);
-            let badge_width = self
-                .channels
+            let badge_width = labels
                 .iter()
-                .map(|channel| {
+                .map(|label| {
                     fonts
                         .layout_no_wrap(
-                            channel.index.to_string(),
+                            label.badge_text.clone(),
                             badge_font.clone(),
                             egui::Color32::WHITE,
                         )

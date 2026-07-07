@@ -1,103 +1,15 @@
 use crate::viewer::LogicAnalyzerViewer;
 use dsl::nodes::sinks::MAX_ANNOTATION_NS;
-use dsl::{Annotation, DerivedLaneData, Sample};
+use dsl::{Annotation, Sample};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
 impl LogicAnalyzerViewer {
     // ── Derived lanes (§4.9) ─────────────────────────────────────────────────
+    //
+    // Content only — the label (name, badge) is drawn once for every row
+    // kind by `draw_rows`, not here.
 
-    /// Rows below the raw channels showing what Viewer nodes collected:
-    /// digital levels, decoded-word boxes, trigger markers. Lane colors
-    /// follow the socket payload hues (green / orange / amber).
-    pub(crate) fn draw_derived_lanes(
-        &self,
-        painter: &Painter,
-        labels_rect: Rect,
-        wave_rect: Rect,
-        row_height: f32,
-        text: Color32,
-        grid: Color32,
-    ) {
-        let Some(store) = &self.derived else {
-            return;
-        };
-        let lanes = store.read();
-        if lanes.is_empty() {
-            return;
-        }
-        let clip = painter.with_clip_rect(wave_rect);
-
-        for (offset, lane) in lanes.iter().enumerate() {
-            let row = self.channels.len() + offset;
-            let y_top = labels_rect.top() + row as f32 * row_height;
-            if y_top > labels_rect.bottom() {
-                break;
-            }
-            let row_rect = Rect::from_min_max(
-                Pos2::new(labels_rect.left(), y_top),
-                Pos2::new(wave_rect.right(), y_top + row_height),
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(labels_rect.left(), row_rect.bottom()),
-                    Pos2::new(wave_rect.right(), row_rect.bottom()),
-                ],
-                Stroke::new(1.0, Color32::from_rgb(42, 42, 42)),
-            );
-
-            let (badge_color, badge_glyph) = match &lane.data {
-                DerivedLaneData::Digital(_) => (Color32::from_rgb(95, 175, 95), "S"),
-                DerivedLaneData::Annotations(_) => (Color32::from_rgb(215, 140, 60), "W"),
-                DerivedLaneData::Markers(_) => (Color32::from_rgb(230, 190, 80), "T"),
-            };
-            let badge_rect = Rect::from_min_size(
-                Pos2::new(labels_rect.left() + 12.0, row_rect.center().y - 8.0),
-                egui::vec2(16.0, 16.0),
-            );
-            painter.rect_filled(badge_rect, 2.0, badge_color);
-            painter.text(
-                badge_rect.center(),
-                Align2::CENTER_CENTER,
-                badge_glyph,
-                FontId::monospace(10.0),
-                crate::format::badge_text_color(badge_color),
-            );
-            let name = if lane.dropped > 0 {
-                format!("{} ⚠", lane.name)
-            } else {
-                lane.name.clone()
-            };
-            painter.with_clip_rect(labels_rect).text(
-                Pos2::new(badge_rect.right() + 8.0, row_rect.center().y),
-                Align2::LEFT_CENTER,
-                name,
-                FontId::proportional(12.0),
-                text,
-            );
-
-            match &lane.data {
-                DerivedLaneData::Digital(samples) => {
-                    let center_y = row_rect.center().y;
-                    clip.line_segment(
-                        [
-                            Pos2::new(wave_rect.left(), center_y),
-                            Pos2::new(wave_rect.right(), center_y),
-                        ],
-                        Stroke::new(1.0, grid),
-                    );
-                    self.draw_derived_digital(&clip, wave_rect, y_top, row_height, samples);
-                }
-                DerivedLaneData::Annotations(annotations) => {
-                    self.draw_derived_annotations(&clip, wave_rect, y_top, row_height, annotations);
-                }
-                DerivedLaneData::Markers(markers) => {
-                    self.draw_derived_markers(&clip, wave_rect, y_top, row_height, markers);
-                }
-            }
-        }
-    }
-
-    fn draw_derived_digital(
+    pub(crate) fn draw_derived_digital(
         &self,
         painter: &Painter,
         wave_rect: Rect,
@@ -188,7 +100,7 @@ impl LogicAnalyzerViewer {
         );
     }
 
-    fn draw_derived_annotations(
+    pub(crate) fn draw_derived_annotations(
         &self,
         painter: &Painter,
         wave_rect: Rect,
@@ -235,14 +147,21 @@ impl LogicAnalyzerViewer {
             return;
         }
 
-        for annotation in visible {
+        for (offset, annotation) in visible.iter().enumerate() {
             if annotation.end_ns < start_ns {
                 continue;
             }
+            let is_last_ever = first + offset == annotations.len() - 1;
+            // Every earlier annotation is already closed (only the very
+            // last one can still have `end_ns == start_ns`), so its width
+            // is a fair estimate of how long this open-ended one likely is.
+            let previous_duration_ns = (first + offset > 0).then(|| {
+                let previous = &annotations[first + offset - 1];
+                previous.end_ns.saturating_sub(previous.start_ns)
+            });
+            let effective_end = annotation_box_end(annotation, is_last_ever, previous_duration_ns);
             let x0 = self.ns_to_x(wave_rect, annotation.start_ns);
-            let x1 = self
-                .ns_to_x(wave_rect, annotation.end_ns.max(annotation.start_ns))
-                .max(x0 + 2.0);
+            let x1 = self.ns_to_x(wave_rect, effective_end).max(x0 + 2.0);
             let rect = Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(x1, box_bottom));
             painter.rect_filled(rect, 2.0, box_color);
             painter.rect_stroke(rect, 2.0, border, egui::StrokeKind::Inside);
@@ -258,7 +177,7 @@ impl LogicAnalyzerViewer {
         }
     }
 
-    fn draw_derived_markers(
+    pub(crate) fn draw_derived_markers(
         &self,
         painter: &Painter,
         wave_rect: Rect,
@@ -313,5 +232,97 @@ impl LogicAnalyzerViewer {
                 Stroke::NONE,
             ));
         }
+    }
+}
+
+/// Effective right edge for one annotation box. The most recent word ever
+/// decoded has no successor to patch its `end_ns` (see `append_word` in
+/// `viewer_sink.rs`) — `start_ns == end_ns` forever, not just until the next
+/// word arrives — so it's rendered open-ended using the previous word's
+/// width as a same-framing estimate (falling back to the burst cap when
+/// there's no previous word to measure), rather than collapsing to an
+/// unreadable sliver.
+fn annotation_box_end(
+    annotation: &Annotation,
+    is_last_ever: bool,
+    previous_duration_ns: Option<u64>,
+) -> u64 {
+    if is_last_ever && annotation.end_ns == annotation.start_ns {
+        let duration = previous_duration_ns
+            .unwrap_or(MAX_ANNOTATION_NS)
+            .min(MAX_ANNOTATION_NS);
+        annotation.start_ns + duration
+    } else {
+        annotation.end_ns.max(annotation.start_ns)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn last_ever_open_annotation_matches_the_previous_words_width() {
+        // "HELLO\n": every earlier byte was ~10 bit-times wide, so the
+        // dangling '\n' should render about that wide too, not the full
+        // 1ms burst cap.
+        let annotation = Annotation {
+            start_ns: 100_000,
+            end_ns: 100_000,
+            value: 0x0A,
+        };
+        assert_eq!(
+            annotation_box_end(&annotation, true, Some(10_000)),
+            110_000
+        );
+    }
+
+    #[test]
+    fn last_ever_open_annotation_falls_back_to_the_burst_cap_with_no_history() {
+        let annotation = Annotation {
+            start_ns: 1_000,
+            end_ns: 1_000,
+            value: 0x4F,
+        };
+        assert_eq!(
+            annotation_box_end(&annotation, true, None),
+            1_000 + MAX_ANNOTATION_NS
+        );
+    }
+
+    #[test]
+    fn last_ever_open_annotation_never_exceeds_the_burst_cap() {
+        let annotation = Annotation {
+            start_ns: 1_000,
+            end_ns: 1_000,
+            value: 0x4F,
+        };
+        assert_eq!(
+            annotation_box_end(&annotation, true, Some(MAX_ANNOTATION_NS * 10)),
+            1_000 + MAX_ANNOTATION_NS
+        );
+    }
+
+    #[test]
+    fn closed_annotation_keeps_its_patched_end() {
+        let annotation = Annotation {
+            start_ns: 1_000,
+            end_ns: 1_500,
+            value: 0x4F,
+        };
+        assert_eq!(annotation_box_end(&annotation, true, Some(10_000)), 1_500);
+        assert_eq!(annotation_box_end(&annotation, false, Some(10_000)), 1_500);
+    }
+
+    #[test]
+    fn open_annotation_that_is_not_the_last_one_ever_is_left_alone() {
+        // Shouldn't happen in practice (append_word always patches the
+        // second-to-last entry), but the fallback must not invent a box.
+        let annotation = Annotation {
+            start_ns: 1_000,
+            end_ns: 1_000,
+            value: 0x4F,
+        };
+        assert_eq!(annotation_box_end(&annotation, false, Some(10_000)), 1_000);
     }
 }

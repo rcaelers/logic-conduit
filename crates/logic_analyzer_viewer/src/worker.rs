@@ -60,11 +60,17 @@ impl LogicAnalyzerViewer {
                     if let Some(capture) = self.capture_info.as_ref() {
                         self.status = capture_status(capture);
                     }
-                    self.ensure_channel_order(header.total_probes.min(16));
                     let mut channels = placeholder_channels(&header);
                     self.apply_channel_names(&mut channels);
                     self.apply_channel_order(&mut channels);
                     self.channels = channels;
+                    // Picks up the new channel count (and drops any stale
+                    // indices from a previous, larger capture); `show()`
+                    // also does this every frame, but doing it here too
+                    // means `self.channels` and `row_order` agree the
+                    // instant this response is processed, not one frame
+                    // later.
+                    self.ensure_row_order();
                     self.sampler = None;
                     self.sampled_key = None;
                     self.index_progress = None;

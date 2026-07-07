@@ -3,10 +3,11 @@ mod derived;
 mod measurement;
 
 use crate::cursor::{cursor_color, cursor_flag_geometry, cursor_flag_label};
-use crate::format::{format_duration, format_time, nice_step};
-use crate::types::AnalyzerLayout;
+use crate::format::{badge_text_color, format_duration, format_time, nice_step};
+use crate::types::{AnalyzerLayout, RowKey};
 use crate::viewer::LogicAnalyzerViewer;
-use egui::{Align2, Color32, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, vec2};
+use dsl::DerivedLaneData;
+use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, vec2};
 
 impl LogicAnalyzerViewer {
     pub(crate) fn draw(
@@ -84,7 +85,7 @@ impl LogicAnalyzerViewer {
 
         self.draw_ruler(painter, ruler_rect, wave_rect, grid, grid_minor, muted);
         let trace = self.color_profile.trace();
-        self.draw_channels(
+        self.draw_rows(
             painter,
             labels_rect,
             wave_rect,
@@ -95,7 +96,6 @@ impl LogicAnalyzerViewer {
             trace,
             grid,
         );
-        self.draw_derived_lanes(painter, labels_rect, wave_rect, row_height, text, grid);
 
         // Pointer position marker: a small triangle hanging from the ruler
         // bottom instead of a full-height crosshair line.
@@ -123,6 +123,117 @@ impl LogicAnalyzerViewer {
         }
 
         self.draw_cursors(painter, ruler_rect, wave_rect, active_cursor);
+    }
+
+    /// Draws every row in `row_order` — a channel or a derived lane, freely
+    /// interleaved. The label (name text, then the colored badge) is drawn
+    /// identically either way, from `row_label`; only the waveform content
+    /// differs by kind (level trace, decoded-word boxes, trigger markers).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_rows(
+        &self,
+        painter: &Painter,
+        labels_rect: Rect,
+        wave_rect: Rect,
+        row_height: f32,
+        name_col_width: f32,
+        badge_width: f32,
+        text: Color32,
+        trace: Color32,
+        grid: Color32,
+    ) {
+        let clip = painter.with_clip_rect(wave_rect);
+
+        for (row, key) in self.row_order.iter().enumerate() {
+            let y_top = labels_rect.top() + row as f32 * row_height;
+            if y_top > labels_rect.bottom() {
+                break;
+            }
+            let row_rect = Rect::from_min_max(
+                Pos2::new(labels_rect.left(), y_top),
+                Pos2::new(wave_rect.right(), y_top + row_height),
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(labels_rect.left(), row_rect.bottom()),
+                    Pos2::new(wave_rect.right(), row_rect.bottom()),
+                ],
+                Stroke::new(1.0, Color32::from_rgb(42, 42, 42)),
+            );
+
+            let Some(label) = self.row_label(key) else {
+                continue;
+            };
+            painter.text(
+                Pos2::new(labels_rect.left() + 12.0, row_rect.center().y),
+                Align2::LEFT_CENTER,
+                &label.name,
+                FontId::proportional(12.0),
+                text,
+            );
+            let badge_rect = Rect::from_min_size(
+                Pos2::new(
+                    labels_rect.left() + 12.0 + name_col_width + 10.0,
+                    row_rect.center().y - 8.0,
+                ),
+                vec2(badge_width, 16.0),
+            );
+            painter.rect_filled(badge_rect, 2.0, label.badge_color);
+            painter.text(
+                badge_rect.center(),
+                Align2::CENTER_CENTER,
+                &label.badge_text,
+                FontId::monospace(10.0),
+                badge_text_color(label.badge_color),
+            );
+
+            match key {
+                RowKey::Channel(index) => {
+                    let Some(channel) = self.channels.iter().find(|c| c.index == *index) else {
+                        continue;
+                    };
+                    let center_y = row_rect.center().y;
+                    clip.line_segment(
+                        [
+                            Pos2::new(wave_rect.left(), center_y),
+                            Pos2::new(wave_rect.right(), center_y),
+                        ],
+                        Stroke::new(1.0, grid),
+                    );
+                    self.draw_channel_waveform(&clip, wave_rect, y_top, row_height, channel, trace);
+                }
+                RowKey::Derived(name) => {
+                    let Some(store) = &self.derived else {
+                        continue;
+                    };
+                    let lanes = store.read();
+                    let Some(lane) = lanes.iter().find(|lane| &lane.name == name) else {
+                        continue;
+                    };
+                    match &lane.data {
+                        DerivedLaneData::Digital(samples) => {
+                            let center_y = row_rect.center().y;
+                            clip.line_segment(
+                                [
+                                    Pos2::new(wave_rect.left(), center_y),
+                                    Pos2::new(wave_rect.right(), center_y),
+                                ],
+                                Stroke::new(1.0, grid),
+                            );
+                            self.draw_derived_digital(&clip, wave_rect, y_top, row_height, samples);
+                        }
+                        DerivedLaneData::Annotations(annotations) => {
+                            self.draw_derived_annotations(
+                                &clip, wave_rect, y_top, row_height, annotations,
+                            );
+                        }
+                        DerivedLaneData::Markers(markers) => {
+                            self.draw_derived_markers(&clip, wave_rect, y_top, row_height, markers);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn draw_cursors(

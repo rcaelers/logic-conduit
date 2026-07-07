@@ -1,82 +1,12 @@
 use crate::channel::LogicChannel;
-use crate::format::badge_text_color;
 use crate::types::WaveformSegmentKind;
 use crate::viewer::LogicAnalyzerViewer;
-use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, vec2};
+use egui::{Color32, Painter, Pos2, Rect, Stroke};
 
 impl LogicAnalyzerViewer {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn draw_channels(
-        &self,
-        painter: &Painter,
-        labels_rect: Rect,
-        wave_rect: Rect,
-        row_height: f32,
-        name_col_width: f32,
-        badge_width: f32,
-        text: Color32,
-        trace: Color32,
-        grid: Color32,
-    ) {
-        let clip = painter.with_clip_rect(wave_rect);
-
-        for (index, channel) in self.channels.iter().enumerate() {
-            let y_top = labels_rect.top() + index as f32 * row_height;
-            let row_rect = Rect::from_min_max(
-                Pos2::new(labels_rect.left(), y_top),
-                Pos2::new(wave_rect.right(), y_top + row_height),
-            );
-            if row_rect.top() > labels_rect.bottom() {
-                break;
-            }
-
-            painter.line_segment(
-                [
-                    Pos2::new(labels_rect.left(), row_rect.bottom()),
-                    Pos2::new(wave_rect.right(), row_rect.bottom()),
-                ],
-                Stroke::new(1.0, Color32::from_rgb(42, 42, 42)),
-            );
-
-            let name_pos = Pos2::new(labels_rect.left() + 12.0, row_rect.center().y);
-            painter.text(
-                name_pos,
-                Align2::LEFT_CENTER,
-                &channel.name,
-                FontId::proportional(12.0),
-                text,
-            );
-
-            let badge_rect = Rect::from_min_size(
-                Pos2::new(
-                    labels_rect.left() + 12.0 + name_col_width + 10.0,
-                    row_rect.center().y - 8.0,
-                ),
-                vec2(badge_width, 16.0),
-            );
-            let badge_color = self.color_profile.channel_color(channel.index);
-            painter.rect_filled(badge_rect, 2.0, badge_color);
-            painter.text(
-                badge_rect.center(),
-                Align2::CENTER_CENTER,
-                channel.index.to_string(),
-                FontId::monospace(10.0),
-                badge_text_color(badge_color),
-            );
-
-            let center_y = row_rect.center().y;
-            clip.line_segment(
-                [
-                    Pos2::new(wave_rect.left(), center_y),
-                    Pos2::new(wave_rect.right(), center_y),
-                ],
-                Stroke::new(1.0, grid),
-            );
-            self.draw_channel_waveform(&clip, wave_rect, y_top, row_height, channel, trace);
-        }
-    }
-
-    fn draw_channel_waveform(
+    /// The waveform content for one channel row — the label (name, badge)
+    /// is drawn once for every row kind by `draw_rows`, not here.
+    pub(crate) fn draw_channel_waveform(
         &self,
         painter: &Painter,
         wave_rect: Rect,
