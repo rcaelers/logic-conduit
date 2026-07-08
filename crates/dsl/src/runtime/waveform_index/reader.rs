@@ -102,6 +102,21 @@ where
         self.header().total_samples as f64 * 1_000_000.0 / self.header().samplerate_hz
     }
 
+    /// Value of `channel` at `position`. O(1) after the containing block is
+    /// cached (raw block cache, or the raw reader's own LRU).
+    pub fn value_at(&mut self, channel: usize, position: u64) -> Result<bool> {
+        if channel >= self.header().total_probes {
+            return Err(Error::InvalidProbe(channel));
+        }
+        if position >= self.header().total_samples {
+            return Err(Error::OutOfBounds(position));
+        }
+        let samples_per_block = self.header().samples_per_block;
+        let block = position / samples_per_block;
+        let data = self.cached_packed_block(channel, block)?;
+        Ok(packed_bit(&data, (position % samples_per_block) as usize))
+    }
+
     pub fn sampled_window(
         &mut self,
         channels: &[usize],

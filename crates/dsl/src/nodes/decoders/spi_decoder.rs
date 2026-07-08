@@ -16,9 +16,12 @@
 
 use super::types::{BitOrder, CsPolarity, SpiMode, SpiTransfer, TimingInfo};
 use crate::runtime::Receiver;
+use crate::runtime::edge_query::EdgeQuery;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
+use crate::runtime::protocol::ProtocolKind;
 use crate::runtime::sample::Sample;
 use std::collections::VecDeque;
+use std::sync::Arc;
 use tracing::{debug, trace};
 
 /// SPI decoder node
@@ -43,6 +46,11 @@ pub struct SpiDecoder {
 
     /// Transaction counter for logging.
     tx_count: u64,
+
+    /// Query-mode CS search cursor, persisted across work() calls (the
+    /// index-query equivalent of the streaming CS `Receiver`'s implicit
+    /// position). Unused in streaming mode.
+    query_cs_position: u64,
 }
 
 impl SpiDecoder {
@@ -77,6 +85,7 @@ impl SpiDecoder {
             channel_buffers: (0..num_channels).map(|_| VecDeque::new()).collect(),
             prev_clk: false,
             tx_count: 0,
+            query_cs_position: 0,
         }
     }
 
@@ -189,7 +198,219 @@ impl ProcessNode for SpiDecoder {
         )]
     }
 
+    fn input_protocols(&self, _port: usize) -> Vec<ProtocolKind> {
+        // Every input this decoder has is a raw binary channel: prefer
+        // skip-ahead queries over streaming every dead-time edge, fall back
+        // to streaming for live sources with no index.
+        vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]
+    }
+
     fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
+        // Real graphs wire cs/clk/mosi/miso to the same source, so this is
+        // an all-or-nothing choice per decoder rather than a per-port mix:
+        // if every port this decoder actually uses negotiated EdgeQuery,
+        // skip straight to the transactions instead of streaming every
+        // sample in between; otherwise stream exactly as before.
+        let cs_query = inputs.first().and_then(|p| p.edge_query());
+        let clk_query = inputs.get(1).and_then(|p| p.edge_query());
+        let mosi_query = if self.has_mosi {
+            inputs.get(2).and_then(|p| p.edge_query())
+        } else {
+            None
+        };
+        let miso_query = if self.has_miso {
+            let idx = 2 + usize::from(self.has_mosi);
+            inputs.get(idx).and_then(|p| p.edge_query())
+        } else {
+            None
+        };
+
+        let ready_for_query_mode = cs_query.is_some()
+            && clk_query.is_some()
+            && (!self.has_mosi || mosi_query.is_some())
+            && (!self.has_miso || miso_query.is_some());
+
+        if ready_for_query_mode {
+            return self.work_indexed(
+                outputs,
+                cs_query.expect("checked above"),
+                clk_query.expect("checked above"),
+                mosi_query,
+                miso_query,
+            );
+        }
+
+        self.work_streamed(inputs, outputs)
+    }
+}
+
+impl SpiDecoder {
+    /// Index-driven path: CS/CLK are located by direct skip-ahead queries
+    /// (no streaming, no discarding dead-time edges) and MOSI/MISO are
+    /// point-read at each CLK sampling edge. One `work()` call processes
+    /// exactly one CS active/inactive transaction window, mirroring
+    /// `work_streamed`'s per-call granularity so `self`'s persisted state
+    /// (`query_cs_position`, `prev_clk`-equivalent-free since sampling
+    /// edges are located directly, `tx_count`) behaves the same way across
+    /// repeated scheduler calls.
+    fn work_indexed(
+        &mut self,
+        outputs: &[OutputPort],
+        cs_query: Arc<dyn EdgeQuery>,
+        clk_query: Arc<dyn EdgeQuery>,
+        mosi_query: Option<Arc<dyn EdgeQuery>>,
+        miso_query: Option<Arc<dyn EdgeQuery>>,
+    ) -> WorkResult<usize> {
+        let cs_polarity = self.cs_polarity;
+        // Edges alternate, so "wait for active" only ever needs the value
+        // that counts as active/inactive, not a predicate — matching
+        // `cs_is_active` in `work_streamed` for the two polarities that
+        // are actually used in practice. `Disabled` inherits the same
+        // degenerate behavior `work_streamed` already has (CS is a
+        // mandatory input on this decoder; a polarity that never
+        // recognizes "inactive" was already a pre-existing corner case).
+        let (active_value, inactive_value) = match cs_polarity {
+            CsPolarity::ActiveLow => (false, true),
+            CsPolarity::ActiveHigh | CsPolarity::Disabled => (true, false),
+        };
+        let sample_on_rising = self.samples_on_rising();
+        let bits_per_word = self.bits_per_word;
+        let bit_order = self.bit_order;
+        let bit_position = |bit_index: usize| -> u32 {
+            match bit_order {
+                BitOrder::MsbFirst => (bits_per_word - 1 - bit_index) as u32,
+                BitOrder::LsbFirst => bit_index as u32,
+            }
+        };
+        // A rising-sampling mode looks for the edge landing on `true`
+        // (i.e. the rising transition); falling-sampling looks for `false`.
+        let sampling_value = sample_on_rising;
+
+        let output = outputs
+            .first()
+            .and_then(|p| p.get::<SpiTransfer>())
+            .ok_or_else(|| WorkError::NodeError("Missing output".into()))?;
+
+        let total_samples = cs_query.total_samples();
+        let timestamp_step = (1_000_000_000.0 / cs_query.samplerate_hz()) as u64;
+        let position_to_ns = |position: u64| position.saturating_mul(timestamp_step);
+        // EdgeQuery methods return crate::Result, not WorkResult.
+        let query_err = |e: crate::Error| WorkError::NodeError(e.to_string());
+
+        if self.query_cs_position >= total_samples {
+            return Err(WorkError::Shutdown);
+        }
+
+        // ── 1. Wait for CS to go active ──────────────────────────────────
+        debug!("Waiting for CS active (query mode)...");
+        let cs_active_start = cs_query
+            .next_edge_with_value(self.query_cs_position, active_value, total_samples)
+            .map_err(query_err)?
+            .ok_or(WorkError::Shutdown)?
+            .sample;
+
+        // ── 2. Get CS inactive edge to know the full CS window ───────────
+        let cs_inactive_time = cs_query
+            .next_edge_with_value(cs_active_start, inactive_value, total_samples)
+            .map_err(query_err)?
+            .ok_or(WorkError::Shutdown)?
+            .sample;
+
+        self.query_cs_position = cs_inactive_time;
+
+        debug!(
+            "CS window: {:.9}s — {:.9}s ({:.3}µs)",
+            position_to_ns(cs_active_start) as f64 / 1_000_000_000.0,
+            position_to_ns(cs_inactive_time) as f64 / 1_000_000_000.0,
+            (position_to_ns(cs_inactive_time) - position_to_ns(cs_active_start)) as f64 / 1_000.0,
+        );
+
+        // ── 3. No drain needed — CLK/MOSI/MISO were never streamed ───────
+
+        // ── 4. Collect words from CLK within the CS window ───────────────
+        let mut words_emitted: usize = 0;
+        let mut clk_position = cs_active_start;
+
+        'word_loop: loop {
+            let mut mosi_word: u32 = 0;
+            let mut miso_word: u32 = 0;
+            let mut bits_collected: usize = 0;
+            let mut first_clock_edge: Option<u64> = None;
+
+            loop {
+                let Some(edge) = clk_query
+                    .next_edge_with_value(clk_position, sampling_value, cs_inactive_time)
+                    .map_err(query_err)?
+                else {
+                    if bits_collected > 0 && bits_collected < bits_per_word {
+                        debug!("Incomplete word: {}/{} bits", bits_collected, bits_per_word);
+                    }
+                    break 'word_loop;
+                };
+                clk_position = edge.sample;
+
+                if first_clock_edge.is_none() {
+                    first_clock_edge = Some(edge.sample);
+                }
+
+                let sample_position = edge.sample.saturating_sub(1);
+                if let Some(ref q) = mosi_query {
+                    let mosi_val = q.value_at(sample_position).map_err(query_err)?;
+                    if mosi_val {
+                        mosi_word |= 1 << bit_position(bits_collected);
+                    }
+                    trace!(
+                        "bit {}: CLK edge at {:.9}s, MOSI={}",
+                        bits_collected,
+                        position_to_ns(edge.sample) as f64 / 1_000_000_000.0,
+                        mosi_val,
+                    );
+                }
+                if let Some(ref q) = miso_query {
+                    let miso_val = q.value_at(sample_position).map_err(query_err)?;
+                    if miso_val {
+                        miso_word |= 1 << bit_position(bits_collected);
+                    }
+                }
+
+                bits_collected += 1;
+                if bits_collected >= bits_per_word {
+                    break;
+                }
+            }
+
+            if bits_collected == bits_per_word {
+                let timestamp = first_clock_edge
+                    .map(position_to_ns)
+                    .unwrap_or_else(|| position_to_ns(cs_active_start));
+                let transfer = SpiTransfer {
+                    mosi: mosi_word,
+                    miso: miso_word,
+                    timing: TimingInfo::new(timestamp as f64 / 1_000.0, timestamp),
+                };
+
+                words_emitted += 1;
+                debug!(
+                    "#{}: 0x{:06X} at {:.9}s",
+                    self.tx_count + words_emitted as u64,
+                    transfer.mosi,
+                    timestamp as f64 / 1_000_000_000.0
+                );
+                output.send(transfer)?;
+            }
+        }
+
+        self.tx_count += words_emitted as u64;
+        Ok(words_emitted)
+    }
+
+    /// Streaming path: unchanged behavior for live sources or any
+    /// connection that didn't negotiate `EdgeQuery`.
+    fn work_streamed(
+        &mut self,
+        inputs: &[InputPort],
+        outputs: &[OutputPort],
+    ) -> WorkResult<usize> {
         // Extract config values before borrowing channel_buffers
         let cs_polarity = self.cs_polarity;
         let cs_is_active = |value: bool| -> bool {
@@ -435,5 +656,155 @@ mod tests {
         let decoder_high =
             SpiDecoder::with_cs_polarity(SpiMode::Mode0, 8, true, false, CsPolarity::ActiveHigh);
         assert_eq!(decoder_high.cs_polarity, CsPolarity::ActiveHigh);
+    }
+
+    // ── Differential test: query-mode output must match streaming-mode ──
+
+    /// Wraps a node and forces its outputs onto the `Stream` protocol
+    /// regardless of what the wrapped node would otherwise prefer. Used to
+    /// get a guaranteed streaming baseline from `DslFileSource` (which
+    /// prefers `EdgeQuery`) to differential-test against.
+    struct ForceStreamOutput<N>(N);
+
+    impl<N: ProcessNode> ProcessNode for ForceStreamOutput<N> {
+        fn name(&self) -> &str {
+            self.0.name()
+        }
+        fn should_stop(&self) -> bool {
+            self.0.should_stop()
+        }
+        fn is_self_threading(&self) -> bool {
+            self.0.is_self_threading()
+        }
+        fn num_inputs(&self) -> usize {
+            self.0.num_inputs()
+        }
+        fn num_outputs(&self) -> usize {
+            self.0.num_outputs()
+        }
+        fn input_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
+            self.0.input_schema()
+        }
+        fn output_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
+            self.0.output_schema()
+        }
+        fn node_type(&self) -> &str {
+            self.0.node_type()
+        }
+        fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
+            self.0.work(inputs, outputs)
+        }
+        fn output_protocols(&self, _port: usize) -> Vec<ProtocolKind> {
+            vec![ProtocolKind::Stream]
+        }
+    }
+
+    /// Test-only sink that collects everything sent to its single input.
+    struct CollectTransfers(std::sync::Arc<std::sync::Mutex<Vec<SpiTransfer>>>);
+
+    impl ProcessNode for CollectTransfers {
+        fn name(&self) -> &str {
+            "collect"
+        }
+        fn num_inputs(&self) -> usize {
+            1
+        }
+        fn num_outputs(&self) -> usize {
+            0
+        }
+        fn input_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
+            use crate::runtime::ports::{PortDirection, PortSchema};
+            vec![PortSchema::new::<SpiTransfer>("data", 0, PortDirection::Input)]
+        }
+        fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
+            let mut buf = VecDeque::new();
+            let mut recv = inputs
+                .first()
+                .and_then(|p| p.get::<SpiTransfer>(&mut buf))
+                .ok_or_else(|| WorkError::NodeError("Missing collector input".into()))?;
+            let item = recv.recv()?;
+            self.0.lock().unwrap().push(item);
+            Ok(1)
+        }
+    }
+
+    /// Runs `_captures/wipneus5.dsl` through a real 3-node pipeline
+    /// (`DslFileSource` -> `SpiDecoder` -> collector), bounded to
+    /// `max_samples` so the test is fast, and returns the decoded
+    /// transfers. `force_stream` wraps the source so the connection
+    /// negotiates `Stream` instead of the `EdgeQuery` both sides would
+    /// otherwise prefer.
+    fn decode_wipneus5(
+        path: &std::path::Path,
+        max_samples: u64,
+        force_stream: bool,
+    ) -> Vec<SpiTransfer> {
+        use crate::DslFileSource;
+        use crate::runtime::Pipeline;
+
+        let source = DslFileSource::new(path, 9)
+            .expect("wipneus5.dsl should open")
+            .with_max_samples(Some(max_samples));
+        let decoder = SpiDecoder::new(SpiMode::Mode0, 24, true, false);
+        let collected = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let mut pipeline = Pipeline::new();
+        if force_stream {
+            pipeline
+                .add_process("source", ForceStreamOutput(source))
+                .unwrap();
+        } else {
+            pipeline.add_process("source", source).unwrap();
+        }
+        pipeline.add_process("spi", decoder).unwrap();
+        pipeline
+            .add_process("collect", CollectTransfers(collected.clone()))
+            .unwrap();
+
+        pipeline.connect("source", "d7", "spi", "clk").unwrap();
+        pipeline.connect("source", "d8", "spi", "cs").unwrap();
+        pipeline.connect("source", "d6", "spi", "mosi").unwrap();
+        pipeline
+            .connect("spi", "spi_transfers", "collect", "data")
+            .unwrap();
+
+        pipeline.build().unwrap().wait();
+
+        std::sync::Arc::try_unwrap(collected)
+            .unwrap()
+            .into_inner()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_query_mode_matches_streaming_mode() {
+        let path = std::path::Path::new("_captures/wipneus5.dsl");
+        if !path.exists() {
+            return;
+        }
+
+        // Bounded prefix: fast to run, still large enough to very likely
+        // contain real SPI traffic on this fixture (the same file/channel
+        // mapping the golden `run_reference` pipeline in
+        // crates/ui/src/compiler/mod.rs uses).
+        const MAX_SAMPLES: u64 = 200_000_000;
+
+        let streamed = decode_wipneus5(path, MAX_SAMPLES, true);
+        let queried = decode_wipneus5(path, MAX_SAMPLES, false);
+
+        assert!(
+            !streamed.is_empty(),
+            "expected at least one decoded SPI transfer in the first {MAX_SAMPLES} samples \
+             to make this comparison meaningful"
+        );
+
+        let as_tuple = |t: &SpiTransfer| (t.mosi, t.miso, t.timing.position, t.timing.timestamp_us);
+        let streamed_view: Vec<_> = streamed.iter().map(as_tuple).collect();
+        let queried_view: Vec<_> = queried.iter().map(as_tuple).collect();
+
+        assert_eq!(
+            streamed_view, queried_view,
+            "query-mode SpiDecoder must produce byte-identical output to the streaming path"
+        );
     }
 }

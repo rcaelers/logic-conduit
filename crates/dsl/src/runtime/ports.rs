@@ -53,8 +53,10 @@ impl PortSchema {
 
 use crossbeam_channel::Receiver as CrossbeamReceiver;
 use std::fmt;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use super::edge_query::EdgeQuery;
 use super::sender::ChannelMessage;
 
 /// Type-erased input port wrapping a Receiver<T>
@@ -62,6 +64,9 @@ pub struct InputPort {
     channel: Box<dyn std::any::Any + Send>,
     watchdog_handle: Option<WatchdogHandle>,
     eos_received: AtomicBool,
+    /// Set when this connection negotiated [`super::protocol::ProtocolKind::EdgeQuery`]
+    /// — see [`Self::edge_query`].
+    edge_query: Option<Arc<dyn EdgeQuery>>,
 }
 
 impl InputPort {
@@ -72,6 +77,7 @@ impl InputPort {
             channel,
             watchdog_handle: None,
             eos_received: AtomicBool::new(false),
+            edge_query: None,
         }
     }
 
@@ -92,6 +98,7 @@ impl InputPort {
             channel: Box::new(receiver),
             watchdog_handle: Some(watchdog.register_port(node_name, "recv", port_name)),
             eos_received: AtomicBool::new(false),
+            edge_query: None,
         }
     }
 
@@ -104,6 +111,22 @@ impl InputPort {
     ) -> Self {
         self.watchdog_handle = Some(watchdog.register_port(&node_name, "recv", &port_name));
         self
+    }
+
+    /// Attach the negotiated `EdgeQuery` handle for this connection
+    /// (internal use by `Pipeline::build`).
+    pub(crate) fn with_edge_query(mut self, edge_query: Option<Arc<dyn EdgeQuery>>) -> Self {
+        self.edge_query = edge_query;
+        self
+    }
+
+    /// The negotiated random-access query handle for this connection, if
+    /// it settled on [`super::protocol::ProtocolKind::EdgeQuery`] rather
+    /// than the streamed-channel protocol. Nodes that can use it should
+    /// prefer it over `get()`; a `None` here means this connection (or an
+    /// unconnected port) only supports streaming.
+    pub fn edge_query(&self) -> Option<Arc<dyn EdgeQuery>> {
+        self.edge_query.clone()
     }
 
     /// Get a Receiver with automatic watchdog monitoring.

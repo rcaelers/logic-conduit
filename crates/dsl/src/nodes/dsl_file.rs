@@ -10,8 +10,8 @@
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkResult};
 use crate::runtime::sample::{Sample, SampleBlock};
 use crate::runtime::{
-    BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureSource, DslHeader,
-    DslSampledWindow, Sender,
+    BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureSource,
+    CaptureTransition, DslHeader, DslSampledWindow, EdgeQuery, ProtocolKind, Sender,
 };
 use crate::runtime::{CaptureIndexProgress, IndexSampler};
 use crate::{Error, Result};
@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use zip::ZipArchive;
 
 type BlockCache = Arc<Mutex<HashMap<(usize, u64), Arc<[u8]>>>>;
@@ -264,6 +264,68 @@ fn dsl_sidecar_path(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
+/// File-backed [`EdgeQuery`] for one channel, sharing the same on-disk
+/// `.idx`/`.raw` waveform index the viewer uses for random-access reads
+/// (via [`DslChunkedCaptureReader`]).
+struct DslChannelEdgeIndex {
+    sampler: Arc<Mutex<DslChunkedCaptureReader>>,
+    channel: usize,
+    sample_period: f64,
+    samplerate_hz: f64,
+    total_samples: u64,
+}
+
+impl EdgeQuery for DslChannelEdgeIndex {
+    fn sample_period(&self) -> f64 {
+        self.sample_period
+    }
+
+    fn samplerate_hz(&self) -> f64 {
+        self.samplerate_hz
+    }
+
+    fn total_samples(&self) -> u64 {
+        self.total_samples
+    }
+
+    fn value_at(&self, position: u64) -> Result<bool> {
+        let mut sampler = self.sampler.lock().unwrap();
+        sampler.value_at(self.channel, position)
+    }
+
+    fn next_edge(&self, position: u64, limit: u64) -> Result<Option<CaptureTransition>> {
+        let limit = limit.min(self.total_samples);
+        if position >= limit {
+            return Ok(None);
+        }
+
+        // Gallop: try successively larger windows until a transition turns
+        // up or we've covered the whole [position, limit) search space.
+        // `target_points == window` always keeps `sampled_window` on its
+        // exact (no-smearing) path, so every result here is a real edge.
+        let mut window: u64 = 4096;
+        loop {
+            let end = position.saturating_add(window).min(limit);
+            let target_points = (end - position).max(1) as usize;
+            let found = {
+                let mut sampler = self.sampler.lock().unwrap();
+                sampler.sampled_window(&[self.channel], position, end, target_points)?
+            };
+            if let Some(transition) = found
+                .channels
+                .first()
+                .and_then(|channel| channel.transitions.first())
+            {
+                return Ok(Some(*transition));
+            }
+            if end >= limit {
+                return Ok(None);
+            }
+            window = window.saturating_mul(2);
+        }
+    }
+}
+
 /// Source node that reads from a DSLogic .dsl capture file and outputs Sample streams
 ///
 /// This runtime `ProcessNode` (with 0 inputs, N outputs) reads from a .dsl file and outputs
@@ -304,6 +366,7 @@ fn dsl_sidecar_path(path: &Path) -> PathBuf {
 pub struct DslFileSource {
     name: String,
     // File access (shared across all channel threads)
+    path: PathBuf,
     archive: Arc<Mutex<ZipArchive<File>>>,
     header: DslHeader,
     blocks: BlockCache,
@@ -318,6 +381,12 @@ pub struct DslFileSource {
     thread_handles: Option<Vec<JoinHandle<()>>>,
     threads_spawned: bool,
     num_threads: usize,
+
+    // Lazily-built random-access waveform index, shared across every
+    // channel's `edge_query()` handle. Built at most once, only if a
+    // downstream node actually negotiates the `EdgeQuery` protocol — see
+    // `edge_index_handle`.
+    index: Mutex<Option<Arc<Mutex<DslChunkedCaptureReader>>>>,
 }
 
 impl DslFileSource {
@@ -330,7 +399,8 @@ impl DslFileSource {
             )));
         }
 
-        let file = File::open(path)?;
+        let path = path.as_ref().to_path_buf();
+        let file = File::open(&path)?;
         let mut archive = ZipArchive::new(file)?;
         let header = Self::parse_header(&mut archive)?;
 
@@ -343,6 +413,7 @@ impl DslFileSource {
 
         Ok(Self {
             name: "dsl_file_source".to_string(),
+            path,
             archive: Arc::new(Mutex::new(archive)),
             header: header.clone(),
             blocks: Arc::new(Mutex::new(HashMap::new())),
@@ -353,7 +424,33 @@ impl DslFileSource {
             thread_handles: None,
             threads_spawned: false,
             num_threads: 0,
+            index: Mutex::new(None),
         })
+    }
+
+    /// Random-access handle backing `edge_query()`, built on first use from
+    /// the same `.idx`/`.raw` sidecar files the viewer uses (via
+    /// `DslFileCaptureDataSource`/`IndexSampler`). Returns `None` (logging a
+    /// warning) if the index can't be built — callers fall back to `Stream`.
+    fn edge_index_handle(&self) -> Option<Arc<Mutex<DslChunkedCaptureReader>>> {
+        let mut guard = self.index.lock().unwrap();
+        if guard.is_none() {
+            let source = match DslFileCaptureDataSource::open(&self.path) {
+                Ok(source) => source,
+                Err(e) => {
+                    warn!("Failed to open capture for edge queries: {}", e);
+                    return None;
+                }
+            };
+            match IndexSampler::open_data_source_with_progress(source, |_| {}) {
+                Ok(sampler) => *guard = Some(Arc::new(Mutex::new(sampler))),
+                Err(e) => {
+                    warn!("Failed to build waveform index for edge queries: {}", e);
+                    return None;
+                }
+            }
+        }
+        guard.clone()
     }
 
     pub(crate) fn parse_header(archive: &mut ZipArchive<File>) -> Result<DslHeader> {
@@ -888,6 +985,37 @@ impl ProcessNode for DslFileSource {
         schemas
     }
 
+    fn output_protocols(&self, _port: usize) -> Vec<ProtocolKind> {
+        // Every d/b port aliases a raw file channel, so every port can be
+        // answered from the waveform index — prefer that, fall back to
+        // streaming for consumers (or live sources with no index) that
+        // don't ask for it.
+        vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]
+    }
+
+    fn edge_query(
+        &self,
+        port: usize,
+        _input_queries: &[Option<Arc<dyn EdgeQuery>>],
+    ) -> Option<Arc<dyn EdgeQuery>> {
+        let channel = port % self.num_channels as usize;
+        let sampler = self.edge_index_handle()?;
+        // Honor `with_max_samples` the same way the streaming reader
+        // threads do, so a bounded source behaves identically regardless
+        // of which protocol a connection negotiates.
+        let total_samples = self
+            .max_samples
+            .unwrap_or(self.header.total_samples)
+            .min(self.header.total_samples);
+        Some(Arc::new(DslChannelEdgeIndex {
+            sampler,
+            channel,
+            sample_period: self.header.sample_period,
+            samplerate_hz: self.header.samplerate_hz,
+            total_samples,
+        }))
+    }
+
     fn work(&mut self, _inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
         use crate::runtime::node::WorkError;
 
@@ -1122,6 +1250,102 @@ mod tests {
 
         assert_eq!(window.channels.len(), channel_count);
         assert!(window.sample_step > 0);
+    }
+
+    #[test]
+    fn test_dsl_channel_edge_index_matches_ground_truth() {
+        let path = Path::new("_captures/wipneus5.dsl");
+        if !path.exists() {
+            return;
+        }
+
+        let source = DslFileSource::new(path, 1).expect("wipneus5.dsl should open");
+        let edge_query = source
+            .edge_query(0, &[])
+            .expect("DslFileSource should provide an EdgeQuery for channel 0");
+
+        // Ground truth: exact transitions over a bounded prefix, computed
+        // directly against the index (bypassing the galloping wrapper) so
+        // this validates next_edge's search logic against real data shape,
+        // not just the index itself.
+        let ground_truth_end = 2_000_000u64.min(edge_query.total_samples());
+        let mut sampler = DslChunkedCaptureReader::open(path).expect("sampler should open");
+        let window = sampler
+            .sampled_window(&[0], 0, ground_truth_end, ground_truth_end as usize)
+            .expect("exact window should read");
+        let expected: Vec<(u64, bool)> = window.channels[0]
+            .transitions
+            .iter()
+            .map(|t| (t.sample, t.value))
+            .collect();
+
+        // Walk next_edge from 0 and confirm it reproduces the same sequence
+        // (exercises galloping across whatever gap sizes occur in the real
+        // signal, small and large alike).
+        let mut position = 0u64;
+        let mut found = Vec::new();
+        while let Some(t) = edge_query
+            .next_edge(position, ground_truth_end)
+            .expect("next_edge should not error")
+        {
+            found.push((t.sample, t.value));
+            position = t.sample;
+        }
+        assert_eq!(found, expected);
+
+        // value_at agrees with the transitions: the new value holds at/after
+        // the edge, the old value holds strictly before it.
+        for &(sample, value) in &expected {
+            assert_eq!(edge_query.value_at(sample).unwrap(), value);
+            if sample > 0 {
+                assert_ne!(edge_query.value_at(sample - 1).unwrap(), value);
+            }
+        }
+    }
+
+    #[test]
+    fn test_dsl_channel_edge_index_next_edge_with_value() {
+        let path = Path::new("_captures/wipneus5.dsl");
+        if !path.exists() {
+            return;
+        }
+        let source = DslFileSource::new(path, 1).expect("wipneus5.dsl should open");
+        let edge_query = source.edge_query(0, &[]).expect("edge query available");
+        let limit = 2_000_000u64.min(edge_query.total_samples());
+
+        let Some(first) = edge_query.next_edge(0, limit).unwrap() else {
+            return; // channel 0 has no transitions in this prefix; nothing to check
+        };
+
+        let same = edge_query
+            .next_edge_with_value(0, first.value, limit)
+            .unwrap()
+            .expect("the first transition itself satisfies its own value");
+        assert_eq!(same, first);
+
+        // Edges alternate, so the opposite value's first occurrence (if any
+        // before `limit`) is strictly after `first`.
+        if let Some(other) = edge_query
+            .next_edge_with_value(0, !first.value, limit)
+            .unwrap()
+        {
+            assert_ne!(other.value, first.value);
+            assert!(other.sample > first.sample);
+        }
+    }
+
+    #[test]
+    fn test_dsl_channel_edge_index_end_of_file() {
+        let path = Path::new("_captures/wipneus5.dsl");
+        if !path.exists() {
+            return;
+        }
+        let source = DslFileSource::new(path, 1).expect("wipneus5.dsl should open");
+        let edge_query = source.edge_query(0, &[]).expect("edge query available");
+        let total = edge_query.total_samples();
+
+        assert_eq!(edge_query.next_edge(total - 1, total).unwrap(), None);
+        assert_eq!(edge_query.next_edge(total, total).unwrap(), None);
     }
 
     #[test]

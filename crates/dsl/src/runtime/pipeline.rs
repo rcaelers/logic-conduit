@@ -1,12 +1,15 @@
 //! Pipeline builder for constructing node graphs
 
+use super::edge_query::EdgeQuery;
 use super::errors::ConnectionError;
 use super::node::{InputPort, OutputPort, ProcessNode};
 use super::ports::PortSchema;
+use super::protocol::ProtocolKind;
 use super::scheduler::Scheduler;
 use super::type_registry::TYPE_REGISTRY;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, info};
 
 /// Pipeline builder that manages nodes and connections
@@ -252,22 +255,93 @@ impl Pipeline {
         let mut scheduler = Scheduler::new();
         let registry = TYPE_REGISTRY.lock().unwrap();
 
-        // Phase 1: Create all channels, accumulating receivers and senders
         type PortKey = (usize, usize);
+        let node_by_id: HashMap<usize, &Box<dyn ProcessNode>> =
+            self.nodes.iter().map(|(id, node)| (*id, node)).collect();
+
+        // Phase 0: negotiate a connection protocol per pending connection,
+        // intersecting the producer's output_protocols (preference order)
+        // with the consumer's input_protocols. Every node defaults to
+        // `[Stream]` on both ends, so a connection between two nodes that
+        // don't know about richer protocols always negotiates `Stream` —
+        // today's behavior, unchanged.
+        let mut protocols: Vec<ProtocolKind> = Vec::with_capacity(self.connections.len());
+        for conn in &self.connections {
+            let from_node = node_by_id
+                .get(&conn.from_node)
+                .ok_or_else(|| format!("Node {} not found", conn.from_node))?;
+            let to_node = node_by_id
+                .get(&conn.to_node)
+                .ok_or_else(|| format!("Node {} not found", conn.to_node))?;
+            let produced = from_node.output_protocols(conn.from_port);
+            let accepted = to_node.input_protocols(conn.to_port);
+            let protocol = produced
+                .iter()
+                .find(|p| accepted.contains(p))
+                .copied()
+                .ok_or_else(|| {
+                    format!(
+                        "No common connection protocol between node {} port {} and node {} port {}",
+                        conn.from_node, conn.from_port, conn.to_node, conn.to_port
+                    )
+                })?;
+            protocols.push(protocol);
+        }
+
+        // Phase 0.5: build one EdgeQuery handle per producing port that has
+        // at least one EdgeQuery-negotiated destination. `input_queries` is
+        // `&[]` today — only zero-input source nodes implement `edge_query`
+        // — so this doesn't need to run in dependency order; a future
+        // pass-through node would upgrade this to a topological pass.
+        let mut edge_queries: HashMap<PortKey, Arc<dyn EdgeQuery>> = HashMap::new();
+        for (conn, &protocol) in self.connections.iter().zip(&protocols) {
+            if protocol != ProtocolKind::EdgeQuery {
+                continue;
+            }
+            let key = (conn.from_node, conn.from_port);
+            if edge_queries.contains_key(&key) {
+                continue;
+            }
+            let from_node = node_by_id[&conn.from_node];
+            let handle = from_node.edge_query(conn.from_port, &[]).ok_or_else(|| {
+                format!(
+                    "Node {} port {} negotiated EdgeQuery but declined to provide a handle",
+                    conn.from_node, conn.from_port
+                )
+            })?;
+            edge_queries.insert(key, handle);
+        }
+
+        // Phase 1: Create channels for Stream-negotiated connections only,
+        // accumulating receivers and senders; collect the EdgeQuery handle
+        // for each EdgeQuery-negotiated destination input. A connection
+        // negotiated as EdgeQuery never gets a channel, so a producer that
+        // only has EdgeQuery destinations for a given port sees it as
+        // unconnected in Phase 2 below (e.g. a self-threading source's
+        // per-destination thread simply doesn't spawn for it).
         let mut receivers: HashMap<PortKey, Box<dyn Any + Send>> = HashMap::new();
         let mut senders: HashMap<PortKey, (TypeId, Vec<Box<dyn Any + Send>>)> = HashMap::new();
+        let mut input_edge_queries: HashMap<PortKey, Arc<dyn EdgeQuery>> = HashMap::new();
 
-        for conn in &self.connections {
-            let (tx, rx) = registry
-                .create_channel(conn.type_id, conn.buffer_size)
-                .ok_or_else(|| format!("Type {:?} not registered. Call register_type::<T>() before building pipeline.", conn.type_id))?;
+        for (conn, &protocol) in self.connections.iter().zip(&protocols) {
+            match protocol {
+                ProtocolKind::Stream => {
+                    let (tx, rx) = registry
+                        .create_channel(conn.type_id, conn.buffer_size)
+                        .ok_or_else(|| format!("Type {:?} not registered. Call register_type::<T>() before building pipeline.", conn.type_id))?;
 
-            receivers.insert((conn.to_node, conn.to_port), rx);
-            senders
-                .entry((conn.from_node, conn.from_port))
-                .or_insert_with(|| (conn.type_id, Vec::new()))
-                .1
-                .push(tx);
+                    receivers.insert((conn.to_node, conn.to_port), rx);
+                    senders
+                        .entry((conn.from_node, conn.from_port))
+                        .or_insert_with(|| (conn.type_id, Vec::new()))
+                        .1
+                        .push(tx);
+                }
+                ProtocolKind::EdgeQuery => {
+                    let handle = edge_queries[&(conn.from_node, conn.from_port)].clone();
+                    input_edge_queries.insert((conn.to_node, conn.to_port), handle);
+                }
+            }
         }
 
         // Phase 2: Start all nodes, wrapping outputs inline
@@ -291,7 +365,8 @@ impl Pipeline {
                         .unwrap_or_else(|| {
                             // Unconnected input: use dummy port
                             InputPort::from_type_erased(Box::new(()) as Box<dyn Any + Send>)
-                        });
+                        })
+                        .with_edge_query(input_edge_queries.remove(&(node_id, i)));
 
                     // Inject watchdog context
                     let port_name = input_schemas

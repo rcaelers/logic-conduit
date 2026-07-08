@@ -3,6 +3,7 @@
 pub mod capture;
 pub mod cooperative_manager;
 pub mod derived_index;
+pub mod edge_query;
 pub mod errors;
 pub mod events;
 pub mod graph;
@@ -10,6 +11,7 @@ pub mod manager;
 pub mod node;
 pub mod pipeline;
 pub mod ports;
+pub mod protocol;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod raw_block_cache;
 pub mod receiver;
@@ -28,6 +30,7 @@ pub use capture::{
     DslWaveformSegment, packed_bit,
 };
 pub use cooperative_manager::CooperativeManager;
+pub use edge_query::EdgeQuery;
 pub use errors::{ConnectionError, PortError, WorkError, WorkResult};
 pub use events::{NumberSample, TextSample, Trigger};
 pub use graph::{Connection, GraphBuilder, NodeId};
@@ -44,6 +47,7 @@ pub type AppManager = PipelineManager;
 pub type AppManager = CooperativeManager;
 pub use node::{ConfigOutcome, ConfigValue, NodeConfig, ProcessNode};
 pub use ports::{InputPort, OutputPort, Pipeline, PortDirection, PortSchema, register_type};
+pub use protocol::ProtocolKind;
 pub use receiver::{Receiver, ReceiverSelector};
 pub use sample::Sample;
 pub use sample::SampleBlock;
