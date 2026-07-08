@@ -4,7 +4,10 @@ use crate::types::{
     WaveformSegmentKind,
 };
 use crate::viewer::LogicAnalyzerViewer;
-use dsl::{CaptureMetadata, CaptureSampledWindow, CaptureWaveformSegment, DerivedLaneData, Sample};
+use dsl::{
+    AppendOnlyMipmap, CaptureMetadata, CaptureSampledWindow, CaptureWaveformSegment, DerivedLaneData,
+    DigitalFold, LaneSummary, MarkerFold, MipmapRecord, Sample,
+};
 use egui::{Color32, CursorIcon, PointerButton, Pos2, Rect, Response, Ui, vec2};
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -375,15 +378,15 @@ impl LogicAnalyzerViewer {
                 let (start_ns, end_ns) = self.visible_window_ns();
                 let lanes = self.derived.as_ref()?.read();
                 let lane = lanes.iter().find(|lane| &lane.name == name)?;
-                match &lane.data {
-                    DerivedLaneData::Digital(samples) => Some(Cow::Owned(
-                        derived_digital_channel(row, &lane.name, samples, start_ns, end_ns),
-                    )),
-                    DerivedLaneData::Markers(markers) => Some(Cow::Owned(
-                        derived_markers_channel(row, &lane.name, markers, start_ns, end_ns),
-                    )),
+                match &lane.summary {
+                    LaneSummary::Digital(summary) => Some(Cow::Owned(derived_digital_channel(
+                        row, &lane.name, summary, start_ns, end_ns,
+                    ))),
+                    LaneSummary::Markers(summary) => Some(Cow::Owned(derived_markers_channel(
+                        row, &lane.name, summary, start_ns, end_ns,
+                    ))),
                     // No boolean level to measure or toggle to snap to.
-                    DerivedLaneData::Annotations(_) => None,
+                    LaneSummary::Annotations(_) => None,
                 }
             }
         }
@@ -407,85 +410,93 @@ impl LogicAnalyzerViewer {
     }
 }
 
-/// The sub-range of a time-sorted slice covering `[start_ns, end_ns]`, padded
-/// by one entry on each side so a pulse straddling the window edge still has
-/// the real neighboring transition available (hover measurement's "period"
-/// needs one entry past the close of a pulse; a pad of exactly one is all it
-/// ever looks at — see `pulse_measurement_from_window`). Keeps derived-lane
-/// hover/snap from re-materializing an entire lane — which can hold millions
-/// of entries — on every frame the pointer moves.
-fn windowed_range(len: usize, first: usize, last: usize) -> (usize, usize) {
-    (first.saturating_sub(1), (last + 1).min(len))
+/// Records requested per query from a lane's summary index — a generous
+/// detail budget for a single hover/snap lookup (as opposed to a whole
+/// row's render), but still a hard bound: without one, a window that itself
+/// spans millions of entries at extreme zoom-out would re-materialize all
+/// of them, same as the raw-Vec bug this replaced.
+const DETAIL_BUDGET: usize = 2_048;
+
+/// Reinterprets a derived lane's multi-resolution summary (`Digital` or
+/// `Markers`, whichever kind `records` came from) as a `LogicChannel`, so
+/// hover measurement and cursor snap don't need a separate code path for
+/// derived lanes — they just don't know the difference. Never re-scans the
+/// raw lane: `records` is already the bounded result of a summary query
+/// (`AppendOnlyMipmap::sampled_window`), which handles windowing to the
+/// visible range internally.
+///
+/// A `Digital` record's `level_hint` carries its first/last level — emitted
+/// as one transition, or two when they differ (the record summarizes a
+/// coarsened run that toggled inside it; its own start/end are real
+/// boundaries, not invented edge positions, same principle
+/// `draw_derived_digital`'s dense fallback already follows). A `Markers`
+/// record has no `level_hint` (events have no level) — alternating a
+/// synthetic value per record reuses the same "gap to the nearest toggle"
+/// pulse machinery for "gap to the nearest event", with no real level
+/// implied; nothing reads `value` for a `Markers`-derived channel except
+/// this toggle shape itself.
+fn logic_channel_from_records(row: usize, name: &str, records: &[MipmapRecord]) -> LogicChannel {
+    let mut transitions = Vec::with_capacity(records.len() * 2);
+    let mut toggle = false;
+    for record in records {
+        match record.level_hint {
+            Some((first, last)) => {
+                transitions.push(Transition {
+                    time_us: record.start_ns as f64 / 1_000.0,
+                    value: first,
+                });
+                if first != last {
+                    transitions.push(Transition {
+                        time_us: record.end_ns as f64 / 1_000.0,
+                        value: last,
+                    });
+                }
+            }
+            None => {
+                toggle = !toggle;
+                transitions.push(Transition {
+                    time_us: record.start_ns as f64 / 1_000.0,
+                    value: toggle,
+                });
+            }
+        }
+    }
+    LogicChannel {
+        index: row,
+        name: name.to_owned(),
+        initial: false,
+        transitions,
+        waveform: Vec::new(),
+    }
 }
 
-/// Reinterprets a derived `Digital` lane's samples as a `LogicChannel`,
-/// windowed to `[start_ns, end_ns]` (see [`windowed_range`]). Before the
-/// first recorded sample there is nothing to show — same default
-/// `draw_derived_digital` uses — so `initial` is always `false`.
+/// Reinterprets a derived `Digital` lane as a `LogicChannel`, windowed to
+/// `[start_ns, end_ns]` via its summary index. Before the first recorded
+/// sample there is nothing to show — same default `draw_derived_digital`
+/// uses — so `initial` is always `false`.
 fn derived_digital_channel(
     row: usize,
     name: &str,
-    samples: &[Sample],
+    summary: &AppendOnlyMipmap<Sample, DigitalFold>,
     start_ns: u64,
     end_ns: u64,
 ) -> LogicChannel {
-    let first = samples.partition_point(|sample| sample.start_time < start_ns);
-    let last = first + samples[first..].partition_point(|sample| sample.start_time <= end_ns);
-    let (first, last) = windowed_range(samples.len(), first, last);
-    LogicChannel {
-        index: row,
-        name: name.to_owned(),
-        initial: false,
-        transitions: samples[first..last]
-            .iter()
-            .map(|sample| Transition {
-                time_us: sample.start_time as f64 / 1_000.0,
-                value: sample.value,
-            })
-            .collect(),
-        waveform: Vec::new(),
-    }
+    let records = summary.sampled_window(start_ns, end_ns, DETAIL_BUDGET);
+    logic_channel_from_records(row, name, &records)
 }
 
-/// Reinterprets a derived `Markers` lane as a `LogicChannel` that toggles at
-/// every marker, windowed to `[start_ns, end_ns]` (see [`windowed_range`]) —
-/// the same trick `derived_digital_channel` uses for sample lanes, so hover
-/// measurement and cursor snap treat "time since/until the nearest event"
-/// exactly like a pulse width on a real channel, with no separate code path.
-/// Width/Period read as the gap to the neighboring markers; there's no real
-/// "level" backing them, so `initial` is arbitrary (`false`) and only affects
-/// which side of the first marker looks "on" — and since only the window
-/// (not the whole lane) is materialized, the alternating `value` restarts
-/// from `false` at the window's first entry rather than reflecting true
-/// parity from the start of the lane, which is fine: nothing reads `value`
-/// for a `Markers`-derived channel except this toggle shape itself.
+/// Reinterprets a derived `Markers` lane as a `LogicChannel`, windowed to
+/// `[start_ns, end_ns]` via its summary index — see
+/// [`logic_channel_from_records`] for how events become toggles.
 fn derived_markers_channel(
     row: usize,
     name: &str,
-    markers: &[u64],
+    summary: &AppendOnlyMipmap<u64, MarkerFold>,
     start_ns: u64,
     end_ns: u64,
 ) -> LogicChannel {
-    let first = markers.partition_point(|&ts| ts < start_ns);
-    let last = first + markers[first..].partition_point(|&ts| ts <= end_ns);
-    let (first, last) = windowed_range(markers.len(), first, last);
-    let mut value = false;
-    LogicChannel {
-        index: row,
-        name: name.to_owned(),
-        initial: false,
-        transitions: markers[first..last]
-            .iter()
-            .map(|&timestamp_ns| {
-                value = !value;
-                Transition {
-                    time_us: timestamp_ns as f64 / 1_000.0,
-                    value,
-                }
-            })
-            .collect(),
-        waveform: Vec::new(),
-    }
+    let records = summary.sampled_window(start_ns, end_ns, DETAIL_BUDGET);
+    logic_channel_from_records(row, name, &records)
 }
 
 pub(crate) fn channels_from_window(

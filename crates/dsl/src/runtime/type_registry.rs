@@ -20,6 +20,9 @@ pub trait ErasedSharedSenders: Send + Sync {
     fn sender_box(&self) -> Box<dyn Any + Send>;
     /// Subscription ids dropped by `OverflowPolicy::Disconnect`.
     fn take_disconnected(&self) -> Vec<u64>;
+    /// Whether broadcasting the next value would have to block on some
+    /// subscriber — see [`SharedSenders::would_block`].
+    fn would_block(&self) -> bool;
 }
 
 impl<T: Clone + Send + Sync + 'static> ErasedSharedSenders for SharedSenders<T> {
@@ -38,6 +41,9 @@ impl<T: Clone + Send + Sync + 'static> ErasedSharedSenders for SharedSenders<T> 
     }
     fn take_disconnected(&self) -> Vec<u64> {
         SharedSenders::take_disconnected(self)
+    }
+    fn would_block(&self) -> bool {
+        SharedSenders::would_block(self)
     }
 }
 

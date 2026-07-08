@@ -91,11 +91,15 @@ impl LogicAnalyzerViewer {
         }
 
         let visible_end_us = self.visible_start_us + self.visible_span_us;
-        // Derived lanes (no index exists for them, wherever they've been
-        // dragged to among the rows) always measure from the in-memory
-        // transitions; a loaded capture's own channels take the index path,
-        // since even at zoom levels where the visible window is exact, the
-        // run or its period may close beyond the viewport.
+        // Derived lanes (wherever they've been dragged to among the rows)
+        // always measure from `channel.transitions` as already resolved by
+        // `channel_at_row` — a bounded query against the lane's own
+        // multi-resolution summary (`runtime::derived_index`), not the raw
+        // `CaptureIndex` real channels use, so there's no further exact
+        // refinement to fall through to below. A loaded capture's own
+        // channels do take that index path, since even at zoom levels
+        // where the visible window is exact, the run or its period may
+        // close beyond the viewport.
         let row_is_indexed = matches!(self.row_order.get(channel_row), Some(RowKey::Channel(_)))
             && self.has_index_sampler();
         let measurement = if !row_is_indexed {

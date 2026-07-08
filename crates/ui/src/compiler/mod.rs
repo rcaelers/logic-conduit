@@ -1494,6 +1494,18 @@ mod tests {
         std::fs::create_dir_all(&graph_dir).unwrap();
         std::fs::create_dir_all(&ref_dir).unwrap();
 
+        // The reference pipeline is a second, entirely independent full pass
+        // over the same multi-billion-sample capture (own process, own
+        // output dir) — nothing about it depends on the live-graph run
+        // below, so it runs concurrently on its own thread instead of
+        // afterward, roughly halving this test's wall-clock time on a
+        // machine with room for both.
+        let reference_handle = {
+            let capture = capture.clone();
+            let ref_dir = ref_dir.clone();
+            std::thread::spawn(move || run_reference(&capture, &ref_dir))
+        };
+
         let registry = BuilderRegistry::standard();
         let mut widget = golden_widget(&capture, &graph_dir);
         let mut ctx = CompileCtx::default();
@@ -1517,15 +1529,32 @@ mod tests {
         assert_eq!(summary.added, 1, "{summary:?}");
         assert_eq!(summary.restarted, 1, "{summary:?}"); // viewer rewired
 
-        // Let the tap observe some windows, then detach it.
-        std::thread::sleep(std::time::Duration::from_secs(20));
+        // Let the tap observe at least one window, then detach it — poll
+        // instead of a fixed sleep so this only takes as long as it
+        // actually needs to.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            let observed = lanes.read().iter().any(|lane| {
+                lane.name.contains("Word Matcher.Match")
+                    && matches!(&lane.data, dsl::DerivedLaneData::Markers(markers) if !markers.is_empty())
+            });
+            if observed {
+                break;
+            }
+            assert!(!run.is_finished(), "run finished before the tap observed anything");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "tap never observed a trigger within deadline"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
         widget.graph_mut().remove_node(matcher);
         let summary = run.apply(widget.graph(), &registry).expect("detach tap");
         assert_eq!(summary.removed, 1, "{summary:?}");
         assert_eq!(summary.restarted, 1, "{summary:?}");
 
         run.wait();
-        run_reference(&capture, &ref_dir);
+        reference_handle.join().expect("reference run panicked");
 
         // The writer branch never noticed any of it.
         let graph_files = bin_files(&graph_dir);
@@ -1569,6 +1598,18 @@ mod tests {
         std::fs::create_dir_all(&graph_dir).unwrap();
         std::fs::create_dir_all(&ref_dir).unwrap();
 
+        // The reference pipeline is a second, entirely independent full pass
+        // over the same multi-billion-sample capture (own process, own
+        // output dir) — nothing about it depends on the compiled-graph run
+        // below, so it runs concurrently on its own thread instead of
+        // afterward, roughly halving this test's wall-clock time on a
+        // machine with room for both.
+        let reference_handle = {
+            let capture = capture.clone();
+            let ref_dir = ref_dir.clone();
+            std::thread::spawn(move || run_reference(&capture, &ref_dir))
+        };
+
         // Compiled-graph run: startup graph with capture path + output
         // template pointed at the temp dirs.
         let widget = golden_widget(&capture, &graph_dir);
@@ -1604,7 +1645,7 @@ mod tests {
             assert!(markers >= 52, "expected ≥52 trigger markers, got {markers}");
         }
 
-        run_reference(&capture, &ref_dir);
+        reference_handle.join().expect("reference run panicked");
 
         let graph_files = bin_files(&graph_dir);
         let ref_files = bin_files(&ref_dir);

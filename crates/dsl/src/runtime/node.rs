@@ -85,6 +85,17 @@ pub trait ProcessNode: Send {
     /// Do work: read from inputs, process, write to outputs
     /// The scheduler provides references to input and output port slices
     /// Returns Ok(n) where n is the number of items produced, or Err on failure
+    ///
+    /// **Cooperative-backend invariant:** implementations must not send more
+    /// than one item per output per `work()` call. `CooperativeManager`
+    /// (used on wasm) only checks *before* calling `work()` that no output
+    /// would currently block (`runtime::cooperative_manager`'s module doc);
+    /// a node that fans out several sends to the same output within one
+    /// call can still fill that output's channel mid-call and hit a real
+    /// blocking `send()` — which, on that single-threaded scheduler,
+    /// deadlocks the whole pump loop permanently. `PipelineManager`
+    /// (thread-per-node, native) has no such constraint — blocking there
+    /// only stalls the one node's own thread.
     fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize>;
 
     /// Apply a configuration change while running (between `work()` calls).

@@ -6,18 +6,43 @@
 //! [`TYPE_REGISTRY`] subscriber-list machinery (so live add/remove/restart/
 //! reconfigure and sticky level priming behave identically), but never
 //! blocks: a node is only ever called when [`pump`](Self::pump) determines
-//! every one of its inputs is ready, and `pump` itself must be driven
-//! externally (the UI frame loop on wasm) rather than running to completion
-//! on its own.
+//! every one of its inputs is ready *and* every one of its outputs could be
+//! sent without blocking, and `pump` itself must be driven externally (the
+//! UI frame loop on wasm) rather than running to completion on its own.
 //!
-//! Readiness ("would `work()` block?") is tracked per input via a small
-//! closed-set dispatch on the port's `TypeId` ([`make_probe`]), because the
-//! type-erased channel handed back by [`ErasedSharedSenders::subscribe`] can
-//! only be downcast against a concrete `T`. A `closed` flag (shared with the
-//! producer's output list) keeps a drained-and-finished input permanently
-//! "ready" — without it, a multi-input node that keeps running after one
-//! producer finishes (e.g. anything built on `ReceiverSelector`) would never
-//! be polled again once that one input's queue emptied.
+//! Input readiness ("would `work()` block reading?") is tracked per input
+//! via a small closed-set dispatch on the port's `TypeId` ([`make_probe`]),
+//! because the type-erased channel handed back by
+//! [`ErasedSharedSenders::subscribe`] can only be downcast against a
+//! concrete `T`. A `closed` flag (shared with the producer's output list)
+//! keeps a drained-and-finished input permanently "ready" — without it, a
+//! multi-input node that keeps running after one producer finishes (e.g.
+//! anything built on `ReceiverSelector`) would never be polled again once
+//! that one input's queue emptied.
+//!
+//! Output readiness ("would `work()` block writing?") needs no such
+//! dispatch — a node's outputs are already held as `Arc<dyn
+//! ErasedSharedSenders>`, and [`ErasedSharedSenders::would_block`] answers
+//! the question directly. A node with any output that would currently block
+//! is skipped for this pump cycle, exactly like a node with an unready
+//! input, and retried automatically once [`pump`](Self::pump)'s
+//! `made_progress` loop comes back around. This is what makes it safe for
+//! [`crate::nodes::sinks::ViewerSink`] (or any node) to actually let a
+//! `Block`-policy channel fill and genuinely stall its producer's `send()`
+//! (`ANALYSIS_PIPELINE_DESIGN.md` §6.4) instead of that call permanently
+//! wedging the one cooperative thread. **This check is a per-cycle
+//! snapshot, not a hold on the channel** — `self.nodes` is a `HashMap`
+//! with unspecified iteration order, so a producer can still be visited
+//! before its consumer in one pass and fill a channel *during* its own
+//! `work()` call if that call performs more than one send on the same
+//! output. The safety net therefore depends on a systemic invariant: **no
+//! `ProcessNode::work()` implementation may send more than once per output
+//! per call while running under the cooperative backend.** Every node in
+//! this codebase already satisfies that (one item in, one item out, per
+//! call) except `ViewerSink`'s batched drain, which sends nothing itself
+//! (it has no outputs) and so is exempt by construction. A future node
+//! that fans out many sends from one `work()` call would reopen the
+//! deadlock this check exists to close.
 
 use super::errors::WorkError;
 use super::events::{NumberSample, TextSample, Trigger};
@@ -468,6 +493,19 @@ impl CooperativeManager {
                 if !node.probes.iter().all(Probe::is_ready) {
                     continue;
                 }
+                // Symmetric with the input-side check above: a node whose
+                // next send would block (a downstream channel is full) is
+                // skipped this cycle instead of being called and blocking
+                // the one cooperative thread inside a real `send()` — see
+                // the module doc's "would `work()` block?" framing, now
+                // covering both directions.
+                if node
+                    .output_lists
+                    .values()
+                    .any(|output| output.list.would_block())
+                {
+                    continue;
+                }
                 calls += 1;
                 match node.node.work(&node.inputs, &node.outputs) {
                     Ok(items) => {
@@ -650,6 +688,45 @@ mod tests {
             )]
         }
         fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
+            let mut input = inputs[0]
+                .get::<NumberSample>(&mut self.buffer)
+                .ok_or_else(|| WorkError::NodeError("missing input".into()))?;
+            let sample = input.recv()?;
+            self.store.lock().unwrap().push(sample.value);
+            Ok(1)
+        }
+    }
+
+    /// Like `Collect`, but drains nothing while `open` is false — simulates
+    /// a consumer that's momentarily not keeping up, under direct test
+    /// control instead of a timing-dependent stall.
+    struct GatedSink {
+        store: Arc<Mutex<Vec<i64>>>,
+        buffer: VecDeque<NumberSample>,
+        open: Arc<AtomicBool>,
+    }
+
+    impl ProcessNode for GatedSink {
+        fn name(&self) -> &str {
+            "gated_sink"
+        }
+        fn num_inputs(&self) -> usize {
+            1
+        }
+        fn num_outputs(&self) -> usize {
+            0
+        }
+        fn input_schema(&self) -> Vec<PortSchema> {
+            vec![PortSchema::new::<NumberSample>(
+                "in",
+                0,
+                PortDirection::Input,
+            )]
+        }
+        fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
+            if !self.open.load(Ordering::Acquire) {
+                return Ok(0);
+            }
             let mut input = inputs[0]
                 .get::<NumberSample>(&mut self.buffer)
                 .ok_or_else(|| WorkError::NodeError("missing input".into()))?;
@@ -875,5 +952,69 @@ mod tests {
 
         assert!(manager.is_finished(), "no nodes left to be unfinished");
         assert_eq!(manager.progress(), Vec::new());
+    }
+
+    #[test]
+    fn producer_is_skipped_not_blocked_while_downstream_channel_is_full() {
+        let mut manager = CooperativeManager::new();
+        let out = Arc::new(Mutex::new(Vec::new()));
+        let gate = Arc::new(AtomicBool::new(false)); // closed: sink drains nothing yet
+
+        manager
+            .add_node(NodeSpec {
+                name: "source".into(),
+                node: Box::new(CountingSource { next: 0, max: 20 }),
+                inputs: vec![],
+            })
+            .unwrap();
+        manager
+            .add_node(NodeSpec {
+                name: "sink".into(),
+                node: Box::new(GatedSink {
+                    store: Arc::clone(&out),
+                    buffer: VecDeque::new(),
+                    open: Arc::clone(&gate),
+                }),
+                inputs: vec![Some(InputSub {
+                    from_node: "source".into(),
+                    from_port: "out".into(),
+                    buffer: 3,
+                    policy: super::super::sender::OverflowPolicy::Block,
+                })],
+            })
+            .unwrap();
+
+        // Gate closed: the source can only fill the 3-slot channel, then
+        // must be *skipped* — not called and left to block a real `send()`,
+        // which on this single-threaded scheduler would hang forever, since
+        // nothing else could ever come along to drain it.
+        manager.pump(50);
+        let source_items = manager
+            .progress()
+            .into_iter()
+            .find(|(name, _)| name == "source")
+            .map(|(_, items)| items)
+            .unwrap();
+        assert_eq!(
+            source_items, 3,
+            "source should be capped at the channel's capacity, not run away"
+        );
+        assert!(
+            out.lock().unwrap().is_empty(),
+            "gate is closed, nothing should have drained yet"
+        );
+        assert!(!manager.is_finished());
+
+        // Open the gate: the channel drains, the source's own next `send()`
+        // (still gated by the same output-readiness check) resumes, and the
+        // run completes with every item delivered — no loss, no hang.
+        gate.store(true, Ordering::Release);
+        manager.pump(1000);
+
+        assert!(manager.is_finished());
+        assert_eq!(
+            out.lock().unwrap().as_slice(),
+            (0..20).collect::<Vec<i64>>().as_slice()
+        );
     }
 }

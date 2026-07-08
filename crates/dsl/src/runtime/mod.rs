@@ -2,6 +2,7 @@
 
 pub mod capture;
 pub mod cooperative_manager;
+pub mod derived_index;
 pub mod errors;
 pub mod events;
 pub mod graph;

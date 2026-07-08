@@ -166,6 +166,22 @@ impl<T: Clone + Send> SharedSenders<T> {
         self.inner.lock().unwrap().subscribers.len()
     }
 
+    /// Whether the next `send()` would have to block: true if any
+    /// `Block`/`Disconnect`-policy subscriber's channel is currently full.
+    /// `Lossy` subscribers never block, so they never count. A cheap,
+    /// non-mutating peek — the cooperative scheduler uses this to skip a
+    /// node whose output can't currently be sent without blocking, the same
+    /// way it already skips a node whose input isn't ready, rather than
+    /// calling `work()` and blocking the single cooperative thread inside a
+    /// real send.
+    pub fn would_block(&self) -> bool {
+        let inner = self.inner.lock().unwrap();
+        inner.subscribers.iter().any(|subscriber| {
+            !matches!(subscriber.policy, OverflowPolicy::Lossy)
+                && subscriber.tx.len() >= subscriber.tx.capacity().unwrap_or(usize::MAX)
+        })
+    }
+
     /// Broadcast one value. Non-blocking work happens under the lock;
     /// subscribers that need a *blocking* send are collected and served
     /// after it is released, so a stalled consumer never blocks a
@@ -575,6 +591,37 @@ mod shared_tests {
         assert_eq!(
             drain(&healthy),
             vec![Sample::new(true, 1), Sample::new(false, 2)]
+        );
+    }
+
+    #[test]
+    fn would_block_reflects_subscriber_fullness() {
+        let shared = SharedSenders::<Sample>::new(false);
+        let sender = Sender::from_shared(shared.clone());
+        let (_, rx) = shared.subscribe(2, OverflowPolicy::Block);
+
+        assert!(!shared.would_block(), "empty channel never blocks");
+        sender.send(Sample::new(true, 100)).unwrap();
+        assert!(!shared.would_block(), "channel not yet full");
+        sender.send(Sample::new(false, 200)).unwrap();
+        assert!(shared.would_block(), "channel now full");
+
+        // Draining frees room again.
+        assert!(rx.try_recv().is_ok());
+        assert!(!shared.would_block());
+    }
+
+    #[test]
+    fn would_block_ignores_lossy_subscribers() {
+        let shared = SharedSenders::<Sample>::new(false);
+        let sender = Sender::from_shared(shared.clone());
+        let (_, _rx) = shared.subscribe(1, OverflowPolicy::Lossy);
+
+        sender.send(Sample::new(true, 100)).unwrap();
+        sender.send(Sample::new(false, 200)).unwrap(); // would overflow a Block subscriber
+        assert!(
+            !shared.would_block(),
+            "a Lossy subscriber never makes the sender block"
         );
     }
 }

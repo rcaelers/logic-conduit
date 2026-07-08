@@ -4,6 +4,7 @@
 
 use crate::nodes::decoders::{ParallelWord, SpiTransfer};
 use crate::nodes::logic::{WordField, WordSource};
+use crate::runtime::derived_index::{AppendOnlyMipmap, LaneFold, MipmapRecord};
 use crate::runtime::events::Trigger;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
@@ -15,6 +16,13 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 /// next word: keeps the last word of a burst from stretching across the idle
 /// gap to the next one.
 pub const MAX_ANNOTATION_NS: u64 = 1_000_000;
+
+/// Most items one lane drains from its channel per `work()` call. Bounds how
+/// long one call holds `DerivedLanes`' write lock and, more importantly,
+/// stops `ViewerSink` from racing a fast producer to keep its channel
+/// perpetually empty — a channel that's allowed to actually fill is what
+/// lets its `Block` overflow policy engage and slow the producer down.
+const DRAIN_BATCH_SIZE: usize = 256;
 
 /// A decoded word drawn as a labeled box. The label is formatted at render
 /// time from `value` — storing strings per word would multiply the memory
@@ -37,10 +45,131 @@ pub enum DerivedLaneData {
     Markers(Vec<u64>),
 }
 
+/// How each lane kind folds into [`MipmapRecord`]s — see
+/// `runtime::derived_index` for why this exists (a multi-resolution index
+/// so the viewer never rescans a whole lane just to render or measure a
+/// zoomed-out window).
+#[derive(Debug, Clone, Copy)]
+pub struct DigitalFold;
+impl LaneFold<Sample> for DigitalFold {
+    fn leaf(entry: &Sample) -> MipmapRecord {
+        MipmapRecord {
+            start_ns: entry.start_time,
+            end_ns: entry.start_time,
+            count: 1,
+            level_hint: Some((entry.value, entry.value)),
+        }
+    }
+    fn combine(records: &[MipmapRecord]) -> MipmapRecord {
+        let first = records[0];
+        let last = records[records.len() - 1];
+        MipmapRecord {
+            start_ns: first.start_ns,
+            end_ns: last.end_ns,
+            count: records.iter().map(|record| record.count).sum(),
+            level_hint: match (first.level_hint, last.level_hint) {
+                (Some((first, _)), Some((_, last))) => Some((first, last)),
+                _ => None,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AnnotationFold;
+impl LaneFold<Annotation> for AnnotationFold {
+    fn leaf(entry: &Annotation) -> MipmapRecord {
+        MipmapRecord {
+            start_ns: entry.start_ns,
+            end_ns: entry.end_ns,
+            count: 1,
+            level_hint: None,
+        }
+    }
+    fn combine(records: &[MipmapRecord]) -> MipmapRecord {
+        MipmapRecord {
+            start_ns: records[0].start_ns,
+            // Not necessarily the last record in append order — boxes can,
+            // in principle, close later than a subsequent one starts.
+            end_ns: records.iter().map(|record| record.end_ns).max().unwrap(),
+            count: records.iter().map(|record| record.count).sum(),
+            level_hint: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MarkerFold;
+impl LaneFold<u64> for MarkerFold {
+    fn leaf(entry: &u64) -> MipmapRecord {
+        MipmapRecord {
+            start_ns: *entry,
+            end_ns: *entry,
+            count: 1,
+            level_hint: None,
+        }
+    }
+    fn combine(records: &[MipmapRecord]) -> MipmapRecord {
+        MipmapRecord {
+            start_ns: records[0].start_ns,
+            end_ns: records[records.len() - 1].end_ns,
+            count: records.iter().map(|record| record.count).sum(),
+            level_hint: None,
+        }
+    }
+}
+
+/// The multi-resolution index kept alongside a lane's raw `data`, mirroring
+/// its shape one-for-one — updated by the same `append_*_batch` calls, so
+/// it's never out of sync with what's actually stored.
+#[derive(Debug, Clone)]
+pub enum LaneSummary {
+    Digital(AppendOnlyMipmap<Sample, DigitalFold>),
+    Annotations(AppendOnlyMipmap<Annotation, AnnotationFold>),
+    Markers(AppendOnlyMipmap<u64, MarkerFold>),
+}
+
+impl LaneSummary {
+    /// A summary backfilled from `data` — every production caller registers
+    /// a lane empty (`ViewerBuilder::build` always passes a fresh
+    /// `Vec::new()`) so this is normally a no-op, but the invariant "summary
+    /// mirrors data" has to hold for *any* caller, not just the ones that
+    /// happen to start empty.
+    fn matching(data: &DerivedLaneData) -> Self {
+        match data {
+            DerivedLaneData::Digital(samples) => {
+                let mut summary = AppendOnlyMipmap::new();
+                summary.extend(samples);
+                Self::Digital(summary)
+            }
+            DerivedLaneData::Annotations(annotations) => {
+                let mut summary = AppendOnlyMipmap::new();
+                // Same rule as live appends (`append_word_batch`): an entry
+                // with `end_ns == start_ns` is still "open" — not yet
+                // closed by a successor — and can't join the summary until
+                // it is (the mipmap can never retroactively patch one it
+                // already folded in).
+                summary.extend(
+                    annotations
+                        .iter()
+                        .filter(|annotation| annotation.end_ns != annotation.start_ns),
+                );
+                Self::Annotations(summary)
+            }
+            DerivedLaneData::Markers(markers) => {
+                let mut summary = AppendOnlyMipmap::new();
+                summary.extend(markers);
+                Self::Markers(summary)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DerivedLane {
     pub name: String,
     pub data: DerivedLaneData,
+    pub summary: LaneSummary,
 }
 
 /// Shared, append-only store of derived lanes. The compiler hands one clone
@@ -66,11 +195,17 @@ impl DerivedLanes {
         let mut lanes = self.inner.write().unwrap();
         if let Some(index) = lanes.iter().position(|lane| lane.name == name) {
             if std::mem::discriminant(&lanes[index].data) != std::mem::discriminant(&data) {
+                lanes[index].summary = LaneSummary::matching(&data);
                 lanes[index].data = data;
             }
             return index;
         }
-        lanes.push(DerivedLane { name, data });
+        let summary = LaneSummary::matching(&data);
+        lanes.push(DerivedLane {
+            name,
+            data,
+            summary,
+        });
         lanes.len() - 1
     }
 
@@ -79,26 +214,51 @@ impl DerivedLanes {
         self.inner.read().unwrap()
     }
 
-    fn append_digital(&self, lane: usize, sample: Sample) {
+    /// Appends a whole batch under a single write-lock acquisition — called
+    /// once per `ViewerSink::work()` invocation per lane, rather than once
+    /// per item, so a burst of decoded entries doesn't take (and contend
+    /// the UI thread's `read()` for) the lock once per item.
+    fn append_digital_batch(&self, lane: usize, samples: impl IntoIterator<Item = Sample>) {
         let mut lanes = self.inner.write().unwrap();
         let Some(lane) = lanes.get_mut(lane) else {
             return;
         };
-        if let DerivedLaneData::Digital(samples) = &mut lane.data {
-            samples.push(sample);
+        let (DerivedLaneData::Digital(existing), LaneSummary::Digital(summary)) =
+            (&mut lane.data, &mut lane.summary)
+        else {
+            return;
+        };
+        for sample in samples {
+            summary.push(&sample);
+            existing.push(sample);
         }
     }
 
-    fn append_word(&self, lane: usize, start_ns: u64, value: u64) {
+    fn append_word_batch(&self, lane: usize, words: impl IntoIterator<Item = (u64, u64)>) {
         let mut lanes = self.inner.write().unwrap();
         let Some(lane) = lanes.get_mut(lane) else {
             return;
         };
-        if let DerivedLaneData::Annotations(annotations) = &mut lane.data {
+        let (DerivedLaneData::Annotations(annotations), LaneSummary::Annotations(summary)) =
+            (&mut lane.data, &mut lane.summary)
+        else {
+            return;
+        };
+        for (start_ns, value) in words {
             if let Some(previous) = annotations.last_mut()
                 && previous.end_ns == previous.start_ns
             {
                 previous.end_ns = start_ns.min(previous.start_ns + MAX_ANNOTATION_NS);
+                // Only now that its `end_ns` is final can it join the
+                // summary — the mipmap is append-only and can never
+                // retroactively patch an entry once it's folded into a
+                // coarser tier, so the most recent annotation always lags
+                // the summary by exactly one entry until the next word
+                // closes it (or, if the run ends right after it, forever —
+                // the raw `data` entry is still fully correct and is what
+                // exact/near-zoom rendering reads directly; see
+                // `draw_derived_annotations`'s open-ended handling).
+                summary.push(previous);
             }
             annotations.push(Annotation {
                 start_ns,
@@ -108,12 +268,18 @@ impl DerivedLanes {
         }
     }
 
-    fn append_marker(&self, lane: usize, timestamp_ns: u64) {
+    fn append_marker_batch(&self, lane: usize, timestamps: impl IntoIterator<Item = u64>) {
         let mut lanes = self.inner.write().unwrap();
         let Some(lane) = lanes.get_mut(lane) else {
             return;
         };
-        if let DerivedLaneData::Markers(markers) = &mut lane.data {
+        let (DerivedLaneData::Markers(markers), LaneSummary::Markers(summary)) =
+            (&mut lane.data, &mut lane.summary)
+        else {
+            return;
+        };
+        for timestamp_ns in timestamps {
+            summary.push(&timestamp_ns);
             markers.push(timestamp_ns);
         }
     }
@@ -143,10 +309,13 @@ struct Lane {
     eos: bool,
 }
 
-/// Sink with one typed input per lane. Never blocks on any single input —
-/// lanes drain round-robin with `try_recv` so a quiet lane cannot stall a
-/// busy one — and never applies backpressure beyond its (bounded) input
-/// buffers filling.
+/// Sink with one typed input per lane. Never blocks *waiting* on any single
+/// input — lanes drain round-robin with `try_recv` so a quiet lane cannot
+/// stall a busy one — but each lane's channel is drained in bounded batches
+/// (`DRAIN_BATCH_SIZE`), not to exhaustion, so a channel that a producer is
+/// filling faster than this sink drains it stays full and the producer's
+/// own send genuinely blocks (`ANALYSIS_PIPELINE_DESIGN.md` §6.4) — real
+/// backpressure, not a silent drop once storage fills up.
 pub struct ViewerSink {
     name: String,
     store: DerivedLanes,
@@ -252,19 +421,22 @@ impl ProcessNode for ViewerSink {
                 .get(index)
                 .ok_or_else(|| WorkError::NodeError(format!("Missing viewer input {index}")))?;
 
-            macro_rules! drain {
-                ($ty:ty, $buffer:expr, $append:expr) => {{
+            // Bounded, not drained to exhaustion: letting a burst fill this
+            // lane's channel (rather than racing to empty it every call) is
+            // what makes the channel's own bound + `Block` overflow policy
+            // (`ANALYSIS_PIPELINE_DESIGN.md` §6.4) actually apply real
+            // backpressure to the producer instead of never engaging.
+            macro_rules! drain_batch {
+                ($ty:ty, $buffer:expr) => {{
                     let Some(mut receiver) = port.get::<$ty>($buffer) else {
                         // Unconnected input: nothing will ever arrive.
                         lane.eos = true;
                         continue;
                     };
-                    loop {
+                    let mut batch: Vec<$ty> = Vec::new();
+                    while batch.len() < DRAIN_BATCH_SIZE {
                         match receiver.try_recv() {
-                            Ok(item) => {
-                                $append(&store, lane.store_index, item);
-                                progress += 1;
-                            }
+                            Ok(item) => batch.push(item),
                             Err(TryRecvError::Empty) => break,
                             Err(TryRecvError::Disconnected) => {
                                 lane.eos = true;
@@ -272,45 +444,51 @@ impl ProcessNode for ViewerSink {
                             }
                         }
                     }
+                    batch
                 }};
             }
 
             match &mut lane.buffer {
                 LaneBuffer::Signal(buffer) => {
-                    drain!(
-                        Sample,
-                        buffer,
-                        |store: &DerivedLanes, lane, item: Sample| {
-                            store.append_digital(lane, item)
-                        }
-                    )
+                    let batch = drain_batch!(Sample, buffer);
+                    progress += batch.len();
+                    if !batch.is_empty() {
+                        store.append_digital_batch(lane.store_index, batch);
+                    }
                 }
                 LaneBuffer::Spi(buffer) => {
-                    drain!(
-                        SpiTransfer,
-                        buffer,
-                        |store: &DerivedLanes, lane, item: SpiTransfer| {
-                            store.append_word(lane, item.timestamp_ns(), item.word(WordField::Mosi))
-                        }
-                    )
+                    let batch = drain_batch!(SpiTransfer, buffer);
+                    progress += batch.len();
+                    if !batch.is_empty() {
+                        store.append_word_batch(
+                            lane.store_index,
+                            batch
+                                .into_iter()
+                                .map(|item| (item.timestamp_ns(), item.word(WordField::Mosi))),
+                        );
+                    }
                 }
                 LaneBuffer::Parallel(buffer) => {
-                    drain!(
-                        ParallelWord,
-                        buffer,
-                        |store: &DerivedLanes, lane, item: ParallelWord| {
-                            store.append_word(lane, item.timestamp_ns(), item.word(WordField::Mosi))
-                        }
-                    )
+                    let batch = drain_batch!(ParallelWord, buffer);
+                    progress += batch.len();
+                    if !batch.is_empty() {
+                        store.append_word_batch(
+                            lane.store_index,
+                            batch
+                                .into_iter()
+                                .map(|item| (item.timestamp_ns(), item.word(WordField::Mosi))),
+                        );
+                    }
                 }
                 LaneBuffer::Trigger(buffer) => {
-                    drain!(
-                        Trigger,
-                        buffer,
-                        |store: &DerivedLanes, lane, item: Trigger| {
-                            store.append_marker(lane, item.timestamp_ns)
-                        }
-                    )
+                    let batch = drain_batch!(Trigger, buffer);
+                    progress += batch.len();
+                    if !batch.is_empty() {
+                        store.append_marker_batch(
+                            lane.store_index,
+                            batch.into_iter().map(|item| item.timestamp_ns),
+                        );
+                    }
                 }
             }
         }
@@ -429,16 +607,115 @@ mod tests {
     }
 
     #[test]
+    fn work_drains_at_most_one_batch_per_call() {
+        // A single `work()` call must not race a fast producer to keep the
+        // channel empty — that's what lets the channel's own bound and
+        // `Block` overflow policy apply real backpressure instead of never
+        // engaging (§`DRAIN_BATCH_SIZE`).
+        let store = DerivedLanes::new();
+        let mut sink = ViewerSink::new(store.clone()).with_lane(ViewerLaneKind::Signal, "sig");
+
+        let total = DRAIN_BATCH_SIZE + 5;
+        let wd = Watchdog::new();
+        let (tx, rx) = bounded::<ChannelMessage<Sample>>(total + 1);
+        for i in 0..total as u64 {
+            tx.send(ChannelMessage::Sample(Sample::new(i % 2 == 0, i)))
+                .unwrap();
+        }
+        drop(tx);
+        let inputs = vec![InputPort::new_with_watchdog(rx, &wd, "viewer", "in0")];
+
+        let progress = sink.work(&inputs, &[]).unwrap();
+        assert_eq!(progress, DRAIN_BATCH_SIZE, "one call drains one batch");
+        {
+            let lanes = store.read();
+            let DerivedLaneData::Digital(samples) = &lanes[0].data else {
+                panic!("expected digital lane");
+            };
+            assert_eq!(samples.len(), DRAIN_BATCH_SIZE);
+        }
+
+        // The remainder (plus the shutdown sentinel) arrives over the
+        // following calls.
+        run_sink(&mut sink, inputs);
+        let lanes = store.read();
+        let DerivedLaneData::Digital(samples) = &lanes[0].data else {
+            panic!("expected digital lane");
+        };
+        assert_eq!(samples.len(), total);
+    }
+
+    #[test]
     fn annotation_end_is_capped_across_gaps() {
         let store = DerivedLanes::new();
         let lane = store.register("w", DerivedLaneData::Annotations(Vec::new()));
-        store.append_word(lane, 1_000, 1);
-        store.append_word(lane, 1_000 + MAX_ANNOTATION_NS * 10, 2);
+        store.append_word_batch(lane, [(1_000, 1), (1_000 + MAX_ANNOTATION_NS * 10, 2)]);
         let lanes = store.read();
         let DerivedLaneData::Annotations(annotations) = &lanes[0].data else {
             panic!("expected annotations");
         };
         assert_eq!(annotations[0].end_ns, 1_000 + MAX_ANNOTATION_NS);
+    }
+
+    #[test]
+    fn summary_tracks_digital_samples_as_they_arrive() {
+        let store = DerivedLanes::new();
+        let lane = store.register("d", DerivedLaneData::Digital(Vec::new()));
+        store.append_digital_batch(
+            lane,
+            [Sample::new(true, 100), Sample::new(false, 300)],
+        );
+        let lanes = store.read();
+        let LaneSummary::Digital(summary) = &lanes[0].summary else {
+            panic!("expected a digital summary");
+        };
+        assert_eq!(summary.len(), 2);
+        let window = summary.sampled_window(0, 300, 10);
+        assert_eq!(window.len(), 2);
+        assert_eq!(window[0].level_hint, Some((true, true)));
+        assert_eq!(window[1].level_hint, Some((false, false)));
+    }
+
+    #[test]
+    fn summary_tracks_markers_as_they_arrive() {
+        let store = DerivedLanes::new();
+        let lane = store.register("m", DerivedLaneData::Markers(Vec::new()));
+        store.append_marker_batch(lane, [10, 20, 30]);
+        let lanes = store.read();
+        let LaneSummary::Markers(summary) = &lanes[0].summary else {
+            panic!("expected a markers summary");
+        };
+        assert_eq!(summary.len(), 3);
+    }
+
+    #[test]
+    fn summary_lags_the_most_recent_open_annotation_by_one() {
+        // The mipmap can't retroactively patch an entry once it's pushed,
+        // so the most recent (still "open", not yet end-patched) annotation
+        // only joins the summary once the *next* word closes it.
+        let store = DerivedLanes::new();
+        let lane = store.register("w", DerivedLaneData::Annotations(Vec::new()));
+
+        store.append_word_batch(lane, [(1_000, 0xAB)]);
+        {
+            let lanes = store.read();
+            let LaneSummary::Annotations(summary) = &lanes[0].summary else {
+                panic!("expected an annotations summary");
+            };
+            assert_eq!(summary.len(), 0, "the only word so far is still open");
+        }
+
+        store.append_word_batch(lane, [(1_500, 0xCD)]);
+        {
+            let lanes = store.read();
+            let LaneSummary::Annotations(summary) = &lanes[0].summary else {
+                panic!("expected an annotations summary");
+            };
+            assert_eq!(summary.len(), 1, "the first word is now closed");
+            let window = summary.sampled_window(0, 1_500, 10);
+            assert_eq!(window[0].start_ns, 1_000);
+            assert_eq!(window[0].end_ns, 1_500);
+        }
     }
 
     #[test]
@@ -449,9 +726,7 @@ mod tests {
         const ENTRIES: u64 = 10_000;
         let store = DerivedLanes::new();
         let lane = store.register("m", DerivedLaneData::Markers(Vec::new()));
-        for ts in 0..ENTRIES {
-            store.append_marker(lane, ts);
-        }
+        store.append_marker_batch(lane, 0..ENTRIES);
         let lanes = store.read();
         let DerivedLaneData::Markers(markers) = &lanes[0].data else {
             panic!("expected markers");

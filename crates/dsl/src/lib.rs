@@ -62,9 +62,11 @@ pub use nodes::logic::{
     WordSource,
 };
 pub use nodes::sinks::{
-    Annotation, BinaryFileWriter, DerivedLane, DerivedLaneData, DerivedLanes, TextFileWriter,
-    TgckRecorder, ViewerLaneKind, ViewerSink, WriteWidth,
+    Annotation, AnnotationFold, BinaryFileWriter, DerivedLane, DerivedLaneData, DerivedLanes,
+    DigitalFold, LaneSummary, MarkerFold, TextFileWriter, TgckRecorder, ViewerLaneKind, ViewerSink,
+    WriteWidth,
 };
+pub use runtime::derived_index::{AppendOnlyMipmap, LaneFold, MipmapRecord};
 
 // Re-export streaming runtime components
 pub use runtime::{
