@@ -357,14 +357,15 @@ impl LogicAnalyzerViewer {
     }
 
     /// Row-addressable channel view spanning both raw channels and any
-    /// derived `Digital` lane (§4.9), resolved through `row_order` so the
-    /// visual position (drag-reordered, interleaved) always matches what's
-    /// actually on screen — the same `LogicChannel` shape either way, so
-    /// hover measurement and cursor snap don't need a separate code path for
-    /// derived lanes; they just don't know the difference.
-    /// `Annotations`/`Markers` lanes have no `LogicChannel` equivalent (no
+    /// derived `Digital` or `Markers` lane (§4.9), resolved through
+    /// `row_order` so the visual position (drag-reordered, interleaved)
+    /// always matches what's actually on screen — the same `LogicChannel`
+    /// shape either way, so hover measurement and cursor snap don't need a
+    /// separate code path for derived lanes; they just don't know the
+    /// difference. `Annotations` lanes have no `LogicChannel` equivalent (no
     /// boolean level to measure or toggle to snap to), so this returns
-    /// `None` for them, same as an out-of-range row.
+    /// `None` for them, same as an out-of-range row. Use [`Self::is_event_row`]
+    /// to tell a `Markers` lane's synthetic level apart from a real one.
     pub(crate) fn channel_at_row(&self, row: usize) -> Option<Cow<'_, LogicChannel>> {
         match self.row_order.get(row)? {
             RowKey::Channel(index) => self
@@ -375,12 +376,35 @@ impl LogicAnalyzerViewer {
             RowKey::Derived(name) => {
                 let lanes = self.derived.as_ref()?.read();
                 let lane = lanes.iter().find(|lane| &lane.name == name)?;
-                let DerivedLaneData::Digital(samples) = &lane.data else {
-                    return None;
-                };
-                Some(Cow::Owned(derived_digital_channel(row, &lane.name, samples)))
+                match &lane.data {
+                    DerivedLaneData::Digital(samples) => {
+                        Some(Cow::Owned(derived_digital_channel(row, &lane.name, samples)))
+                    }
+                    DerivedLaneData::Markers(markers) => {
+                        Some(Cow::Owned(derived_markers_channel(row, &lane.name, markers)))
+                    }
+                    // No boolean level to measure or toggle to snap to.
+                    DerivedLaneData::Annotations(_) => None,
+                }
             }
         }
+    }
+
+    /// Whether `row` is a `Markers` derived lane — [`Self::channel_at_row`]
+    /// reinterprets its events as an alternating channel so hover/snap can
+    /// reuse the same machinery, but there's no real high/low level behind
+    /// that, only the gap between two events.
+    pub(crate) fn is_event_row(&self, row: usize) -> bool {
+        let Some(RowKey::Derived(name)) = self.row_order.get(row) else {
+            return false;
+        };
+        let Some(store) = &self.derived else {
+            return false;
+        };
+        store
+            .read()
+            .iter()
+            .any(|lane| &lane.name == name && matches!(lane.data, DerivedLaneData::Markers(_)))
     }
 }
 
@@ -397,6 +421,33 @@ fn derived_digital_channel(row: usize, name: &str, samples: &[Sample]) -> LogicC
             .map(|sample| Transition {
                 time_us: sample.start_time as f64 / 1_000.0,
                 value: sample.value,
+            })
+            .collect(),
+        waveform: Vec::new(),
+    }
+}
+
+/// Reinterprets a derived `Markers` lane as a `LogicChannel` that toggles at
+/// every marker — the same trick `derived_digital_channel` uses for sample
+/// lanes, so hover measurement and cursor snap treat "time since/until the
+/// nearest event" exactly like a pulse width on a real channel, with no
+/// separate code path. Width/Period read as the gap to the neighboring
+/// markers; there's no real "level" backing them, so `initial` is arbitrary
+/// (`false`) and only affects which side of the first marker looks "on".
+fn derived_markers_channel(row: usize, name: &str, markers: &[u64]) -> LogicChannel {
+    let mut value = false;
+    LogicChannel {
+        index: row,
+        name: name.to_owned(),
+        initial: false,
+        transitions: markers
+            .iter()
+            .map(|&timestamp_ns| {
+                value = !value;
+                Transition {
+                    time_us: timestamp_ns as f64 / 1_000.0,
+                    value,
+                }
             })
             .collect(),
         waveform: Vec::new(),
@@ -584,6 +635,65 @@ mod tests {
         let viewer = viewer_with_derived();
         let past_everything = viewer.channels.len() + 2;
         assert!(viewer.channel_at_row(past_everything).is_none());
+    }
+
+    #[test]
+    fn markers_derived_lane_converts_to_toggling_logic_channel() {
+        let mut viewer = viewer_with_derived();
+        let lanes = DerivedLanes::new();
+        lanes.register(
+            "match.start",
+            DerivedLaneData::Markers(vec![1_000, 3_000, 7_000]),
+        );
+        viewer.set_derived_lanes(lanes);
+        viewer.ensure_row_order();
+
+        // Rows: 10 channels, then the one Markers lane.
+        let channel = viewer
+            .channel_at_row(10)
+            .expect("markers lane has a LogicChannel view");
+        assert_eq!(channel.name, "match.start");
+        assert!(matches!(channel, Cow::Owned(_)));
+        assert_eq!(
+            channel.transitions,
+            vec![
+                Transition {
+                    time_us: 1.0,
+                    value: true
+                },
+                Transition {
+                    time_us: 3.0,
+                    value: false
+                },
+                Transition {
+                    time_us: 7.0,
+                    value: true
+                },
+            ]
+        );
+        // No index-backed sampler for a synthetic marker channel.
+        assert!(channel.waveform.is_empty());
+    }
+
+    #[test]
+    fn is_event_row_true_only_for_markers_lanes() {
+        let mut viewer = viewer_with_derived();
+        let lanes = DerivedLanes::new();
+        lanes.register("match.start", DerivedLaneData::Markers(vec![1_000]));
+        lanes.register(
+            "decoded.rx",
+            DerivedLaneData::Digital(vec![Sample::new(true, 1_000)]),
+        );
+        viewer.set_derived_lanes(lanes);
+        viewer.ensure_row_order();
+
+        // Rows: 10 real channels, then "decoded.rx" (kept at its old row by
+        // `ensure_row_order`, since a lane of that name already existed),
+        // then the brand-new "match.start" appended after it.
+        assert!(!viewer.is_event_row(0), "a real channel is never an event");
+        assert!(!viewer.is_event_row(10), "decoded.rx is a Digital lane");
+        assert!(viewer.is_event_row(11), "match.start is a Markers lane");
+        assert!(!viewer.is_event_row(99), "out of range");
     }
 
     #[test]

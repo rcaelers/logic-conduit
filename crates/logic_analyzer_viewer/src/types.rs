@@ -153,6 +153,12 @@ pub(crate) struct PulseMeasurement {
     // `None` when the trace doesn't have a following transition to close a
     // full period (e.g. a single isolated pulse) — Width is still valid.
     pub(crate) period_end_us: Option<f64>,
+    /// This row is a zero-width event lane (e.g. a `Markers` derived lane)
+    /// reinterpreted as an alternating channel purely so the same hover/snap
+    /// machinery applies (§`derived_markers_channel`) — there's no real
+    /// "level" backing `value`, so drawing/reporting must not treat this
+    /// like a real pulse (no high/low, no period/duty cycle).
+    pub(crate) is_event: bool,
 }
 
 impl PulseMeasurement {

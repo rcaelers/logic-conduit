@@ -1,4 +1,4 @@
-use crate::types::{AnalyzerLayout, CaptureInfo, ExactWindow, PulseMeasurement, Transition};
+use crate::types::{AnalyzerLayout, CaptureInfo, ExactWindow, PulseMeasurement, RowKey, Transition};
 use crate::viewer::LogicAnalyzerViewer;
 use crate::channel::channels_from_window;
 use dsl::CaptureWaveformSegment;
@@ -91,13 +91,13 @@ impl LogicAnalyzerViewer {
         }
 
         let visible_end_us = self.visible_start_us + self.visible_span_us;
-        // Demo data, derived lanes (no index exists for them), and — with a
-        // capture loaded — anything past the raw-channel rows all measure
-        // from the in-memory transitions; a loaded capture's own channels
-        // always take the index path, since even at zoom levels where the
-        // visible window is exact, the run or its period may close beyond
-        // the viewport.
-        let row_is_indexed = channel_row < self.channels.len() && self.has_index_sampler();
+        // Derived lanes (no index exists for them, wherever they've been
+        // dragged to among the rows) always measure from the in-memory
+        // transitions; a loaded capture's own channels take the index path,
+        // since even at zoom levels where the visible window is exact, the
+        // run or its period may close beyond the viewport.
+        let row_is_indexed = matches!(self.row_order.get(channel_row), Some(RowKey::Channel(_)))
+            && self.has_index_sampler();
         let measurement = if !row_is_indexed {
             pulse_measurement_from_window(
                 &channel.transitions,
@@ -172,8 +172,14 @@ impl LogicAnalyzerViewer {
             measurement
         };
 
+        // An event lane has no real level, so "Period" (time back to a
+        // matching level) doesn't mean anything — only the gap to the
+        // neighboring event does, which `width_us` already is.
+        let is_event = self.is_event_row(channel_row);
         self.hover_measurement = measurement.map(|measurement| PulseMeasurement {
             channel_row,
+            is_event,
+            period_end_us: if is_event { None } else { measurement.period_end_us },
             ..measurement
         });
     }
@@ -398,6 +404,7 @@ pub(crate) fn pulse_measurement_from_window(
         start_open,
         end_open,
         period_end_us,
+        is_event: false,
     })
 }
 
