@@ -11,11 +11,6 @@ use crate::runtime::sample::Sample;
 use std::collections::VecDeque;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
-/// Hard cap per lane; decoded words can reach tens of millions on long
-/// captures, which would otherwise eat gigabytes. Overflow increments
-/// `DerivedLane::dropped` so the UI can show a truncation marker.
-pub const MAX_LANE_ENTRIES: usize = 2_000_000;
-
 /// Longest box a word annotation may span when its end is inferred from the
 /// next word: keeps the last word of a burst from stretching across the idle
 /// gap to the next one.
@@ -46,8 +41,6 @@ pub enum DerivedLaneData {
 pub struct DerivedLane {
     pub name: String,
     pub data: DerivedLaneData,
-    /// Entries discarded after [`MAX_LANE_ENTRIES`] was reached.
-    pub dropped: u64,
 }
 
 /// Shared, append-only store of derived lanes. The compiler hands one clone
@@ -74,15 +67,10 @@ impl DerivedLanes {
         if let Some(index) = lanes.iter().position(|lane| lane.name == name) {
             if std::mem::discriminant(&lanes[index].data) != std::mem::discriminant(&data) {
                 lanes[index].data = data;
-                lanes[index].dropped = 0;
             }
             return index;
         }
-        lanes.push(DerivedLane {
-            name,
-            data,
-            dropped: 0,
-        });
+        lanes.push(DerivedLane { name, data });
         lanes.len() - 1
     }
 
@@ -97,10 +85,6 @@ impl DerivedLanes {
             return;
         };
         if let DerivedLaneData::Digital(samples) = &mut lane.data {
-            if samples.len() >= MAX_LANE_ENTRIES {
-                lane.dropped += 1;
-                return;
-            }
             samples.push(sample);
         }
     }
@@ -116,10 +100,6 @@ impl DerivedLanes {
             {
                 previous.end_ns = start_ns.min(previous.start_ns + MAX_ANNOTATION_NS);
             }
-            if annotations.len() >= MAX_LANE_ENTRIES {
-                lane.dropped += 1;
-                return;
-            }
             annotations.push(Annotation {
                 start_ns,
                 end_ns: start_ns,
@@ -134,10 +114,6 @@ impl DerivedLanes {
             return;
         };
         if let DerivedLaneData::Markers(markers) = &mut lane.data {
-            if markers.len() >= MAX_LANE_ENTRIES {
-                lane.dropped += 1;
-                return;
-            }
             markers.push(timestamp_ns);
         }
     }
@@ -466,17 +442,21 @@ mod tests {
     }
 
     #[test]
-    fn lane_cap_counts_dropped_entries() {
+    fn lane_growth_has_no_cap() {
+        // Not a real-world entry count (that would just make the test
+        // slow) — just enough to prove there's no hidden ceiling like the
+        // old `MAX_LANE_ENTRIES` silently discarding past some threshold.
+        const ENTRIES: u64 = 10_000;
         let store = DerivedLanes::new();
         let lane = store.register("m", DerivedLaneData::Markers(Vec::new()));
-        for ts in 0..(MAX_LANE_ENTRIES as u64 + 5) {
+        for ts in 0..ENTRIES {
             store.append_marker(lane, ts);
         }
         let lanes = store.read();
         let DerivedLaneData::Markers(markers) = &lanes[0].data else {
             panic!("expected markers");
         };
-        assert_eq!(markers.len(), MAX_LANE_ENTRIES);
-        assert_eq!(lanes[0].dropped, 5);
+        assert_eq!(markers.len(), ENTRIES as usize);
+        assert_eq!(markers.last(), Some(&(ENTRIES - 1)));
     }
 }

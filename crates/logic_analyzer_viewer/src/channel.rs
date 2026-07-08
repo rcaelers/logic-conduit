@@ -58,13 +58,11 @@ impl LogicAnalyzerViewer {
                     DerivedLaneData::Annotations(_) => (Color32::from_rgb(215, 140, 60), "W"),
                     DerivedLaneData::Markers(_) => (Color32::from_rgb(230, 190, 80), "T"),
                 };
-                let name = self.derived_names.get(lane_name).cloned().unwrap_or_else(|| {
-                    if lane.dropped > 0 {
-                        format!("{} ⚠", lane.name)
-                    } else {
-                        lane.name.clone()
-                    }
-                });
+                let name = self
+                    .derived_names
+                    .get(lane_name)
+                    .cloned()
+                    .unwrap_or_else(|| lane.name.clone());
                 Some(RowLabel {
                     name,
                     badge_text: badge_glyph.to_string(),
@@ -374,15 +372,16 @@ impl LogicAnalyzerViewer {
                 .find(|channel| channel.index == *index)
                 .map(Cow::Borrowed),
             RowKey::Derived(name) => {
+                let (start_ns, end_ns) = self.visible_window_ns();
                 let lanes = self.derived.as_ref()?.read();
                 let lane = lanes.iter().find(|lane| &lane.name == name)?;
                 match &lane.data {
-                    DerivedLaneData::Digital(samples) => {
-                        Some(Cow::Owned(derived_digital_channel(row, &lane.name, samples)))
-                    }
-                    DerivedLaneData::Markers(markers) => {
-                        Some(Cow::Owned(derived_markers_channel(row, &lane.name, markers)))
-                    }
+                    DerivedLaneData::Digital(samples) => Some(Cow::Owned(
+                        derived_digital_channel(row, &lane.name, samples, start_ns, end_ns),
+                    )),
+                    DerivedLaneData::Markers(markers) => Some(Cow::Owned(
+                        derived_markers_channel(row, &lane.name, markers, start_ns, end_ns),
+                    )),
                     // No boolean level to measure or toggle to snap to.
                     DerivedLaneData::Annotations(_) => None,
                 }
@@ -408,15 +407,36 @@ impl LogicAnalyzerViewer {
     }
 }
 
-/// Reinterprets a derived `Digital` lane's samples as a `LogicChannel`.
-/// Before the first recorded sample there is nothing to show — same default
+/// The sub-range of a time-sorted slice covering `[start_ns, end_ns]`, padded
+/// by one entry on each side so a pulse straddling the window edge still has
+/// the real neighboring transition available (hover measurement's "period"
+/// needs one entry past the close of a pulse; a pad of exactly one is all it
+/// ever looks at — see `pulse_measurement_from_window`). Keeps derived-lane
+/// hover/snap from re-materializing an entire lane — which can hold millions
+/// of entries — on every frame the pointer moves.
+fn windowed_range(len: usize, first: usize, last: usize) -> (usize, usize) {
+    (first.saturating_sub(1), (last + 1).min(len))
+}
+
+/// Reinterprets a derived `Digital` lane's samples as a `LogicChannel`,
+/// windowed to `[start_ns, end_ns]` (see [`windowed_range`]). Before the
+/// first recorded sample there is nothing to show — same default
 /// `draw_derived_digital` uses — so `initial` is always `false`.
-fn derived_digital_channel(row: usize, name: &str, samples: &[Sample]) -> LogicChannel {
+fn derived_digital_channel(
+    row: usize,
+    name: &str,
+    samples: &[Sample],
+    start_ns: u64,
+    end_ns: u64,
+) -> LogicChannel {
+    let first = samples.partition_point(|sample| sample.start_time < start_ns);
+    let last = first + samples[first..].partition_point(|sample| sample.start_time <= end_ns);
+    let (first, last) = windowed_range(samples.len(), first, last);
     LogicChannel {
         index: row,
         name: name.to_owned(),
         initial: false,
-        transitions: samples
+        transitions: samples[first..last]
             .iter()
             .map(|sample| Transition {
                 time_us: sample.start_time as f64 / 1_000.0,
@@ -428,19 +448,33 @@ fn derived_digital_channel(row: usize, name: &str, samples: &[Sample]) -> LogicC
 }
 
 /// Reinterprets a derived `Markers` lane as a `LogicChannel` that toggles at
-/// every marker — the same trick `derived_digital_channel` uses for sample
-/// lanes, so hover measurement and cursor snap treat "time since/until the
-/// nearest event" exactly like a pulse width on a real channel, with no
-/// separate code path. Width/Period read as the gap to the neighboring
-/// markers; there's no real "level" backing them, so `initial` is arbitrary
-/// (`false`) and only affects which side of the first marker looks "on".
-fn derived_markers_channel(row: usize, name: &str, markers: &[u64]) -> LogicChannel {
+/// every marker, windowed to `[start_ns, end_ns]` (see [`windowed_range`]) —
+/// the same trick `derived_digital_channel` uses for sample lanes, so hover
+/// measurement and cursor snap treat "time since/until the nearest event"
+/// exactly like a pulse width on a real channel, with no separate code path.
+/// Width/Period read as the gap to the neighboring markers; there's no real
+/// "level" backing them, so `initial` is arbitrary (`false`) and only affects
+/// which side of the first marker looks "on" — and since only the window
+/// (not the whole lane) is materialized, the alternating `value` restarts
+/// from `false` at the window's first entry rather than reflecting true
+/// parity from the start of the lane, which is fine: nothing reads `value`
+/// for a `Markers`-derived channel except this toggle shape itself.
+fn derived_markers_channel(
+    row: usize,
+    name: &str,
+    markers: &[u64],
+    start_ns: u64,
+    end_ns: u64,
+) -> LogicChannel {
+    let first = markers.partition_point(|&ts| ts < start_ns);
+    let last = first + markers[first..].partition_point(|&ts| ts <= end_ns);
+    let (first, last) = windowed_range(markers.len(), first, last);
     let mut value = false;
     LogicChannel {
         index: row,
         name: name.to_owned(),
         initial: false,
-        transitions: markers
+        transitions: markers[first..last]
             .iter()
             .map(|&timestamp_ns| {
                 value = !value;
@@ -673,6 +707,95 @@ mod tests {
         );
         // No index-backed sampler for a synthetic marker channel.
         assert!(channel.waveform.is_empty());
+    }
+
+    #[test]
+    fn derived_channel_windows_to_the_visible_range_not_the_whole_lane() {
+        // Default view is [0, 900us] = [0, 900_000ns]; a lane with millions
+        // of entries elsewhere in time must not get fully materialized just
+        // because the pointer happens to be hovering the visible window —
+        // at most one entry past the edge, for the padding `windowed_range`
+        // adds (see `derived_channel_window_pads_one_entry_past_each_edge`).
+        let mut viewer = viewer_with_derived();
+        let lanes = DerivedLanes::new();
+        lanes.register(
+            "decoded.rx",
+            DerivedLaneData::Digital(vec![
+                Sample::new(true, 100_000),    // in view
+                Sample::new(false, 500_000),   // in view
+                Sample::new(true, 10_000_000),  // one entry past the edge: the pad
+                Sample::new(false, 20_000_000), // further still: must not appear
+            ]),
+        );
+        viewer.set_derived_lanes(lanes);
+        viewer.ensure_row_order();
+
+        let channel = viewer
+            .channel_at_row(10)
+            .expect("digital lane has a LogicChannel view");
+        assert_eq!(
+            channel.transitions,
+            vec![
+                Transition {
+                    time_us: 100.0,
+                    value: true
+                },
+                Transition {
+                    time_us: 500.0,
+                    value: false
+                },
+                Transition {
+                    time_us: 10_000.0,
+                    value: true
+                },
+            ],
+            "only one padding entry past the edge, and no further"
+        );
+    }
+
+    #[test]
+    fn derived_channel_window_pads_one_entry_past_each_edge() {
+        // A pulse whose closing edge lands just outside [start_ns, end_ns]
+        // still needs that one bounding transition for period/width math —
+        // see `windowed_range`'s one-entry pad.
+        let mut viewer = viewer_with_derived();
+        let lanes = DerivedLanes::new();
+        lanes.register(
+            "decoded.rx",
+            DerivedLaneData::Digital(vec![
+                Sample::new(false, 100),     // in view
+                Sample::new(true, 200),      // in view
+                Sample::new(false, 950_000), // just past the 900_000ns edge
+                Sample::new(true, 950_100),  // one more, past the edge
+            ]),
+        );
+        viewer.set_derived_lanes(lanes);
+        viewer.ensure_row_order();
+
+        let channel = viewer
+            .channel_at_row(10)
+            .expect("digital lane has a LogicChannel view");
+        // Both in-view entries are present, plus exactly one padding entry
+        // past the right edge (950_000ns) — the second out-of-view entry
+        // (950_100ns) is one too many and must not appear. There's nothing
+        // before 100ns to pad with on the left.
+        assert_eq!(
+            channel.transitions,
+            vec![
+                Transition {
+                    time_us: 0.1,
+                    value: false
+                },
+                Transition {
+                    time_us: 0.2,
+                    value: true
+                },
+                Transition {
+                    time_us: 950.0,
+                    value: false
+                },
+            ]
+        );
     }
 
     #[test]

@@ -374,7 +374,7 @@ impl LogicAnalyzerViewer {
         );
     }
 
-    fn visible_window_ns(&self) -> (u64, u64) {
+    pub(crate) fn visible_window_ns(&self) -> (u64, u64) {
         let start_ns = (self.visible_start_us.max(0.0) * 1_000.0) as u64;
         let end_ns =
             ((self.visible_start_us + self.visible_span_us).max(0.0) * 1_000.0).ceil() as u64;

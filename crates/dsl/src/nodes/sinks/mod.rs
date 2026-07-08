@@ -9,6 +9,6 @@ pub use binary_file_writer::{BinaryFileWriter, WriteWidth};
 pub use text_file_writer::TextFileWriter;
 pub use tgck_recorder::{TgckRecord, TgckRecorder};
 pub use viewer_sink::{
-    Annotation, DerivedLane, DerivedLaneData, DerivedLanes, MAX_ANNOTATION_NS, MAX_LANE_ENTRIES,
-    ViewerLaneKind, ViewerSink,
+    Annotation, DerivedLane, DerivedLaneData, DerivedLanes, MAX_ANNOTATION_NS, ViewerLaneKind,
+    ViewerSink,
 };
