@@ -940,6 +940,7 @@ dependencies = [
  "eframe",
  "egui",
  "log",
+ "tracing-subscriber",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
