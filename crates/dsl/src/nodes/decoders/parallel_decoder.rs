@@ -7,9 +7,13 @@
 use super::types::{CsPolarity, Endianness, ParallelWord, StrobeMode, TimingInfo};
 use crate::runtime::Receiver;
 use crate::runtime::WorkError;
+use crate::runtime::edge_query::EdgeQuery;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkResult};
+use crate::runtime::protocol::ProtocolKind;
 use crate::runtime::sample::{Sample, SampleBlock};
+use crate::runtime::sender::Sender;
 use std::collections::VecDeque;
+use std::sync::Arc;
 use tracing::debug;
 
 /// Parallel bus decoder node (block-based)
@@ -46,6 +50,11 @@ pub struct ParallelDecoder {
     assembly_value: u64,
     assembly_cycles: usize,
     assembly_first_ts: u64,
+
+    /// Query-mode strobe search cursor, persisted across `work()` calls
+    /// (the index-query equivalent of the streaming block reader's
+    /// implicit position). Unused in streaming mode.
+    query_strobe_position: u64,
 }
 
 impl ParallelDecoder {
@@ -78,6 +87,7 @@ impl ParallelDecoder {
             assembly_value: 0,
             assembly_cycles: 0,
             assembly_first_ts: 0,
+            query_strobe_position: 0,
         }
     }
 
@@ -165,7 +175,343 @@ impl ProcessNode for ParallelDecoder {
         )]
     }
 
+    fn input_protocols(&self, port: usize) -> Vec<ProtocolKind> {
+        // strobe/dN/cs alias raw binary channels: prefer skip-ahead
+        // queries. enable_signal is a computed control signal (from an SR
+        // latch, not a raw channel) with no EdgeQuery producer yet, so it
+        // always streams.
+        let enable_port = 1 + self.num_data_bits + 1;
+        if port == enable_port {
+            vec![ProtocolKind::Stream]
+        } else {
+            vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]
+        }
+    }
+
     fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
+        // HighLevel/LowLevel trigger on *every* sample at that level, not
+        // on sparse transitions, so a skip-ahead search doesn't help them
+        // (every level-held sample would be its own point query — no
+        // faster than streaming, likely slower). Only the edge-triggered
+        // modes benefit, and only if strobe/every data bit/cs (when it
+        // matters) all negotiated EdgeQuery.
+        let sparse_mode = matches!(
+            self.mode,
+            StrobeMode::RisingEdge | StrobeMode::FallingEdge | StrobeMode::AnyEdge
+        );
+        let strobe_query = inputs.first().and_then(|p| p.edge_query());
+        let data_queries: Vec<Option<Arc<dyn EdgeQuery>>> = (0..self.num_data_bits)
+            .map(|i| inputs.get(1 + i).and_then(|p| p.edge_query()))
+            .collect();
+        let cs_query = inputs
+            .get(1 + self.num_data_bits)
+            .and_then(|p| p.edge_query());
+        let cs_needed = self.cs_polarity != CsPolarity::Disabled;
+
+        let ready_for_query_mode = sparse_mode
+            && strobe_query.is_some()
+            && data_queries.iter().all(Option::is_some)
+            && (!cs_needed || cs_query.is_some());
+
+        if ready_for_query_mode {
+            return self.work_indexed(
+                inputs,
+                outputs,
+                strobe_query.expect("checked above"),
+                data_queries
+                    .into_iter()
+                    .map(|q| q.expect("checked above"))
+                    .collect(),
+                cs_query,
+            );
+        }
+
+        self.work_streamed(inputs, outputs)
+    }
+}
+
+/// Word-assembly accumulator, threaded through `process_trigger` calls.
+struct AssemblyState {
+    value: u64,
+    cycles: usize,
+    first_ts: u64,
+}
+
+/// Streamed enable-signal state, threaded through `process_trigger` calls
+/// (query mode has no EdgeQuery producer for this port yet — see
+/// `ParallelDecoder::input_protocols`).
+struct EnableState<'a> {
+    current: bool,
+    next_change_position: u64,
+    input: Option<Receiver<'a, Sample>>,
+}
+
+impl ParallelDecoder {
+    /// Index-driven path: strobe triggers are located by direct skip-ahead
+    /// queries instead of a per-sample block scan; data/CS are point-read
+    /// at each trigger. `enable_signal` still streams (no query producer
+    /// exists for it). One call processes every remaining trigger in the
+    /// file — there's no natural per-call window the way SpiDecoder has
+    /// CS transactions — so a call can run long on a pathologically dense
+    /// `AnyEdge` signal; that's the same signal shape query mode doesn't
+    /// help with in the first place (see `work()`'s `sparse_mode` gate).
+    #[allow(clippy::too_many_arguments)]
+    fn work_indexed(
+        &mut self,
+        inputs: &[InputPort],
+        outputs: &[OutputPort],
+        strobe_query: Arc<dyn EdgeQuery>,
+        data_queries: Vec<Arc<dyn EdgeQuery>>,
+        cs_query: Option<Arc<dyn EdgeQuery>>,
+    ) -> WorkResult<usize> {
+        self.work_call_count += 1;
+
+        let output = outputs
+            .first()
+            .and_then(|port| port.get::<ParallelWord>())
+            .ok_or_else(|| WorkError::NodeError("Missing output".to_string()))?;
+
+        let enable_port_idx = 1 + self.num_data_bits + 1;
+        let enable_recv = inputs
+            .get(enable_port_idx)
+            .and_then(|port| port.get::<Sample>(&mut self.enable_buffer));
+        let mut enable = EnableState {
+            current: self.current_enable_value,
+            next_change_position: self.next_enable_change_position,
+            input: enable_recv,
+        };
+        if enable.input.is_none() {
+            enable.current = true;
+            enable.next_change_position = u64::MAX;
+        }
+
+        let mode = self.mode;
+        let cs_polarity = self.cs_polarity;
+        let cycles_per_word = self.cycles_per_word;
+        let endianness = self.endianness;
+        let num_data_bits = self.num_data_bits;
+        let timestamp_step = (1_000_000_000.0 / strobe_query.samplerate_hz()) as u64;
+        let total_samples = strobe_query.total_samples();
+        // EdgeQuery methods return crate::Result, not WorkResult.
+        let query_err = |e: crate::Error| WorkError::NodeError(e.to_string());
+
+        let mut assembly = AssemblyState {
+            value: self.assembly_value,
+            cycles: self.assembly_cycles,
+            first_ts: self.assembly_first_ts,
+        };
+
+        let mut words_emitted = 0u64;
+        let mut position = self.query_strobe_position;
+        let exhausted;
+
+        // Mirrors work_streamed's `last_strobe_value` starting `false`: a
+        // strobe already at the triggering level at position 0 counts as a
+        // trigger there too (there's no real "edge" at the very first
+        // sample — the implicit prior sample is treated as low, exactly
+        // like the streaming per-sample scan does).
+        if position == 0 {
+            let value = strobe_query.value_at(0).map_err(query_err)?;
+            let triggered0 = match mode {
+                StrobeMode::RisingEdge | StrobeMode::AnyEdge => value,
+                StrobeMode::FallingEdge => false,
+                StrobeMode::HighLevel | StrobeMode::LowLevel => {
+                    unreachable!("excluded from query mode by work()'s sparse_mode gate")
+                }
+            };
+            if triggered0 {
+                words_emitted += Self::process_trigger(
+                    0,
+                    cs_polarity,
+                    &cs_query,
+                    &mut enable,
+                    &data_queries,
+                    num_data_bits,
+                    cycles_per_word,
+                    endianness,
+                    timestamp_step,
+                    &mut assembly,
+                    &output,
+                    &self.name,
+                )?;
+            }
+        }
+
+        loop {
+            let next = match mode {
+                StrobeMode::RisingEdge => {
+                    strobe_query.next_edge_with_value(position, true, total_samples)
+                }
+                StrobeMode::FallingEdge => {
+                    strobe_query.next_edge_with_value(position, false, total_samples)
+                }
+                StrobeMode::AnyEdge => strobe_query.next_edge(position, total_samples),
+                StrobeMode::HighLevel | StrobeMode::LowLevel => {
+                    unreachable!("excluded from query mode by work()'s sparse_mode gate")
+                }
+            }
+            .map_err(query_err)?;
+
+            let Some(edge) = next else {
+                exhausted = true;
+                break;
+            };
+            position = edge.sample;
+
+            words_emitted += Self::process_trigger(
+                position,
+                cs_polarity,
+                &cs_query,
+                &mut enable,
+                &data_queries,
+                num_data_bits,
+                cycles_per_word,
+                endianness,
+                timestamp_step,
+                &mut assembly,
+                &output,
+                &self.name,
+            )?;
+        }
+
+        self.query_strobe_position = position;
+        self.current_enable_value = enable.current;
+        self.next_enable_change_position = enable.next_change_position;
+        self.total_words_emitted += words_emitted;
+        self.assembly_value = assembly.value;
+        self.assembly_cycles = assembly.cycles;
+        self.assembly_first_ts = assembly.first_ts;
+
+        debug!(
+            "[{}] Query-mode batch {} done: {} words, {} total",
+            self.name, self.work_call_count, words_emitted, self.total_words_emitted
+        );
+
+        if exhausted {
+            Err(WorkError::Shutdown)
+        } else {
+            Ok(words_emitted as usize)
+        }
+    }
+
+    /// Gates CS/enable, samples data bits, and assembles/emits a word for
+    /// one located trigger position. Shared by the position-0 special case
+    /// and the main search loop in `work_indexed`.
+    #[allow(clippy::too_many_arguments)]
+    fn process_trigger(
+        position: u64,
+        cs_polarity: CsPolarity,
+        cs_query: &Option<Arc<dyn EdgeQuery>>,
+        enable: &mut EnableState,
+        data_queries: &[Arc<dyn EdgeQuery>],
+        num_data_bits: usize,
+        cycles_per_word: usize,
+        endianness: Endianness,
+        timestamp_step: u64,
+        assembly: &mut AssemblyState,
+        output: &Sender<ParallelWord>,
+        decoder_name: &str,
+    ) -> WorkResult<u64> {
+        let query_err = |e: crate::Error| WorkError::NodeError(e.to_string());
+
+        // Check CS: is it inactive?
+        let cs_inactive = match (cs_polarity, cs_query) {
+            (CsPolarity::ActiveLow, Some(q)) => q.value_at(position).map_err(query_err)?, // inactive = high
+            (CsPolarity::ActiveHigh, Some(q)) => !q.value_at(position).map_err(query_err)?, // inactive = low
+            _ => true, // Disabled or unconnected
+        };
+        if !cs_inactive {
+            if assembly.cycles > 0 {
+                debug!(
+                    "[{decoder_name}] dropping incomplete word ({}/{} cycles) at CS boundary",
+                    assembly.cycles, cycles_per_word
+                );
+                assembly.cycles = 0;
+                assembly.value = 0;
+            }
+            return Ok(0);
+        }
+
+        // Check enable signal (edge-based, timestamps in nanoseconds).
+        let timestamp_ns = position.saturating_mul(timestamp_step);
+        if timestamp_ns >= enable.next_change_position
+            && let Some(enable_recv) = &mut enable.input
+        {
+            loop {
+                match enable_recv.peek() {
+                    Ok(next_edge) => {
+                        if next_edge.start_time <= timestamp_ns {
+                            let edge = enable_recv.recv()?;
+                            enable.current = edge.value;
+                        } else {
+                            enable.next_change_position = next_edge.start_time;
+                            break;
+                        }
+                    }
+                    Err(WorkError::Shutdown) => {
+                        enable.next_change_position = u64::MAX;
+                        break;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+
+        if !enable.current {
+            if assembly.cycles > 0 {
+                debug!(
+                    "[{decoder_name}] dropping incomplete word ({}/{} cycles) at enable boundary",
+                    assembly.cycles, cycles_per_word
+                );
+                assembly.cycles = 0;
+                assembly.value = 0;
+            }
+            return Ok(0);
+        }
+
+        // Sample all data bits — O(1) (or O(log gap)) point reads.
+        let mut value = 0u64;
+        for (bit_idx, q) in data_queries.iter().enumerate() {
+            if q.value_at(position).map_err(query_err)? {
+                value |= 1 << bit_idx;
+            }
+        }
+
+        // Assemble cycles into a word (cycles_per_word == 1 passes each
+        // cycle straight through).
+        if assembly.cycles == 0 {
+            assembly.first_ts = timestamp_ns;
+        }
+        match endianness {
+            Endianness::Little => {
+                assembly.value |= value << (assembly.cycles * num_data_bits);
+            }
+            Endianness::Big => {
+                assembly.value = (assembly.value << num_data_bits) | value;
+            }
+        }
+        assembly.cycles += 1;
+        if assembly.cycles < cycles_per_word {
+            return Ok(0);
+        }
+
+        let word = ParallelWord {
+            value: assembly.value,
+            timing: TimingInfo::new(
+                assembly.first_ts as f64 / 1_000.0, // Convert ns to microseconds
+                assembly.first_ts,
+            ),
+        };
+        assembly.value = 0;
+        assembly.cycles = 0;
+
+        output.send(word)?;
+        Ok(1)
+    }
+
+    /// Streaming path: unchanged behavior for live sources or any
+    /// connection that didn't negotiate `EdgeQuery`.
+    fn work_streamed(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
         self.work_call_count += 1;
 
         if self.work_call_count == 1 {
@@ -542,6 +888,157 @@ mod tests {
         assert_eq!(
             words.iter().map(|w| w.value).collect::<Vec<_>>(),
             vec![0x12, 0x34]
+        );
+    }
+
+    // ── Differential test: query-mode output must match streaming-mode ──
+
+    /// Wraps a node and forces its outputs onto the `Stream` protocol
+    /// regardless of what the wrapped node would otherwise prefer.
+    struct ForceStreamOutput<N>(N);
+
+    impl<N: ProcessNode> ProcessNode for ForceStreamOutput<N> {
+        fn name(&self) -> &str {
+            self.0.name()
+        }
+        fn should_stop(&self) -> bool {
+            self.0.should_stop()
+        }
+        fn is_self_threading(&self) -> bool {
+            self.0.is_self_threading()
+        }
+        fn num_inputs(&self) -> usize {
+            self.0.num_inputs()
+        }
+        fn num_outputs(&self) -> usize {
+            self.0.num_outputs()
+        }
+        fn input_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
+            self.0.input_schema()
+        }
+        fn output_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
+            self.0.output_schema()
+        }
+        fn node_type(&self) -> &str {
+            self.0.node_type()
+        }
+        fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
+            self.0.work(inputs, outputs)
+        }
+        fn output_protocols(&self, _port: usize) -> Vec<ProtocolKind> {
+            vec![ProtocolKind::Stream]
+        }
+    }
+
+    /// Test-only sink that collects everything sent to its single input.
+    struct CollectWords(Arc<std::sync::Mutex<Vec<ParallelWord>>>);
+
+    impl ProcessNode for CollectWords {
+        fn name(&self) -> &str {
+            "collect"
+        }
+        fn num_inputs(&self) -> usize {
+            1
+        }
+        fn num_outputs(&self) -> usize {
+            0
+        }
+        fn input_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
+            use crate::runtime::ports::{PortDirection, PortSchema};
+            vec![PortSchema::new::<ParallelWord>("data", 0, PortDirection::Input)]
+        }
+        fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
+            let mut buf = VecDeque::new();
+            let mut recv = inputs
+                .first()
+                .and_then(|p| p.get::<ParallelWord>(&mut buf))
+                .ok_or_else(|| WorkError::NodeError("Missing collector input".into()))?;
+            let item = recv.recv()?;
+            self.0.lock().unwrap().push(item);
+            Ok(1)
+        }
+    }
+
+    /// Runs `_captures/wipneus5.dsl` through a real 3-node pipeline
+    /// (`DslFileSource` -> `ParallelDecoder` -> collector), bounded to
+    /// `max_samples` so the test is fast, and returns the decoded words.
+    /// Channels 0..7 = data, 8 = CS, 10 = strobe — the same mapping the
+    /// UI compiler's golden SPI/parallel pipeline uses on this fixture.
+    /// `enable_signal` is left unconnected (always enabled) to keep the
+    /// test focused on the strobe/data/CS query-mode path this change
+    /// touches. `force_stream` wraps the source so the connection
+    /// negotiates `Stream` instead of the `EdgeQuery` both sides would
+    /// otherwise prefer.
+    fn decode_wipneus5_parallel(
+        path: &std::path::Path,
+        max_samples: u64,
+        force_stream: bool,
+    ) -> Vec<ParallelWord> {
+        use crate::DslFileSource;
+        use crate::runtime::Pipeline;
+
+        let source = DslFileSource::new(path, 11)
+            .expect("wipneus5.dsl should open")
+            .with_max_samples(Some(max_samples));
+        let decoder = ParallelDecoder::new(8, StrobeMode::AnyEdge, CsPolarity::ActiveLow);
+        let collected = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let mut pipeline = Pipeline::new();
+        if force_stream {
+            pipeline
+                .add_process("source", ForceStreamOutput(source))
+                .unwrap();
+        } else {
+            pipeline.add_process("source", source).unwrap();
+        }
+        pipeline.add_process("decoder", decoder).unwrap();
+        pipeline
+            .add_process("collect", CollectWords(collected.clone()))
+            .unwrap();
+
+        pipeline.connect("source", "b10", "decoder", "strobe").unwrap();
+        for bit in 0..8 {
+            pipeline
+                .connect("source", &format!("b{bit}"), "decoder", &format!("d{bit}"))
+                .unwrap();
+        }
+        pipeline.connect("source", "b8", "decoder", "cs").unwrap();
+        pipeline
+            .connect("decoder", "words", "collect", "data")
+            .unwrap();
+
+        pipeline.build().unwrap().wait();
+
+        Arc::try_unwrap(collected).unwrap().into_inner().unwrap()
+    }
+
+    #[test]
+    fn test_query_mode_matches_streaming_mode() {
+        let path = std::path::Path::new("_captures/wipneus5.dsl");
+        if !path.exists() {
+            return;
+        }
+
+        // Bounded prefix: fast to run, still large enough to very likely
+        // contain real bus activity on this fixture.
+        const MAX_SAMPLES: u64 = 200_000_000;
+
+        let streamed = decode_wipneus5_parallel(path, MAX_SAMPLES, true);
+        let queried = decode_wipneus5_parallel(path, MAX_SAMPLES, false);
+
+        assert!(
+            !streamed.is_empty(),
+            "expected at least one decoded word in the first {MAX_SAMPLES} samples \
+             to make this comparison meaningful"
+        );
+
+        let as_tuple = |w: &ParallelWord| (w.value, w.timing.position, w.timing.timestamp_us);
+        let streamed_view: Vec<_> = streamed.iter().map(as_tuple).collect();
+        let queried_view: Vec<_> = queried.iter().map(as_tuple).collect();
+
+        assert_eq!(
+            streamed_view, queried_view,
+            "query-mode ParallelDecoder must produce byte-identical output to the streaming path"
         );
     }
 }
