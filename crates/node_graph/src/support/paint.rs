@@ -203,26 +203,53 @@ pub fn draw_connections(
     wire_width: f32,
     emphasis: impl Fn(usize, &Connection) -> WireEmphasis,
 ) {
+    let mut highlighted = Vec::new();
     for (idx, conn) in graph.connections.iter().enumerate() {
-        let Some(&from_p) = socket_positions.get(&conn.from) else {
+        let emphasis = emphasis(idx, conn);
+        if emphasis == WireEmphasis::Highlight {
+            highlighted.push((idx, conn));
             continue;
-        };
-        let Some(&to_p) = socket_positions.get(&conn.to) else {
-            continue;
-        };
-        let base = graph
-            .nodes
-            .get(&conn.from.node)
-            .and_then(|n| n.outputs.get(conn.from.index))
-            .map(|s| s.color)
-            .unwrap_or(Color32::from_rgb(160, 160, 160));
-        let (color, width) = match emphasis(idx, conn) {
-            WireEmphasis::Normal => (base, wire_width),
-            WireEmphasis::Highlight => (brighten_wire_color(base), wire_width * 2.0),
-            WireEmphasis::Muted => (mute_wire_color(base), wire_width),
-        };
-        draw_wire(painter, from_p, to_p, color, width);
+        }
+        draw_connection(painter, graph, socket_positions, wire_width, conn, emphasis);
     }
+    for (idx, conn) in highlighted {
+        draw_connection(
+            painter,
+            graph,
+            socket_positions,
+            wire_width,
+            conn,
+            emphasis(idx, conn),
+        );
+    }
+}
+
+fn draw_connection(
+    painter: &Painter,
+    graph: &GraphState,
+    socket_positions: &HashMap<SocketId, Pos2>,
+    wire_width: f32,
+    conn: &Connection,
+    emphasis: WireEmphasis,
+) {
+    let Some(&from_p) = socket_positions.get(&conn.from) else {
+        return;
+    };
+    let Some(&to_p) = socket_positions.get(&conn.to) else {
+        return;
+    };
+    let base = graph
+        .nodes
+        .get(&conn.from.node)
+        .and_then(|n| n.outputs.get(conn.from.index))
+        .map(|s| s.color)
+        .unwrap_or(Color32::from_rgb(160, 160, 160));
+    let (color, width) = match emphasis {
+        WireEmphasis::Normal => (base, wire_width),
+        WireEmphasis::Highlight => (brighten_wire_color(base), wire_width * 2.0),
+        WireEmphasis::Muted => (mute_wire_color(base), wire_width),
+    };
+    draw_wire(painter, from_p, to_p, color, width);
 }
 
 pub fn draw_box_select(painter: &Painter, start: Pos2, end: Pos2) {

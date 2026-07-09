@@ -238,10 +238,20 @@ impl NodeGraphWidget {
         } else {
             self.allocate_responses(ui, response, &layout, content_rect)
         };
+        let hovered_socket = self.hovered_socket(&responses);
         self.handle_input(ui, &responses, origin, &layout, content_rect);
 
         let layout = self.build_layout(origin);
-        self.draw_graph(ui, &painter, content_rect, origin, pointer, &layout);
+        self.draw_graph(
+            ui,
+            &painter,
+            content_rect,
+            origin,
+            pointer,
+            &layout,
+            hovered_socket,
+        );
+        self.show_socket_tooltip(&responses, hovered_socket);
         if let Some(panel_rect) = panel_rect {
             self.show_active_panel(ui, panel_rect);
         }

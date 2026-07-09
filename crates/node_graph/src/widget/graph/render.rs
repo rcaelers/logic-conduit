@@ -1,12 +1,17 @@
-use super::{NodeGraphWidget, interaction::InteractionState, layout::GraphWidgetLayout, minimap};
+use super::{
+    NodeGraphWidget,
+    interaction::{GraphResponses, InteractionState},
+    layout::GraphWidgetLayout,
+    minimap,
+};
 use crate::{
-    model::SocketDirection,
+    model::{Socket, SocketDirection, SocketId},
     support::paint::{
         WireEmphasis, draw_box_select, draw_connections, draw_frames, draw_grid, draw_knife_line,
         draw_wire,
     },
 };
-use egui::{Color32, Painter, Pos2, Rect, Stroke};
+use egui::{Color32, Painter, Pos2, Rect, RichText, Stroke};
 
 impl NodeGraphWidget {
     pub(super) fn draw_graph(
@@ -17,6 +22,7 @@ impl NodeGraphWidget {
         origin: Pos2,
         pointer: Option<Pos2>,
         layout: &GraphWidgetLayout,
+        hovered_socket: Option<SocketId>,
     ) {
         // `painter` is already clipped to `rect`, but the inline node
         // controls below (`show_controls`) place real egui widgets straight
@@ -60,6 +66,11 @@ impl NodeGraphWidget {
                         WireEmphasis::Muted
                     }
                 }
+                _ if hovered_socket
+                    .is_some_and(|socket| conn.from == socket || conn.to == socket) =>
+                {
+                    WireEmphasis::Highlight
+                }
                 _ => {
                     let endpoint_selected = [conn.from.node, conn.to.node]
                         .iter()
@@ -73,6 +84,14 @@ impl NodeGraphWidget {
             },
         );
         let mut socket_highlights = Vec::new();
+        if let Some(socket_id) = hovered_socket {
+            for socket_id in self.socket_highlight_cluster(socket_id) {
+                if let Some(&pos) = layout.socket_screen_pos.get(&socket_id) {
+                    let color = self.socket_display_color(socket_id);
+                    socket_highlights.push((self.view.screen_to_canvas(origin, pos), color));
+                }
+            }
+        }
 
         if let InteractionState::DraggingWire {
             from,
@@ -260,6 +279,160 @@ impl NodeGraphWidget {
         ctx.request_repaint();
     }
 
+    pub(super) fn hovered_socket(&self, responses: &GraphResponses) -> Option<SocketId> {
+        responses
+            .sockets
+            .iter()
+            .filter(|(_, response)| response.hovered())
+            .min_by_key(|(socket_id, _)| {
+                (
+                    socket_id.node.0,
+                    match socket_id.direction {
+                        SocketDirection::Input => 0,
+                        SocketDirection::Output => 1,
+                    },
+                    socket_id.index,
+                )
+            })
+            .map(|(&socket_id, _)| socket_id)
+    }
+
+    pub(super) fn show_socket_tooltip(
+        &self,
+        responses: &GraphResponses,
+        socket_id: Option<SocketId>,
+    ) {
+        let Some(socket_id) = socket_id else {
+            return;
+        };
+        let Some(response) = responses.sockets.get(&socket_id) else {
+            return;
+        };
+        response.clone().on_hover_ui(|ui| {
+            self.socket_tooltip_ui(ui, socket_id);
+        });
+    }
+
+    fn socket_tooltip_ui(&self, ui: &mut egui::Ui, socket_id: SocketId) {
+        let Some((node_title, socket)) = self.socket_ref(socket_id) else {
+            return;
+        };
+        ui.set_max_width(340.0);
+        let socket_name = if socket.name.is_empty() {
+            "(unnamed)"
+        } else {
+            &socket.name
+        };
+        ui.label(RichText::new(format!("{node_title}.{socket_name}")).strong());
+        ui.separator();
+
+        tooltip_row(
+            ui,
+            "Direction",
+            match socket_id.direction {
+                SocketDirection::Input => "Input",
+                SocketDirection::Output => "Output",
+            },
+        );
+        tooltip_row(ui, "Declared type", &socket.type_name);
+        if socket.effective_type() != socket.type_name {
+            tooltip_row(ui, "Current type", socket.effective_type());
+        }
+        if let Some(resolved) = &socket.resolved_type {
+            tooltip_row(ui, "Resolved type", resolved);
+        }
+        tooltip_row(ui, "Supports", &self.socket_supported_types(socket_id, socket));
+
+        let connections = self.connected_socket_labels(socket_id);
+        tooltip_row(
+            ui,
+            "Connection",
+            if connections.is_empty() {
+                "Unconnected".to_owned()
+            } else {
+                connections.join(", ")
+            },
+        );
+    }
+
+    fn socket_supported_types(&self, socket_id: SocketId, socket: &Socket) -> String {
+        match socket_id.direction {
+            SocketDirection::Input => {
+                if socket.type_name == "Any" {
+                    return "Any".to_owned();
+                }
+                let mut supported = vec![socket.type_name.clone()];
+                supported.extend(socket.allowed.iter().cloned());
+                supported.sort();
+                supported.dedup();
+                supported.join(", ")
+            }
+            SocketDirection::Output => socket.type_name.clone(),
+        }
+    }
+
+    fn connected_socket_labels(&self, socket_id: SocketId) -> Vec<String> {
+        self.graph
+            .connections
+            .iter()
+            .filter_map(|conn| {
+                let other = if conn.from == socket_id {
+                    conn.to
+                } else if conn.to == socket_id {
+                    conn.from
+                } else {
+                    return None;
+                };
+                self.socket_ref(other).map(|(node_title, socket)| {
+                    let socket_name = if socket.name.is_empty() {
+                        "(unnamed)"
+                    } else {
+                        &socket.name
+                    };
+                    format!("{node_title}.{socket_name}")
+                })
+            })
+            .collect()
+    }
+
+    fn socket_ref(&self, socket_id: SocketId) -> Option<(&str, &Socket)> {
+        let node = self.graph.nodes.get(&socket_id.node)?;
+        let socket = match socket_id.direction {
+            SocketDirection::Input => node.inputs.get(socket_id.index)?,
+            SocketDirection::Output => node.outputs.get(socket_id.index)?,
+        };
+        Some((&node.title, socket))
+    }
+
+    fn socket_highlight_cluster(&self, socket_id: SocketId) -> Vec<SocketId> {
+        let mut sockets = vec![socket_id];
+        for conn in &self.graph.connections {
+            if conn.from == socket_id {
+                sockets.push(conn.to);
+            } else if conn.to == socket_id {
+                sockets.push(conn.from);
+            }
+        }
+        sockets.sort_by_key(|socket_id| {
+            (
+                socket_id.node.0,
+                match socket_id.direction {
+                    SocketDirection::Input => 0,
+                    SocketDirection::Output => 1,
+                },
+                socket_id.index,
+            )
+        });
+        sockets.dedup();
+        sockets
+    }
+
+    fn socket_display_color(&self, socket_id: SocketId) -> Color32 {
+        self.socket_ref(socket_id)
+            .map(|(_, socket)| self.registry.socket_display(socket).0)
+            .unwrap_or(Color32::from_rgb(160, 160, 160))
+    }
+
     pub(super) fn show_frame_rename(&mut self, ctx: &egui::Context) {
         let Some(state) = &mut self.frame_rename else {
             return;
@@ -314,4 +487,11 @@ impl NodeGraphWidget {
             self.frame_rename = None;
         }
     }
+}
+
+fn tooltip_row(ui: &mut egui::Ui, label: &str, value: impl Into<String>) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(format!("{label}:")).weak());
+        ui.label(value.into());
+    });
 }
