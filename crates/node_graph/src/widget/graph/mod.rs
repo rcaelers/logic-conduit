@@ -221,15 +221,16 @@ impl NodeGraphWidget {
             .hover_pos()
             .or_else(|| ui.input(|i| i.pointer.hover_pos()));
 
-        // The properties panel claims a right-hand strip; the rest of the
-        // chrome (minimap, zoom hit-testing) works with what remains.
+        // The right-side tab strip is always present. The optional panel body
+        // floats over the graph and only claims input where it is visible.
+        let tab_bar_rect = self.panel_tab_bar_rect(rect);
         let panel_rect = self.panel_rect(rect);
-        let content_rect = panel_rect.map_or(rect, |panel| {
-            egui::Rect::from_min_max(rect.min, Pos2::new(panel.left(), rect.max.y))
-        });
+        let content_rect =
+            egui::Rect::from_min_max(rect.min, Pos2::new(tab_bar_rect.left(), rect.max.y));
         if let Some(panel_rect) = panel_rect {
             self.update_panel_interaction(ui, panel_rect);
         }
+        self.update_panel_tab_bar_interaction(ui, tab_bar_rect);
 
         let layout = self.build_layout(origin);
         let responses = if self.interaction_state.use_fast_rendering() {
@@ -242,8 +243,9 @@ impl NodeGraphWidget {
         let layout = self.build_layout(origin);
         self.draw_graph(ui, &painter, content_rect, origin, pointer, &layout);
         if let Some(panel_rect) = panel_rect {
-            self.show_properties_panel(ui, panel_rect);
+            self.show_active_panel(ui, panel_rect);
         }
+        self.show_panel_tab_bar(ui, tab_bar_rect);
         self.show_frame_rename(ui.ctx());
     }
 }

@@ -7,22 +7,35 @@
 use super::NodeGraphWidget;
 use crate::model::{NodeId, NodeKind};
 use egui::{
-    Align, Color32, CursorIcon, Layout, Pos2, Rect, RichText, Sense, Stroke, Ui, UiBuilder, Vec2,
+    Align, Align2, Color32, CursorIcon, FontId, Layout, Pos2, Rect, RichText, Sense, Stroke, Ui,
+    UiBuilder, Vec2,
 };
 
 const PANEL_MIN_WIDTH: f32 = 220.0;
 const PANEL_MAX_WIDTH: f32 = 520.0;
+const TAB_BAR_WIDTH: f32 = 24.0;
+const TAB_HEIGHT: f32 = 70.0;
 const DEFAULT_ROW_HEIGHT: f32 = 24.0;
+const PANEL_MARGIN_Y: f32 = 8.0;
+const PANEL_TITLE_BLOCK_HEIGHT: f32 = 44.0;
+const COLLAPSING_HEADER_HEIGHT: f32 = 26.0;
+const PANEL_SECTION_GAP: f32 = 4.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum PanelTab {
+    Node,
+    View,
+}
 
 pub(super) struct PanelState {
-    pub visible: bool,
+    pub active_tab: Option<PanelTab>,
     pub width: f32,
 }
 
 impl Default for PanelState {
     fn default() -> Self {
         Self {
-            visible: true,
+            active_tab: None,
             width: 300.0,
         }
     }
@@ -30,44 +43,97 @@ impl Default for PanelState {
 
 impl NodeGraphWidget {
     pub(super) fn toggle_panel(&mut self) {
-        self.panel.visible = !self.panel.visible;
+        self.toggle_panel_tab(PanelTab::Node);
+    }
+
+    fn toggle_panel_tab(&mut self, tab: PanelTab) {
+        self.panel.active_tab = if self.panel.active_tab == Some(tab) {
+            None
+        } else {
+            Some(tab)
+        };
     }
 
     /// The node the panel shows: the active (most recently clicked/added)
-    /// node while it is still selected, otherwise the newest selected node.
-    /// `None` hides the panel.
+    /// regular node if it still exists, otherwise the newest regular selected
+    /// node. Canvas deselection does not clear the active node; the side tab
+    /// owns panel visibility.
     fn panel_target(&self) -> Option<NodeId> {
         let shown = |id: &NodeId| {
             self.graph
                 .nodes
                 .get(id)
-                .is_some_and(|node| node.selected && node.kind == NodeKind::Regular)
+                .is_some_and(|node| node.kind == NodeKind::Regular)
                 && self.runtime.contains_key(id)
         };
         self.active_node.filter(shown).or_else(|| {
             self.graph
                 .nodes
                 .keys()
-                .filter(|id| shown(id))
+                .filter(|id| {
+                    shown(id) && self.graph.nodes.get(id).is_some_and(|node| node.selected)
+                })
                 .max_by_key(|id| id.0)
                 .copied()
         })
     }
 
+    /// Screen rect occupied by the always-visible right-side tab strip.
+    pub(super) fn panel_tab_bar_rect(&self, canvas_rect: Rect) -> Rect {
+        Rect::from_min_max(
+            Pos2::new(canvas_rect.max.x - TAB_BAR_WIDTH, canvas_rect.min.y),
+            canvas_rect.max,
+        )
+    }
+
     /// Screen rect the panel occupies this frame, `None` while hidden.
     pub(super) fn panel_rect(&self, canvas_rect: Rect) -> Option<Rect> {
-        if !self.panel.visible {
-            return None;
-        }
-        self.panel_target()?;
+        self.panel.active_tab?;
         let width = self.panel.width.clamp(
             PANEL_MIN_WIDTH,
-            (canvas_rect.width() - 160.0).max(PANEL_MIN_WIDTH),
+            (canvas_rect.width() - TAB_BAR_WIDTH - 160.0).max(PANEL_MIN_WIDTH),
         );
+        let height = self.panel_height(canvas_rect);
+        let tab_bar = self.panel_tab_bar_rect(canvas_rect);
         Some(Rect::from_min_max(
-            Pos2::new(canvas_rect.max.x - width, canvas_rect.min.y),
-            canvas_rect.max,
+            Pos2::new(tab_bar.left() - width, canvas_rect.min.y),
+            Pos2::new(tab_bar.left(), canvas_rect.min.y + height),
         ))
+    }
+
+    fn panel_height(&self, canvas_rect: Rect) -> f32 {
+        let natural = match self.panel.active_tab {
+            Some(PanelTab::Node) => self.node_panel_height(),
+            Some(PanelTab::View) => {
+                PANEL_MARGIN_Y * 2.0 + PANEL_TITLE_BLOCK_HEIGHT
+            }
+            None => 0.0,
+        };
+        natural.clamp(0.0, canvas_rect.height().max(0.0))
+    }
+
+    fn node_panel_height(&self) -> f32 {
+        let Some(node_id) = self.panel_target() else {
+            return PANEL_MARGIN_Y * 2.0 + PANEL_TITLE_BLOCK_HEIGHT;
+        };
+        let mut height = PANEL_MARGIN_Y * 2.0
+            + PANEL_TITLE_BLOCK_HEIGHT
+            + COLLAPSING_HEADER_HEIGHT
+            + 2.0 * DEFAULT_ROW_HEIGHT
+            + PANEL_SECTION_GAP;
+
+        if let Some(instance) = self.runtime.get(&node_id) {
+            for section in instance.panel_sections() {
+                height += COLLAPSING_HEADER_HEIGHT + PANEL_SECTION_GAP;
+                height += section
+                    .prop_heights
+                    .iter()
+                    .map(|row_height| row_height.unwrap_or(DEFAULT_ROW_HEIGHT))
+                    .sum::<f32>();
+            }
+        }
+
+        height
     }
 
     /// Allocates the panel's interaction surfaces. Must run before
@@ -101,8 +167,95 @@ impl NodeGraphWidget {
         }
     }
 
-    pub(super) fn show_properties_panel(&mut self, ui: &mut Ui, panel_rect: Rect) {
+    pub(super) fn update_panel_tab_bar_interaction(&mut self, ui: &mut Ui, tab_bar_rect: Rect) {
+        let _background = ui.interact(
+            tab_bar_rect,
+            ui.id().with("props-panel-tabbar-bg"),
+            Sense::click_and_drag(),
+        );
+        for tab in [PanelTab::Node, PanelTab::View] {
+            let response = ui.interact(
+                self.panel_tab_rect(tab_bar_rect, tab),
+                ui.id().with(("props-panel-tab", tab)),
+                Sense::click(),
+            );
+            if response.clicked() {
+                self.toggle_panel_tab(tab);
+            }
+        }
+    }
+
+    pub(super) fn show_panel_tab_bar(&self, ui: &mut Ui, tab_bar_rect: Rect) {
+        let painter = ui.painter_at(tab_bar_rect);
+        painter.rect_filled(tab_bar_rect, 0.0, Color32::from_rgb(31, 31, 31));
+        painter.line_segment(
+            [tab_bar_rect.left_top(), tab_bar_rect.left_bottom()],
+            Stroke::new(1.0, Color32::from_rgb(62, 62, 62)),
+        );
+
+        for tab in [PanelTab::Node, PanelTab::View] {
+            let rect = self.panel_tab_rect(tab_bar_rect, tab);
+            let active = self.panel.active_tab == Some(tab);
+            let fill = if active {
+                Color32::from_rgb(58, 58, 58)
+            } else {
+                Color32::from_rgb(39, 39, 39)
+            };
+            let stroke = if active {
+                Color32::from_rgb(92, 92, 92)
+            } else {
+                Color32::from_rgb(55, 55, 55)
+            };
+            painter.rect_filled(rect.shrink(1.0), 4.0, fill);
+            painter.rect_stroke(
+                rect.shrink(1.0),
+                4.0,
+                Stroke::new(1.0, stroke),
+                egui::StrokeKind::Inside,
+            );
+
+            let text = match tab {
+                PanelTab::Node => "Node",
+                PanelTab::View => "View",
+            };
+            let color = if active {
+                Color32::WHITE
+            } else {
+                Color32::from_rgb(185, 185, 185)
+            };
+            let galley = painter.layout_no_wrap(text.to_owned(), FontId::proportional(12.0), color);
+            let text_pos = rect.center() - galley.rect.center().to_vec2();
+            let mut shape = egui::epaint::TextShape::new(text_pos, galley, color)
+                .with_angle_and_anchor(-std::f32::consts::FRAC_PI_2, Align2::CENTER_CENTER);
+            shape.override_text_color = Some(color);
+            painter.add(shape);
+        }
+    }
+
+    fn panel_tab_rect(&self, tab_bar_rect: Rect, tab: PanelTab) -> Rect {
+        let top = tab_bar_rect.top()
+            + 8.0
+            + match tab {
+                PanelTab::Node => 0.0,
+                PanelTab::View => TAB_HEIGHT + 6.0,
+            };
+        Rect::from_min_size(
+            Pos2::new(tab_bar_rect.left(), top),
+            Vec2::new(tab_bar_rect.width(), TAB_HEIGHT),
+        )
+    }
+
+    pub(super) fn show_active_panel(&mut self, ui: &mut Ui, panel_rect: Rect) {
+        match self.panel.active_tab {
+            Some(PanelTab::Node) => self.show_properties_panel(ui, panel_rect),
+            Some(PanelTab::View) => self.show_view_panel(ui, panel_rect),
+            None => {}
+        }
+    }
+
+    fn show_properties_panel(&mut self, ui: &mut Ui, panel_rect: Rect) {
         let Some(node_id) = self.panel_target() else {
+            self.show_empty_node_panel(ui, panel_rect);
             return;
         };
 
@@ -195,5 +348,45 @@ impl NodeGraphWidget {
         if changed {
             self.run_update(node_id);
         }
+    }
+
+    fn show_empty_node_panel(&self, ui: &mut Ui, panel_rect: Rect) {
+        let painter = ui.painter_at(panel_rect);
+        painter.rect_filled(panel_rect, 0.0, Color32::from_rgb(38, 38, 38));
+        painter.line_segment(
+            [panel_rect.left_top(), panel_rect.left_bottom()],
+            Stroke::new(1.0_f32, Color32::from_rgb(70, 70, 70)),
+        );
+        let content = panel_rect.shrink2(Vec2::new(10.0, 8.0));
+        ui.scope_builder(
+            UiBuilder::new()
+                .max_rect(content)
+                .layout(Layout::top_down(Align::Min)),
+            |ui| {
+                ui.set_clip_rect(panel_rect);
+                ui.label(RichText::new("Node").size(15.0).strong());
+                ui.label(RichText::new("No active node").size(11.0).weak());
+            },
+        );
+    }
+
+    fn show_view_panel(&self, ui: &mut Ui, panel_rect: Rect) {
+        let painter = ui.painter_at(panel_rect);
+        painter.rect_filled(panel_rect, 0.0, Color32::from_rgb(38, 38, 38));
+        painter.line_segment(
+            [panel_rect.left_top(), panel_rect.left_bottom()],
+            Stroke::new(1.0_f32, Color32::from_rgb(70, 70, 70)),
+        );
+        let content = panel_rect.shrink2(Vec2::new(10.0, 8.0));
+        ui.scope_builder(
+            UiBuilder::new()
+                .max_rect(content)
+                .layout(Layout::top_down(Align::Min)),
+            |ui| {
+                ui.set_clip_rect(panel_rect);
+                ui.label(RichText::new("View").size(15.0).strong());
+                ui.label(RichText::new("Viewport settings").size(11.0).weak());
+            },
+        );
     }
 }

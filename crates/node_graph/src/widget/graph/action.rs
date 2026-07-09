@@ -258,12 +258,19 @@ impl NodeGraphWidget {
     }
 
     fn delete_nodes(&mut self, target: Option<NodeId>) {
+        let targets = self.target_nodes(target);
         if target.is_none() {
             self.graph.frames.retain(|frame| !frame.selected);
         }
-        for id in self.target_nodes(target) {
+        for id in targets {
             self.graph.remove_node(id);
             self.runtime.remove(&id);
+        }
+        if self
+            .active_node
+            .is_some_and(|id| !self.graph.nodes.contains_key(&id))
+        {
+            self.active_node = None;
         }
         self.graph.cleanup_frames();
     }
@@ -313,6 +320,12 @@ impl NodeGraphWidget {
         for id in targets {
             self.graph.remove_node(id);
             self.runtime.remove(&id);
+        }
+        if self
+            .active_node
+            .is_some_and(|id| !self.graph.nodes.contains_key(&id))
+        {
+            self.active_node = None;
         }
         let mut touched: Vec<NodeId> = Vec::new();
         for connection in rewired {
@@ -469,6 +482,7 @@ impl NodeGraphWidget {
         }
 
         let mut pasted = 0usize;
+        let mut last_pasted = None;
         for mut node in payload.nodes {
             let old_id = node.id;
             let new_id = self.graph.next_id();
@@ -480,8 +494,10 @@ impl NodeGraphWidget {
                 self.runtime.insert(node.id, instance);
             }
             self.graph.add_node(node);
+            last_pasted = Some(new_id);
             pasted += 1;
         }
+        self.active_node = last_pasted.or(self.active_node);
 
         let new_connections: Vec<_> = payload
             .connections

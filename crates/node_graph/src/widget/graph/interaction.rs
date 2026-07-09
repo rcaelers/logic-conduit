@@ -774,8 +774,6 @@ impl NodeGraphWidget {
             // most recent selection.
             if node.selected {
                 self.active_node = Some(id);
-            } else if self.active_node == Some(id) {
-                self.active_node = None;
             }
         }
     }
@@ -1066,7 +1064,8 @@ impl NodeGraphWidget {
         // would also pan the graph. Once a pan has started, keep following
         // the drag even if the pointer leaves the canvas rect.
         let middle_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle))
-            && (response.hovered() || matches!(self.interaction_state, InteractionState::Panning { .. }));
+            && (response.hovered()
+                || matches!(self.interaction_state, InteractionState::Panning { .. }));
         let right_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary));
 
         if middle_down {
