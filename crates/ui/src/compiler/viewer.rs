@@ -3,7 +3,7 @@
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 use dsl::runtime::ProcessNode;
-use dsl::{ParallelWord, Sample, SpiTransfer, Trigger, ViewerLaneKind, ViewerSink};
+use dsl::{Sample, Trigger, ViewerLaneKind, ViewerSink, Word};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -16,8 +16,7 @@ impl RuntimeBuilder for ViewerBuilder {
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
         vec![
             PortKind::of::<Sample>(),
-            PortKind::of::<SpiTransfer>(),
-            PortKind::of::<ParallelWord>(),
+            PortKind::of::<Word>(),
             PortKind::of::<Trigger>(),
         ]
     }
@@ -56,16 +55,10 @@ impl RuntimeBuilder for ViewerBuilder {
             } else {
                 format!("{prefix}: {}", input.source)
             };
-            // `ViewerSink` only ever sees `Signal`/`Words`/`Trigger` —
-            // picking the concrete `T: WordSource` for a `Words` lane is
-            // this builder's job, not something the viewer itself needs to
-            // know (see `ViewerLaneKind`'s doc).
             sink = if input.kind == PortKind::of::<Sample>() {
                 sink.with_lane(ViewerLaneKind::Signal, lane_name)
-            } else if input.kind == PortKind::of::<SpiTransfer>() {
-                sink.with_words_lane::<SpiTransfer>(lane_name)
-            } else if input.kind == PortKind::of::<ParallelWord>() {
-                sink.with_words_lane::<ParallelWord>(lane_name)
+            } else if input.kind == PortKind::of::<Word>() {
+                sink.with_lane(ViewerLaneKind::Words, lane_name)
             } else if input.kind == PortKind::of::<Trigger>() {
                 sink.with_lane(ViewerLaneKind::Trigger, lane_name)
             } else {

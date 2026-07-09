@@ -40,12 +40,13 @@
 use clap::Parser;
 use crossbeam_channel::TryRecvError;
 use dsl::DslFileSource;
-use dsl::nodes::decoders::{CsPolarity, ParallelWord, SpiMode, SpiTransfer, StrobeMode};
+use dsl::nodes::decoders::{CsPolarity, SpiMode, StrobeMode};
 use dsl::nodes::decoders::{ParallelDecoder, SpiDecoder};
 use dsl::runtime::{
     InputPort, OutputPort, Pipeline, PortDirection, PortSchema, ProcessNode, Sample, WorkError,
     WorkResult,
 };
+use dsl::Word;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -118,7 +119,7 @@ fn parse_hex(s: &str) -> Result<u64, std::num::ParseIntError> {
 /// This node watches SPI transfers and emits state changes when specific
 /// command values are detected. Used to enable/disable downstream nodes.
 ///
-/// Outputs Sample with start_time = position for instantaneous state changes.
+/// Outputs Sample with start_time_ns = position for instantaneous state changes.
 struct SpiCommandController {
     name: String,
     enable_command: u64,
@@ -147,7 +148,7 @@ impl ProcessNode for SpiCommandController {
     }
 
     fn num_inputs(&self) -> usize {
-        1 // SpiTransfer input
+        1 // Word input
     }
 
     fn num_outputs(&self) -> usize {
@@ -155,11 +156,7 @@ impl ProcessNode for SpiCommandController {
     }
 
     fn input_schema(&self) -> Vec<PortSchema> {
-        vec![PortSchema::new::<SpiTransfer>(
-            "spi_in",
-            0,
-            PortDirection::Input,
-        )]
+        vec![PortSchema::new::<Word>("spi_in", 0, PortDirection::Input)]
     }
 
     fn output_schema(&self) -> Vec<PortSchema> {
@@ -171,11 +168,11 @@ impl ProcessNode for SpiCommandController {
     }
 
     fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
-        // Expect 1 input (SpiTransfer) and 1 output (Sample)
+        // Expect 1 input (Word) and 1 output (Sample)
         let mut input_buffer = VecDeque::new();
         let mut input = inputs
             .first()
-            .and_then(|port| port.get::<SpiTransfer>(&mut input_buffer))
+            .and_then(|port| port.get::<Word>(&mut input_buffer))
             .ok_or_else(|| WorkError::NodeError("Missing input channel".to_string()))?;
 
         let output = outputs
@@ -196,7 +193,7 @@ impl ProcessNode for SpiCommandController {
 
         // Process one SPI transfer
         let transfer = input.recv()?;
-        let mosi_value = transfer.mosi as u64;
+        let mosi_value = transfer.value;
 
         debug!(
             "[SpiCommandController] command: #{} 0x{:06X}",
@@ -220,7 +217,7 @@ impl ProcessNode for SpiCommandController {
                 self.current_state, new_state, mosi_value
             );
             self.current_state = new_state;
-            let timestamp = transfer.timing.position;
+            let timestamp = transfer.timestamp_ns;
             let sample = Sample::new(self.current_state, timestamp);
             output.send(sample)?;
         }
@@ -242,8 +239,8 @@ struct ControlledParallelWriter {
     current_enable_state: bool,
     current_enable_timestamp: u64,
     // Metadata for current file
-    current_file_start_time: Option<f64>,
-    current_file_end_time: Option<f64>,
+    current_file_start_time_ns: Option<u64>,
+    current_file_end_time_ns: Option<u64>,
     current_file_start_pos: Option<u64>,
     current_file_end_pos: Option<u64>,
     // TGCK tracking
@@ -277,8 +274,8 @@ impl ControlledParallelWriter {
             enable_buffer: VecDeque::new(),
             current_enable_state: false,
             current_enable_timestamp: 0,
-            current_file_start_time: None,
-            current_file_end_time: None,
+            current_file_start_time_ns: None,
+            current_file_end_time_ns: None,
             current_file_start_pos: None,
             current_file_end_pos: None,
             tgck_buffer: VecDeque::new(),
@@ -336,9 +333,9 @@ impl ControlledParallelWriter {
 
         // Write metadata for this file
         let filename = format!("capture_{:04}.bin", file_num);
-        let start_time = self.current_file_start_time.unwrap_or(0.0);
-        let end_time = self.current_file_end_time.unwrap_or(0.0);
-        let duration = end_time - start_time;
+        let start_time_us = self.current_file_start_time_ns.unwrap_or(0) as f64 / 1_000.0;
+        let end_time_us = self.current_file_end_time_ns.unwrap_or(0) as f64 / 1_000.0;
+        let duration = end_time_us - start_time_us;
         let start_pos = self.current_file_start_pos.unwrap_or(0);
         let end_pos = self.current_file_end_pos.unwrap_or(0);
         let width = self.compute_width_from_tgck().unwrap_or(0);
@@ -350,8 +347,8 @@ impl ControlledParallelWriter {
             filename,
             self.words_in_file,
             width,
-            start_time,
-            end_time,
+            start_time_us,
+            end_time_us,
             duration,
             start_pos,
             end_pos
@@ -378,8 +375,8 @@ impl ControlledParallelWriter {
 
         self.current_file = Some(writer);
         self.words_in_file = 0;
-        self.current_file_start_time = None;
-        self.current_file_end_time = None;
+        self.current_file_start_time_ns = None;
+        self.current_file_end_time_ns = None;
         self.current_file_start_pos = None;
         self.current_file_end_pos = None;
         self.tgck_records.clear();
@@ -394,17 +391,17 @@ impl ControlledParallelWriter {
         Ok(())
     }
 
-    fn write_word(&mut self, word: &ParallelWord) -> Result<(), std::io::Error> {
+    fn write_word(&mut self, word: &Word) -> Result<(), std::io::Error> {
         if let Some(writer) = &mut self.current_file {
             self.words_in_file += 1;
 
             // Track metadata for index file
-            if self.current_file_start_time.is_none() {
-                self.current_file_start_time = Some(word.timing.timestamp_us);
-                self.current_file_start_pos = Some(word.timing.position);
+            if self.current_file_start_time_ns.is_none() {
+                self.current_file_start_time_ns = Some(word.timestamp_ns);
+                self.current_file_start_pos = Some(word.timestamp_ns);
             }
-            self.current_file_end_time = Some(word.timing.timestamp_us);
-            self.current_file_end_pos = Some(word.timing.position);
+            self.current_file_end_time_ns = Some(word.timestamp_ns);
+            self.current_file_end_pos = Some(word.timestamp_ns);
 
             writer.write_all(&[word.value as u8])?;
         }
@@ -526,7 +523,7 @@ impl ProcessNode for ControlledParallelWriter {
     fn input_schema(&self) -> Vec<dsl::PortSchema> {
         use dsl::{PortDirection, PortSchema};
         vec![
-            PortSchema::new::<ParallelWord>("parallel_words", 0, PortDirection::Input),
+            PortSchema::new::<Word>("parallel_words", 0, PortDirection::Input),
             PortSchema::new::<Sample>("enable_signal", 1, PortDirection::Input),
             PortSchema::new::<Sample>("tgck", 2, PortDirection::Input),
         ]
@@ -538,7 +535,7 @@ impl ProcessNode for ControlledParallelWriter {
         let mut words_buffer = std::collections::VecDeque::new();
         let mut words_input = inputs
             .first()
-            .and_then(|port| port.get::<ParallelWord>(&mut words_buffer))
+            .and_then(|port| port.get::<Word>(&mut words_buffer))
             .ok_or_else(|| WorkError::NodeError("Missing parallel_words input".to_string()))?;
 
         let mut words_processed = 0;
@@ -571,7 +568,7 @@ impl ProcessNode for ControlledParallelWriter {
                 }
             };
 
-            let word_position = word.timing.position;
+            let word_position = word.timestamp_ns;
 
             // Collect edges up to this word's position
             // (need to drop enable_input and tgck_input before calling self.close_file)
@@ -590,13 +587,13 @@ impl ProcessNode for ControlledParallelWriter {
                     loop {
                         match enable_input.peek() {
                             Ok(next_edge) => {
-                                if next_edge.start_time <= word_position {
+                                if next_edge.start_time_ns <= word_position {
                                     let edge = enable_input.recv()?;
                                     if edge.value != self.current_enable_state {
                                         self.edges_to_process_buf.push(edge);
                                         // Update state to track further transitions
                                         self.current_enable_state = edge.value;
-                                        self.current_enable_timestamp = edge.start_time;
+                                        self.current_enable_timestamp = edge.start_time_ns;
                                     }
                                 } else {
                                     break;
@@ -622,15 +619,15 @@ impl ProcessNode for ControlledParallelWriter {
                     loop {
                         match tgck_input.peek() {
                             Ok(next_edge) => {
-                                if next_edge.start_time <= word_position {
+                                if next_edge.start_time_ns <= word_position {
                                     let edge = tgck_input.recv()?;
                                     // Detect rising edge
                                     if edge.value && !self.last_tgck_value {
-                                        self.tgck_rising_buf.push(edge.start_time);
+                                        self.tgck_rising_buf.push(edge.start_time_ns);
                                     }
                                     // Detect falling edge
                                     if !edge.value && self.last_tgck_value {
-                                        self.tgck_falling_buf.push(edge.start_time);
+                                        self.tgck_falling_buf.push(edge.start_time_ns);
                                     }
                                     self.last_tgck_value = edge.value;
                                 } else {
@@ -674,13 +671,13 @@ impl ProcessNode for ControlledParallelWriter {
                 if !edge.value {
                     info!(
                         ">>> Enable INACTIVE at position {} - closing capture file",
-                        edge.start_time,
+                        edge.start_time_ns,
                     );
                     self.close_file().map_err(|e| {
                         WorkError::NodeError(format!("Failed to close file: {}", e))
                     })?;
                 } else {
-                    info!(">>> Enable ACTIVE at position {}", edge.start_time,);
+                    info!(">>> Enable ACTIVE at position {}", edge.start_time_ns,);
                 }
                 i += 1;
             }
@@ -690,9 +687,9 @@ impl ProcessNode for ControlledParallelWriter {
                 // Open file if needed (first word after enable)
                 if self.current_file.is_none() {
                     info!(
-                        ">>> First word while enabled - new capture file (enabled at position {}, word at {:.6}s)",
+                        ">>> First word while enabled - new capture file (enabled at position {}, word at {} ns)",
                         self.current_enable_timestamp,
-                        word.timing.timestamp_us / 1_000_000.0
+                        word.timestamp_ns
                     );
                     self.open_new_file()
                         .map_err(|e| WorkError::NodeError(format!("Failed to open file: {}", e)))?;
@@ -701,12 +698,12 @@ impl ProcessNode for ControlledParallelWriter {
                 // Track first clock (strobe) edge after TGCK events
                 if self.tgck_need_clock_after_rising {
                     self.tgck_first_clock_after_rising =
-                        Some((self.words_in_file, word.timing.position));
+                        Some((self.words_in_file, word.timestamp_ns));
                     self.tgck_need_clock_after_rising = false;
                 }
                 if self.tgck_need_clock_after_falling {
                     self.tgck_first_clock_after_falling =
-                        Some((self.words_in_file, word.timing.position));
+                        Some((self.words_in_file, word.timestamp_ns));
                     self.tgck_need_clock_after_falling = false;
                 }
 
@@ -717,11 +714,8 @@ impl ProcessNode for ControlledParallelWriter {
                 // Log progress every 100000 words (reduced from 10000 for performance)
                 if self.count.is_multiple_of(100000) {
                     info!(
-                        "Progress: {} words written (latest: 0x{:02X} at t={:.6}s in file {})",
-                        self.count,
-                        word.value,
-                        word.timing.timestamp_us / 1_000_000.0,
-                        self.file_count
+                        "Progress: {} words written (latest: 0x{:02X} at t={} ns in file {})",
+                        self.count, word.value, word.timestamp_ns, self.file_count
                     );
                 }
             }
@@ -801,7 +795,7 @@ impl ProcessNode for SpiMonitor {
 
     fn input_schema(&self) -> Vec<dsl::PortSchema> {
         use dsl::{PortDirection, PortSchema};
-        vec![PortSchema::new::<SpiTransfer>(
+        vec![PortSchema::new::<Word>(
             "spi_transfers",
             0,
             PortDirection::Input,
@@ -812,18 +806,17 @@ impl ProcessNode for SpiMonitor {
         let mut input_buffer = std::collections::VecDeque::new();
         let mut input = inputs
             .first()
-            .and_then(|port| port.get::<SpiTransfer>(&mut input_buffer))
+            .and_then(|port| port.get::<Word>(&mut input_buffer))
             .ok_or_else(|| WorkError::NodeError("Missing input channel".to_string()))?;
 
         // Use try_recv() to avoid blocking and contributing to backpressure
         match input.try_recv() {
             Ok(transfer) => {
                 // Print the SPI command (only show enable/disable commands to reduce log spam)
-                if transfer.mosi == 0x600081 || transfer.mosi == 0x600000 {
+                if transfer.value == 0x600081 || transfer.value == 0x600000 {
                     info!(
-                        "SPI Command: 0x{:06X} at t={:.6}s",
-                        transfer.mosi,
-                        transfer.timing.timestamp_us / 1_000_000.0
+                        "SPI Command: 0x{:06X} at t={} ns",
+                        transfer.value, transfer.timestamp_ns
                     );
                 }
                 Ok(1)
@@ -931,12 +924,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect SPI decoder output to both monitor and controller (small buffers for low-bandwidth SPI commands)
     pipeline.connect_with_buffer(
         "spi_decoder",
-        "spi_transfers",
+        "mosi_words",
         "spi_monitor",
         "spi_transfers",
         1000,
     )?;
-    pipeline.connect_with_buffer("spi_decoder", "spi_transfers", "controller", "spi_in", 1000)?;
+    pipeline.connect_with_buffer("spi_decoder", "mosi_words", "controller", "spi_in", 1000)?;
 
     // Add state monitor (autodetects 1 input, 0 outputs)
     pipeline.add_process("state_monitor", StateMonitor)?;

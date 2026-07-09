@@ -2,9 +2,8 @@
 //! renders as extra rows under the raw channels
 //! (`ANALYSIS_PIPELINE_DESIGN.md` §4.9).
 
-use crate::nodes::logic::{WordField, WordSource};
 use crate::runtime::derived_index::{AppendOnlyMipmap, LaneFold, MipmapRecord};
-use crate::runtime::events::Trigger;
+use crate::runtime::events::{Trigger, Word};
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
 use crate::runtime::sample::Sample;
@@ -53,8 +52,8 @@ pub struct DigitalFold;
 impl LaneFold<Sample> for DigitalFold {
     fn leaf(entry: &Sample) -> MipmapRecord {
         MipmapRecord {
-            start_ns: entry.start_time,
-            end_ns: entry.start_time,
+            start_ns: entry.start_time_ns,
+            end_ns: entry.start_time_ns,
             count: 1,
             level_hint: Some((entry.value, entry.value)),
         }
@@ -286,12 +285,9 @@ impl DerivedLanes {
 
 /// The three shapes a viewer lane's data can take
 /// (`ANALYSIS_PIPELINE_DESIGN.md` §4.9) — every decoder's output reduces to
-/// one of these. The viewer itself never needs to know which decoder (or
-/// concrete word-carrying Rust type) produced a lane: a level stream
-/// (`Signal`), a stream of decoded values (`Words` — built via
-/// [`ViewerSink::with_words_lane`], generic over any `T: WordSource`; the
-/// concrete `T` is a choice the *caller* makes, not something this type
-/// names), or a stream of instantaneous events (`Trigger`).
+/// one of these, so the viewer itself never needs to know which decoder
+/// produced a lane: a level stream (`Signal`), a stream of decoded values
+/// (`Words`, i.e. [`Word`]), or a stream of instantaneous events (`Trigger`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewerLaneKind {
     Signal,
@@ -299,55 +295,14 @@ pub enum ViewerLaneKind {
     Trigger,
 }
 
-/// Type-erased per-lane word decoder: knows this lane's `PortSchema` and how
-/// to drain a batch of `(timestamp_ns, word)` pairs from its input, for
-/// whatever concrete `T: WordSource` it was built with in
-/// [`ViewerSink::with_words_lane`]. Keeps every decoder's word type out of
-/// [`ViewerLaneKind`]/[`LaneBuffer`] — they only ever see "a `Words` lane".
-trait WordDrain: Send {
-    fn port_schema(&self, name: String, index: usize) -> PortSchema;
-    /// Drains up to `DRAIN_BATCH_SIZE` items, returning `(timestamp_ns,
-    /// word)` pairs and whether the channel is now known to be closed.
-    fn drain(&mut self, port: &InputPort) -> (Vec<(u64, u64)>, bool);
-}
-
-struct TypedWordBuffer<T> {
-    buffer: VecDeque<T>,
-}
-
-impl<T: WordSource> WordDrain for TypedWordBuffer<T> {
-    fn port_schema(&self, name: String, index: usize) -> PortSchema {
-        PortSchema::new::<T>(name, index, PortDirection::Input)
-    }
-
-    fn drain(&mut self, port: &InputPort) -> (Vec<(u64, u64)>, bool) {
-        use crossbeam_channel::TryRecvError;
-        let Some(mut receiver) = port.get::<T>(&mut self.buffer) else {
-            return (Vec::new(), true);
-        };
-        let mut items = Vec::new();
-        let mut eos = false;
-        while items.len() < DRAIN_BATCH_SIZE {
-            match receiver.try_recv() {
-                Ok(item) => items.push((item.timestamp_ns(), item.word(WordField::Mosi))),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    eos = true;
-                    break;
-                }
-            }
-        }
-        (items, eos)
-    }
-}
-
 enum LaneBuffer {
     Signal(VecDeque<Sample>),
-    Words(Box<dyn WordDrain>),
+    Words(VecDeque<Word>),
     Trigger(VecDeque<Trigger>),
 }
 
 struct Lane {
+    kind: ViewerLaneKind,
     store_index: usize,
     buffer: LaneBuffer,
     eos: bool,
@@ -380,43 +335,27 @@ impl ViewerSink {
         self
     }
 
-    /// Appends a `Signal` or `Trigger` lane; input port order follows lane
-    /// order (`in0`, `in1`, …). Use [`Self::with_words_lane`] for `Words`.
+    /// Appends a lane; input port order follows lane order (`in0`, `in1`, …).
     pub fn with_lane(mut self, kind: ViewerLaneKind, name: impl Into<String>) -> Self {
         let (data, buffer) = match kind {
             ViewerLaneKind::Signal => (
                 DerivedLaneData::Digital(Vec::new()),
                 LaneBuffer::Signal(VecDeque::new()),
             ),
+            ViewerLaneKind::Words => (
+                DerivedLaneData::Annotations(Vec::new()),
+                LaneBuffer::Words(VecDeque::new()),
+            ),
             ViewerLaneKind::Trigger => (
                 DerivedLaneData::Markers(Vec::new()),
                 LaneBuffer::Trigger(VecDeque::new()),
             ),
-            ViewerLaneKind::Words => {
-                panic!("with_lane doesn't support Words — use with_words_lane::<T>()")
-            }
         };
         let store_index = self.store.register(name, data);
         self.lanes.push(Lane {
+            kind,
             store_index,
             buffer,
-            eos: false,
-        });
-        self
-    }
-
-    /// Appends a `Words` lane carrying `T`. Generic so this file never needs
-    /// to name a specific decoder's word type — the caller (the compiler's
-    /// `ViewerBuilder`) picks `T` from the negotiated `PortKind`.
-    pub fn with_words_lane<T: WordSource>(mut self, name: impl Into<String>) -> Self {
-        let store_index = self
-            .store
-            .register(name, DerivedLaneData::Annotations(Vec::new()));
-        self.lanes.push(Lane {
-            store_index,
-            buffer: LaneBuffer::Words(Box::new(TypedWordBuffer::<T> {
-                buffer: VecDeque::new(),
-            })),
             eos: false,
         });
         self
@@ -446,12 +385,14 @@ impl ProcessNode for ViewerSink {
             .enumerate()
             .map(|(index, lane)| {
                 let name = format!("in{index}");
-                match &lane.buffer {
-                    LaneBuffer::Signal(_) => {
+                match lane.kind {
+                    ViewerLaneKind::Signal => {
                         PortSchema::new::<Sample>(name, index, PortDirection::Input)
                     }
-                    LaneBuffer::Words(word_drain) => word_drain.port_schema(name, index),
-                    LaneBuffer::Trigger(_) => {
+                    ViewerLaneKind::Words => {
+                        PortSchema::new::<Word>(name, index, PortDirection::Input)
+                    }
+                    ViewerLaneKind::Trigger => {
                         PortSchema::new::<Trigger>(name, index, PortDirection::Input)
                     }
                 }
@@ -512,14 +453,14 @@ impl ProcessNode for ViewerSink {
                         store.append_digital_batch(lane.store_index, batch);
                     }
                 }
-                LaneBuffer::Words(word_drain) => {
-                    let (items, eos) = word_drain.drain(port);
-                    progress += items.len();
-                    if eos {
-                        lane.eos = true;
-                    }
-                    if !items.is_empty() {
-                        store.append_word_batch(lane.store_index, items);
+                LaneBuffer::Words(buffer) => {
+                    let batch = drain_batch!(Word, buffer);
+                    progress += batch.len();
+                    if !batch.is_empty() {
+                        store.append_word_batch(
+                            lane.store_index,
+                            batch.into_iter().map(|w| (w.timestamp_ns, w.value)),
+                        );
                     }
                 }
                 LaneBuffer::Trigger(buffer) => {
@@ -550,8 +491,6 @@ impl ProcessNode for ViewerSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TimingInfo;
-    use crate::nodes::decoders::ParallelWord;
     use crate::runtime::OutputPort as OutPort;
     use crate::runtime::sender::ChannelMessage;
     use crate::runtime::watchdog::Watchdog;
@@ -573,7 +512,7 @@ mod tests {
         let store = DerivedLanes::new();
         let mut sink = ViewerSink::new(store.clone())
             .with_lane(ViewerLaneKind::Signal, "latch.q")
-            .with_words_lane::<ParallelWord>("decoder.words")
+            .with_lane(ViewerLaneKind::Words, "decoder.words")
             .with_lane(ViewerLaneKind::Trigger, "start.match");
 
         let wd = Watchdog::new();
@@ -586,13 +525,10 @@ mod tests {
             .unwrap();
         drop(sig_tx);
 
-        let (word_tx, word_rx) = bounded::<ChannelMessage<ParallelWord>>(16);
+        let (word_tx, word_rx) = bounded::<ChannelMessage<Word>>(16);
         for (value, ts) in [(0xAB_u64, 1_000_u64), (0xCD, 1_500)] {
             word_tx
-                .send(ChannelMessage::Sample(ParallelWord {
-                    value,
-                    timing: TimingInfo::new(ts as f64 / 1_000.0, ts),
-                }))
+                .send(ChannelMessage::Sample(Word::new(value, ts)))
                 .unwrap();
         }
         drop(word_tx);

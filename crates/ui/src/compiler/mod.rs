@@ -10,8 +10,8 @@
 //!
 //! Kind negotiation (§5.4): each edge picks `offered ∩ accepted`, producer
 //! preference order winning. That is what maps one UI `Signal` socket onto
-//! the source's dual `d{i}`/`b{i}` ports and one `Words` socket onto
-//! `SpiTransfer` vs `ParallelWord` consumers.
+//! the source's dual `d{i}`/`b{i}` ports; every `Words` socket carries the
+//! same `Word` runtime type regardless of which decoder produced it.
 
 use dsl::DerivedLanes;
 use dsl::SampleBlock;
@@ -1003,7 +1003,7 @@ mod tests {
     use dsl::runtime::{ConfigValue, Pipeline};
     #[cfg(not(target_arch = "wasm32"))]
     use dsl::BinaryFileWriter;
-    use dsl::{ParallelWord, Sample, Trigger};
+    use dsl::{Sample, Trigger, Word};
     use node_graph::NodeGraphWidget;
     use std::path::{Path, PathBuf};
 
@@ -1043,7 +1043,7 @@ mod tests {
         assert!(
             lanes
                 .iter()
-                .any(|(_, input)| input.kind == PortKind::of::<ParallelWord>()
+                .any(|(_, input)| input.kind == PortKind::of::<Word>()
                     && input.source == "Viewer Buffer.Out")
         );
         assert!(lanes.iter().any(
@@ -1111,7 +1111,7 @@ mod tests {
         let lanes = viewer.resolved.members(0);
         assert_eq!(lanes.len(), 2);
         assert_eq!(lanes[0].1.kind, PortKind::of::<Sample>());
-        assert_eq!(lanes[1].1.kind, PortKind::of::<ParallelWord>());
+        assert_eq!(lanes[1].1.kind, PortKind::of::<Word>());
     }
 
     #[test]
@@ -1401,7 +1401,7 @@ mod tests {
     /// `spi_controlled_decode.rs`).
     fn run_reference(capture: &Path, out_dir: &Path) {
         use dsl::nodes::decoders::{CsPolarity, ParallelDecoder, SpiDecoder, SpiMode, StrobeMode};
-        use dsl::{SpiTransfer, SrLatch, TextFormatter, TriggerCounter, WordMatcher};
+        use dsl::{SrLatch, TextFormatter, TriggerCounter, WordMatcher};
 
         let mut pipeline = Pipeline::new().with_default_buffer_size(10_000_000);
         pipeline
@@ -1411,10 +1411,10 @@ mod tests {
             .add_process("spi", SpiDecoder::new(SpiMode::Mode0, 24, true, false))
             .unwrap();
         pipeline
-            .add_process("start", WordMatcher::<SpiTransfer>::new(0x600081, u64::MAX))
+            .add_process("start", WordMatcher::new(0x600081, u64::MAX))
             .unwrap();
         pipeline
-            .add_process("stop", WordMatcher::<SpiTransfer>::new(0x600000, u64::MAX))
+            .add_process("stop", WordMatcher::new(0x600000, u64::MAX))
             .unwrap();
         pipeline.add_process("latch", SrLatch::new(false)).unwrap();
         pipeline
@@ -1440,10 +1440,10 @@ mod tests {
         pipeline.connect("source", "ch8", "spi", "cs").unwrap();
         pipeline.connect("source", "ch6", "spi", "mosi").unwrap();
         pipeline
-            .connect_with_buffer("spi", "spi_transfers", "start", "words", 1_000)
+            .connect_with_buffer("spi", "mosi_words", "start", "words", 1_000)
             .unwrap();
         pipeline
-            .connect_with_buffer("spi", "spi_transfers", "stop", "words", 1_000)
+            .connect_with_buffer("spi", "mosi_words", "stop", "words", 1_000)
             .unwrap();
         pipeline
             .connect_with_buffer("start", "trigger", "latch", "set", 100)

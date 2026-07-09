@@ -17,7 +17,8 @@
 
 use clap::Parser;
 use dsl::DslFileSource;
-use dsl::nodes::decoders::{SpiDecoder, SpiMode, SpiTransfer};
+use dsl::nodes::decoders::{SpiDecoder, SpiMode};
+use dsl::Word;
 use dsl::runtime::{InputPort, OutputPort, Pipeline, ProcessNode, WorkError, WorkResult};
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -85,7 +86,7 @@ impl ProcessNode for SpiPrinter {
 
     fn input_schema(&self) -> Vec<dsl::PortSchema> {
         use dsl::{PortDirection, PortSchema};
-        vec![PortSchema::new::<SpiTransfer>(
+        vec![PortSchema::new::<Word>(
             "spi_transfers",
             0,
             PortDirection::Input,
@@ -96,19 +97,15 @@ impl ProcessNode for SpiPrinter {
         let mut input_buffer = std::collections::VecDeque::new();
         let mut input = inputs
             .first()
-            .and_then(|port| port.get::<SpiTransfer>(&mut input_buffer))
+            .and_then(|port| port.get::<Word>(&mut input_buffer))
             .ok_or_else(|| WorkError::NodeError("Missing input channel".to_string()))?;
 
-        let transfer = input.recv()?;
+        let word = input.recv()?;
 
         self.count += 1;
         info!(
-            "SPI Transfer #{}: MOSI=0x{:06X} MISO=0x{:06X} at t={:.6}s (pos={})",
-            self.count,
-            transfer.mosi,
-            transfer.miso,
-            transfer.timing.timestamp_us / 1_000_000.0,
-            transfer.timing.position
+            "SPI Transfer #{}: MOSI=0x{:06X} at t={} ns",
+            self.count, word.value, word.timestamp_ns
         );
 
         if self.max_transfers > 0 && self.count >= self.max_transfers {
@@ -165,7 +162,7 @@ impl ProcessNode for SpiCsvWriter {
 
     fn input_schema(&self) -> Vec<dsl::PortSchema> {
         use dsl::{PortDirection, PortSchema};
-        vec![PortSchema::new::<SpiTransfer>(
+        vec![PortSchema::new::<Word>(
             "spi_transfers",
             0,
             PortDirection::Input,
@@ -176,10 +173,10 @@ impl ProcessNode for SpiCsvWriter {
         let mut input_buffer = std::collections::VecDeque::new();
         let mut input = inputs
             .first()
-            .and_then(|port| port.get::<SpiTransfer>(&mut input_buffer))
+            .and_then(|port| port.get::<Word>(&mut input_buffer))
             .ok_or_else(|| WorkError::NodeError("Missing input channel".to_string()))?;
 
-        let transfer = input.recv()?;
+        let word = input.recv()?;
 
         self.count += 1;
 
@@ -187,7 +184,7 @@ impl ProcessNode for SpiCsvWriter {
         writeln!(
             self.writer,
             "{},{:.2},{:06X}",
-            self.count, transfer.timing.position as f64, transfer.mosi
+            self.count, word.timestamp_ns as f64, word.value
         )
         .map_err(|e| WorkError::NodeError(format!("CSV write error: {}", e)))?;
 
@@ -280,7 +277,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Add SPI printer sink
     pipeline.add_process("printer", SpiPrinter::new(args.n))?;
-    pipeline.connect("spi_decoder", "spi_transfers", "printer", "spi_transfers")?;
+    pipeline.connect("spi_decoder", "mosi_words", "printer", "spi_transfers")?;
 
     // Optionally add CSV writer
     if let Some(csv_path) = &args.csv_output {
@@ -288,7 +285,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         pipeline.add_process("csv_writer", SpiCsvWriter::new(csv_path, args.n)?)?;
         pipeline.connect(
             "spi_decoder",
-            "spi_transfers",
+            "mosi_words",
             "csv_writer",
             "spi_transfers",
         )?;

@@ -2,9 +2,10 @@
 //!
 //! Accepts SampleBlock inputs for high-bandwidth signals (strobe, data, CS)
 //! and Sample inputs for low-bandwidth control signals (enable_signal).
-//! Outputs ParallelWord events.
+//! Outputs Word events.
 
-use super::types::{CsPolarity, Endianness, ParallelWord, StrobeMode, TimingInfo};
+use super::types::{CsPolarity, Endianness, StrobeMode};
+use crate::runtime::events::Word;
 use crate::runtime::Receiver;
 use crate::runtime::WorkError;
 use crate::runtime::edge_query::EdgeQuery;
@@ -22,7 +23,7 @@ use tracing::debug;
 ///   - Block inputs: strobe_block, d0_block..dN_block, cs_block — all SampleBlock
 ///   - Edge input: enable_signal — Sample (from SPI controller)
 ///
-/// Output: ParallelWord events
+/// Output: Word events
 pub struct ParallelDecoder {
     name: String,
     num_data_bits: usize,
@@ -126,7 +127,7 @@ impl ProcessNode for ParallelDecoder {
     }
 
     fn num_outputs(&self) -> usize {
-        1 // ParallelWord output
+        1 // Word output
     }
 
     fn input_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
@@ -172,7 +173,7 @@ impl ProcessNode for ParallelDecoder {
     fn output_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
         use crate::runtime::ports::{PortDirection, PortSchema};
 
-        vec![PortSchema::new::<ParallelWord>(
+        vec![PortSchema::new::<Word>(
             "words",
             0,
             PortDirection::Output,
@@ -259,7 +260,7 @@ impl ParallelDecoder {
 
         let output = outputs
             .first()
-            .and_then(|port| port.get::<ParallelWord>())
+            .and_then(|port| port.get::<Word>())
             .ok_or_else(|| WorkError::NodeError("Missing output".to_string()))?;
 
         let enable_port_idx = 1 + self.num_data_bits + 1;
@@ -400,7 +401,7 @@ impl ParallelDecoder {
         endianness: Endianness,
         timestamp_step: u64,
         assembly: &mut AssemblyState,
-        output: &Sender<ParallelWord>,
+        output: &Sender<Word>,
         decoder_name: &str,
     ) -> WorkResult<u64> {
         let query_err = |e: crate::Error| WorkError::NodeError(e.to_string());
@@ -431,11 +432,11 @@ impl ParallelDecoder {
             loop {
                 match enable_recv.peek() {
                     Ok(next_edge) => {
-                        if next_edge.start_time <= timestamp_ns {
+                        if next_edge.start_time_ns <= timestamp_ns {
                             let edge = enable_recv.recv()?;
                             enable.current = edge.value;
                         } else {
-                            enable.next_change_position = next_edge.start_time;
+                            enable.next_change_position = next_edge.start_time_ns;
                             break;
                         }
                     }
@@ -486,12 +487,9 @@ impl ParallelDecoder {
             return Ok(0);
         }
 
-        let word = ParallelWord {
+        let word = Word {
             value: assembly.value,
-            timing: TimingInfo::new(
-                assembly.first_ts as f64 / 1_000.0, // Convert ns to microseconds
-                assembly.first_ts,
-            ),
+            timestamp_ns: assembly.first_ts,
         };
         assembly.value = 0;
         assembly.cycles = 0;
@@ -517,7 +515,7 @@ impl ParallelDecoder {
         // Get output
         let output = outputs
             .first()
-            .and_then(|port| port.get::<ParallelWord>())
+            .and_then(|port| port.get::<Word>())
             .ok_or_else(|| WorkError::NodeError("Missing output".to_string()))?;
 
         // Get block inputs: strobe, data[0..N], cs
@@ -645,11 +643,11 @@ impl ParallelDecoder {
                 loop {
                     match enable.peek() {
                         Ok(next_edge) => {
-                            if next_edge.start_time <= timestamp_ns {
+                            if next_edge.start_time_ns <= timestamp_ns {
                                 let edge = enable.recv()?;
                                 current_enable_value = edge.value;
                             } else {
-                                next_enable_change_position = next_edge.start_time;
+                                next_enable_change_position = next_edge.start_time_ns;
                                 break;
                             }
                         }
@@ -701,12 +699,9 @@ impl ParallelDecoder {
                 continue;
             }
 
-            let word = ParallelWord {
+            let word = Word {
                 value: assembly_value,
-                timing: TimingInfo::new(
-                    assembly_first_ts as f64 / 1_000.0, // Convert ns to microseconds
-                    assembly_first_ts,
-                ),
+                timestamp_ns: assembly_first_ts,
             };
             assembly_value = 0;
             assembly_cycles = 0;
@@ -780,7 +775,7 @@ mod tests {
 
     /// 4-bit bus, strobe rising at positions 1,5,9,13, bus values 1,2,3,4.
     /// CS and enable are left unconnected.
-    fn run_4bit(decoder: &mut ParallelDecoder) -> Vec<ParallelWord> {
+    fn run_4bit(decoder: &mut ParallelDecoder) -> Vec<Word> {
         let wd = Watchdog::new();
         let n = 16usize;
         let values = [0u64, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4];
@@ -793,7 +788,7 @@ mod tests {
         inputs.push(unconnected(&wd, "cs"));
         inputs.push(unconnected(&wd, "enable_signal"));
 
-        let (out_tx, out_rx) = bounded::<ChannelMessage<ParallelWord>>(64);
+        let (out_tx, out_rx) = bounded::<ChannelMessage<Word>>(64);
         let outputs = [OutputPort::new_with_watchdog(
             Sender::new(vec![out_tx]),
             &wd,
@@ -827,7 +822,7 @@ mod tests {
         );
         // Timestamps at the strobe positions (step = 1ns).
         assert_eq!(
-            words.iter().map(|w| w.timing.position).collect::<Vec<_>>(),
+            words.iter().map(|w| w.timestamp_ns).collect::<Vec<_>>(),
             vec![1, 5, 9, 13]
         );
     }
@@ -842,7 +837,7 @@ mod tests {
             unconnected(&wd, "cs"),
             unconnected(&wd, "enable_signal"),
         ];
-        let (out_tx, _out_rx) = bounded::<ChannelMessage<ParallelWord>>(4);
+        let (out_tx, _out_rx) = bounded::<ChannelMessage<Word>>(4);
         let outputs = [OutputPort::new_with_watchdog(
             Sender::new(vec![out_tx]),
             &wd,
@@ -866,7 +861,7 @@ mod tests {
         );
         // Word timestamped at its first cycle.
         assert_eq!(
-            words.iter().map(|w| w.timing.position).collect::<Vec<_>>(),
+            words.iter().map(|w| w.timestamp_ns).collect::<Vec<_>>(),
             vec![1, 9]
         );
     }
@@ -923,7 +918,7 @@ mod tests {
     }
 
     /// Test-only sink that collects everything sent to its single input.
-    struct CollectWords(Arc<std::sync::Mutex<Vec<ParallelWord>>>);
+    struct CollectWords(Arc<std::sync::Mutex<Vec<Word>>>);
 
     impl ProcessNode for CollectWords {
         fn name(&self) -> &str {
@@ -937,13 +932,13 @@ mod tests {
         }
         fn input_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
             use crate::runtime::ports::{PortDirection, PortSchema};
-            vec![PortSchema::new::<ParallelWord>("data", 0, PortDirection::Input)]
+            vec![PortSchema::new::<Word>("data", 0, PortDirection::Input)]
         }
         fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
             let mut buf = VecDeque::new();
             let mut recv = inputs
                 .first()
-                .and_then(|p| p.get::<ParallelWord>(&mut buf))
+                .and_then(|p| p.get::<Word>(&mut buf))
                 .ok_or_else(|| WorkError::NodeError("Missing collector input".into()))?;
             let item = recv.recv()?;
             self.0.lock().unwrap().push(item);
@@ -965,7 +960,7 @@ mod tests {
         path: &std::path::Path,
         max_samples: u64,
         force_stream: bool,
-    ) -> Vec<ParallelWord> {
+    ) -> Vec<Word> {
         use crate::DslFileSource;
         use crate::runtime::Pipeline;
 
@@ -1024,7 +1019,7 @@ mod tests {
              to make this comparison meaningful"
         );
 
-        let as_tuple = |w: &ParallelWord| (w.value, w.timing.position, w.timing.timestamp_us);
+        let as_tuple = |w: &Word| (w.value, w.timestamp_ns);
         let streamed_view: Vec<_> = streamed.iter().map(as_tuple).collect();
         let queried_view: Vec<_> = queried.iter().map(as_tuple).collect();
 

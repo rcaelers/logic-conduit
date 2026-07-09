@@ -7,8 +7,7 @@
 //! the data stream. Files open lazily on the first word written to them, so
 //! name windows without data produce no file at all.
 
-use crate::nodes::decoders::ParallelWord;
-use crate::runtime::events::TextSample;
+use crate::runtime::events::{TextSample, Word};
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
 use std::collections::VecDeque;
@@ -48,17 +47,16 @@ impl WriteWidth {
     }
 }
 
-/// Sink writing [`ParallelWord`] values to files named by a
-/// [`TextSample`] level.
+/// Sink writing [`Word`] values to files named by a [`TextSample`] level.
 ///
-/// Inputs: `data` (0) — `ParallelWord`; `filename` (1) — `TextSample` level
+/// Inputs: `data` (0) — `Word`; `filename` (1) — `TextSample` level
 /// Outputs: none
 pub struct BinaryFileWriter {
     name: String,
     width: WriteWidth,
     index_csv: bool,
 
-    data_buffer: VecDeque<ParallelWord>,
+    data_buffer: VecDeque<Word>,
     name_buffer: VecDeque<TextSample>,
     /// Drained but not yet applicable name changes (timestamps ahead of the
     /// data stream), in channel (= timestamp) order.
@@ -69,10 +67,8 @@ pub struct BinaryFileWriter {
     files_closed: usize,
     bytes_in_file: u64,
     words_in_file: u64,
-    file_start_time_us: f64,
-    file_end_time_us: f64,
-    file_start_pos: u64,
-    file_end_pos: u64,
+    file_start_ns: u64,
+    file_end_ns: u64,
     last_word_ts: u64,
 }
 
@@ -90,10 +86,8 @@ impl BinaryFileWriter {
             files_closed: 0,
             bytes_in_file: 0,
             words_in_file: 0,
-            file_start_time_us: 0.0,
-            file_end_time_us: 0.0,
-            file_start_pos: 0,
-            file_end_pos: 0,
+            file_start_ns: 0,
+            file_end_ns: 0,
             last_word_ts: 0,
         }
     }
@@ -135,17 +129,19 @@ impl BinaryFileWriter {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let start_us = self.file_start_ns as f64 / 1_000.0;
+        let end_us = self.file_end_ns as f64 / 1_000.0;
         writeln!(
             writer,
             "{},{},{},{:.6},{:.6},{:.6},{},{}",
             self.files_closed,
             filename,
             self.bytes_in_file,
-            self.file_start_time_us,
-            self.file_end_time_us,
-            self.file_end_time_us - self.file_start_time_us,
-            self.file_start_pos,
-            self.file_end_pos,
+            start_us,
+            end_us,
+            end_us - start_us,
+            self.file_start_ns,
+            self.file_end_ns,
         )?;
         writer.flush()
     }
@@ -179,18 +175,18 @@ impl BinaryFileWriter {
 
     /// Switch to a new filename, closing the current file.
     fn apply_name_change(&mut self, change: TextSample) -> WorkResult<()> {
-        if change.start_time < self.last_word_ts {
+        if change.start_time_ns < self.last_word_ts {
             warn!(
                 "[{}] filename change to {:?} at {}ns arrived after data at {}ns — \
                  words may have landed at the previous boundary",
-                self.name, change.value, change.start_time, self.last_word_ts
+                self.name, change.value, change.start_time_ns, self.last_word_ts
             );
         }
         self.close_current()
             .map_err(|e| WorkError::NodeError(format!("closing file: {e}")))?;
         debug!(
             "[{}] filename -> {:?} at {}ns",
-            self.name, change.value, change.start_time
+            self.name, change.value, change.start_time_ns
         );
         self.current_name = Some(change.value);
         Ok(())
@@ -250,7 +246,7 @@ impl ProcessNode for BinaryFileWriter {
 
     fn input_schema(&self) -> Vec<PortSchema> {
         vec![
-            PortSchema::new::<ParallelWord>("data", 0, PortDirection::Input),
+            PortSchema::new::<Word>("data", 0, PortDirection::Input),
             PortSchema::new::<TextSample>("filename", 1, PortDirection::Input),
         ]
     }
@@ -262,7 +258,7 @@ impl ProcessNode for BinaryFileWriter {
     fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
         let mut data = inputs
             .first()
-            .and_then(|port| port.get::<ParallelWord>(&mut self.data_buffer))
+            .and_then(|port| port.get::<Word>(&mut self.data_buffer))
             .ok_or_else(|| WorkError::NodeError("Missing data input".to_string()))?;
         let mut names = inputs
             .get(1)
@@ -293,11 +289,11 @@ impl ProcessNode for BinaryFileWriter {
         }
 
         // Apply every name change the data stream has passed.
-        let word_ts = word.timing.position;
+        let word_ts = word.timestamp_ns;
         while self
             .pending_names
             .front()
-            .is_some_and(|change| change.start_time <= word_ts)
+            .is_some_and(|change| change.start_time_ns <= word_ts)
         {
             let change = self.pending_names.pop_front().unwrap();
             self.apply_name_change(change)?;
@@ -305,11 +301,9 @@ impl ProcessNode for BinaryFileWriter {
 
         // Append the word to the current file.
         if self.words_in_file == 0 {
-            self.file_start_time_us = word.timing.timestamp_us;
-            self.file_start_pos = word.timing.position;
+            self.file_start_ns = word.timestamp_ns;
         }
-        self.file_end_time_us = word.timing.timestamp_us;
-        self.file_end_pos = word.timing.position;
+        self.file_end_ns = word.timestamp_ns;
         self.last_word_ts = word_ts;
 
         let width = self.width;
@@ -327,27 +321,23 @@ impl ProcessNode for BinaryFileWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nodes::decoders::TimingInfo;
     use crate::runtime::sender::ChannelMessage;
     use crate::runtime::watchdog::Watchdog;
     use crossbeam_channel::bounded;
 
-    fn word(value: u64, ts: u64) -> ParallelWord {
-        ParallelWord {
-            value,
-            timing: TimingInfo::new(ts as f64 / 1_000.0, ts),
-        }
+    fn word(value: u64, ts: u64) -> Word {
+        Word::new(value, ts)
     }
 
     struct Rig {
-        data_tx: crossbeam_channel::Sender<ChannelMessage<ParallelWord>>,
+        data_tx: crossbeam_channel::Sender<ChannelMessage<Word>>,
         name_tx: crossbeam_channel::Sender<ChannelMessage<TextSample>>,
         inputs: Vec<InputPort>,
     }
 
     fn rig() -> Rig {
         let wd = Watchdog::new();
-        let (data_tx, data_rx) = bounded::<ChannelMessage<ParallelWord>>(256);
+        let (data_tx, data_rx) = bounded::<ChannelMessage<Word>>(256);
         let (name_tx, name_rx) = bounded::<ChannelMessage<TextSample>>(256);
         Rig {
             data_tx,

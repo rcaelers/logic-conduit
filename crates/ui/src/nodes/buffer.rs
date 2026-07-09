@@ -15,15 +15,7 @@ use serde::{Deserialize, Serialize};
 /// Which built-in payload kind flows through a given `Buffer` instance —
 /// order matches the dropdown and `crates/ui/src/compiler/buffer.rs`'s
 /// `selected_kind()`.
-pub const KIND_LABELS: &[&str] = &[
-    "Signal",
-    "Block",
-    "SPI Transfer",
-    "Word",
-    "Number",
-    "Text",
-    "Trigger",
-];
+pub const KIND_LABELS: &[&str] = &["Signal", "Block", "Word", "Number", "Text", "Trigger"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BufferState {

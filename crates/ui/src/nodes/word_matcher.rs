@@ -30,7 +30,6 @@ pub struct WordMatcherState {
     /// Comparison of the masked word against the masked pattern.
     #[serde(default = "default_match_op")]
     pub op: EnumValue,
-    pub field: EnumValue,
     pub pulse_output: BoolValue,
 }
 
@@ -64,7 +63,6 @@ impl NodeDef for WordMatcher {
             pattern: StringValue::new("0x000000"),
             mask: StringValue::new("0xFFFFFF"),
             op: default_match_op(),
-            field: EnumValue::new(0, &["MOSI", "MISO"]),
             pulse_output: BoolValue::new(false),
         }
     }
@@ -81,7 +79,6 @@ impl NodeDef for WordMatcher {
             vec![
                 PropDef::control("op", "Compare", |state| &mut state.op),
                 PropDef::control("mask", "Mask", |state| &mut state.mask),
-                PropDef::control("field", "Field", |state| &mut state.field),
                 PropDef::control("pulse_output", "Pulse output", |state| {
                     &mut state.pulse_output
                 }),

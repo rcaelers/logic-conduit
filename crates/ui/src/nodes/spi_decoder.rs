@@ -49,7 +49,7 @@ impl NodeDef for SpiDecoder {
 
     fn state() -> Self::State {
         SpiDecoderState {
-            word_size: IntValue::new(8, 1, 32),
+            word_size: IntValue::new(8, 1, 64),
             cpol: EnumValue::new(0, &["0", "1"]),
             cpha: EnumValue::new(0, &["0", "1"]),
             bit_order: EnumValue::new(0, &["MSB first", "LSB first"]),

@@ -45,14 +45,13 @@
 //! deadlock this check exists to close.
 
 use super::errors::WorkError;
-use super::events::{NumberSample, TextSample, Trigger};
+use super::events::{NumberSample, TextSample, Trigger, Word};
 use super::manager::{DisconnectEvent, InputSub, NodeSpec};
 use super::node::{ConfigOutcome, InputPort, NodeConfig, OutputPort, ProcessNode};
 use super::sample::{Sample, SampleBlock};
 use super::sender::ChannelMessage;
 use super::type_registry::{ErasedSharedSenders, TYPE_REGISTRY};
 use super::watchdog::Watchdog;
-use crate::nodes::decoders::{ParallelWord, SpiTransfer};
 use crossbeam_channel::Receiver as CrossbeamReceiver;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -90,11 +89,7 @@ enum Probe {
         CrossbeamReceiver<ChannelMessage<SampleBlock>>,
         Arc<AtomicBool>,
     ),
-    Spi(CrossbeamReceiver<ChannelMessage<SpiTransfer>>, Arc<AtomicBool>),
-    Parallel(
-        CrossbeamReceiver<ChannelMessage<ParallelWord>>,
-        Arc<AtomicBool>,
-    ),
+    Word(CrossbeamReceiver<ChannelMessage<Word>>, Arc<AtomicBool>),
     Trigger(CrossbeamReceiver<ChannelMessage<Trigger>>, Arc<AtomicBool>),
     Number(
         CrossbeamReceiver<ChannelMessage<NumberSample>>,
@@ -112,8 +107,7 @@ impl Probe {
             Self::Disconnected => true,
             Self::Sample(rx, closed) => !rx.is_empty() || closed.load(Ordering::Acquire),
             Self::SampleBlock(rx, closed) => !rx.is_empty() || closed.load(Ordering::Acquire),
-            Self::Spi(rx, closed) => !rx.is_empty() || closed.load(Ordering::Acquire),
-            Self::Parallel(rx, closed) => !rx.is_empty() || closed.load(Ordering::Acquire),
+            Self::Word(rx, closed) => !rx.is_empty() || closed.load(Ordering::Acquire),
             Self::Trigger(rx, closed) => !rx.is_empty() || closed.load(Ordering::Acquire),
             Self::Number(rx, closed) => !rx.is_empty() || closed.load(Ordering::Acquire),
             Self::Text(rx, closed) => !rx.is_empty() || closed.load(Ordering::Acquire),
@@ -141,8 +135,7 @@ fn make_probe(
     }
     try_type!(Sample, Sample);
     try_type!(SampleBlock, SampleBlock);
-    try_type!(SpiTransfer, Spi);
-    try_type!(ParallelWord, Parallel);
+    try_type!(Word, Word);
     try_type!(Trigger, Trigger);
     try_type!(NumberSample, Number);
     try_type!(TextSample, Text);
@@ -589,7 +582,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
-    /// Emits `NumberSample { value: i, start_time: i }` for i in 0..max, one
+    /// Emits `NumberSample { value: i, start_time_ns: i }` for i in 0..max, one
     /// per `work()` call — no pacing needed since the cooperative pump loop
     /// is driven synchronously by the test, not by wall-clock time.
     struct CountingSource {
@@ -623,7 +616,7 @@ mod tests {
                 .ok_or_else(|| WorkError::NodeError("missing output".into()))?;
             output.send(NumberSample {
                 value: self.next,
-                start_time: self.next as u64,
+                start_time_ns: self.next as u64,
             })?;
             self.next += 1;
             Ok(1)
@@ -678,7 +671,7 @@ mod tests {
                 .ok_or_else(|| WorkError::NodeError("missing output".into()))?;
             output.send(NumberSample {
                 value: sample.value + self.offset,
-                start_time: sample.start_time,
+                start_time_ns: sample.start_time_ns,
             })?;
             Ok(1)
         }

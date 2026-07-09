@@ -75,7 +75,7 @@ impl SocketDef for Signal {
     }
 }
 
-/// Decoded word events (`SpiTransfer` / `ParallelWord` at runtime).
+/// Decoded word events (`Word` at runtime).
 pub struct Words;
 impl SocketDef for Words {
     type Value = u64;
@@ -257,7 +257,6 @@ pub fn populate_startup(widget: &mut node_graph::NodeGraphWidget) {
             pattern: StringValue::new(pattern),
             mask: StringValue::new("0xFFFFFF"),
             op: default_match_op(),
-            field: EnumValue::new(0, &["MOSI", "MISO"]),
             pulse_output: BoolValue::new(false),
         })
         .unwrap()

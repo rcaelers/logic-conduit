@@ -86,18 +86,18 @@ impl TextFileWriter {
 
     /// Switch to a new filename, closing the current file.
     fn apply_name_change(&mut self, change: TextSample) -> WorkResult<()> {
-        if change.start_time < self.last_line_ts {
+        if change.start_time_ns < self.last_line_ts {
             warn!(
                 "[{}] filename change to {:?} at {}ns arrived after data at {}ns — \
                  lines may have landed at the previous boundary",
-                self.name, change.value, change.start_time, self.last_line_ts
+                self.name, change.value, change.start_time_ns, self.last_line_ts
             );
         }
         self.close_current()
             .map_err(|e| WorkError::NodeError(format!("closing file: {e}")))?;
         debug!(
             "[{}] filename -> {:?} at {}ns",
-            self.name, change.value, change.start_time
+            self.name, change.value, change.start_time_ns
         );
         self.current_name = Some(change.value);
         Ok(())
@@ -200,11 +200,11 @@ impl ProcessNode for TextFileWriter {
         }
 
         // Apply every name change the line stream has passed.
-        let line_ts = line.start_time;
+        let line_ts = line.start_time_ns;
         while self
             .pending_names
             .front()
-            .is_some_and(|change| change.start_time <= line_ts)
+            .is_some_and(|change| change.start_time_ns <= line_ts)
         {
             let change = self.pending_names.pop_front().unwrap();
             self.apply_name_change(change)?;

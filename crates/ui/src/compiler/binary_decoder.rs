@@ -4,7 +4,7 @@ use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 use dsl::nodes::decoders::Endianness;
 use dsl::runtime::ProcessNode;
-use dsl::{CsPolarity, ParallelWord, Sample, SampleBlock, StrobeMode};
+use dsl::{CsPolarity, Sample, SampleBlock, StrobeMode, Word};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -31,7 +31,7 @@ impl RuntimeBuilder for BinaryDecoderBuilder {
         }
     }
     fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::of::<ParallelWord>()]
+        vec![PortKind::of::<Word>()]
     }
     fn input_port(
         &self,
@@ -49,7 +49,7 @@ impl RuntimeBuilder for BinaryDecoderBuilder {
         }
     }
     fn output_port(&self, _socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
-        (kind == PortKind::of::<ParallelWord>()).then(|| "words".into())
+        (kind == PortKind::of::<Word>()).then(|| "words".into())
     }
     fn input_required(&self, socket: &Socket, state: &Value) -> bool {
         match socket.def_index {

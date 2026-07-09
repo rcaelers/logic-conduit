@@ -5,7 +5,7 @@
 
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
 use dsl::runtime::ProcessNode;
-use dsl::{ParallelWord, Sample, TextSample};
+use dsl::{Sample, TextSample, Word};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -14,7 +14,7 @@ pub(super) struct TgckRecorderBuilder;
 impl RuntimeBuilder for TgckRecorderBuilder {
     fn accepted_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
         match socket.def_index {
-            0 => vec![PortKind::of::<ParallelWord>()],
+            0 => vec![PortKind::of::<Word>()],
             1 => vec![PortKind::of::<Sample>()],
             2 => vec![PortKind::of::<TextSample>()],
             _ => vec![],

@@ -159,7 +159,7 @@ impl ProcessNode for LogicGate {
             .iter()
             .enumerate()
             .filter_map(|(index, head)| head.map(|sample| (index, sample)))
-            .min_by_key(|(index, sample)| (sample.start_time, *index));
+            .min_by_key(|(index, sample)| (sample.start_time_ns, *index));
         let Some((index, sample)) = next else {
             return Err(WorkError::Shutdown); // all inputs closed and drained
         };
@@ -170,7 +170,7 @@ impl ProcessNode for LogicGate {
         if out == self.last_out {
             return Ok(0);
         }
-        let mut ts = sample.start_time;
+        let mut ts = sample.start_time_ns;
         if ts < self.last_emit_ts {
             warn!(
                 "[{}] out-of-order edge at {}ns clamped to {}ns",

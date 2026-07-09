@@ -1,10 +1,11 @@
 //! `Word Matcher` builder — fires a trigger when a decoded word matches a
-//! pattern/mask. Polymorphic over the decoder's word type (§5.4).
+//! pattern/mask. Works on any decoder's `Word` output, no decoder-specific
+//! knowledge needed (§5.4).
 
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_hex, parse_state};
 use crate::nodes;
 use dsl::runtime::{ConfigValue, NodeConfig, ProcessNode};
-use dsl::{MatchOp, ParallelWord, Sample, SpiTransfer, Trigger, WordField, WordMatcher};
+use dsl::{MatchOp, Sample, Trigger, Word, WordMatcher};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -26,7 +27,7 @@ impl WordMatcherBuilder {
 
 impl RuntimeBuilder for WordMatcherBuilder {
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::of::<SpiTransfer>(), PortKind::of::<ParallelWord>()]
+        vec![PortKind::of::<Word>()]
     }
     fn offered_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
         match socket.def_index {
@@ -49,37 +50,16 @@ impl RuntimeBuilder for WordMatcherBuilder {
         &self,
         name: &str,
         state: &Value,
-        resolved: &ResolvedInputs,
+        _resolved: &ResolvedInputs,
         _ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: nodes::WordMatcherState = parse_state(state)?;
         let pattern = parse_hex(&state.pattern.value)?;
         let mask = parse_hex(&state.mask.value)?;
         let (op, _) = Self::match_op(state.op.selected());
-        let field = if state.field.selected() == "MISO" {
-            WordField::Miso
-        } else {
-            WordField::Mosi
-        };
-        // The words input kind picks the concrete consumer type (§5.4).
-        let kind0 = resolved.kind(0);
-        if kind0 == Some(PortKind::of::<SpiTransfer>()) {
-            Ok(Box::new(
-                WordMatcher::<SpiTransfer>::new(pattern, mask)
-                    .with_field(field)
-                    .with_op(op)
-                    .with_name(name),
-            ))
-        } else if kind0 == Some(PortKind::of::<ParallelWord>()) {
-            Ok(Box::new(
-                WordMatcher::<ParallelWord>::new(pattern, mask)
-                    .with_field(field)
-                    .with_op(op)
-                    .with_name(name),
-            ))
-        } else {
-            Err("words input is not connected".into())
-        }
+        Ok(Box::new(
+            WordMatcher::new(pattern, mask).with_op(op).with_name(name),
+        ))
     }
 
     fn hot_config(&self, state: &Value) -> Option<NodeConfig> {
@@ -95,14 +75,6 @@ impl RuntimeBuilder for WordMatcherBuilder {
         );
         let (_, op_name) = Self::match_op(state.op.selected());
         config.insert("op".into(), ConfigValue::Text(op_name.into()));
-        config.insert(
-            "field".into(),
-            ConfigValue::Text(if state.field.selected() == "MISO" {
-                "miso".into()
-            } else {
-                "mosi".into()
-            }),
-        );
         // The pulse-output toggle only affects UI socket visibility.
         Some(config)
     }

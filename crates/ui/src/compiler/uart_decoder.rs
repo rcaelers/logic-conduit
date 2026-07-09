@@ -4,7 +4,7 @@ use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 use dsl::nodes::decoders::{BitOrder, UartParity, UartStopBits};
 use dsl::runtime::ProcessNode;
-use dsl::{ParallelWord, Sample, Trigger};
+use dsl::{Sample, Trigger, Word};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -16,7 +16,7 @@ impl RuntimeBuilder for UartDecoderBuilder {
     }
     fn offered_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
         match socket.def_index {
-            0 => vec![PortKind::of::<ParallelWord>()],
+            0 => vec![PortKind::of::<Word>()],
             1 => vec![PortKind::of::<Trigger>()],
             _ => vec![],
         }

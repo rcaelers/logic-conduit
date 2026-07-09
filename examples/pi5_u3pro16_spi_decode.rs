@@ -1,10 +1,10 @@
 //! Capture the matching Pi 5 GPIO SPI test waveform with a DSLogic U3Pro16.
 
-use dsl::nodes::decoders::{SpiDecoder, SpiMode, SpiTransfer};
+use dsl::nodes::decoders::{SpiDecoder, SpiMode};
 use dsl::{
     CaptureMode, ClockSource, DsLogicU3Pro16, InputPort, LogicCaptureConfig, LogicEncodingRequest,
     LogicTrigger, LogicTriggerStage, OutputPort, Pipeline, PortDirection, PortSchema, ProcessNode,
-    Sample, TriggerCondition, WorkError, WorkResult,
+    Sample, TriggerCondition, Word, WorkError, WorkResult,
 };
 use std::collections::VecDeque;
 
@@ -24,7 +24,7 @@ impl ProcessNode for Printer {
         0
     }
     fn input_schema(&self) -> Vec<PortSchema> {
-        vec![PortSchema::new::<SpiTransfer>(
+        vec![PortSchema::new::<Word>(
             "transfers",
             0,
             PortDirection::Input,
@@ -34,10 +34,10 @@ impl ProcessNode for Printer {
         let mut buffer = VecDeque::new();
         let mut input = inputs
             .first()
-            .and_then(|p| p.get::<SpiTransfer>(&mut buffer))
+            .and_then(|p| p.get::<Word>(&mut buffer))
             .ok_or_else(|| WorkError::NodeError("missing SPI input".into()))?;
-        let transfer = input.recv()?;
-        let byte = transfer.mosi as u8;
+        let word = input.recv()?;
+        let byte = word.value as u8;
         let text = match byte {
             b'\n' => "\\n".to_owned(),
             b'\r' => "\\r".to_owned(),
@@ -46,11 +46,8 @@ impl ProcessNode for Printer {
             _ => ".".to_owned(),
         };
         println!(
-            "sample={} time={:.6}s MOSI=0x{:02X} text={:?}",
-            transfer.timing.position,
-            transfer.timing.timestamp_us / 1_000_000.0,
-            byte,
-            text
+            "time={} ns MOSI=0x{:02X} text={:?}",
+            word.timestamp_ns, byte, text
         );
         Ok(1)
     }
@@ -88,8 +85,8 @@ impl ProcessNode for CsPrinter {
                     "asserted (LOW)"
                 }
             ),
-            Some(true) if !sample.value => println!("CS asserted at {} ns", sample.start_time),
-            Some(false) if sample.value => println!("CS released at {} ns", sample.start_time),
+            Some(true) if !sample.value => println!("CS asserted at {} ns", sample.start_time_ns),
+            Some(false) if sample.value => println!("CS released at {} ns", sample.start_time_ns),
             _ => {}
         }
         self.previous = Some(sample.value);
@@ -126,7 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     pipeline.connect("source", "ch0", "cs_printer", "cs")?;
     pipeline.connect("source", "ch1", "spi", "clk")?;
     pipeline.connect("source", "ch2", "spi", "mosi")?;
-    pipeline.connect("spi", "spi_transfers", "printer", "transfers")?;
+    pipeline.connect("spi", "mosi_words", "printer", "transfers")?;
     pipeline.build()?.wait();
     Ok(())
 }

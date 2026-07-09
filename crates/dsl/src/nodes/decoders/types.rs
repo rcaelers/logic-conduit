@@ -1,24 +1,5 @@
 //! Common decoder types and enums
 
-/// Timing information for decoded events
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TimingInfo {
-    /// Timestamp in microseconds
-    pub timestamp_us: f64,
-    /// Position in capture
-    pub position: u64,
-}
-
-impl TimingInfo {
-    /// Create new timing information
-    pub fn new(timestamp_us: f64, position: u64) -> Self {
-        Self {
-            timestamp_us,
-            position,
-        }
-    }
-}
-
 /// SPI clock polarity and phase modes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpiMode {
@@ -30,17 +11,6 @@ pub enum SpiMode {
     Mode2,
     /// CPOL=1, CPHA=1: Clock idle high, sample on rising edge
     Mode3,
-}
-
-/// Decoded SPI transfer
-#[derive(Debug, Clone)]
-pub struct SpiTransfer {
-    /// Data on MOSI line (0 if not configured)
-    pub mosi: u32,
-    /// Data on MISO line (0 if not configured)
-    pub miso: u32,
-    /// Timing information
-    pub timing: TimingInfo,
 }
 
 /// Chip select polarity for decoders
@@ -87,13 +57,4 @@ pub enum StrobeMode {
     HighLevel,
     /// Sample when strobe is low (level-triggered)
     LowLevel,
-}
-
-/// Decoded parallel bus word
-#[derive(Debug, Clone)]
-pub struct ParallelWord {
-    /// Data value (up to 64 bits)
-    pub value: u64,
-    /// Timing information
-    pub timing: TimingInfo,
 }

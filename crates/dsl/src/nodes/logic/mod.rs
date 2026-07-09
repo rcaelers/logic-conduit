@@ -43,4 +43,4 @@ pub use formatter::TextFormatter;
 pub use logic_gate::{GateOp, LogicGate};
 pub use sr_latch::SrLatch;
 pub use trigger_counter::TriggerCounter;
-pub use word_matcher::{MatchOp, WordField, WordMatcher, WordSource};
+pub use word_matcher::{MatchOp, WordMatcher};

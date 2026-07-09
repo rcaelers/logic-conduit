@@ -4,7 +4,7 @@ use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 use dsl::nodes::decoders::BitOrder;
 use dsl::runtime::ProcessNode;
-use dsl::{CsPolarity, Sample, SpiDecoder, SpiMode, SpiTransfer};
+use dsl::{CsPolarity, Sample, SpiDecoder, SpiMode, Word};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -28,7 +28,7 @@ impl RuntimeBuilder for SpiDecoderBuilder {
         vec![PortKind::of::<Sample>()]
     }
     fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::of::<SpiTransfer>()]
+        vec![PortKind::of::<Word>()]
     }
     fn input_port(&self, socket: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
         match socket.def_index {
@@ -39,10 +39,14 @@ impl RuntimeBuilder for SpiDecoderBuilder {
             _ => None,
         }
     }
-    fn output_port(&self, _socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
-        // Both UI word outputs map to the single transfer stream; the
-        // MOSI/MISO split is the consumer's field selection (§4.2).
-        (kind == PortKind::of::<SpiTransfer>()).then(|| "spi_transfers".into())
+    fn output_port(&self, socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
+        (kind == PortKind::of::<Word>()).then(|| {
+            match socket.def_index {
+                0 => "mosi_words",
+                _ => "miso_words",
+            }
+            .into()
+        })
     }
     fn input_required(&self, socket: &Socket, state: &Value) -> bool {
         let Ok(state) = Self::parsed(state) else {
@@ -76,7 +80,7 @@ impl RuntimeBuilder for SpiDecoderBuilder {
         };
         let decoder = SpiDecoder::with_cs_polarity(
             mode,
-            state.word_size.value.clamp(1, 32) as usize,
+            state.word_size.value.clamp(1, 64) as usize,
             true,
             state.has_miso.value,
             Self::cs_polarity(&state),

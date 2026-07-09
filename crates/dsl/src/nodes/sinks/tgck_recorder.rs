@@ -17,8 +17,7 @@
 //! the same lazy-open-on-first-line file-rolling `TextFileWriter` already
 //! provides.
 
-use crate::nodes::decoders::ParallelWord;
-use crate::runtime::events::TextSample;
+use crate::runtime::events::{TextSample, Word};
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
 use std::collections::VecDeque;
@@ -119,7 +118,7 @@ fn tgck_csv_path(filename: &str) -> String {
 
 /// Sink correlating TGCK line-clock edges with the captured byte stream.
 ///
-/// Inputs: `words` — `ParallelWord` (the enable-gated data stream, same as
+/// Inputs: `words` — `Word` (the enable-gated data stream, same as
 /// the writer's); `tgck` — `Sample` edges; `filename` — `TextSample` level
 /// (never blocked on, §3.1). Outputs: `rows` — `TextSample` events, the CSV
 /// header and each finalized record; `filename` — `TextSample` level, the
@@ -138,7 +137,7 @@ pub struct TgckRecorder {
     /// Timestamp of the last word processed; used to place the rows emitted
     /// when end-of-stream force-closes the final window.
     last_position: u64,
-    words_buffer: VecDeque<ParallelWord>,
+    words_buffer: VecDeque<Word>,
     tgck_buffer: VecDeque<crate::runtime::sample::Sample>,
     name_buffer: VecDeque<TextSample>,
 }
@@ -208,7 +207,7 @@ impl ProcessNode for TgckRecorder {
 
     fn input_schema(&self) -> Vec<PortSchema> {
         vec![
-            PortSchema::new::<ParallelWord>("words", 0, PortDirection::Input),
+            PortSchema::new::<Word>("words", 0, PortDirection::Input),
             PortSchema::new::<crate::runtime::sample::Sample>("tgck", 1, PortDirection::Input),
             PortSchema::new::<TextSample>("filename", 2, PortDirection::Input),
         ]
@@ -225,7 +224,7 @@ impl ProcessNode for TgckRecorder {
         let word = {
             let mut words = inputs
                 .first()
-                .and_then(|port| port.get::<ParallelWord>(&mut self.words_buffer))
+                .and_then(|port| port.get::<Word>(&mut self.words_buffer))
                 .ok_or_else(|| WorkError::NodeError("Missing words input".to_string()))?;
             match words.recv() {
                 Ok(word) => word,
@@ -236,7 +235,7 @@ impl ProcessNode for TgckRecorder {
                 Err(e) => return Err(e),
             }
         };
-        let position = word.timing.position;
+        let position = word.timestamp_ns;
         self.last_position = position;
 
         // Filename changes: never block (§3.1), apply those at or before
@@ -261,18 +260,18 @@ impl ProcessNode for TgckRecorder {
             }
         }
         while let Some(next) = self.pending_names.front() {
-            if next.start_time > position {
+            if next.start_time_ns > position {
                 break;
             }
             let sample = self.pending_names.pop_front().expect("peeked");
             debug!("[{}] filename -> '{}'", self.name, sample.value);
-            self.close_window(outputs, sample.start_time)?;
+            self.close_window(outputs, sample.start_time_ns)?;
             let derived = tgck_csv_path(&sample.value);
             let filename_out = outputs
                 .get(1)
                 .and_then(|port| port.get::<TextSample>())
                 .ok_or_else(|| WorkError::NodeError("Missing filename output".to_string()))?;
-            filename_out.send(TextSample::new(derived, sample.start_time))?;
+            filename_out.send(TextSample::new(derived, sample.start_time_ns))?;
             self.current_filename = Some(sample.value);
         }
 
@@ -286,16 +285,16 @@ impl ProcessNode for TgckRecorder {
                 .ok_or_else(|| WorkError::NodeError("Missing tgck input".to_string()))?;
             loop {
                 match tgck.peek() {
-                    Ok(edge) if edge.start_time <= position => {
+                    Ok(edge) if edge.start_time_ns <= position => {
                         let edge = tgck.recv()?;
                         if let Some(window) = &mut self.window {
                             if edge.value && !self.last_tgck {
                                 window.finalize_record();
-                                window.current_rising = Some((window.words, edge.start_time));
+                                window.current_rising = Some((window.words, edge.start_time_ns));
                                 window.need_after_rising = true;
                             }
                             if !edge.value && self.last_tgck {
-                                window.current_falling = Some((window.words, edge.start_time));
+                                window.current_falling = Some((window.words, edge.start_time_ns));
                                 window.need_after_falling = true;
                             }
                         }
@@ -338,17 +337,13 @@ impl ProcessNode for TgckRecorder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TimingInfo;
     use crate::runtime::sample::Sample;
     use crate::runtime::sender::ChannelMessage;
     use crate::runtime::watchdog::Watchdog;
     use crossbeam_channel::bounded;
 
-    fn word(ts: u64) -> ParallelWord {
-        ParallelWord {
-            value: 0xAB,
-            timing: TimingInfo::new(ts as f64 / 1_000.0, ts),
-        }
+    fn word(ts: u64) -> Word {
+        Word::new(0xAB, ts)
     }
 
     struct Rig {
@@ -360,7 +355,7 @@ mod tests {
 
     fn rig() -> Rig {
         let wd = Watchdog::new();
-        let (words_tx, words_rx) = bounded::<ChannelMessage<ParallelWord>>(64);
+        let (words_tx, words_rx) = bounded::<ChannelMessage<Word>>(64);
         let (tgck_tx, tgck_rx) = bounded::<ChannelMessage<Sample>>(64);
         let (name_tx, name_rx) = bounded::<ChannelMessage<TextSample>>(64);
         let (rows_tx, rows_rx) = bounded::<ChannelMessage<TextSample>>(64);
@@ -450,7 +445,7 @@ mod tests {
     #[test]
     fn no_rows_without_records() {
         let wd = Watchdog::new();
-        let (words_tx, words_rx) = bounded::<ChannelMessage<ParallelWord>>(16);
+        let (words_tx, words_rx) = bounded::<ChannelMessage<Word>>(16);
         let (tgck_tx, tgck_rx) = bounded::<ChannelMessage<Sample>>(16);
         let (name_tx, name_rx) = bounded::<ChannelMessage<TextSample>>(16);
         let (rows_tx, rows_rx) = bounded::<ChannelMessage<TextSample>>(16);

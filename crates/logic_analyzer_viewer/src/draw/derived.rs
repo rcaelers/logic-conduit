@@ -24,8 +24,8 @@ impl LogicAnalyzerViewer {
         let low_y = y_top + row_height * 0.72;
         let (start_ns, end_ns) = self.visible_window_ns();
 
-        let first = samples.partition_point(|sample| sample.start_time < start_ns);
-        let last = samples.partition_point(|sample| sample.start_time <= end_ns);
+        let first = samples.partition_point(|sample| sample.start_time_ns < start_ns);
+        let last = samples.partition_point(|sample| sample.start_time_ns <= end_ns);
         let mut level = if first > 0 {
             samples[first - 1].value
         } else {
@@ -36,7 +36,7 @@ impl LogicAnalyzerViewer {
         if last - first <= DIRECT_EDGE_LIMIT {
             let mut prev_x = wave_rect.left();
             for sample in &samples[first..last] {
-                let x = self.ns_to_x(wave_rect, sample.start_time);
+                let x = self.ns_to_x(wave_rect, sample.start_time_ns);
                 painter.line_segment(
                     [Pos2::new(prev_x, y_of(level)), Pos2::new(x, y_of(level))],
                     stroke,
@@ -71,7 +71,7 @@ impl LogicAnalyzerViewer {
             let column_end_ns =
                 start_ns + ((column + 1) as u64).saturating_mul(span_ns) / width as u64;
             let step =
-                samples[index..last].partition_point(|sample| sample.start_time < column_end_ns);
+                samples[index..last].partition_point(|sample| sample.start_time_ns < column_end_ns);
             if step > 0 {
                 painter.line_segment(
                     [

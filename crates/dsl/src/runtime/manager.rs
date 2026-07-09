@@ -802,7 +802,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    /// Emits `NumberSample { value: i, start_time: i }` for i in 0..max,
+    /// Emits `NumberSample { value: i, start_time_ns: i }` for i in 0..max,
     /// paced so tests can attach taps mid-stream.
     struct PacedSource {
         next: i64,
@@ -836,7 +836,7 @@ mod tests {
                 .ok_or_else(|| WorkError::NodeError("missing output".into()))?;
             output.send(NumberSample {
                 value: self.next,
-                start_time: self.next as u64,
+                start_time_ns: self.next as u64,
             })?;
             self.next += 1;
             std::thread::sleep(self.pace);
@@ -892,7 +892,7 @@ mod tests {
                 .ok_or_else(|| WorkError::NodeError("missing output".into()))?;
             output.send(NumberSample {
                 value: sample.value + self.offset,
-                start_time: sample.start_time,
+                start_time_ns: sample.start_time_ns,
             })?;
             Ok(1)
         }

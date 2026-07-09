@@ -88,7 +88,7 @@ impl fmt::Debug for PortKind {
 
 // ── Built-in payload types ──────────────────────────────────────────────────
 
-use dsl::{NumberSample, ParallelWord, Sample, SampleBlock, SpiTransfer, TextSample, Trigger};
+use dsl::{NumberSample, Sample, SampleBlock, TextSample, Trigger, Word};
 
 impl PortValue for Sample {
     fn kind_name() -> &'static str {
@@ -108,21 +108,14 @@ impl PortValue for SampleBlock {
     }
 }
 
-impl PortValue for SpiTransfer {
+impl PortValue for Word {
     fn kind_name() -> &'static str {
-        "SpiTransfer"
+        "Word"
     }
     // Uses the trait default (100) — see §5.3 in
     // `ANALYSIS_PIPELINE_DESIGN.md`: word-shaped kinds no longer get a
     // special-cased large buffer to silently absorb skew between branches;
     // a graph that genuinely needs that inserts an explicit `Buffer` node.
-}
-
-impl PortValue for ParallelWord {
-    fn kind_name() -> &'static str {
-        "Word"
-    }
-    // Uses the trait default (100) — see the note on `SpiTransfer` above.
 }
 
 impl PortValue for Trigger {

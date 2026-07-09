@@ -28,9 +28,7 @@
 
 use clap::Parser;
 use dsl::DslFileSource;
-use dsl::nodes::decoders::{
-    CsPolarity, ParallelDecoder, SpiDecoder, SpiMode, SpiTransfer, StrobeMode,
-};
+use dsl::nodes::decoders::{CsPolarity, ParallelDecoder, SpiDecoder, SpiMode, StrobeMode};
 use dsl::nodes::logic::{SrLatch, TextFormatter, TriggerCounter, WordMatcher};
 use dsl::nodes::sinks::BinaryFileWriter;
 use dsl::runtime::Pipeline;
@@ -117,11 +115,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     pipeline.add_process(
         "start_matcher",
-        WordMatcher::<SpiTransfer>::new(args.enable_cmd, u64::MAX).with_name("start_matcher"),
+        WordMatcher::new(args.enable_cmd, u64::MAX).with_name("start_matcher"),
     )?;
     pipeline.add_process(
         "stop_matcher",
-        WordMatcher::<SpiTransfer>::new(args.disable_cmd, u64::MAX).with_name("stop_matcher"),
+        WordMatcher::new(args.disable_cmd, u64::MAX).with_name("stop_matcher"),
     )?;
     pipeline.add_process("latch", SrLatch::new(false))?;
     pipeline.add_process("counter", TriggerCounter::new(0, 1))?;
@@ -163,14 +161,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     pipeline.connect_with_buffer(
         "spi_decoder",
-        "spi_transfers",
+        "mosi_words",
         "start_matcher",
         "words",
         1_000,
     )?;
     pipeline.connect_with_buffer(
         "spi_decoder",
-        "spi_transfers",
+        "mosi_words",
         "stop_matcher",
         "words",
         1_000,

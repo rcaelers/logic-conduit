@@ -113,7 +113,7 @@ mod tests {
         assert!(
             samples
                 .windows(2)
-                .all(|pair| pair[0].start_time < pair[1].start_time)
+                .all(|pair| pair[0].start_time_ns < pair[1].start_time_ns)
         );
     }
 }

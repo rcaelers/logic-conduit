@@ -173,8 +173,8 @@ impl ProcessNode for PulseMeasureNode {
             && prev.value
         {
             output.send(PulseWidth {
-                width_ns: sample.start_time.saturating_sub(prev.start_time),
-                start_time_ns: prev.start_time,
+                width_ns: sample.start_time_ns.saturating_sub(prev.start_time_ns),
+                start_time_ns: prev.start_time_ns,
             })?;
         }
         self.prev = Some(sample);

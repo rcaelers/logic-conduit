@@ -5,9 +5,9 @@
 //! bit centers are exact nanosecond math on the start edge, so decode
 //! quality depends only on edges being captured faithfully.
 
-use super::types::{BitOrder, ParallelWord, TimingInfo};
+use super::types::BitOrder;
 use crate::runtime::Receiver;
-use crate::runtime::events::Trigger;
+use crate::runtime::events::{Trigger, Word};
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
 use crate::runtime::sample::Sample;
@@ -54,7 +54,7 @@ impl UartStopBits {
 /// UART decoder node
 ///
 /// Input: `rx` — `Sample` edge stream of the transceive line
-/// Outputs: `words` — one `ParallelWord` per frame (timestamped at the
+/// Outputs: `words` — one `Word` per frame (timestamped at the
 ///          start edge); `error` — `Trigger` per parity/framing error
 ///          (the word is still emitted, annotation-style)
 pub struct UartDecoder {
@@ -139,7 +139,7 @@ impl UartDecoder {
             };
             match channel.peek() {
                 Ok(next) => {
-                    if current.start_time <= timestamp && timestamp < next.start_time {
+                    if current.start_time_ns <= timestamp && timestamp < next.start_time_ns {
                         channel.put_back(current);
                         return Ok(Some(current.value));
                     }
@@ -147,7 +147,7 @@ impl UartDecoder {
                 }
                 Err(WorkError::Shutdown) => {
                     // Last edge extends to infinity
-                    if current.start_time <= timestamp {
+                    if current.start_time_ns <= timestamp {
                         channel.put_back(current);
                         return Ok(Some(current.value));
                     }
@@ -182,7 +182,7 @@ impl ProcessNode for UartDecoder {
 
     fn output_schema(&self) -> Vec<PortSchema> {
         vec![
-            PortSchema::new::<ParallelWord>("words", 0, PortDirection::Output),
+            PortSchema::new::<Word>("words", 0, PortDirection::Output),
             PortSchema::new::<Trigger>("error", 1, PortDirection::Output),
         ]
     }
@@ -204,7 +204,7 @@ impl ProcessNode for UartDecoder {
             .ok_or_else(|| WorkError::NodeError("Missing rx input".to_string()))?;
         let words_out = outputs
             .first()
-            .and_then(|port| port.get::<ParallelWord>())
+            .and_then(|port| port.get::<Word>())
             .ok_or_else(|| WorkError::NodeError("Missing words output".to_string()))?;
         // Optional; None when unconnected.
         let error_out = outputs.get(1).and_then(|port| port.get::<Trigger>());
@@ -212,16 +212,16 @@ impl ProcessNode for UartDecoder {
         // ── 1. Hunt for a start edge past the previous frame ────────────
         let t0 = loop {
             let edge = rx.recv()?;
-            if edge.value == start_level && edge.start_time >= self.resume_after {
+            if edge.value == start_level && edge.start_time_ns >= self.resume_after {
                 // Put it back: this edge also carries the line level for the
                 // first bit intervals when the data doesn't toggle.
-                let t0 = edge.start_time;
+                let t0 = edge.start_time_ns;
                 rx.put_back(edge);
                 break t0;
             }
             trace!(
                 "[{}] skipping edge at {}ns (mid-frame or wrong level)",
-                self.name, edge.start_time
+                self.name, edge.start_time_ns
             );
         };
 
@@ -307,9 +307,9 @@ impl ProcessNode for UartDecoder {
         if frame_error && let Some(errors) = &error_out {
             errors.send(Trigger::new(t0))?;
         }
-        words_out.send(ParallelWord {
+        words_out.send(Word {
             value,
-            timing: TimingInfo::new(t0 as f64 / 1_000.0, t0),
+            timestamp_ns: t0,
         })?;
         self.finished = rx.is_shutdown();
         Ok(1)
@@ -360,7 +360,7 @@ mod tests {
     }
 
     struct Output {
-        words: Vec<ParallelWord>,
+        words: Vec<Word>,
         errors: Vec<Trigger>,
     }
 
@@ -372,7 +372,7 @@ mod tests {
         }
         drop(tx);
         let inputs = [InputPort::new_with_watchdog(rx, &wd, "uart", "rx")];
-        let (words_tx, words_rx) = bounded::<ChannelMessage<ParallelWord>>(1024);
+        let (words_tx, words_rx) = bounded::<ChannelMessage<Word>>(1024);
         let (err_tx, err_rx) = bounded::<ChannelMessage<Trigger>>(1024);
         let outputs = [
             OutputPort::new_with_watchdog(Sender::new(vec![words_tx]), &wd, "uart", "words"),
@@ -413,8 +413,8 @@ mod tests {
             out.words.iter().map(|w| w.value).collect::<Vec<_>>(),
             vec![0x55, 0xA3]
         );
-        assert_eq!(out.words[0].timing.position, 10_000);
-        assert_eq!(out.words[1].timing.position, 50_000);
+        assert_eq!(out.words[0].timestamp_ns, 10_000);
+        assert_eq!(out.words[1].timestamp_ns, 50_000);
         assert!(out.errors.is_empty());
     }
 
@@ -450,7 +450,7 @@ mod tests {
         let mut edges = frames_to_edges(&[(10_000, 0x00, None)], 8, false);
         // frames_to_edges emits stop high at 10_000+9*BIT; overwrite: line
         // stays low through the stop bit, returning high afterwards.
-        edges.retain(|e| e.start_time < 10_000 + 9 * BIT);
+        edges.retain(|e| e.start_time_ns < 10_000 + 9 * BIT);
         edges.push(Sample::new(true, 10_000 + 10 * BIT));
         let mut decoder = UartDecoder::new(1_000_000, 8);
         let out = run_decoder(&mut decoder, edges);
@@ -498,7 +498,7 @@ mod tests {
             .collect();
         let mut edges = frames_to_edges(&frames, 8, false);
         let last_t0 = frames.last().unwrap().0;
-        edges.retain(|e| e.start_time <= last_t0 + 9 * BIT);
+        edges.retain(|e| e.start_time_ns <= last_t0 + 9 * BIT);
         let mut decoder = UartDecoder::new(1_000_000, 8);
         let out = run_decoder(&mut decoder, edges);
         assert_eq!(
@@ -511,7 +511,7 @@ mod tests {
     fn resyncs_after_error() {
         // A framing-error frame followed by a clean frame.
         let mut edges = frames_to_edges(&[(10_000, 0x00, None)], 8, false);
-        edges.retain(|e| e.start_time < 10_000 + 9 * BIT);
+        edges.retain(|e| e.start_time_ns < 10_000 + 9 * BIT);
         edges.push(Sample::new(true, 10_000 + 10 * BIT));
         let clean = frames_to_edges(&[(40_000, 0x42, None)], 8, false);
         // Skip the initial idle sample of the second batch (line already high).

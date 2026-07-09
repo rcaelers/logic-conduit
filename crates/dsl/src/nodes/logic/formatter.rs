@@ -174,7 +174,7 @@ impl ProcessNode for TextFormatter {
                 .ok_or_else(|| WorkError::NodeError("Missing value input".to_string()))?;
             let number = input.recv()?;
             let text = format_template(&self.template, &[number.value]);
-            output.send(TextSample::new(text, number.start_time))?;
+            output.send(TextSample::new(text, number.start_time_ns))?;
             return Ok(1);
         }
 
@@ -200,7 +200,7 @@ impl ProcessNode for TextFormatter {
             .iter()
             .enumerate()
             .filter_map(|(index, head)| head.clone().map(|sample| (index, sample)))
-            .min_by_key(|(index, sample)| (sample.start_time, *index));
+            .min_by_key(|(index, sample)| (sample.start_time_ns, *index));
         let Some((index, sample)) = next else {
             return Err(WorkError::Shutdown);
         };
@@ -212,7 +212,7 @@ impl ProcessNode for TextFormatter {
             return Ok(0);
         }
         self.last_text = Some(text.clone());
-        output.send(TextSample::new(text, sample.start_time))?;
+        output.send(TextSample::new(text, sample.start_time_ns))?;
         Ok(1)
     }
 }

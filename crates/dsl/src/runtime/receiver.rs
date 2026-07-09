@@ -190,8 +190,8 @@ impl<'a, T> Receiver<'a, T> {
     /// Discard all items whose end time is `<= before`, blocking until the
     /// first item that extends past the threshold is buffered.
     ///
-    /// With Sample format, an item is valid from `start_time` until the
-    /// next item's `start_time`. So we need to look at pairs of items to
+    /// With Sample format, an item is valid from `start_time_ns` until the
+    /// next item's `start_time_ns`. So we need to look at pairs of items to
     /// determine if the first one ended before `before`.
     ///
     /// `start_time_fn` extracts the start time from each item.
@@ -426,7 +426,7 @@ mod tests {
         let (tx, rx) = bounded::<ChannelMessage<(u64, i32)>>(10);
         let mut buf = VecDeque::new();
 
-        // Add items to buffer (start_time, value)
+        // Add items to buffer (start_time_ns, value)
         // These items extend: [100..200), [200..300), [300..inf)
         buf.push_back((100, 1));
         buf.push_back((200, 2));
@@ -442,7 +442,7 @@ mod tests {
         let mut pr = Receiver::new(&rx, &mut buf, handle, &eos);
 
         // Drain everything that ends at or before 200
-        // With Sample format: item valid from start_time until next item's start_time
+        // With Sample format: item valid from start_time_ns until next item's start_time_ns
         // (100, 1) extends [100..200) - ends at 200, should be drained
         // (200, 2) extends [200..300) - ends at 300, should NOT be drained
         pr.drain_before(200, |item| item.0).unwrap();

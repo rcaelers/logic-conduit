@@ -10,10 +10,10 @@
 //! already configured. The image must be the exact U3Pro16 image.
 
 use clap::Parser;
-use dsl::nodes::decoders::{SpiDecoder, SpiMode, SpiTransfer};
+use dsl::nodes::decoders::{SpiDecoder, SpiMode};
 use dsl::{
     CaptureMode, ClockSource, DsLogicU3Pro16, InputPort, LogicCaptureConfig, LogicEncodingRequest,
-    LogicTrigger, OutputPort, Pipeline, PortDirection, PortSchema, ProcessNode, WorkError,
+    LogicTrigger, OutputPort, Pipeline, PortDirection, PortSchema, ProcessNode, Word, WorkError,
     WorkResult,
 };
 use std::collections::VecDeque;
@@ -57,7 +57,7 @@ impl ProcessNode for SpiPrinter {
         0
     }
     fn input_schema(&self) -> Vec<PortSchema> {
-        vec![PortSchema::new::<SpiTransfer>(
+        vec![PortSchema::new::<Word>(
             "transfers",
             0,
             PortDirection::Input,
@@ -67,15 +67,10 @@ impl ProcessNode for SpiPrinter {
         let mut buffer = VecDeque::new();
         let mut input = inputs
             .first()
-            .and_then(|port| port.get::<SpiTransfer>(&mut buffer))
+            .and_then(|port| port.get::<Word>(&mut buffer))
             .ok_or_else(|| WorkError::NodeError("missing SPI transfer input".into()))?;
-        let transfer = input.recv()?;
-        println!(
-            "t={:.6}s sample={} MOSI=0x{:X}",
-            transfer.timing.timestamp_us / 1_000_000.0,
-            transfer.timing.position,
-            transfer.mosi,
-        );
+        let word = input.recv()?;
+        println!("t={} ns MOSI=0x{:X}", word.timestamp_ns, word.value);
         Ok(1)
     }
 }
@@ -115,7 +110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     pipeline.connect("source", &format!("ch{}", args.cs), "spi", "cs")?;
     pipeline.connect("source", &format!("ch{}", args.clk), "spi", "clk")?;
     pipeline.connect("source", &format!("ch{}", args.mosi), "spi", "mosi")?;
-    pipeline.connect("spi", "spi_transfers", "printer", "transfers")?;
+    pipeline.connect("spi", "mosi_words", "printer", "transfers")?;
     pipeline.build()?.wait();
     Ok(())
 }

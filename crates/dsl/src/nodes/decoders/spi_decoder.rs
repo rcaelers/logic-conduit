@@ -8,15 +8,19 @@
 //!   2. Wait for CS to go inactive → establishes full CS time window
 //!   3. Discard CLK/MOSI/MISO edges from before CS active
 //!   4. For each CLK sampling edge within the window, read MOSI/MISO value
-//!   5. After bits_per_word bits → emit SpiTransfer
+//!   5. After bits_per_word bits → emit a `Word` on each configured line's
+//!      own output port (MOSI and MISO are independent word streams, not
+//!      two fields of one event — a consumer that only cares about one
+//!      line wires only that port)
 //!   6. Continue collecting words until CLK edges pass the CS window
 //!
 //! Because each data value is obtained by blocking recv (not try_recv),
 //! the race condition from the old batch-decode approach is eliminated.
 
-use super::types::{BitOrder, CsPolarity, SpiMode, SpiTransfer, TimingInfo};
+use super::types::{BitOrder, CsPolarity, SpiMode};
 use crate::runtime::Receiver;
 use crate::runtime::edge_query::EdgeQuery;
+use crate::runtime::events::Word;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::protocol::ProtocolKind;
 use crate::runtime::sample::Sample;
@@ -27,7 +31,8 @@ use tracing::{debug, trace};
 /// SPI decoder node
 ///
 /// Inputs: cs, clk, mosi (optional), miso (optional) — Sample channels
-/// Output: SpiTransfer events
+/// Outputs: `mosi_words` (if `has_mosi`), `miso_words` (if `has_miso`) —
+/// independent `Word` streams, one per configured line.
 pub struct SpiDecoder {
     name: String,
     mode: SpiMode,
@@ -108,8 +113,8 @@ impl SpiDecoder {
 
     /// Read the value of a signal channel at a given timestamp.
     ///
-    /// With Sample format, an edge is valid from start_time until the
-    /// next edge's start_time. We peek at the next edge to determine when
+    /// With Sample format, an edge is valid from start_time_ns until the
+    /// next edge's start_time_ns. We peek at the next edge to determine when
     /// the current edge ends.
     ///
     /// Returns None if the channel is exhausted before finding a valid edge.
@@ -127,26 +132,26 @@ impl SpiDecoder {
                 Err(e) => return Err(e),
             };
 
-            if current.start_time > timestamp {
+            if current.start_time_ns > timestamp {
                 debug!(
                     "value_at_time: edge starts after timestamp ({} > {})",
-                    current.start_time, timestamp
+                    current.start_time_ns, timestamp
                 );
             }
 
             match channel.peek() {
                 Ok(next) => {
-                    // Check if timestamp is in [current.start_time, next.start_time)
-                    if current.start_time <= timestamp && timestamp < next.start_time {
+                    // Check if timestamp is in [current.start_time_ns, next.start_time_ns)
+                    if current.start_time_ns <= timestamp && timestamp < next.start_time_ns {
                         channel.put_back(current);
                         return Ok(Some(current.value));
                     }
-                    // timestamp >= next.start_time, current has ended - continue
+                    // timestamp >= next.start_time_ns, current has ended - continue
                 }
                 Err(WorkError::Shutdown) => {
                     // Channel closed - current is the last edge, extends to infinity
                     debug!("Channel peek returned Shutdown at timestamp {}", timestamp);
-                    if current.start_time <= timestamp {
+                    if current.start_time_ns <= timestamp {
                         channel.put_back(current);
                         return Ok(Some(current.value));
                     } else {
@@ -169,7 +174,7 @@ impl ProcessNode for SpiDecoder {
     }
 
     fn num_outputs(&self) -> usize {
-        1
+        usize::from(self.has_mosi) + usize::from(self.has_miso)
     }
 
     fn input_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
@@ -203,11 +208,25 @@ impl ProcessNode for SpiDecoder {
 
     fn output_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
         use crate::runtime::ports::{PortDirection, PortSchema};
-        vec![PortSchema::new::<SpiTransfer>(
-            "spi_transfers",
-            0,
-            PortDirection::Output,
-        )]
+
+        // Mirrors input_schema()'s conditional-port pattern: MOSI's port
+        // (if present) always comes before MISO's.
+        let mut schemas = Vec::new();
+        if self.has_mosi {
+            schemas.push(PortSchema::new::<Word>(
+                "mosi_words",
+                schemas.len(),
+                PortDirection::Output,
+            ));
+        }
+        if self.has_miso {
+            schemas.push(PortSchema::new::<Word>(
+                "miso_words",
+                schemas.len(),
+                PortDirection::Output,
+            ));
+        }
+        schemas
     }
 
     fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
@@ -291,10 +310,29 @@ impl SpiDecoder {
         // (i.e. the rising transition); falling-sampling looks for `false`.
         let sampling_value = sample_on_rising;
 
-        let output = outputs
-            .first()
-            .and_then(|p| p.get::<SpiTransfer>())
-            .ok_or_else(|| WorkError::NodeError("Missing output".into()))?;
+        // Output port layout mirrors input_schema(): MOSI's port (if
+        // present) always comes before MISO's.
+        let mosi_output = if self.has_mosi {
+            Some(
+                outputs
+                    .first()
+                    .and_then(|p| p.get::<Word>())
+                    .ok_or_else(|| WorkError::NodeError("Missing MOSI output".into()))?,
+            )
+        } else {
+            None
+        };
+        let miso_output = if self.has_miso {
+            let idx = usize::from(self.has_mosi);
+            Some(
+                outputs
+                    .get(idx)
+                    .and_then(|p| p.get::<Word>())
+                    .ok_or_else(|| WorkError::NodeError("Missing MISO output".into()))?,
+            )
+        } else {
+            None
+        };
 
         let total_samples = cs_query.total_samples();
         let timestamp_step = (1_000_000_000.0 / cs_query.samplerate_hz()) as u64;
@@ -337,8 +375,8 @@ impl SpiDecoder {
         let mut clk_position = cs_active_start;
 
         'word_loop: loop {
-            let mut mosi_word: u32 = 0;
-            let mut miso_word: u32 = 0;
+            let mut mosi_word: u64 = 0;
+            let mut miso_word: u64 = 0;
             let mut bits_collected: usize = 0;
             let mut first_clock_edge: Option<u64> = None;
 
@@ -388,20 +426,21 @@ impl SpiDecoder {
                 let timestamp = first_clock_edge
                     .map(position_to_ns)
                     .unwrap_or_else(|| position_to_ns(cs_active_start));
-                let transfer = SpiTransfer {
-                    mosi: mosi_word,
-                    miso: miso_word,
-                    timing: TimingInfo::new(timestamp as f64 / 1_000.0, timestamp),
-                };
 
                 words_emitted += 1;
                 debug!(
-                    "#{}: 0x{:06X} at {:.9}s",
+                    "#{}: mosi=0x{:06X} miso=0x{:06X} at {:.9}s",
                     self.tx_count + words_emitted as u64,
-                    transfer.mosi,
+                    mosi_word,
+                    miso_word,
                     timestamp as f64 / 1_000_000_000.0
                 );
-                output.send(transfer)?;
+                if let Some(ref output) = mosi_output {
+                    output.send(Word::new(mosi_word, timestamp))?;
+                }
+                if let Some(ref output) = miso_output {
+                    output.send(Word::new(miso_word, timestamp))?;
+                }
             }
         }
 
@@ -469,10 +508,29 @@ impl SpiDecoder {
         } else {
             None
         };
-        let output = outputs
-            .first()
-            .and_then(|p| p.get::<SpiTransfer>())
-            .ok_or_else(|| WorkError::NodeError("Missing output".into()))?;
+        // Output port layout mirrors input_schema(): MOSI's port (if
+        // present) always comes before MISO's.
+        let mosi_output = if has_mosi {
+            Some(
+                outputs
+                    .first()
+                    .and_then(|p| p.get::<Word>())
+                    .ok_or_else(|| WorkError::NodeError("Missing MOSI output".into()))?,
+            )
+        } else {
+            None
+        };
+        let miso_output = if has_miso {
+            let idx = usize::from(has_mosi);
+            Some(
+                outputs
+                    .get(idx)
+                    .and_then(|p| p.get::<Word>())
+                    .ok_or_else(|| WorkError::NodeError("Missing MISO output".into()))?,
+            )
+        } else {
+            None
+        };
 
         // ── 1. Wait for CS to go active ──────────────────────────────────
         // Only read from CS — leave CLK/MOSI/MISO untouched so their edges
@@ -485,7 +543,7 @@ impl SpiDecoder {
             }
         };
 
-        let cs_active_start = cs_active_edge.start_time;
+        let cs_active_start = cs_active_edge.start_time_ns;
 
         // ── 2. Get CS inactive edge to know the full CS window ───────────
         let cs_inactive_edge = loop {
@@ -494,7 +552,7 @@ impl SpiDecoder {
                 break edge;
             }
         };
-        let cs_inactive_time = cs_inactive_edge.start_time;
+        let cs_inactive_time = cs_inactive_edge.start_time_ns;
 
         debug!(
             "CS window: {:.9}s — {:.9}s ({:.3}µs)",
@@ -504,20 +562,20 @@ impl SpiDecoder {
         );
 
         // ── 3. Discard CLK/MOSI/MISO edges from before CS active ────────
-        clk.drain_before(cs_active_start, |e| e.start_time)?;
+        clk.drain_before(cs_active_start, |e| e.start_time_ns)?;
         if let Some(ref mut m) = mosi {
-            m.drain_before(cs_active_start, |e| e.start_time)?;
+            m.drain_before(cs_active_start, |e| e.start_time_ns)?;
         }
         if let Some(ref mut m) = miso {
-            m.drain_before(cs_active_start, |e| e.start_time)?;
+            m.drain_before(cs_active_start, |e| e.start_time_ns)?;
         }
 
         // ── 4. Collect words from CLK within the CS window ───────────────
         let mut words_emitted: usize = 0;
 
         'word_loop: loop {
-            let mut mosi_word: u32 = 0;
-            let mut miso_word: u32 = 0;
+            let mut mosi_word: u64 = 0;
+            let mut miso_word: u64 = 0;
             let mut bits_collected: usize = 0;
             let mut first_clock_edge: Option<u64> = None;
 
@@ -529,7 +587,7 @@ impl SpiDecoder {
                 let edge = clk.recv()?;
 
                 // CLK edge past CS window → transaction is over
-                if edge.start_time >= cs_inactive_time {
+                if edge.start_time_ns >= cs_inactive_time {
                     clk.put_back(edge);
 
                     if bits_collected > 0 && bits_collected < bits_per_word {
@@ -556,11 +614,11 @@ impl SpiDecoder {
 
                 // Record first clock edge timestamp
                 if first_clock_edge.is_none() {
-                    first_clock_edge = Some(edge.start_time);
+                    first_clock_edge = Some(edge.start_time_ns);
                 }
 
                 // Sample data lines at CLK edge time
-                let sample_time = edge.start_time.saturating_sub(1);
+                let sample_time = edge.start_time_ns.saturating_sub(1);
                 if has_mosi {
                     match Self::value_at_time(mosi.as_mut().unwrap(), sample_time)? {
                         Some(mosi_val) => {
@@ -570,7 +628,7 @@ impl SpiDecoder {
                             trace!(
                                 "bit {}: CLK edge at {:.9}s, MOSI={}",
                                 bits_collected,
-                                edge.start_time as f64 / 1_000_000_000.0,
+                                edge.start_time_ns as f64 / 1_000_000_000.0,
                                 mosi_val,
                             );
                         }
@@ -606,20 +664,21 @@ impl SpiDecoder {
             // We have a complete word
             if bits_collected == bits_per_word {
                 let timestamp = first_clock_edge.unwrap_or(cs_active_start);
-                let transfer = SpiTransfer {
-                    mosi: mosi_word,
-                    miso: miso_word,
-                    timing: TimingInfo::new(timestamp as f64 / 1_000.0, timestamp),
-                };
 
                 words_emitted += 1;
                 debug!(
-                    "#{}: 0x{:06X} at {:.9}s",
+                    "#{}: mosi=0x{:06X} miso=0x{:06X} at {:.9}s",
                     self.tx_count + words_emitted as u64,
-                    transfer.mosi,
+                    mosi_word,
+                    miso_word,
                     timestamp as f64 / 1_000_000_000.0
                 );
-                output.send(transfer)?;
+                if let Some(ref output) = mosi_output {
+                    output.send(Word::new(mosi_word, timestamp))?;
+                }
+                if let Some(ref output) = miso_output {
+                    output.send(Word::new(miso_word, timestamp))?;
+                }
             }
         }
 
@@ -661,6 +720,88 @@ mod tests {
         let decoder_high =
             SpiDecoder::with_cs_polarity(SpiMode::Mode0, 8, true, false, CsPolarity::ActiveHigh);
         assert_eq!(decoder_high.cs_polarity, CsPolarity::ActiveHigh);
+    }
+
+    /// MOSI and MISO are independent `Word` streams on independent output
+    /// ports — the regression test for the bug this design fixes (the old
+    /// single-`SpiTransfer`-port design could never actually deliver MISO
+    /// to a consumer; see `ANALYSIS_PIPELINE_DESIGN.md` and this file's
+    /// module doc). 4-bit words, MSB-first: MOSI = 0b1010, MISO = 0b0101,
+    /// sampled on CLK's rising edge (Mode0).
+    #[test]
+    fn work_streamed_emits_independent_mosi_and_miso_word_streams() {
+        use crate::runtime::sender::{ChannelMessage, Sender};
+        use crate::runtime::watchdog::Watchdog;
+        use crossbeam_channel::bounded;
+
+        let wd = Watchdog::new();
+
+        let cs_samples = [Sample::new(false, 0), Sample::new(true, 1000)];
+        let clk_samples = [
+            Sample::new(false, 0),
+            Sample::new(true, 100),
+            Sample::new(false, 200),
+            Sample::new(true, 300),
+            Sample::new(false, 400),
+            Sample::new(true, 500),
+            Sample::new(false, 600),
+            Sample::new(true, 700),
+        ];
+        // Bit i is read 1ns before CLK's i-th rising edge.
+        let mosi_samples = [
+            Sample::new(true, 0),    // bit0 = 1
+            Sample::new(false, 200), // bit1 = 0
+            Sample::new(true, 400),  // bit2 = 1
+            Sample::new(false, 600), // bit3 = 0
+        ];
+        let miso_samples = [
+            Sample::new(false, 0), // bit0 = 0
+            Sample::new(true, 200),  // bit1 = 1
+            Sample::new(false, 400), // bit2 = 0
+            Sample::new(true, 600),  // bit3 = 1
+        ];
+
+        let make_input = |samples: &[Sample], port: &str| {
+            let (tx, rx) = bounded::<ChannelMessage<Sample>>(samples.len() + 1);
+            for &s in samples {
+                tx.send(ChannelMessage::Sample(s)).unwrap();
+            }
+            drop(tx);
+            InputPort::new_with_watchdog(rx, &wd, "spi", port)
+        };
+        let inputs = [
+            make_input(&cs_samples, "cs"),
+            make_input(&clk_samples, "clk"),
+            make_input(&mosi_samples, "mosi"),
+            make_input(&miso_samples, "miso"),
+        ];
+
+        let (mosi_tx, mosi_rx) = bounded::<ChannelMessage<Word>>(16);
+        let (miso_tx, miso_rx) = bounded::<ChannelMessage<Word>>(16);
+        let outputs = [
+            OutputPort::new_with_watchdog(Sender::new(vec![mosi_tx]), &wd, "spi", "mosi_words"),
+            OutputPort::new_with_watchdog(Sender::new(vec![miso_tx]), &wd, "spi", "miso_words"),
+        ];
+
+        let mut decoder = SpiDecoder::new(SpiMode::Mode0, 4, true, true);
+        loop {
+            match decoder.work(&inputs, &outputs) {
+                Ok(_) => {}
+                Err(WorkError::Shutdown) => break,
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+
+        let collect = |rx: crossbeam_channel::Receiver<ChannelMessage<Word>>| -> Vec<Word> {
+            rx.try_iter()
+                .filter_map(|m| match m {
+                    ChannelMessage::Sample(w) => Some(w),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(collect(mosi_rx), vec![Word::new(0b1010, 100)]);
+        assert_eq!(collect(miso_rx), vec![Word::new(0b0101, 100)]);
     }
 
     // ── Differential test: query-mode output must match streaming-mode ──
@@ -706,9 +847,9 @@ mod tests {
     }
 
     /// Test-only sink that collects everything sent to its single input.
-    struct CollectTransfers(std::sync::Arc<std::sync::Mutex<Vec<SpiTransfer>>>);
+    struct CollectWords(std::sync::Arc<std::sync::Mutex<Vec<Word>>>);
 
-    impl ProcessNode for CollectTransfers {
+    impl ProcessNode for CollectWords {
         fn name(&self) -> &str {
             "collect"
         }
@@ -720,13 +861,13 @@ mod tests {
         }
         fn input_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
             use crate::runtime::ports::{PortDirection, PortSchema};
-            vec![PortSchema::new::<SpiTransfer>("data", 0, PortDirection::Input)]
+            vec![PortSchema::new::<Word>("data", 0, PortDirection::Input)]
         }
         fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
             let mut buf = VecDeque::new();
             let mut recv = inputs
                 .first()
-                .and_then(|p| p.get::<SpiTransfer>(&mut buf))
+                .and_then(|p| p.get::<Word>(&mut buf))
                 .ok_or_else(|| WorkError::NodeError("Missing collector input".into()))?;
             let item = recv.recv()?;
             self.0.lock().unwrap().push(item);
@@ -736,15 +877,15 @@ mod tests {
 
     /// Runs `_captures/wipneus5.dsl` through a real 3-node pipeline
     /// (`DslFileSource` -> `SpiDecoder` -> collector), bounded to
-    /// `max_samples` so the test is fast, and returns the decoded
-    /// transfers. `force_stream` wraps the source so the connection
+    /// `max_samples` so the test is fast, and returns the decoded MOSI
+    /// words. `force_stream` wraps the source so the connection
     /// negotiates `Stream` instead of the `EdgeQuery` both sides would
     /// otherwise prefer.
     fn decode_wipneus5(
         path: &std::path::Path,
         max_samples: u64,
         force_stream: bool,
-    ) -> Vec<SpiTransfer> {
+    ) -> Vec<Word> {
         use crate::DslFileSource;
         use crate::runtime::Pipeline;
 
@@ -764,14 +905,14 @@ mod tests {
         }
         pipeline.add_process("spi", decoder).unwrap();
         pipeline
-            .add_process("collect", CollectTransfers(collected.clone()))
+            .add_process("collect", CollectWords(collected.clone()))
             .unwrap();
 
         pipeline.connect("source", "ch7", "spi", "clk").unwrap();
         pipeline.connect("source", "ch8", "spi", "cs").unwrap();
         pipeline.connect("source", "ch6", "spi", "mosi").unwrap();
         pipeline
-            .connect("spi", "spi_transfers", "collect", "data")
+            .connect("spi", "mosi_words", "collect", "data")
             .unwrap();
 
         pipeline.build().unwrap().wait();
@@ -804,7 +945,7 @@ mod tests {
              to make this comparison meaningful"
         );
 
-        let as_tuple = |t: &SpiTransfer| (t.mosi, t.miso, t.timing.position, t.timing.timestamp_us);
+        let as_tuple = |w: &Word| (w.value, w.timestamp_ns);
         let streamed_view: Vec<_> = streamed.iter().map(as_tuple).collect();
         let queried_view: Vec<_> = queried.iter().map(as_tuple).collect();
 

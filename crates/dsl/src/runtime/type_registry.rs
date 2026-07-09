@@ -187,8 +187,7 @@ lazy_static::lazy_static! {
         // Register common types
         use crate::Sample;
         use crate::runtime::sample::SampleBlock;
-        use crate::runtime::events::{NumberSample, TextSample, Trigger};
-        use crate::nodes::decoders::{SpiTransfer, ParallelWord};
+        use crate::runtime::events::{NumberSample, TextSample, Trigger, Word};
         registry.register::<Sample>();
         registry.register::<SampleBlock>();
         #[cfg(not(target_arch = "wasm32"))]
@@ -196,8 +195,7 @@ lazy_static::lazy_static! {
             use crate::nodes::LogicChunk;
             registry.register::<LogicChunk>();
         }
-        registry.register::<SpiTransfer>();
-        registry.register::<ParallelWord>();
+        registry.register::<Word>();
         registry.register::<Trigger>();
         registry.register::<NumberSample>();
         registry.register::<TextSample>();

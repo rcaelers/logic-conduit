@@ -4,7 +4,7 @@
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 use dsl::runtime::ProcessNode;
-use dsl::{BufferNode, NumberSample, ParallelWord, Sample, SampleBlock, SpiTransfer, TextSample, Trigger};
+use dsl::{BufferNode, NumberSample, Sample, SampleBlock, TextSample, Trigger, Word};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -17,8 +17,7 @@ fn selected_kind(state: &Value) -> PortKind {
         .unwrap_or_default();
     match selected.as_str() {
         "Block" => PortKind::of::<SampleBlock>(),
-        "SPI Transfer" => PortKind::of::<SpiTransfer>(),
-        "Word" => PortKind::of::<ParallelWord>(),
+        "Word" => PortKind::of::<Word>(),
         "Number" => PortKind::of::<NumberSample>(),
         "Text" => PortKind::of::<TextSample>(),
         "Trigger" => PortKind::of::<Trigger>(),
@@ -56,8 +55,7 @@ impl RuntimeBuilder for BufferBuilder {
         let state: nodes::BufferState = parse_state(state)?;
         let node: Box<dyn ProcessNode> = match state.kind.selected() {
             "Block" => Box::new(BufferNode::<SampleBlock>::new(name)),
-            "SPI Transfer" => Box::new(BufferNode::<SpiTransfer>::new(name)),
-            "Word" => Box::new(BufferNode::<ParallelWord>::new(name)),
+            "Word" => Box::new(BufferNode::<Word>::new(name)),
             "Number" => Box::new(BufferNode::<NumberSample>::new(name)),
             "Text" => Box::new(BufferNode::<TextSample>::new(name)),
             "Trigger" => Box::new(BufferNode::<Trigger>::new(name)),
