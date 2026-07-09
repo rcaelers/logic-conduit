@@ -71,7 +71,7 @@ impl SocketDef for Signal {
         "Signal"
     }
     fn color() -> Color32 {
-        Color32::from_rgb(95, 175, 95)
+        Color32::from_rgb(0, 205, 160)
     }
 }
 

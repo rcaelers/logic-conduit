@@ -179,10 +179,11 @@ pub enum WireEmphasis {
 }
 
 fn brighten_wire_color(base: Color32) -> Color32 {
+    let mix = |channel: u8| ((channel as f32 * 0.48) + (255.0 * 0.52)).round() as u8;
     Color32::from_rgba_unmultiplied(
-        (base.r() as f32 * 1.5).min(255.0) as u8,
-        (base.g() as f32 * 1.5).min(255.0) as u8,
-        (base.b() as f32 * 1.5).min(255.0) as u8,
+        mix(base.r()),
+        mix(base.g()),
+        mix(base.b()),
         255,
     )
 }
