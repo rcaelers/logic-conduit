@@ -5,7 +5,7 @@ use super::errors::ConnectionError;
 use super::node::{InputPort, OutputPort, ProcessNode};
 use super::ports::PortSchema;
 use super::protocol::ProtocolKind;
-use super::sample_kind::{self, SampleKind};
+use super::sample_kind;
 use super::scheduler::Scheduler;
 use super::type_registry::TYPE_REGISTRY;
 use std::any::{Any, TypeId};
@@ -14,16 +14,14 @@ use std::sync::Arc;
 use tracing::{debug, info};
 
 /// Cached per-node schema data, computed once in `add_process` while the
-/// node is still locally owned. `input_kinds`/`output_kinds` are indexed
-/// by port index (same convention as `output_protocols`/`edge_query`),
-/// not list position — `SampleKind` negotiation is pure and cheap (unlike
-/// `EdgeQuery`, which needs a live node reference), so it's safe to
-/// resolve fully at `connect()` time from this cache alone.
+/// node is still locally owned. Each `PortSchema` carries its own
+/// `protocols`/`sample_kinds` now, so `connect()` and `build()`'s protocol
+/// negotiation phase both resolve fully from this cache alone — the only
+/// trait method that still needs a live node reference is `edge_query`
+/// (stateful, so it stays deferred to `build()`'s Phase 0.5).
 struct NodeSchemas {
     inputs: Vec<PortSchema>,
     outputs: Vec<PortSchema>,
-    input_kinds: Vec<Vec<SampleKind>>,
-    output_kinds: Vec<Vec<SampleKind>>,
 }
 
 /// Pipeline builder that manages nodes and connections
@@ -78,25 +76,11 @@ impl Pipeline {
 
         let inputs = node.input_schema();
         let outputs = node.output_schema();
-        let input_kinds = (0..node.num_inputs())
-            .map(|i| node.input_sample_kinds(i))
-            .collect();
-        let output_kinds = (0..node.num_outputs())
-            .map(|i| node.output_sample_kinds(i))
-            .collect();
 
         let id = self.next_id;
         self.next_id += 1;
 
-        self.node_schemas.insert(
-            id,
-            NodeSchemas {
-                inputs,
-                outputs,
-                input_kinds,
-                output_kinds,
-            },
-        );
+        self.node_schemas.insert(id, NodeSchemas { inputs, outputs });
         self.node_names.insert(name, id);
         self.nodes.push((id, Box::new(node)));
 
@@ -177,20 +161,22 @@ impl Pipeline {
         // type_id match if neither side declared a SampleKind list (every
         // node except a handful of raw-channel sources), otherwise the
         // producer-preferred kind both sides agree on.
-        let offered = &from_node_schemas.output_kinds[from_schema.index];
-        let accepted = &to_node_schemas.input_kinds[to_schema.index];
-        let negotiated_type =
-            sample_kind::negotiate(offered, from_schema.type_id, accepted, to_schema.type_id)
-                .ok_or_else(|| {
-                    Box::new(ConnectionError::TypeMismatch {
-                        from_node: from_node.to_string(),
-                        from_port: from_port.to_string(),
-                        from_type: from_schema.type_id,
-                        to_node: to_node.to_string(),
-                        to_port: to_port.to_string(),
-                        to_type: to_schema.type_id,
-                    })
-                })?;
+        let negotiated_type = sample_kind::negotiate(
+            &from_schema.sample_kinds,
+            from_schema.type_id,
+            &to_schema.sample_kinds,
+            to_schema.type_id,
+        )
+        .ok_or_else(|| {
+            Box::new(ConnectionError::TypeMismatch {
+                from_node: from_node.to_string(),
+                from_port: from_port.to_string(),
+                from_type: from_schema.type_id,
+                to_node: to_node.to_string(),
+                to_port: to_port.to_string(),
+                to_type: to_schema.type_id,
+            })
+        })?;
 
         // Check for duplicate connection to same input port
         if self
@@ -298,21 +284,33 @@ impl Pipeline {
             self.nodes.iter().map(|(id, node)| (*id, node)).collect();
 
         // Phase 0: negotiate a connection protocol per pending connection,
-        // intersecting the producer's output_protocols (preference order)
-        // with the consumer's input_protocols. Every node defaults to
-        // `[Stream]` on both ends, so a connection between two nodes that
-        // don't know about richer protocols always negotiates `Stream` —
-        // today's behavior, unchanged.
+        // intersecting the producer's declared protocols (preference order)
+        // with the consumer's, straight from the schema cache built in
+        // `add_process` — every port defaults to `[Stream]` on both ends,
+        // so a connection between two ports that don't know about richer
+        // protocols always negotiates `Stream` — today's behavior, unchanged.
         let mut protocols: Vec<ProtocolKind> = Vec::with_capacity(self.connections.len());
         for conn in &self.connections {
-            let from_node = node_by_id
+            let from_schemas = self
+                .node_schemas
                 .get(&conn.from_node)
                 .ok_or_else(|| format!("Node {} not found", conn.from_node))?;
-            let to_node = node_by_id
+            let to_schemas = self
+                .node_schemas
                 .get(&conn.to_node)
                 .ok_or_else(|| format!("Node {} not found", conn.to_node))?;
-            let produced = from_node.output_protocols(conn.from_port);
-            let accepted = to_node.input_protocols(conn.to_port);
+            let produced = &from_schemas
+                .outputs
+                .get(conn.from_port)
+                .ok_or_else(|| {
+                    format!("Node {} has no output port {}", conn.from_node, conn.from_port)
+                })?
+                .protocols;
+            let accepted = &to_schemas
+                .inputs
+                .get(conn.to_port)
+                .ok_or_else(|| format!("Node {} has no input port {}", conn.to_node, conn.to_port))?
+                .protocols;
             let protocol = produced
                 .iter()
                 .find(|p| accepted.contains(p))
@@ -474,7 +472,7 @@ mod tests {
     use crate::nodes::Sample;
     use crate::runtime::node::ProcessNode;
     use crate::runtime::ports::PortSchema;
-    use std::any::TypeId;
+    use crate::runtime::sample_kind::SampleKind;
 
     // Minimal test node implementations
     struct TestSource;
@@ -492,12 +490,11 @@ mod tests {
             vec![]
         }
         fn output_schema(&self) -> Vec<PortSchema> {
-            vec![PortSchema {
-                name: "out".to_string(),
-                type_id: TypeId::of::<Sample>(),
-                index: 0,
-                direction: crate::runtime::ports::PortDirection::Output,
-            }]
+            vec![PortSchema::new::<Sample>(
+                "out",
+                0,
+                crate::runtime::ports::PortDirection::Output,
+            )]
         }
         fn work(
             &mut self,
@@ -520,12 +517,11 @@ mod tests {
             0
         }
         fn input_schema(&self) -> Vec<PortSchema> {
-            vec![PortSchema {
-                name: "in".to_string(),
-                type_id: TypeId::of::<Sample>(),
-                index: 0,
-                direction: crate::runtime::ports::PortDirection::Input,
-            }]
+            vec![PortSchema::new::<Sample>(
+                "in",
+                0,
+                crate::runtime::ports::PortDirection::Input,
+            )]
         }
         fn output_schema(&self) -> Vec<PortSchema> {
             vec![]
@@ -551,20 +547,18 @@ mod tests {
             1
         }
         fn input_schema(&self) -> Vec<PortSchema> {
-            vec![PortSchema {
-                name: "in".to_string(),
-                type_id: TypeId::of::<Sample>(),
-                index: 0,
-                direction: crate::runtime::ports::PortDirection::Input,
-            }]
+            vec![PortSchema::new::<Sample>(
+                "in",
+                0,
+                crate::runtime::ports::PortDirection::Input,
+            )]
         }
         fn output_schema(&self) -> Vec<PortSchema> {
-            vec![PortSchema {
-                name: "out".to_string(),
-                type_id: TypeId::of::<Sample>(),
-                index: 0,
-                direction: crate::runtime::ports::PortDirection::Output,
-            }]
+            vec![PortSchema::new::<Sample>(
+                "out",
+                0,
+                crate::runtime::ports::PortDirection::Output,
+            )]
         }
         fn work(
             &mut self,
@@ -724,14 +718,10 @@ mod tests {
             1
         }
         fn output_schema(&self) -> Vec<PortSchema> {
-            vec![PortSchema::new::<Sample>(
-                "out",
-                0,
-                crate::runtime::ports::PortDirection::Output,
-            )]
-        }
-        fn output_sample_kinds(&self, _port: usize) -> Vec<SampleKind> {
-            vec![SampleKind::Block, SampleKind::Edge]
+            vec![
+                PortSchema::new::<Sample>("out", 0, crate::runtime::ports::PortDirection::Output)
+                    .with_sample_kinds(vec![SampleKind::Block, SampleKind::Edge]),
+            ]
         }
         fn work(
             &mut self,
@@ -873,14 +863,10 @@ mod tests {
             1
         }
         fn output_schema(&self) -> Vec<PortSchema> {
-            vec![PortSchema::new::<Sample>(
-                "out",
-                0,
-                crate::runtime::ports::PortDirection::Output,
-            )]
-        }
-        fn output_sample_kinds(&self, _port: usize) -> Vec<SampleKind> {
-            vec![SampleKind::Edge]
+            vec![
+                PortSchema::new::<Sample>("out", 0, crate::runtime::ports::PortDirection::Output)
+                    .with_sample_kinds(vec![SampleKind::Edge]),
+            ]
         }
         fn work(
             &mut self,
@@ -891,6 +877,9 @@ mod tests {
         }
     }
 
+    /// Deliberately declares no `sample_kinds` — an input's accepted kind
+    /// is always its own fixed `type_id` (`SampleBlock` here), so there's
+    /// nothing to negotiate on this side.
     struct BlockOnlySink;
     impl ProcessNode for BlockOnlySink {
         fn name(&self) -> &str {
@@ -908,9 +897,6 @@ mod tests {
                 0,
                 crate::runtime::ports::PortDirection::Input,
             )]
-        }
-        fn input_sample_kinds(&self, _port: usize) -> Vec<SampleKind> {
-            vec![SampleKind::Block]
         }
         fn work(
             &mut self,

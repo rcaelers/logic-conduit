@@ -15,6 +15,9 @@ pub use super::sender::Sender;
 pub use super::type_registry::register_type;
 pub use super::watchdog::{Watchdog, WatchdogHandle};
 
+use super::protocol::ProtocolKind;
+use super::sample_kind::SampleKind;
+
 /// Direction of a port
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PortDirection {
@@ -29,6 +32,21 @@ pub struct PortSchema {
     pub type_id: TypeId,
     pub index: usize,
     pub direction: PortDirection,
+    /// Protocols this port can speak, most preferred first. Default:
+    /// `[Stream]`, the guaranteed fallback every port supports — override
+    /// via [`Self::with_protocols`] for a port that can also answer
+    /// [`super::edge_query::EdgeQuery`] (see
+    /// [`super::node::ProcessNode::edge_query`]).
+    pub protocols: Vec<ProtocolKind>,
+    /// Payload kinds (`Sample` vs `SampleBlock`) this *output* port can
+    /// produce, most preferred first — see [`super::sample_kind::negotiate`].
+    /// Default empty, meaning "not polymorphic — `type_id` is the only
+    /// option," true of every port except a handful of raw-channel sources
+    /// (`DslFileSource`, `LogicAnalyzerSource`). Input ports leave this
+    /// empty too: negotiation always resolves an input to its own declared
+    /// `type_id`, so there's no separate "accepted kinds" concept to
+    /// declare on the consuming side.
+    pub sample_kinds: Vec<SampleKind>,
 }
 
 impl PortSchema {
@@ -43,7 +61,22 @@ impl PortSchema {
             type_id: TypeId::of::<T>(),
             index,
             direction,
+            protocols: vec![ProtocolKind::Stream],
+            sample_kinds: Vec::new(),
         }
+    }
+
+    /// Declares which protocols this port can speak, most preferred first.
+    pub fn with_protocols(mut self, protocols: Vec<ProtocolKind>) -> Self {
+        self.protocols = protocols;
+        self
+    }
+
+    /// Declares which payload kinds this output port can produce, most
+    /// preferred first.
+    pub fn with_sample_kinds(mut self, sample_kinds: Vec<SampleKind>) -> Self {
+        self.sample_kinds = sample_kinds;
+        self
     }
 }
 

@@ -960,8 +960,9 @@ impl ProcessNode for DslFileSource {
 
     fn num_outputs(&self) -> usize {
         // One port per channel, `ch0..chN` — negotiates Sample vs
-        // SampleBlock per connection (see `output_sample_kinds`) instead
-        // of exposing separate `d`/`b` ports for each.
+        // SampleBlock per connection (see `output_schema`'s
+        // `with_sample_kinds`) instead of exposing separate `d`/`b` ports
+        // for each.
         self.num_channels as usize
     }
 
@@ -971,24 +972,19 @@ impl ProcessNode for DslFileSource {
         (0..self.num_channels)
             .map(|i| {
                 PortSchema::new::<Sample>(format!("ch{}", i), i as usize, PortDirection::Output)
+                    // Every channel port aliases a raw file channel, so
+                    // every port can be answered from the waveform index —
+                    // prefer that, fall back to streaming for consumers (or
+                    // live sources with no index) that don't ask for it.
+                    .with_protocols(vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream])
+                    // Block is a near-zero-cost passthrough of the on-disk
+                    // block; Edge costs a real bit-walk to derive RLE edges
+                    // (see `block_reader_thread`/`channel_reader_thread`
+                    // below) — prefer Block, but a consumer that only wants
+                    // Edge still gets it.
+                    .with_sample_kinds(vec![SampleKind::Block, SampleKind::Edge])
             })
             .collect()
-    }
-
-    fn output_protocols(&self, _port: usize) -> Vec<ProtocolKind> {
-        // Every channel port aliases a raw file channel, so every port can
-        // be answered from the waveform index — prefer that, fall back to
-        // streaming for consumers (or live sources with no index) that
-        // don't ask for it.
-        vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]
-    }
-
-    fn output_sample_kinds(&self, _port: usize) -> Vec<SampleKind> {
-        // Block is a near-zero-cost passthrough of the on-disk block;
-        // Edge costs a real bit-walk to derive RLE edges (see
-        // `block_reader_thread`/`channel_reader_thread` below) — prefer
-        // Block, but a consumer that only wants Edge still gets it.
-        vec![SampleKind::Block, SampleKind::Edge]
     }
 
     fn edge_query(

@@ -45,8 +45,11 @@ impl SampleKind {
 ///
 /// `offered`/`accepted` are the producer's/consumer's declared kind
 /// lists, most preferred first; empty means "not polymorphic — only this
-/// port's own declared type applies" (every existing node's default via
-/// [`super::node::ProcessNode::output_sample_kinds`]/`input_sample_kinds`).
+/// port's own declared type applies" (every existing port's default via
+/// [`super::ports::PortSchema::sample_kinds`] — in practice `accepted` is
+/// always empty today, since only a handful of raw-channel *sources*
+/// declare a kind list at all; an input's accepted kind is simply its own
+/// fixed `PortSchema::type_id`).
 /// Empty on both sides falls back to a plain equality check between
 /// `from_type`/`to_type` (today's behavior, unchanged); otherwise
 /// intersects the two kind sets, producer preference order winning ties.

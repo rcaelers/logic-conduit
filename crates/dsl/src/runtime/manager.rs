@@ -64,12 +64,13 @@ fn is_level_type(type_id: TypeId) -> bool {
 
 /// Builds this node's output subscriber lists plus each port's negotiable
 /// protocol capability. `node` must still be locally owned — this is the
-/// only point at which the live manager can ever call `output_protocols`/
-/// `output_sample_kinds`/`edge_query` on it (see [`OutputList::edge_query`]'s
-/// doc: once `start_node` moves it into its thread, nothing outside that
-/// thread can call methods on it again, unlike the offline
-/// `Pipeline::build`, which negotiates every connection before any node
-/// is spawned).
+/// only point at which the live manager can ever call `edge_query` on it
+/// (see [`OutputList::edge_query`]'s doc: once `start_node` moves it into
+/// its thread, nothing outside that thread can call methods on it again,
+/// unlike the offline `Pipeline::build`, which negotiates every connection
+/// before any node is spawned). `protocols`/`sample_kinds` themselves come
+/// straight off `output_schemas`, which was already obtained from the node
+/// without needing a live reference.
 fn build_output_lists(
     node: &dyn ProcessNode,
     output_schemas: &[PortSchema],
@@ -77,7 +78,7 @@ fn build_output_lists(
     let mut outputs: HashMap<String, OutputList> = HashMap::new();
     let registry = TYPE_REGISTRY.lock().unwrap();
     for schema in output_schemas {
-        let sample_kinds = node.output_sample_kinds(schema.index);
+        let sample_kinds = schema.sample_kinds.clone();
         let type_ids: Vec<TypeId> = if sample_kinds.is_empty() {
             vec![schema.type_id]
         } else {
@@ -96,7 +97,7 @@ fn build_output_lists(
             lists.push((type_id, list));
         }
 
-        let mut protocols = node.output_protocols(schema.index);
+        let mut protocols = schema.protocols.clone();
         let edge_query = if protocols.contains(&ProtocolKind::EdgeQuery) {
             node.edge_query(schema.index, &[])
         } else {
@@ -195,7 +196,7 @@ struct OutputList {
     /// `sample_kinds` is empty (every ordinary, non-polymorphic port).
     type_id: TypeId,
     /// This port's declared payload alternatives
-    /// (`node.output_sample_kinds`), empty for ordinary single-kind ports.
+    /// (`schema.sample_kinds`), empty for ordinary single-kind ports.
     sample_kinds: Vec<SampleKind>,
     /// One shared subscriber list per concrete `TypeId` this port
     /// actually exposes — one entry for an ordinary port, one per
@@ -203,8 +204,8 @@ struct OutputList {
     /// raw file channel feeding one `Sample`-only consumer and one
     /// `SampleBlock`-only consumer at once).
     lists: Vec<(TypeId, Arc<dyn ErasedSharedSenders>)>,
-    /// Protocols this port can actually deliver — `node.output_protocols`
-    /// with `EdgeQuery` dropped again if `edge_query` below turned out to
+    /// Protocols this port can actually deliver — `schema.protocols` with
+    /// `EdgeQuery` dropped again if `edge_query` below turned out to
     /// be `None` (index unavailable), so a mismatch between what a node
     /// *claims* and what it *delivers* never reaches negotiation.
     protocols: Vec<ProtocolKind>,
@@ -318,8 +319,8 @@ impl PipelineManager {
 
         // Output subscriber lists, supervisor-owned. `node` is still
         // locally owned here (not yet moved into a thread), so this is the
-        // only point where its `output_protocols`/`edge_query` can ever be
-        // queried — see `OutputList::edge_query`'s doc.
+        // only point where its `edge_query` can ever be queried — see
+        // `OutputList::edge_query`'s doc.
         let outputs = build_output_lists(node.as_ref(), &output_schemas)?;
 
         // Wire inputs: subscribe into the producers' lists, unless this
@@ -342,10 +343,9 @@ impl PipelineManager {
                             sub.from_node, sub.from_port
                         )
                     })?;
-                    let accepted_kinds = node.input_sample_kinds(index);
                     let list = negotiate_sample_kind_list(
                         output,
-                        &accepted_kinds,
+                        &input_schemas[index].sample_kinds,
                         input_schemas[index].type_id,
                     )
                     .ok_or_else(|| {
@@ -354,8 +354,9 @@ impl PipelineManager {
                             sub.from_node, sub.from_port, name, input_schemas[index].name
                         )
                     })?;
-                    let accepted = node.input_protocols(index);
-                    if let Some(handle) = negotiate_edge_query(output, &accepted) {
+                    if let Some(handle) =
+                        negotiate_edge_query(output, &input_schemas[index].protocols)
+                    {
                         InputPort::from_type_erased(Box::new(()) as Box<dyn Any + Send>)
                             .with_edge_query(Some(handle))
                     } else {
@@ -638,10 +639,9 @@ impl PipelineManager {
                             sub.from_node, sub.from_port
                         )
                     })?;
-                    let accepted_kinds = node.input_sample_kinds(index);
                     let list = negotiate_sample_kind_list(
                         output,
-                        &accepted_kinds,
+                        &input_schemas[index].sample_kinds,
                         input_schemas[index].type_id,
                     )
                     .ok_or_else(|| {
@@ -650,8 +650,9 @@ impl PipelineManager {
                             sub.from_node, sub.from_port, name, input_schemas[index].name
                         )
                     })?;
-                    let accepted = node.input_protocols(index);
-                    if let Some(handle) = negotiate_edge_query(output, &accepted) {
+                    if let Some(handle) =
+                        negotiate_edge_query(output, &input_schemas[index].protocols)
+                    {
                         InputPort::from_type_erased(Box::new(()) as Box<dyn Any + Send>)
                             .with_edge_query(Some(handle))
                     } else {
@@ -1226,17 +1227,13 @@ mod tests {
             1
         }
         fn output_schema(&self) -> Vec<PortSchema> {
-            vec![PortSchema::new::<NumberSample>(
-                "out",
-                0,
-                PortDirection::Output,
-            )]
+            vec![
+                PortSchema::new::<NumberSample>("out", 0, PortDirection::Output)
+                    .with_protocols(vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]),
+            ]
         }
         fn work(&mut self, _inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
             Ok(0)
-        }
-        fn output_protocols(&self, _port: usize) -> Vec<ProtocolKind> {
-            vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]
         }
         fn edge_query(
             &self,
@@ -1263,10 +1260,10 @@ mod tests {
             0
         }
         fn input_schema(&self) -> Vec<PortSchema> {
-            vec![PortSchema::new::<NumberSample>("in", 0, PortDirection::Input)]
-        }
-        fn input_protocols(&self, _port: usize) -> Vec<ProtocolKind> {
-            vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]
+            vec![
+                PortSchema::new::<NumberSample>("in", 0, PortDirection::Input)
+                    .with_protocols(vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]),
+            ]
         }
         fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
             if inputs[0].edge_query().is_some() {
@@ -1338,10 +1335,10 @@ mod tests {
             1
         }
         fn output_schema(&self) -> Vec<PortSchema> {
-            vec![PortSchema::new::<Sample>("out", 0, PortDirection::Output)]
-        }
-        fn output_sample_kinds(&self, _port: usize) -> Vec<SampleKind> {
-            vec![SampleKind::Block, SampleKind::Edge]
+            vec![
+                PortSchema::new::<Sample>("out", 0, PortDirection::Output)
+                    .with_sample_kinds(vec![SampleKind::Block, SampleKind::Edge]),
+            ]
         }
         fn work(&mut self, _inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
             if self.sent {

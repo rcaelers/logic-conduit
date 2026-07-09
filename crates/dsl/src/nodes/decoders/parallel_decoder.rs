@@ -132,28 +132,32 @@ impl ProcessNode for ParallelDecoder {
     fn input_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
         use crate::runtime::ports::{PortDirection, PortSchema};
 
+        // strobe/dN/cs alias raw binary channels: prefer skip-ahead
+        // queries. enable_signal (pushed separately below, keeping the
+        // default `[Stream]`) is a computed control signal (from an SR
+        // latch, not a raw channel) with no EdgeQuery producer yet, so it
+        // always streams.
+        let indexed_protocols = vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream];
+
         let mut schemas = Vec::new();
 
         // Block inputs first
-        schemas.push(PortSchema::new::<SampleBlock>(
-            "strobe",
-            0,
-            PortDirection::Input,
-        ));
+        schemas.push(
+            PortSchema::new::<SampleBlock>("strobe", 0, PortDirection::Input)
+                .with_protocols(indexed_protocols.clone()),
+        );
 
         for i in 0..self.num_data_bits {
-            schemas.push(PortSchema::new::<SampleBlock>(
-                format!("d{}", i),
-                1 + i,
-                PortDirection::Input,
-            ));
+            schemas.push(
+                PortSchema::new::<SampleBlock>(format!("d{}", i), 1 + i, PortDirection::Input)
+                    .with_protocols(indexed_protocols.clone()),
+            );
         }
 
-        schemas.push(PortSchema::new::<SampleBlock>(
-            "cs",
-            1 + self.num_data_bits,
-            PortDirection::Input,
-        ));
+        schemas.push(
+            PortSchema::new::<SampleBlock>("cs", 1 + self.num_data_bits, PortDirection::Input)
+                .with_protocols(indexed_protocols.clone()),
+        );
 
         // Edge input last
         schemas.push(PortSchema::new::<Sample>(
@@ -173,19 +177,6 @@ impl ProcessNode for ParallelDecoder {
             0,
             PortDirection::Output,
         )]
-    }
-
-    fn input_protocols(&self, port: usize) -> Vec<ProtocolKind> {
-        // strobe/dN/cs alias raw binary channels: prefer skip-ahead
-        // queries. enable_signal is a computed control signal (from an SR
-        // latch, not a raw channel) with no EdgeQuery producer yet, so it
-        // always streams.
-        let enable_port = 1 + self.num_data_bits + 1;
-        if port == enable_port {
-            vec![ProtocolKind::Stream]
-        } else {
-            vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]
-        }
     }
 
     fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
@@ -917,16 +908,17 @@ mod tests {
             self.0.input_schema()
         }
         fn output_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
-            self.0.output_schema()
+            self.0
+                .output_schema()
+                .into_iter()
+                .map(|schema| schema.with_protocols(vec![ProtocolKind::Stream]))
+                .collect()
         }
         fn node_type(&self) -> &str {
             self.0.node_type()
         }
         fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
             self.0.work(inputs, outputs)
-        }
-        fn output_protocols(&self, _port: usize) -> Vec<ProtocolKind> {
-            vec![ProtocolKind::Stream]
         }
     }
 

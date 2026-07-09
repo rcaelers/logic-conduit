@@ -14,8 +14,6 @@ pub use super::receiver::Receiver;
 pub use super::sender::Sender;
 
 use super::edge_query::EdgeQuery;
-use super::protocol::ProtocolKind;
-use super::sample_kind::SampleKind;
 use std::sync::Arc;
 
 /// A configuration value delivered to a running node (live reconfiguration,
@@ -110,25 +108,11 @@ pub trait ProcessNode: Send {
         ConfigOutcome::NeedsRestart
     }
 
-    /// Protocols this node can produce on output port `port`, most
-    /// preferred first. `Pipeline::build` negotiates a connection's
-    /// protocol by intersecting this with the consumer's
-    /// [`input_protocols`](Self::input_protocols). Default: every node
-    /// supports the streamed-channel protocol, so this never needs
-    /// overriding unless a node can *also* answer [`edge_query`](Self::edge_query).
-    fn output_protocols(&self, _port: usize) -> Vec<ProtocolKind> {
-        vec![ProtocolKind::Stream]
-    }
-
-    /// Protocols this node can accept on input port `port`, most
-    /// preferred first. See [`output_protocols`](Self::output_protocols).
-    fn input_protocols(&self, _port: usize) -> Vec<ProtocolKind> {
-        vec![ProtocolKind::Stream]
-    }
-
     /// Random-access query handle for output port `port`, if this node
     /// can answer it without streaming. Only called by `Pipeline::build`
-    /// for connections that negotiated [`ProtocolKind::EdgeQuery`].
+    /// for connections that negotiated
+    /// [`ProtocolKind::EdgeQuery`](super::protocol::ProtocolKind::EdgeQuery)
+    /// (see [`PortSchema::protocols`](super::ports::PortSchema::protocols)).
     /// `input_queries` carries this node's own inputs' negotiated query
     /// handles (in `input_schema()` order, `None` where a given input
     /// didn't negotiate `EdgeQuery`) — empty today since only zero-input
@@ -141,25 +125,6 @@ pub trait ProcessNode: Send {
         _input_queries: &[Option<Arc<dyn EdgeQuery>>],
     ) -> Option<Arc<dyn EdgeQuery>> {
         None
-    }
-
-    /// Payload kinds (`Sample` vs `SampleBlock`) this node can produce on
-    /// output port `port`, most preferred first. Every wiring path
-    /// negotiates a connection's concrete type by intersecting this with
-    /// the consumer's [`input_sample_kinds`](Self::input_sample_kinds) —
-    /// see [`super::sample_kind::negotiate`]. Default: empty, meaning
-    /// "not polymorphic — this port's declared `PortSchema` type is the
-    /// only option," which is every node except a handful of raw-channel
-    /// sources (`DslFileSource`, `LogicAnalyzerSource`).
-    fn output_sample_kinds(&self, _port: usize) -> Vec<SampleKind> {
-        Vec::new()
-    }
-
-    /// Payload kinds this node can accept on input port `port`, most
-    /// preferred first. See
-    /// [`output_sample_kinds`](Self::output_sample_kinds).
-    fn input_sample_kinds(&self, _port: usize) -> Vec<SampleKind> {
-        Vec::new()
     }
 }
 
@@ -196,23 +161,11 @@ impl ProcessNode for Box<dyn ProcessNode> {
     fn apply_config(&mut self, config: &NodeConfig) -> ConfigOutcome {
         (**self).apply_config(config)
     }
-    fn output_protocols(&self, port: usize) -> Vec<ProtocolKind> {
-        (**self).output_protocols(port)
-    }
-    fn input_protocols(&self, port: usize) -> Vec<ProtocolKind> {
-        (**self).input_protocols(port)
-    }
     fn edge_query(
         &self,
         port: usize,
         input_queries: &[Option<Arc<dyn EdgeQuery>>],
     ) -> Option<Arc<dyn EdgeQuery>> {
         (**self).edge_query(port, input_queries)
-    }
-    fn output_sample_kinds(&self, port: usize) -> Vec<SampleKind> {
-        (**self).output_sample_kinds(port)
-    }
-    fn input_sample_kinds(&self, port: usize) -> Vec<SampleKind> {
-        (**self).input_sample_kinds(port)
     }
 }

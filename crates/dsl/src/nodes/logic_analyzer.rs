@@ -345,11 +345,15 @@ impl<A: LogicAnalyzer> ProcessNode for LogicAnalyzerSource<A> {
         let n = usize::from(self.channels);
         let mut schema = Vec::with_capacity(n + 1);
         for i in 0..n {
-            schema.push(PortSchema::new::<Sample>(
-                format!("ch{i}"),
-                i,
-                PortDirection::Output,
-            ));
+            schema.push(
+                PortSchema::new::<Sample>(format!("ch{i}"), i, PortDirection::Output)
+                    // Block is a near-zero-cost passthrough of the
+                    // packed-bit chunk already captured; Edge costs a real
+                    // bit-walk to derive RLE edges (see `Demux::push`) —
+                    // prefer Block, but a consumer that only wants Edge
+                    // still gets it.
+                    .with_sample_kinds(vec![SampleKind::Block, SampleKind::Edge]),
+            );
         }
         schema.push(PortSchema::new::<LogicChunk>(
             "raw",
@@ -357,19 +361,6 @@ impl<A: LogicAnalyzer> ProcessNode for LogicAnalyzerSource<A> {
             PortDirection::Output,
         ));
         schema
-    }
-
-    fn output_sample_kinds(&self, port: usize) -> Vec<SampleKind> {
-        let n = usize::from(self.channels);
-        if port < n {
-            // Block is a near-zero-cost passthrough of the packed-bit
-            // chunk already captured; Edge costs a real bit-walk to
-            // derive RLE edges (see `Demux::push`) — prefer Block, but a
-            // consumer that only wants Edge still gets it.
-            vec![SampleKind::Block, SampleKind::Edge]
-        } else {
-            Vec::new()
-        }
     }
 
     fn work(&mut self, _inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {

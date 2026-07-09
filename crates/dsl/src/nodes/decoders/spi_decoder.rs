@@ -175,16 +175,28 @@ impl ProcessNode for SpiDecoder {
     fn input_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
         use crate::runtime::ports::{PortDirection, PortSchema};
 
+        // Every input this decoder has is a raw binary channel: prefer
+        // skip-ahead queries over streaming every dead-time edge, fall back
+        // to streaming for live sources with no index.
+        let protocols = vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream];
         let mut schemas = vec![
-            PortSchema::new::<Sample>("cs", 0, PortDirection::Input),
-            PortSchema::new::<Sample>("clk", 1, PortDirection::Input),
+            PortSchema::new::<Sample>("cs", 0, PortDirection::Input)
+                .with_protocols(protocols.clone()),
+            PortSchema::new::<Sample>("clk", 1, PortDirection::Input)
+                .with_protocols(protocols.clone()),
         ];
         if self.has_mosi {
-            schemas.push(PortSchema::new::<Sample>("mosi", 2, PortDirection::Input));
+            schemas.push(
+                PortSchema::new::<Sample>("mosi", 2, PortDirection::Input)
+                    .with_protocols(protocols.clone()),
+            );
         }
         if self.has_miso {
             let idx = 2 + usize::from(self.has_mosi);
-            schemas.push(PortSchema::new::<Sample>("miso", idx, PortDirection::Input));
+            schemas.push(
+                PortSchema::new::<Sample>("miso", idx, PortDirection::Input)
+                    .with_protocols(protocols.clone()),
+            );
         }
         schemas
     }
@@ -196,13 +208,6 @@ impl ProcessNode for SpiDecoder {
             0,
             PortDirection::Output,
         )]
-    }
-
-    fn input_protocols(&self, _port: usize) -> Vec<ProtocolKind> {
-        // Every input this decoder has is a raw binary channel: prefer
-        // skip-ahead queries over streaming every dead-time edge, fall back
-        // to streaming for live sources with no index.
-        vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]
     }
 
     fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
@@ -686,16 +691,17 @@ mod tests {
             self.0.input_schema()
         }
         fn output_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
-            self.0.output_schema()
+            self.0
+                .output_schema()
+                .into_iter()
+                .map(|schema| schema.with_protocols(vec![ProtocolKind::Stream]))
+                .collect()
         }
         fn node_type(&self) -> &str {
             self.0.node_type()
         }
         fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
             self.0.work(inputs, outputs)
-        }
-        fn output_protocols(&self, _port: usize) -> Vec<ProtocolKind> {
-            vec![ProtocolKind::Stream]
         }
     }
 
