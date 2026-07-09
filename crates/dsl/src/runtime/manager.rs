@@ -24,6 +24,7 @@ use super::edge_query::EdgeQuery;
 use super::node::{ConfigOutcome, InputPort, NodeConfig, OutputPort, ProcessNode};
 use super::ports::PortSchema;
 use super::protocol::ProtocolKind;
+use super::sample_kind::{self, SampleKind};
 use super::sender::OverflowPolicy;
 use super::type_registry::{ErasedSharedSenders, TYPE_REGISTRY};
 use super::watchdog::Watchdog;
@@ -64,10 +65,11 @@ fn is_level_type(type_id: TypeId) -> bool {
 /// Builds this node's output subscriber lists plus each port's negotiable
 /// protocol capability. `node` must still be locally owned — this is the
 /// only point at which the live manager can ever call `output_protocols`/
-/// `edge_query` on it (see [`OutputList::edge_query`]'s doc: once
-/// `start_node` moves it into its thread, nothing outside that thread can
-/// call methods on it again, unlike the offline `Pipeline::build`, which
-/// negotiates every connection before any node is spawned).
+/// `output_sample_kinds`/`edge_query` on it (see [`OutputList::edge_query`]'s
+/// doc: once `start_node` moves it into its thread, nothing outside that
+/// thread can call methods on it again, unlike the offline
+/// `Pipeline::build`, which negotiates every connection before any node
+/// is spawned).
 fn build_output_lists(
     node: &dyn ProcessNode,
     output_schemas: &[PortSchema],
@@ -75,10 +77,24 @@ fn build_output_lists(
     let mut outputs: HashMap<String, OutputList> = HashMap::new();
     let registry = TYPE_REGISTRY.lock().unwrap();
     for schema in output_schemas {
-        let sticky = is_level_type(schema.type_id);
-        let list = registry
-            .create_shared(schema.type_id, sticky)
-            .ok_or_else(|| format!("type of port '{}' not registered", schema.name))?;
+        let sample_kinds = node.output_sample_kinds(schema.index);
+        let type_ids: Vec<TypeId> = if sample_kinds.is_empty() {
+            vec![schema.type_id]
+        } else {
+            sample_kinds.iter().map(|kind| kind.payload_type()).collect()
+        };
+        // Sticky-ness is a property of the concrete payload (a `Sample`
+        // level wants late-joiner priming; a `SampleBlock` burst must not
+        // replay a stale block), so it's computed per kind here, not once
+        // per port.
+        let mut lists = Vec::with_capacity(type_ids.len());
+        for type_id in type_ids {
+            let sticky = is_level_type(type_id);
+            let list = registry
+                .create_shared(type_id, sticky)
+                .ok_or_else(|| format!("type of port '{}' not registered", schema.name))?;
+            lists.push((type_id, list));
+        }
 
         let mut protocols = node.output_protocols(schema.index);
         let edge_query = if protocols.contains(&ProtocolKind::EdgeQuery) {
@@ -97,8 +113,9 @@ fn build_output_lists(
         outputs.insert(
             schema.name.clone(),
             OutputList {
-                list,
                 type_id: schema.type_id,
+                sample_kinds,
+                lists,
                 protocols,
                 edge_query,
             },
@@ -126,6 +143,44 @@ fn negotiate_edge_query(
     }
 }
 
+/// Negotiates one connection's payload type (`output`'s declared
+/// alternatives against the consumer's `accepted` list — see
+/// [`sample_kind::negotiate`]) and returns the matching subscriber list.
+/// `None` means no common `SampleKind`/type — a real type mismatch.
+fn negotiate_sample_kind_list<'a>(
+    output: &'a OutputList,
+    accepted: &[SampleKind],
+    to_type: TypeId,
+) -> Option<&'a Arc<dyn ErasedSharedSenders>> {
+    let negotiated_type =
+        sample_kind::negotiate(&output.sample_kinds, output.type_id, accepted, to_type)?;
+    Some(
+        &output
+            .lists
+            .iter()
+            .find(|(type_id, _)| *type_id == negotiated_type)
+            .expect("negotiated type must be one of this output's own lists")
+            .1,
+    )
+}
+
+/// Builds one `OutputPort` from every sender this output actually has —
+/// one per negotiated `SampleKind` for a polymorphic port (see
+/// [`OutputList::lists`]), folded into a single port the node's `work()`
+/// queries by type (`OutputPort::split_senders::<Sample>()` and
+/// `::<SampleBlock>()` independently, each seeing only its own senders).
+fn output_port_from_lists(output: &OutputList) -> OutputPort {
+    let mut port: Option<OutputPort> = None;
+    for (type_id, list) in &output.lists {
+        let sender = list.sender_box();
+        port = Some(match port {
+            None => OutputPort::from_type_erased(*type_id, sender),
+            Some(p) => p.extend_type_erased(*type_id, sender),
+        });
+    }
+    port.expect("build_output_lists always creates at least one list per port")
+}
+
 /// A consumer dropped by [`OverflowPolicy::Disconnect`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DisconnectEvent {
@@ -135,8 +190,19 @@ pub struct DisconnectEvent {
 }
 
 struct OutputList {
-    list: Arc<dyn ErasedSharedSenders>,
+    /// This port's own declared type (before any `SampleKind`
+    /// negotiation) — `sample_kind::negotiate`'s fallback when
+    /// `sample_kinds` is empty (every ordinary, non-polymorphic port).
     type_id: TypeId,
+    /// This port's declared payload alternatives
+    /// (`node.output_sample_kinds`), empty for ordinary single-kind ports.
+    sample_kinds: Vec<SampleKind>,
+    /// One shared subscriber list per concrete `TypeId` this port
+    /// actually exposes — one entry for an ordinary port, one per
+    /// negotiated kind for a polymorphic Sample/SampleBlock port (e.g. a
+    /// raw file channel feeding one `Sample`-only consumer and one
+    /// `SampleBlock`-only consumer at once).
+    lists: Vec<(TypeId, Arc<dyn ErasedSharedSenders>)>,
     /// Protocols this port can actually deliver — `node.output_protocols`
     /// with `EdgeQuery` dropped again if `edge_query` below turned out to
     /// be `None` (index unavailable), so a mismatch between what a node
@@ -276,18 +342,24 @@ impl PipelineManager {
                             sub.from_node, sub.from_port
                         )
                     })?;
-                    if output.type_id != input_schemas[index].type_id {
-                        return Err(format!(
+                    let accepted_kinds = node.input_sample_kinds(index);
+                    let list = negotiate_sample_kind_list(
+                        output,
+                        &accepted_kinds,
+                        input_schemas[index].type_id,
+                    )
+                    .ok_or_else(|| {
+                        format!(
                             "type mismatch: {}.{} -> {}.{}",
                             sub.from_node, sub.from_port, name, input_schemas[index].name
-                        ));
-                    }
+                        )
+                    })?;
                     let accepted = node.input_protocols(index);
                     if let Some(handle) = negotiate_edge_query(output, &accepted) {
                         InputPort::from_type_erased(Box::new(()) as Box<dyn Any + Send>)
                             .with_edge_query(Some(handle))
                     } else {
-                        let (id, rx) = output.list.subscribe(sub.buffer, sub.policy);
+                        let (id, rx) = list.subscribe(sub.buffer, sub.policy);
                         input_subs.push((sub.from_node.clone(), sub.from_port.clone(), id));
                         InputPort::from_type_erased(rx)
                     }
@@ -303,8 +375,7 @@ impl PipelineManager {
         let output_ports: Vec<OutputPort> = output_schemas
             .iter()
             .map(|schema| {
-                let sender = outputs[&schema.name].list.sender_box();
-                OutputPort::from_type_erased(sender).with_watchdog(
+                output_port_from_lists(&outputs[&schema.name]).with_watchdog(
                     self.watchdog.clone(),
                     name.clone(),
                     schema.name.clone(),
@@ -396,7 +467,7 @@ impl PipelineManager {
         let close_handles: Vec<Arc<dyn ErasedSharedSenders>> = entry
             .outputs
             .values()
-            .map(|output| Arc::clone(&output.list))
+            .flat_map(|output| output.lists.iter().map(|(_, list)| Arc::clone(list)))
             .collect();
 
         let thread = std::thread::Builder::new()
@@ -478,7 +549,9 @@ impl PipelineManager {
         self.detach(&node);
         node.stop_flag.store(true, Ordering::Relaxed);
         for output in node.outputs.values() {
-            output.list.close();
+            for (_, list) in &output.lists {
+                list.close();
+            }
         }
         if let Some(thread) = node.thread
             && thread.join().is_err()
@@ -493,7 +566,14 @@ impl PipelineManager {
             if let Some(producer) = self.nodes.get(from_node)
                 && let Some(output) = producer.outputs.get(from_port)
             {
-                output.list.unsubscribe(*sub_id);
+                // Subscription ids are globally unique (one counter shared
+                // across every SharedSenders list, see sender.rs), so
+                // unsubscribing from a list that doesn't hold this id is a
+                // harmless no-op — no need to track which negotiated kind
+                // this particular subscription resolved to.
+                for (_, list) in &output.lists {
+                    list.unsubscribe(*sub_id);
+                }
             }
         }
     }
@@ -558,18 +638,24 @@ impl PipelineManager {
                             sub.from_node, sub.from_port
                         )
                     })?;
-                    if output.type_id != input_schemas[index].type_id {
-                        return Err(format!(
+                    let accepted_kinds = node.input_sample_kinds(index);
+                    let list = negotiate_sample_kind_list(
+                        output,
+                        &accepted_kinds,
+                        input_schemas[index].type_id,
+                    )
+                    .ok_or_else(|| {
+                        format!(
                             "type mismatch: {}.{} -> {}.{}",
                             sub.from_node, sub.from_port, name, input_schemas[index].name
-                        ));
-                    }
+                        )
+                    })?;
                     let accepted = node.input_protocols(index);
                     if let Some(handle) = negotiate_edge_query(output, &accepted) {
                         InputPort::from_type_erased(Box::new(()) as Box<dyn Any + Send>)
                             .with_edge_query(Some(handle))
                     } else {
-                        let (id, rx) = output.list.subscribe(sub.buffer, sub.policy);
+                        let (id, rx) = list.subscribe(sub.buffer, sub.policy);
                         input_subs.push((sub.from_node.clone(), sub.from_port.clone(), id));
                         InputPort::from_type_erased(rx)
                     }
@@ -586,8 +672,7 @@ impl PipelineManager {
         let output_ports: Vec<OutputPort> = output_schemas
             .iter()
             .map(|schema| {
-                let sender = old.outputs[&schema.name].list.sender_box();
-                OutputPort::from_type_erased(sender).with_watchdog(
+                output_port_from_lists(&old.outputs[&schema.name]).with_watchdog(
                     self.watchdog.clone(),
                     name.to_owned(),
                     schema.name.clone(),
@@ -633,12 +718,14 @@ impl PipelineManager {
         let mut events = Vec::new();
         for (name, node) in &self.nodes {
             for (port, output) in &node.outputs {
-                for sub_id in output.list.take_disconnected() {
-                    events.push(DisconnectEvent {
-                        producer: name.clone(),
-                        port: port.clone(),
-                        consumer: consumers.get(&sub_id).map(|s| s.to_string()),
-                    });
+                for (_, list) in &output.lists {
+                    for sub_id in list.take_disconnected() {
+                        events.push(DisconnectEvent {
+                            producer: name.clone(),
+                            port: port.clone(),
+                            consumer: consumers.get(&sub_id).map(|s| s.to_string()),
+                        });
+                    }
                 }
             }
         }
@@ -652,7 +739,9 @@ impl PipelineManager {
         for node in self.nodes.values() {
             node.stop_flag.store(true, Ordering::Relaxed);
             for output in node.outputs.values() {
-                output.list.close();
+                for (_, list) in &output.lists {
+                    list.close();
+                }
             }
         }
         for (name, node) in self.nodes.drain() {
@@ -1223,5 +1312,150 @@ mod tests {
             "consumer never received an EdgeQuery handle even though both \
              sides declared support for it"
         );
+    }
+
+    // ── SampleKind negotiation (live path) ──────────────────────────────
+
+    use crate::runtime::sample::{Sample, SampleBlock};
+
+    /// One output port that can serve `Sample` and `SampleBlock`
+    /// destinations simultaneously — sends exactly one of each, then
+    /// signals completion. Mirrors `pipeline.rs`'s offline
+    /// `MultiKindSource` test, but exercised through the live
+    /// `PipelineManager` path this time (the class of gap that let the
+    /// `ProtocolKind` work silently miss the live app earlier).
+    struct MultiKindSource {
+        sent: bool,
+    }
+    impl ProcessNode for MultiKindSource {
+        fn name(&self) -> &str {
+            "multi_kind_source"
+        }
+        fn num_inputs(&self) -> usize {
+            0
+        }
+        fn num_outputs(&self) -> usize {
+            1
+        }
+        fn output_schema(&self) -> Vec<PortSchema> {
+            vec![PortSchema::new::<Sample>("out", 0, PortDirection::Output)]
+        }
+        fn output_sample_kinds(&self, _port: usize) -> Vec<SampleKind> {
+            vec![SampleKind::Block, SampleKind::Edge]
+        }
+        fn work(&mut self, _inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
+            if self.sent {
+                return Err(WorkError::Shutdown);
+            }
+            self.sent = true;
+            if let Some(sender) = outputs[0].get::<Sample>() {
+                let _ = sender.send(Sample::new(true, 0));
+            }
+            if let Some(sender) = outputs[0].get::<SampleBlock>() {
+                let _ = sender.send(SampleBlock::new(Arc::from([0u8].as_slice()), 0, 1, 1));
+            }
+            Ok(1)
+        }
+    }
+
+    struct SampleSink {
+        got: Arc<Mutex<Vec<Sample>>>,
+    }
+    impl ProcessNode for SampleSink {
+        fn name(&self) -> &str {
+            "sample_sink"
+        }
+        fn num_inputs(&self) -> usize {
+            1
+        }
+        fn num_outputs(&self) -> usize {
+            0
+        }
+        fn input_schema(&self) -> Vec<PortSchema> {
+            vec![PortSchema::new::<Sample>("in", 0, PortDirection::Input)]
+        }
+        fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
+            let mut buf = VecDeque::new();
+            let mut recv = inputs[0].get::<Sample>(&mut buf).unwrap();
+            let item = recv.recv()?;
+            self.got.lock().unwrap().push(item);
+            Ok(1)
+        }
+    }
+
+    struct BlockSink {
+        got: Arc<Mutex<Vec<SampleBlock>>>,
+    }
+    impl ProcessNode for BlockSink {
+        fn name(&self) -> &str {
+            "block_sink"
+        }
+        fn num_inputs(&self) -> usize {
+            1
+        }
+        fn num_outputs(&self) -> usize {
+            0
+        }
+        fn input_schema(&self) -> Vec<PortSchema> {
+            vec![PortSchema::new::<SampleBlock>(
+                "in",
+                0,
+                PortDirection::Input,
+            )]
+        }
+        fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
+            let mut buf = VecDeque::new();
+            let mut recv = inputs[0].get::<SampleBlock>(&mut buf).unwrap();
+            let item = recv.recv()?;
+            self.got.lock().unwrap().push(item);
+            Ok(1)
+        }
+    }
+
+    #[test]
+    fn mixed_kind_fan_out_from_one_port_reaches_both_destinations_live() {
+        // `SampleBlock` isn't a sticky/level type (unlike `Sample`), so a
+        // subscriber added after the source already sent and closed would
+        // genuinely miss it — no amount of pacing makes that safe. Add
+        // every node deferred and start them together instead, so both
+        // sinks are subscribed before the source's thread can run at all
+        // (the same guarantee `start_all_deferred`'s own doc describes
+        // for initial materialization).
+        let mut manager = PipelineManager::new();
+        manager
+            .add_node_deferred(NodeSpec {
+                name: "source".into(),
+                node: Box::new(MultiKindSource { sent: false }),
+                inputs: vec![],
+            })
+            .unwrap();
+
+        let sample_got = Arc::new(Mutex::new(Vec::new()));
+        let block_got = Arc::new(Mutex::new(Vec::new()));
+        manager
+            .add_node_deferred(NodeSpec {
+                name: "sample_sink".into(),
+                node: Box::new(SampleSink {
+                    got: sample_got.clone(),
+                }),
+                inputs: vec![sub("source", "out")],
+            })
+            .unwrap();
+        manager
+            .add_node_deferred(NodeSpec {
+                name: "block_sink".into(),
+                node: Box::new(BlockSink {
+                    got: block_got.clone(),
+                }),
+                inputs: vec![sub("source", "out")],
+            })
+            .unwrap();
+        manager.start_all_deferred().unwrap();
+
+        wait_finished(&manager, Duration::from_secs(5));
+        manager.wait();
+
+        assert_eq!(sample_got.lock().unwrap().len(), 1);
+        assert_eq!(block_got.lock().unwrap().len(), 1);
     }
 }

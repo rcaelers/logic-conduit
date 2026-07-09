@@ -9,6 +9,7 @@ use crate::runtime::Sender;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
 use crate::runtime::sample::{Sample, SampleBlock};
+use crate::runtime::sample_kind::SampleKind;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -335,32 +336,40 @@ impl<A: LogicAnalyzer> ProcessNode for LogicAnalyzerSource<A> {
         0
     }
     fn num_outputs(&self) -> usize {
-        usize::from(self.channels) * 2 + 1
+        // One port per channel (`ch0..chN`, negotiates Sample vs
+        // SampleBlock per connection) plus the raw chunk port.
+        usize::from(self.channels) + 1
     }
 
     fn output_schema(&self) -> Vec<PortSchema> {
         let n = usize::from(self.channels);
-        let mut schema = Vec::with_capacity(n * 2 + 1);
+        let mut schema = Vec::with_capacity(n + 1);
         for i in 0..n {
             schema.push(PortSchema::new::<Sample>(
-                format!("d{i}"),
+                format!("ch{i}"),
                 i,
-                PortDirection::Output,
-            ));
-        }
-        for i in 0..n {
-            schema.push(PortSchema::new::<SampleBlock>(
-                format!("b{i}"),
-                n + i,
                 PortDirection::Output,
             ));
         }
         schema.push(PortSchema::new::<LogicChunk>(
             "raw",
-            n * 2,
+            n,
             PortDirection::Output,
         ));
         schema
+    }
+
+    fn output_sample_kinds(&self, port: usize) -> Vec<SampleKind> {
+        let n = usize::from(self.channels);
+        if port < n {
+            // Block is a near-zero-cost passthrough of the packed-bit
+            // chunk already captured; Edge costs a real bit-walk to
+            // derive RLE edges (see `Demux::push`) — prefer Block, but a
+            // consumer that only wants Edge still gets it.
+            vec![SampleKind::Block, SampleKind::Edge]
+        } else {
+            Vec::new()
+        }
     }
 
     fn work(&mut self, _inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
@@ -376,19 +385,16 @@ impl<A: LogicAnalyzer> ProcessNode for LogicAnalyzerSource<A> {
             .ok_or_else(|| WorkError::NodeError("missing analyzer".into()))?;
         let n = usize::from(self.channels);
         let config = self.config.clone();
+        // Both queries run independently against the same channel port —
+        // it can carry Sample and SampleBlock destinations simultaneously
+        // (negotiated per connection, see `output_sample_kinds`).
         let edge_senders = (0..n)
             .map(|i| outputs.get(i).and_then(|p| p.clone_sender::<Sample>()))
             .collect();
         let block_senders = (0..n)
-            .map(|i| {
-                outputs
-                    .get(n + i)
-                    .and_then(|p| p.clone_sender::<SampleBlock>())
-            })
+            .map(|i| outputs.get(i).and_then(|p| p.clone_sender::<SampleBlock>()))
             .collect();
-        let raw_sender = outputs
-            .get(n * 2)
-            .and_then(|p| p.clone_sender::<LogicChunk>());
+        let raw_sender = outputs.get(n).and_then(|p| p.clone_sender::<LogicChunk>());
         let shutdown = Arc::clone(&self.shutdown);
         let completed = Arc::clone(&self.completed);
         self.handle = Some(

@@ -112,9 +112,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         SpiDecoder::new(SpiMode::Mode0, args.bits_per_word, true, false),
     )?;
     pipeline.add_process("printer", SpiPrinter)?;
-    pipeline.connect("source", &format!("d{}", args.cs), "spi", "cs")?;
-    pipeline.connect("source", &format!("d{}", args.clk), "spi", "clk")?;
-    pipeline.connect("source", &format!("d{}", args.mosi), "spi", "mosi")?;
+    pipeline.connect("source", &format!("ch{}", args.cs), "spi", "cs")?;
+    pipeline.connect("source", &format!("ch{}", args.clk), "spi", "clk")?;
+    pipeline.connect("source", &format!("ch{}", args.mosi), "spi", "mosi")?;
     pipeline.connect("spi", "spi_transfers", "printer", "transfers")?;
     pipeline.build()?.wait();
     Ok(())

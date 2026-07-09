@@ -902,14 +902,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wire SPI decoder inputs from source
     pipeline.connect(
         "source",
-        &format!("d{}", args.spi_clk),
+        &format!("ch{}", args.spi_clk),
         "spi_decoder",
         "clk",
     )?;
-    pipeline.connect("source", &format!("d{}", args.spi_cs), "spi_decoder", "cs")?;
     pipeline.connect(
         "source",
-        &format!("d{}", args.spi_mosi),
+        &format!("ch{}", args.spi_cs),
+        "spi_decoder",
+        "cs",
+    )?;
+    pipeline.connect(
+        "source",
+        &format!("ch{}", args.spi_mosi),
         "spi_decoder",
         "mosi",
     )?;
@@ -958,7 +963,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wire parallel decoder strobe from source (block channel, small buffer — each block is ~2MB)
     pipeline.connect_with_buffer(
         "source",
-        &format!("b{}", args.parallel_strobe),
+        &format!("ch{}", args.parallel_strobe),
         "parallel_decoder",
         "strobe",
         4,
@@ -968,7 +973,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (i, &channel) in args.parallel_data.iter().enumerate() {
         pipeline.connect_with_buffer(
             "source",
-            &format!("b{}", channel),
+            &format!("ch{}", channel),
             "parallel_decoder",
             &format!("d{}", i),
             4,
@@ -978,7 +983,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wire CS from source to parallel_decoder (block channel)
     pipeline.connect_with_buffer(
         "source",
-        &format!("b{}", args.spi_cs),
+        &format!("ch{}", args.spi_cs),
         "parallel_decoder",
         "cs",
         4,
@@ -1018,7 +1023,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Connect TGCK from source to writer
-    pipeline.connect("source", &format!("d{}", args.tgck), "writer", "tgck")?;
+    pipeline.connect("source", &format!("ch{}", args.tgck), "writer", "tgck")?;
 
     // Build and run
     info!("Building pipeline...");

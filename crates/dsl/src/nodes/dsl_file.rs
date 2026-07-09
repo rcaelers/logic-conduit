@@ -11,7 +11,7 @@ use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkResult};
 use crate::runtime::sample::{Sample, SampleBlock};
 use crate::runtime::{
     BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureSource,
-    CaptureTransition, DslHeader, DslSampledWindow, EdgeQuery, ProtocolKind, Sender,
+    CaptureTransition, DslHeader, DslSampledWindow, EdgeQuery, ProtocolKind, SampleKind, Sender,
 };
 use crate::runtime::{CaptureIndexProgress, IndexSampler};
 use crate::{Error, Result};
@@ -959,38 +959,36 @@ impl ProcessNode for DslFileSource {
     }
 
     fn num_outputs(&self) -> usize {
-        // Edge ports (d0..dN) + Block ports (b0..bN)
-        self.num_channels as usize * 2
+        // One port per channel, `ch0..chN` — negotiates Sample vs
+        // SampleBlock per connection (see `output_sample_kinds`) instead
+        // of exposing separate `d`/`b` ports for each.
+        self.num_channels as usize
     }
 
     fn output_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
         use crate::runtime::ports::{PortDirection, PortSchema};
 
-        let mut schemas: Vec<PortSchema> = (0..self.num_channels)
+        (0..self.num_channels)
             .map(|i| {
-                PortSchema::new::<Sample>(format!("d{}", i), i as usize, PortDirection::Output)
+                PortSchema::new::<Sample>(format!("ch{}", i), i as usize, PortDirection::Output)
             })
-            .collect();
-
-        // Block output ports: b0, b1, ..., bN
-        let offset = self.num_channels as usize;
-        for i in 0..self.num_channels {
-            schemas.push(PortSchema::new::<SampleBlock>(
-                format!("b{}", i),
-                offset + i as usize,
-                PortDirection::Output,
-            ));
-        }
-
-        schemas
+            .collect()
     }
 
     fn output_protocols(&self, _port: usize) -> Vec<ProtocolKind> {
-        // Every d/b port aliases a raw file channel, so every port can be
-        // answered from the waveform index — prefer that, fall back to
+        // Every channel port aliases a raw file channel, so every port can
+        // be answered from the waveform index — prefer that, fall back to
         // streaming for consumers (or live sources with no index) that
         // don't ask for it.
         vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]
+    }
+
+    fn output_sample_kinds(&self, _port: usize) -> Vec<SampleKind> {
+        // Block is a near-zero-cost passthrough of the on-disk block;
+        // Edge costs a real bit-walk to derive RLE edges (see
+        // `block_reader_thread`/`channel_reader_thread` below) — prefer
+        // Block, but a consumer that only wants Edge still gets it.
+        vec![SampleKind::Block, SampleKind::Edge]
     }
 
     fn edge_query(
@@ -998,7 +996,7 @@ impl ProcessNode for DslFileSource {
         port: usize,
         _input_queries: &[Option<Arc<dyn EdgeQuery>>],
     ) -> Option<Arc<dyn EdgeQuery>> {
-        let channel = port % self.num_channels as usize;
+        let channel = port;
         let sampler = self.edge_index_handle()?;
         // Honor `with_max_samples` the same way the streaming reader
         // threads do, so a bounded source behaves identically regardless
@@ -1037,29 +1035,24 @@ impl ProcessNode for DslFileSource {
         );
 
         // Collect all channel-destination pairs to spawn threads for
-        // Each destination gets its own independent reader thread
+        // Each destination gets its own independent reader thread. Every
+        // channel has exactly one output port now, but that port can
+        // carry `Sample` and `SampleBlock` destinations simultaneously
+        // (negotiated per connection — see `output_sample_kinds`), so
+        // both queries run independently against the same port.
         let mut edge_thread_configs: Vec<(usize, usize, Sender<Sample>)> = Vec::new();
         let mut block_thread_configs: Vec<(usize, usize, Sender<SampleBlock>)> = Vec::new();
 
-        // Edge outputs: ports 0..num_channels
         for channel_idx in 0..self.num_channels as usize {
-            if let Some(senders) = outputs
-                .get(channel_idx)
-                .and_then(|port| port.split_senders::<Sample>())
-            {
+            let Some(port) = outputs.get(channel_idx) else {
+                continue;
+            };
+            if let Some(senders) = port.split_senders::<Sample>() {
                 for (dest_idx, sender) in senders.into_iter().enumerate() {
                     edge_thread_configs.push((channel_idx, dest_idx, sender));
                 }
             }
-        }
-
-        // Block outputs: ports num_channels..2*num_channels
-        let block_offset = self.num_channels as usize;
-        for channel_idx in 0..self.num_channels as usize {
-            if let Some(senders) = outputs
-                .get(block_offset + channel_idx)
-                .and_then(|port| port.split_senders::<SampleBlock>())
-            {
+            if let Some(senders) = port.split_senders::<SampleBlock>() {
                 for (dest_idx, sender) in senders.into_iter().enumerate() {
                     block_thread_configs.push((channel_idx, dest_idx, sender));
                 }
@@ -1361,7 +1354,7 @@ mod tests {
         if let Ok(source) = result {
             assert_eq!(source.num_channels(), 8);
             assert_eq!(source.num_inputs(), 0); // Source node
-            assert_eq!(source.num_outputs(), 16); // 8 edge + 8 block ports
+            assert_eq!(source.num_outputs(), 8); // one port per channel
             assert_eq!(source.name(), "dsl_file_source");
 
             // Check header parsing
@@ -1542,7 +1535,7 @@ mod tests {
         assert!(result.is_ok());
         if let Ok(source) = result {
             assert_eq!(source.num_channels(), 1);
-            assert_eq!(source.num_outputs(), 2); // 1 edge + 1 block
+            assert_eq!(source.num_outputs(), 1); // one port per channel
         }
 
         // Test maximum valid within file's channels (11)
@@ -1550,7 +1543,7 @@ mod tests {
         assert!(result.is_ok());
         if let Ok(source) = result {
             assert_eq!(source.num_channels(), 11);
-            assert_eq!(source.num_outputs(), 22); // 11 edge + 11 block
+            assert_eq!(source.num_outputs(), 11); // one port per channel
         }
     }
 

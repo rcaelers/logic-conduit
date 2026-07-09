@@ -122,10 +122,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     pipeline.add_process("spi", SpiDecoder::new(SpiMode::Mode0, 8, true, false))?;
     pipeline.add_process("printer", Printer)?;
     pipeline.add_process("cs_printer", CsPrinter { previous: None })?;
-    pipeline.connect("source", "d0", "spi", "cs")?;
-    pipeline.connect("source", "d0", "cs_printer", "cs")?;
-    pipeline.connect("source", "d1", "spi", "clk")?;
-    pipeline.connect("source", "d2", "spi", "mosi")?;
+    pipeline.connect("source", "ch0", "spi", "cs")?;
+    pipeline.connect("source", "ch0", "cs_printer", "cs")?;
+    pipeline.connect("source", "ch1", "spi", "clk")?;
+    pipeline.connect("source", "ch2", "spi", "mosi")?;
     pipeline.connect("spi", "spi_transfers", "printer", "transfers")?;
     pipeline.build()?.wait();
     Ok(())

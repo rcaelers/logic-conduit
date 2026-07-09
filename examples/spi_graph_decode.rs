@@ -145,14 +145,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── SPI control path ─────────────────────────────────────────────────
     pipeline.connect(
         "source",
-        &format!("d{}", args.spi_clk),
+        &format!("ch{}", args.spi_clk),
         "spi_decoder",
         "clk",
     )?;
-    pipeline.connect("source", &format!("d{}", args.spi_cs), "spi_decoder", "cs")?;
     pipeline.connect(
         "source",
-        &format!("d{}", args.spi_mosi),
+        &format!("ch{}", args.spi_cs),
+        "spi_decoder",
+        "cs",
+    )?;
+    pipeline.connect(
+        "source",
+        &format!("ch{}", args.spi_mosi),
         "spi_decoder",
         "mosi",
     )?;
@@ -182,7 +187,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Data path (block channels; each block ≈ 2 MB) ────────────────────
     pipeline.connect_with_buffer(
         "source",
-        &format!("b{}", args.parallel_strobe),
+        &format!("ch{}", args.parallel_strobe),
         "parallel_decoder",
         "strobe",
         4,
@@ -190,7 +195,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (i, &channel) in args.parallel_data.iter().enumerate() {
         pipeline.connect_with_buffer(
             "source",
-            &format!("b{}", channel),
+            &format!("ch{}", channel),
             "parallel_decoder",
             &format!("d{}", i),
             4,
@@ -198,7 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     pipeline.connect_with_buffer(
         "source",
-        &format!("b{}", args.spi_cs),
+        &format!("ch{}", args.spi_cs),
         "parallel_decoder",
         "cs",
         4,

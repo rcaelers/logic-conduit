@@ -12,6 +12,7 @@ pub mod node;
 pub mod pipeline;
 pub mod ports;
 pub mod protocol;
+pub mod sample_kind;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod raw_block_cache;
 pub mod receiver;
@@ -48,6 +49,7 @@ pub type AppManager = CooperativeManager;
 pub use node::{ConfigOutcome, ConfigValue, NodeConfig, ProcessNode};
 pub use ports::{InputPort, OutputPort, Pipeline, PortDirection, PortSchema, register_type};
 pub use protocol::ProtocolKind;
+pub use sample_kind::SampleKind;
 pub use receiver::{Receiver, ReceiverSelector};
 pub use sample::Sample;
 pub use sample::SampleBlock;

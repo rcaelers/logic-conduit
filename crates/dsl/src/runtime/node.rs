@@ -15,6 +15,7 @@ pub use super::sender::Sender;
 
 use super::edge_query::EdgeQuery;
 use super::protocol::ProtocolKind;
+use super::sample_kind::SampleKind;
 use std::sync::Arc;
 
 /// A configuration value delivered to a running node (live reconfiguration,
@@ -141,6 +142,25 @@ pub trait ProcessNode: Send {
     ) -> Option<Arc<dyn EdgeQuery>> {
         None
     }
+
+    /// Payload kinds (`Sample` vs `SampleBlock`) this node can produce on
+    /// output port `port`, most preferred first. Every wiring path
+    /// negotiates a connection's concrete type by intersecting this with
+    /// the consumer's [`input_sample_kinds`](Self::input_sample_kinds) —
+    /// see [`super::sample_kind::negotiate`]. Default: empty, meaning
+    /// "not polymorphic — this port's declared `PortSchema` type is the
+    /// only option," which is every node except a handful of raw-channel
+    /// sources (`DslFileSource`, `LogicAnalyzerSource`).
+    fn output_sample_kinds(&self, _port: usize) -> Vec<SampleKind> {
+        Vec::new()
+    }
+
+    /// Payload kinds this node can accept on input port `port`, most
+    /// preferred first. See
+    /// [`output_sample_kinds`](Self::output_sample_kinds).
+    fn input_sample_kinds(&self, _port: usize) -> Vec<SampleKind> {
+        Vec::new()
+    }
 }
 
 /// Forwarding impl so factories (e.g. the graph compiler) can hand
@@ -188,5 +208,11 @@ impl ProcessNode for Box<dyn ProcessNode> {
         input_queries: &[Option<Arc<dyn EdgeQuery>>],
     ) -> Option<Arc<dyn EdgeQuery>> {
         (**self).edge_query(port, input_queries)
+    }
+    fn output_sample_kinds(&self, port: usize) -> Vec<SampleKind> {
+        (**self).output_sample_kinds(port)
+    }
+    fn input_sample_kinds(&self, port: usize) -> Vec<SampleKind> {
+        (**self).input_sample_kinds(port)
     }
 }

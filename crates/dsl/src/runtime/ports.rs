@@ -154,20 +154,48 @@ impl InputPort {
     }
 }
 
-/// Type-erased output port wrapping a Sender<T>
+/// Type-erased output port wrapping one or more `Sender<T>`s.
+///
+/// Usually exactly one concrete `T` (as many ports as exist today). A port
+/// backed by a node that negotiated [`super::sample_kind::SampleKind`]
+/// with more than one destination can hold *both* a `Sender<Sample>` and a
+/// `Sender<SampleBlock>` at once — `SampleKind` is a closed two-variant
+/// enum, so a `Vec` scanned linearly is simpler and cheaper here than a
+/// `HashMap` would be, and this is only ever looked up at node-startup
+/// time, not per-sample.
 pub struct OutputPort {
-    channel: Box<dyn std::any::Any + Send>,
+    channels: Vec<(TypeId, Box<dyn std::any::Any + Send>)>,
     watchdog_handle: Option<WatchdogHandle>,
 }
 
 impl OutputPort {
-    /// Create from type-erased box (for internal use by Pipeline).
-    /// Watchdog must be attached via with_watchdog() before use.
-    pub(crate) fn from_type_erased(channel: Box<dyn std::any::Any + Send>) -> Self {
+    /// Create from a type-erased box holding a `Sender<T>` (for internal
+    /// use by Pipeline). `payload_type` must be `TypeId::of::<T>()` — the
+    /// *payload* type `get::<T>()`/`split_senders::<T>()` will look up by,
+    /// **not** `channel`'s own `Any::type_id()` (which would be
+    /// `TypeId::of::<Sender<T>>()`, the wrapper, always different from
+    /// `T`). Watchdog must be attached via with_watchdog() before use.
+    pub(crate) fn from_type_erased(
+        payload_type: TypeId,
+        channel: Box<dyn std::any::Any + Send>,
+    ) -> Self {
         Self {
-            channel,
+            channels: vec![(payload_type, channel)],
             watchdog_handle: None,
         }
+    }
+
+    /// Adds a second concretely-typed sender to this port (internal use by
+    /// `Pipeline::build`/`PipelineManager` when a producer negotiated more
+    /// than one `SampleKind` for the same logical port). Same `payload_type`
+    /// caveat as [`Self::from_type_erased`].
+    pub(crate) fn extend_type_erased(
+        mut self,
+        payload_type: TypeId,
+        channel: Box<dyn std::any::Any + Send>,
+    ) -> Self {
+        self.channels.push((payload_type, channel));
+        self
     }
 
     /// Create a new OutputPort with a watchdog (for testing).
@@ -178,7 +206,7 @@ impl OutputPort {
         port_name: &str,
     ) -> Self {
         Self {
-            channel: Box::new(sender),
+            channels: vec![(TypeId::of::<T>(), Box::new(sender))],
             watchdog_handle: Some(watchdog.register_port(node_name, "send", port_name)),
         }
     }
@@ -194,6 +222,13 @@ impl OutputPort {
         self
     }
 
+    fn find<T: 'static>(&self) -> Option<&Sender<T>> {
+        self.channels
+            .iter()
+            .find(|(type_id, _)| *type_id == TypeId::of::<T>())
+            .and_then(|(_, boxed)| boxed.downcast_ref::<Sender<T>>())
+    }
+
     /// Get a Sender with automatic watchdog monitoring.
     /// Returns an owned sender (cheaply cloned from internal storage).
     ///
@@ -202,7 +237,7 @@ impl OutputPort {
     /// # Panics
     /// Panics if watchdog has not been attached to this port.
     pub fn get<T: Send + Clone + 'static>(&self) -> Option<Sender<T>> {
-        let sender = self.channel.downcast_ref::<Sender<T>>()?;
+        let sender = self.find::<T>()?;
         let watchdog = self.watchdog_handle.as_ref().expect(
             "OutputPort.get() called before watchdog attached - this is a bug in the pipeline",
         );
@@ -212,7 +247,7 @@ impl OutputPort {
     /// Clone the underlying Sender for this port.
     /// Used by nodes that spawn their own worker threads (e.g., DslFileSource).
     pub fn clone_sender<T: Send + Clone + 'static>(&self) -> Option<Sender<T>> {
-        self.channel.downcast_ref::<Sender<T>>().cloned()
+        self.find::<T>().cloned()
     }
 
     /// Split the underlying broadcast Sender into individual senders (one per destination).
@@ -222,9 +257,11 @@ impl OutputPort {
     /// sends to exactly one destination.
     ///
     /// Returns None if the port doesn't contain a Sender<T>, or if the sender
-    /// has no destinations.
+    /// has no destinations. A port carrying more than one `SampleKind`
+    /// (see the struct doc) is queried independently per `T` — each call
+    /// only sees the destinations that negotiated that particular type.
     pub fn split_senders<T: Send + Clone + 'static>(&self) -> Option<Vec<Sender<T>>> {
-        let sender = self.channel.downcast_ref::<Sender<T>>()?;
+        let sender = self.find::<T>()?;
         let splits = sender.split_senders();
         if splits.is_empty() {
             None

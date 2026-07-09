@@ -996,13 +996,13 @@ mod tests {
             .add_process("collect", CollectWords(collected.clone()))
             .unwrap();
 
-        pipeline.connect("source", "b10", "decoder", "strobe").unwrap();
+        pipeline.connect("source", "ch10", "decoder", "strobe").unwrap();
         for bit in 0..8 {
             pipeline
-                .connect("source", &format!("b{bit}"), "decoder", &format!("d{bit}"))
+                .connect("source", &format!("ch{bit}"), "decoder", &format!("d{bit}"))
                 .unwrap();
         }
-        pipeline.connect("source", "b8", "decoder", "cs").unwrap();
+        pipeline.connect("source", "ch8", "decoder", "cs").unwrap();
         pipeline
             .connect("decoder", "words", "collect", "data")
             .unwrap();

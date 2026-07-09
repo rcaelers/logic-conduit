@@ -25,8 +25,10 @@ impl RuntimeBuilder for FileSourceBuilder {
     fn output_port(&self, socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
         let channel = socket.def_index;
         match kind {
-            PortKind::SampleEdge => Some(format!("d{channel}")),
-            PortKind::Block => Some(format!("b{channel}")),
+            // The runtime negotiates Sample vs SampleBlock per connection
+            // on a single `ch{channel}` port now — both kinds resolve to
+            // the same port name here.
+            PortKind::SampleEdge | PortKind::Block => Some(format!("ch{channel}")),
             _ => None,
         }
     }

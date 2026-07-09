@@ -5,6 +5,7 @@ use super::errors::ConnectionError;
 use super::node::{InputPort, OutputPort, ProcessNode};
 use super::ports::PortSchema;
 use super::protocol::ProtocolKind;
+use super::sample_kind::{self, SampleKind};
 use super::scheduler::Scheduler;
 use super::type_registry::TYPE_REGISTRY;
 use std::any::{Any, TypeId};
@@ -12,11 +13,24 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
 
+/// Cached per-node schema data, computed once in `add_process` while the
+/// node is still locally owned. `input_kinds`/`output_kinds` are indexed
+/// by port index (same convention as `output_protocols`/`edge_query`),
+/// not list position — `SampleKind` negotiation is pure and cheap (unlike
+/// `EdgeQuery`, which needs a live node reference), so it's safe to
+/// resolve fully at `connect()` time from this cache alone.
+struct NodeSchemas {
+    inputs: Vec<PortSchema>,
+    outputs: Vec<PortSchema>,
+    input_kinds: Vec<Vec<SampleKind>>,
+    output_kinds: Vec<Vec<SampleKind>>,
+}
+
 /// Pipeline builder that manages nodes and connections
 pub struct Pipeline {
     nodes: Vec<(usize, Box<dyn ProcessNode>)>,
     node_names: HashMap<String, usize>,
-    node_schemas: HashMap<usize, (Vec<PortSchema>, Vec<PortSchema>)>,
+    node_schemas: HashMap<usize, NodeSchemas>,
     connections: Vec<PendingConnection>,
     next_id: usize,
     default_buffer_size: usize,
@@ -62,14 +76,27 @@ impl Pipeline {
             return Err(format!("Node with name '{}' already exists", name));
         }
 
-        let input_schemas = node.input_schema();
-        let output_schemas = node.output_schema();
+        let inputs = node.input_schema();
+        let outputs = node.output_schema();
+        let input_kinds = (0..node.num_inputs())
+            .map(|i| node.input_sample_kinds(i))
+            .collect();
+        let output_kinds = (0..node.num_outputs())
+            .map(|i| node.output_sample_kinds(i))
+            .collect();
 
         let id = self.next_id;
         self.next_id += 1;
 
-        self.node_schemas
-            .insert(id, (input_schemas.clone(), output_schemas.clone()));
+        self.node_schemas.insert(
+            id,
+            NodeSchemas {
+                inputs,
+                outputs,
+                input_kinds,
+                output_kinds,
+            },
+        );
         self.node_names.insert(name, id);
         self.nodes.push((id, Box::new(node)));
 
@@ -113,17 +140,18 @@ impl Pipeline {
             .ok_or_else(|| Box::new(ConnectionError::NodeNotFound(to_node.to_string())))?;
 
         // Get schemas
-        let (_, from_outputs) = self
+        let from_node_schemas = self
             .node_schemas
             .get(&from_id)
             .ok_or_else(|| Box::new(ConnectionError::NodeNotFound(from_node.to_string())))?;
-        let (to_inputs, _) = self
+        let to_node_schemas = self
             .node_schemas
             .get(&to_id)
             .ok_or_else(|| Box::new(ConnectionError::NodeNotFound(to_node.to_string())))?;
 
         // Find output port
-        let from_schema = from_outputs
+        let from_schema = from_node_schemas
+            .outputs
             .iter()
             .find(|s| s.name == from_port)
             .ok_or_else(|| {
@@ -134,7 +162,8 @@ impl Pipeline {
             })?;
 
         // Find input port
-        let to_schema = to_inputs
+        let to_schema = to_node_schemas
+            .inputs
             .iter()
             .find(|s| s.name == to_port)
             .ok_or_else(|| {
@@ -144,17 +173,24 @@ impl Pipeline {
                 })
             })?;
 
-        // Type check
-        if from_schema.type_id != to_schema.type_id {
-            return Err(Box::new(ConnectionError::TypeMismatch {
-                from_node: from_node.to_string(),
-                from_port: from_port.to_string(),
-                from_type: from_schema.type_id,
-                to_node: to_node.to_string(),
-                to_port: to_port.to_string(),
-                to_type: to_schema.type_id,
-            }));
-        }
+        // Negotiate the connection's concrete payload type: an exact
+        // type_id match if neither side declared a SampleKind list (every
+        // node except a handful of raw-channel sources), otherwise the
+        // producer-preferred kind both sides agree on.
+        let offered = &from_node_schemas.output_kinds[from_schema.index];
+        let accepted = &to_node_schemas.input_kinds[to_schema.index];
+        let negotiated_type =
+            sample_kind::negotiate(offered, from_schema.type_id, accepted, to_schema.type_id)
+                .ok_or_else(|| {
+                    Box::new(ConnectionError::TypeMismatch {
+                        from_node: from_node.to_string(),
+                        from_port: from_port.to_string(),
+                        from_type: from_schema.type_id,
+                        to_node: to_node.to_string(),
+                        to_port: to_port.to_string(),
+                        to_type: to_schema.type_id,
+                    })
+                })?;
 
         // Check for duplicate connection to same input port
         if self
@@ -174,7 +210,7 @@ impl Pipeline {
             from_port: from_schema.index,
             to_node: to_id,
             to_port: to_schema.index,
-            type_id: from_schema.type_id,
+            type_id: negotiated_type,
             buffer_size,
         });
 
@@ -187,11 +223,12 @@ impl Pipeline {
             .node_names
             .get(name)
             .ok_or_else(|| format!("Node '{}' not found", name))?;
-        let (inputs, _) = self
+        let schemas = self
             .node_schemas
             .get(id)
             .ok_or_else(|| format!("Node '{}' not found", name))?;
-        inputs
+        schemas
+            .inputs
             .iter()
             .find(|s| s.name == port)
             .ok_or_else(|| format!("Input port '{}' not found on node '{}'", port, name))
@@ -203,11 +240,12 @@ impl Pipeline {
             .node_names
             .get(name)
             .ok_or_else(|| format!("Node '{}' not found", name))?;
-        let (_, outputs) = self
+        let schemas = self
             .node_schemas
             .get(id)
             .ok_or_else(|| format!("Node '{}' not found", name))?;
-        outputs
+        schemas
+            .outputs
             .iter()
             .find(|s| s.name == port)
             .ok_or_else(|| format!("Output port '{}' not found on node '{}'", port, name))
@@ -219,11 +257,11 @@ impl Pipeline {
             .node_names
             .get(name)
             .ok_or_else(|| format!("Node '{}' not found", name))?;
-        let (inputs, _) = self
+        let schemas = self
             .node_schemas
             .get(id)
             .ok_or_else(|| format!("Node '{}' not found", name))?;
-        Ok(inputs.as_slice())
+        Ok(schemas.inputs.as_slice())
     }
 
     /// List all output ports for a node by name
@@ -232,11 +270,11 @@ impl Pipeline {
             .node_names
             .get(name)
             .ok_or_else(|| format!("Node '{}' not found", name))?;
-        let (_, outputs) = self
+        let schemas = self
             .node_schemas
             .get(id)
             .ok_or_else(|| format!("Node '{}' not found", name))?;
-        Ok(outputs.as_slice())
+        Ok(schemas.outputs.as_slice())
     }
 
     /// List all node names
@@ -320,7 +358,12 @@ impl Pipeline {
         // unconnected in Phase 2 below (e.g. a self-threading source's
         // per-destination thread simply doesn't spawn for it).
         let mut receivers: HashMap<PortKey, Box<dyn Any + Send>> = HashMap::new();
-        let mut senders: HashMap<PortKey, (TypeId, Vec<Box<dyn Any + Send>>)> = HashMap::new();
+        // Per (node, port): one (TypeId, senders) group per negotiated
+        // TypeId — a port whose destinations negotiated different
+        // SampleKinds (e.g. one Edge, one Block) ends up with more than
+        // one group, and Phase 2 folds each into the same OutputPort.
+        type SenderGroup = (TypeId, Vec<Box<dyn Any + Send>>);
+        let mut senders: HashMap<PortKey, Vec<SenderGroup>> = HashMap::new();
         let mut input_edge_queries: HashMap<PortKey, Arc<dyn EdgeQuery>> = HashMap::new();
 
         for (conn, &protocol) in self.connections.iter().zip(&protocols) {
@@ -331,11 +374,11 @@ impl Pipeline {
                         .ok_or_else(|| format!("Type {:?} not registered. Call register_type::<T>() before building pipeline.", conn.type_id))?;
 
                     receivers.insert((conn.to_node, conn.to_port), rx);
-                    senders
-                        .entry((conn.from_node, conn.from_port))
-                        .or_insert_with(|| (conn.type_id, Vec::new()))
-                        .1
-                        .push(tx);
+                    let groups = senders.entry((conn.from_node, conn.from_port)).or_default();
+                    match groups.iter_mut().find(|(type_id, _)| *type_id == conn.type_id) {
+                        Some((_, list)) => list.push(tx),
+                        None => groups.push((conn.type_id, vec![tx])),
+                    }
                 }
                 ProtocolKind::EdgeQuery => {
                     let handle = edge_queries[&(conn.from_node, conn.from_port)].clone();
@@ -380,14 +423,22 @@ impl Pipeline {
             // Collect outputs (unconnected outputs are allowed - nodes must check before sending)
             let output_ports: Result<Vec<_>, String> = (0..num_outputs)
                 .map(|i| {
-                    let port = if let Some((type_id, sender_list)) = senders.remove(&(node_id, i)) {
-                        registry
-                            .wrap_output(type_id, sender_list)
-                            .map(OutputPort::from_type_erased)?
-                    } else {
+                    let groups = senders.remove(&(node_id, i)).unwrap_or_default();
+                    let mut port: Option<OutputPort> = None;
+                    for (type_id, sender_list) in groups {
+                        let boxed = registry.wrap_output(type_id, sender_list)?;
+                        port = Some(match port {
+                            None => OutputPort::from_type_erased(type_id, boxed),
+                            Some(p) => p.extend_type_erased(type_id, boxed),
+                        });
+                    }
+                    let port = port.unwrap_or_else(|| {
                         // Unconnected output: use dummy port
-                        OutputPort::from_type_erased(Box::new(()) as Box<dyn Any + Send>)
-                    };
+                        OutputPort::from_type_erased(
+                            TypeId::of::<()>(),
+                            Box::new(()) as Box<dyn Any + Send>,
+                        )
+                    });
 
                     // Inject watchdog context
                     let port_name = output_schemas
@@ -649,5 +700,237 @@ mod tests {
         assert_eq!(nodes.len(), 2);
         assert!(nodes.contains(&"source"));
         assert!(nodes.contains(&"sink"));
+    }
+
+    // ── SampleKind negotiation ──────────────────────────────────────────
+
+    use crate::runtime::sample::SampleBlock;
+    use std::sync::Mutex;
+
+    /// One output port that can serve `Sample` and `SampleBlock`
+    /// destinations simultaneously — sends exactly one of each, then
+    /// signals completion.
+    struct MultiKindSource {
+        sent: bool,
+    }
+    impl ProcessNode for MultiKindSource {
+        fn name(&self) -> &str {
+            "multi_kind_source"
+        }
+        fn num_inputs(&self) -> usize {
+            0
+        }
+        fn num_outputs(&self) -> usize {
+            1
+        }
+        fn output_schema(&self) -> Vec<PortSchema> {
+            vec![PortSchema::new::<Sample>(
+                "out",
+                0,
+                crate::runtime::ports::PortDirection::Output,
+            )]
+        }
+        fn output_sample_kinds(&self, _port: usize) -> Vec<SampleKind> {
+            vec![SampleKind::Block, SampleKind::Edge]
+        }
+        fn work(
+            &mut self,
+            _inputs: &[InputPort],
+            outputs: &[OutputPort],
+        ) -> crate::runtime::errors::WorkResult<usize> {
+            if self.sent {
+                return Err(crate::runtime::errors::WorkError::Shutdown);
+            }
+            self.sent = true;
+            if let Some(sender) = outputs[0].get::<Sample>() {
+                let _ = sender.send(Sample::new(true, 0));
+            }
+            if let Some(sender) = outputs[0].get::<SampleBlock>() {
+                let _ = sender.send(SampleBlock::new(Arc::from([0u8].as_slice()), 0, 1, 1));
+            }
+            Ok(1)
+        }
+    }
+
+    struct SampleSink {
+        got: Arc<Mutex<Vec<Sample>>>,
+    }
+    impl ProcessNode for SampleSink {
+        fn name(&self) -> &str {
+            "sample_sink"
+        }
+        fn num_inputs(&self) -> usize {
+            1
+        }
+        fn num_outputs(&self) -> usize {
+            0
+        }
+        fn input_schema(&self) -> Vec<PortSchema> {
+            vec![PortSchema::new::<Sample>(
+                "in",
+                0,
+                crate::runtime::ports::PortDirection::Input,
+            )]
+        }
+        fn work(
+            &mut self,
+            inputs: &[InputPort],
+            _outputs: &[OutputPort],
+        ) -> crate::runtime::errors::WorkResult<usize> {
+            let mut buf = std::collections::VecDeque::new();
+            let mut recv = inputs[0].get::<Sample>(&mut buf).unwrap();
+            let item = recv.recv()?;
+            self.got.lock().unwrap().push(item);
+            Ok(1)
+        }
+    }
+
+    struct BlockSink {
+        got: Arc<Mutex<Vec<SampleBlock>>>,
+    }
+    impl ProcessNode for BlockSink {
+        fn name(&self) -> &str {
+            "block_sink"
+        }
+        fn num_inputs(&self) -> usize {
+            1
+        }
+        fn num_outputs(&self) -> usize {
+            0
+        }
+        fn input_schema(&self) -> Vec<PortSchema> {
+            vec![PortSchema::new::<SampleBlock>(
+                "in",
+                0,
+                crate::runtime::ports::PortDirection::Input,
+            )]
+        }
+        fn work(
+            &mut self,
+            inputs: &[InputPort],
+            _outputs: &[OutputPort],
+        ) -> crate::runtime::errors::WorkResult<usize> {
+            let mut buf = std::collections::VecDeque::new();
+            let mut recv = inputs[0].get::<SampleBlock>(&mut buf).unwrap();
+            let item = recv.recv()?;
+            self.got.lock().unwrap().push(item);
+            Ok(1)
+        }
+    }
+
+    #[test]
+    fn mixed_kind_fan_out_from_one_port_reaches_both_destinations() {
+        let mut pipeline = Pipeline::new();
+        pipeline
+            .add_process("source", MultiKindSource { sent: false })
+            .unwrap();
+        let sample_got = Arc::new(Mutex::new(Vec::new()));
+        let block_got = Arc::new(Mutex::new(Vec::new()));
+        pipeline
+            .add_process(
+                "sample_sink",
+                SampleSink {
+                    got: sample_got.clone(),
+                },
+            )
+            .unwrap();
+        pipeline
+            .add_process(
+                "block_sink",
+                BlockSink {
+                    got: block_got.clone(),
+                },
+            )
+            .unwrap();
+
+        // Same producer port, negotiated onto two different SampleKinds
+        // for its two destinations.
+        pipeline
+            .connect("source", "out", "sample_sink", "in")
+            .unwrap();
+        pipeline
+            .connect("source", "out", "block_sink", "in")
+            .unwrap();
+
+        pipeline.build().unwrap().wait();
+
+        assert_eq!(sample_got.lock().unwrap().len(), 1);
+        assert_eq!(block_got.lock().unwrap().len(), 1);
+    }
+
+    /// A port that only offers `Edge`, connected to a consumer that only
+    /// accepts `Block` — no common kind, must still reject with
+    /// `TypeMismatch` (not silently pick one).
+    struct EdgeOnlySource;
+    impl ProcessNode for EdgeOnlySource {
+        fn name(&self) -> &str {
+            "edge_only_source"
+        }
+        fn num_inputs(&self) -> usize {
+            0
+        }
+        fn num_outputs(&self) -> usize {
+            1
+        }
+        fn output_schema(&self) -> Vec<PortSchema> {
+            vec![PortSchema::new::<Sample>(
+                "out",
+                0,
+                crate::runtime::ports::PortDirection::Output,
+            )]
+        }
+        fn output_sample_kinds(&self, _port: usize) -> Vec<SampleKind> {
+            vec![SampleKind::Edge]
+        }
+        fn work(
+            &mut self,
+            _inputs: &[InputPort],
+            _outputs: &[OutputPort],
+        ) -> crate::runtime::errors::WorkResult<usize> {
+            Err(crate::runtime::errors::WorkError::Shutdown)
+        }
+    }
+
+    struct BlockOnlySink;
+    impl ProcessNode for BlockOnlySink {
+        fn name(&self) -> &str {
+            "block_only_sink"
+        }
+        fn num_inputs(&self) -> usize {
+            1
+        }
+        fn num_outputs(&self) -> usize {
+            0
+        }
+        fn input_schema(&self) -> Vec<PortSchema> {
+            vec![PortSchema::new::<SampleBlock>(
+                "in",
+                0,
+                crate::runtime::ports::PortDirection::Input,
+            )]
+        }
+        fn input_sample_kinds(&self, _port: usize) -> Vec<SampleKind> {
+            vec![SampleKind::Block]
+        }
+        fn work(
+            &mut self,
+            _inputs: &[InputPort],
+            _outputs: &[OutputPort],
+        ) -> crate::runtime::errors::WorkResult<usize> {
+            Err(crate::runtime::errors::WorkError::Shutdown)
+        }
+    }
+
+    #[test]
+    fn no_common_sample_kind_is_rejected_as_type_mismatch() {
+        let mut pipeline = Pipeline::new();
+        pipeline.add_process("source", EdgeOnlySource).unwrap();
+        pipeline.add_process("sink", BlockOnlySink).unwrap();
+
+        let result = pipeline.connect("source", "out", "sink", "in");
+        assert!(
+            result.is_err(),
+            "connection with no common SampleKind should be rejected"
+        );
     }
 }

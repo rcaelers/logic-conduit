@@ -761,9 +761,9 @@ mod tests {
             .add_process("collect", CollectTransfers(collected.clone()))
             .unwrap();
 
-        pipeline.connect("source", "d7", "spi", "clk").unwrap();
-        pipeline.connect("source", "d8", "spi", "cs").unwrap();
-        pipeline.connect("source", "d6", "spi", "mosi").unwrap();
+        pipeline.connect("source", "ch7", "spi", "clk").unwrap();
+        pipeline.connect("source", "ch8", "spi", "cs").unwrap();
+        pipeline.connect("source", "ch6", "spi", "mosi").unwrap();
         pipeline
             .connect("spi", "spi_transfers", "collect", "data")
             .unwrap();

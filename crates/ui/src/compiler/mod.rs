@@ -1077,11 +1077,16 @@ mod tests {
                 .find(|e| e.to.0 == node && e.to.1 == port)
                 .unwrap_or_else(|| panic!("no edge into {port}"))
         };
-        assert!(edge_to(spi.id, "clk").from.1.starts_with('d'));
-        assert!(edge_to(decoder.id, "strobe").from.1.starts_with('b'));
+        // The runtime port name no longer encodes which kind was picked
+        // (both resolve to `ch{channel}` on a single collapsed port —
+        // see `FileSourceBuilder::output_port`), so check the negotiated
+        // kind directly via each node's `ResolvedInputs` instead of
+        // sniffing a `d`/`b` prefix.
+        assert_eq!(spi.resolved.kind(0), Some(PortKind::SampleEdge)); // clk
+        assert_eq!(decoder.resolved.kind(0), Some(PortKind::Block)); // strobe
         assert_eq!(edge_to(decoder.id, "strobe").buffer, 4);
         assert_eq!(edge_to(spi.id, "clk").buffer, 10_000_000);
-        assert_eq!(edge_to(decoder.id, "d7").from.1, "b7");
+        assert_eq!(edge_to(decoder.id, "d7").from.1, "ch7");
         assert!(
             compiled
                 .edges
@@ -1373,9 +1378,9 @@ mod tests {
             .add_process("writer", BinaryFileWriter::new().with_index_csv(true))
             .unwrap();
 
-        pipeline.connect("source", "d7", "spi", "clk").unwrap();
-        pipeline.connect("source", "d8", "spi", "cs").unwrap();
-        pipeline.connect("source", "d6", "spi", "mosi").unwrap();
+        pipeline.connect("source", "ch7", "spi", "clk").unwrap();
+        pipeline.connect("source", "ch8", "spi", "cs").unwrap();
+        pipeline.connect("source", "ch6", "spi", "mosi").unwrap();
         pipeline
             .connect_with_buffer("spi", "spi_transfers", "start", "words", 1_000)
             .unwrap();
@@ -1401,21 +1406,24 @@ mod tests {
             .connect_with_buffer("formatter", "text", "writer", "filename", 100)
             .unwrap();
         pipeline
-            .connect_with_buffer("source", "b10", "decoder", "strobe", 4)
+            .connect_with_buffer("source", "ch10", "decoder", "strobe", 4)
             .unwrap();
         for bit in 0..8 {
             pipeline
                 .connect_with_buffer(
                     "source",
-                    &format!("b{bit}"),
+                    &format!("ch{bit}"),
                     "decoder",
                     &format!("d{bit}"),
                     4,
                 )
                 .unwrap();
         }
+        // Same channel 8 as `spi.cs` above, negotiated onto a *different*
+        // SampleKind (Block, not Edge) for this destination — the mixed-
+        // kind fan-out this whole change exists to collapse into one port.
         pipeline
-            .connect_with_buffer("source", "b8", "decoder", "cs", 4)
+            .connect_with_buffer("source", "ch8", "decoder", "cs", 4)
             .unwrap();
         pipeline
             .connect_with_buffer("decoder", "words", "writer", "data", 100_000)

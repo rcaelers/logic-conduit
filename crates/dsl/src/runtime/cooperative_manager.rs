@@ -62,6 +62,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// Level streams get sticky lists; kept in sync with
 /// [`manager::is_level_type`](super::manager) by hand — both are tiny and
 /// change together only if a new level type is ever registered.
+///
+/// This manager deliberately does **not** get `SampleKind` negotiation
+/// (the `Sample`/`SampleBlock` port-unification work `PipelineManager`
+/// has): the only two producers that ever declare more than one
+/// `SampleKind` — `DslFileSource` and `LogicAnalyzerSource` — are both
+/// `#[cfg(not(target_arch = "wasm32"))]`-gated, i.e. unreachable from
+/// this (wasm-only) manager by construction. A connection here still
+/// requires an exact `TypeId` match, which is correct as long as that
+/// stays true — if a wasm-reachable node ever needs to negotiate
+/// `SampleKind`, mirror `manager.rs`'s `build_output_lists`/
+/// `negotiate_sample_kind_list`/`output_port_from_lists` here too.
 fn is_level_type(type_id: TypeId) -> bool {
     type_id == TypeId::of::<Sample>()
         || type_id == TypeId::of::<NumberSample>()
@@ -266,7 +277,8 @@ impl CooperativeManager {
             .iter()
             .map(|schema| {
                 let sender = output_lists[&schema.name].list.sender_box();
-                OutputPort::from_type_erased(sender).with_watchdog(
+                OutputPort::from_type_erased(output_lists[&schema.name].type_id, sender)
+                    .with_watchdog(
                     self.watchdog.clone(),
                     name.clone(),
                     schema.name.clone(),
@@ -397,7 +409,8 @@ impl CooperativeManager {
             .iter()
             .map(|schema| {
                 let sender = old.output_lists[&schema.name].list.sender_box();
-                OutputPort::from_type_erased(sender).with_watchdog(
+                OutputPort::from_type_erased(old.output_lists[&schema.name].type_id, sender)
+                    .with_watchdog(
                     self.watchdog.clone(),
                     name.to_owned(),
                     schema.name.clone(),

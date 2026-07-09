@@ -261,14 +261,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wire SPI decoder inputs from source
     pipeline.connect(
         "source",
-        &format!("d{}", args.spi_clk),
+        &format!("ch{}", args.spi_clk),
         "spi_decoder",
         "clk",
     )?;
-    pipeline.connect("source", &format!("d{}", args.spi_cs), "spi_decoder", "cs")?;
     pipeline.connect(
         "source",
-        &format!("d{}", args.spi_mosi),
+        &format!("ch{}", args.spi_cs),
+        "spi_decoder",
+        "cs",
+    )?;
+    pipeline.connect(
+        "source",
+        &format!("ch{}", args.spi_mosi),
         "spi_decoder",
         "mosi",
     )?;
