@@ -4,6 +4,7 @@
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 use dsl::runtime::ProcessNode;
+use dsl::{Sample, SampleBlock};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -17,19 +18,20 @@ impl RuntimeBuilder for FileSourceBuilder {
         vec![]
     }
     fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::SampleEdge, PortKind::Block]
+        vec![PortKind::of::<Sample>(), PortKind::of::<SampleBlock>()]
     }
     fn input_port(&self, _: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
         None
     }
     fn output_port(&self, socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
         let channel = socket.def_index;
-        match kind {
-            // The runtime negotiates Sample vs SampleBlock per connection
-            // on a single `ch{channel}` port now — both kinds resolve to
-            // the same port name here.
-            PortKind::SampleEdge | PortKind::Block => Some(format!("ch{channel}")),
-            _ => None,
+        // The runtime negotiates Sample vs SampleBlock per connection on a
+        // single `ch{channel}` port now — both kinds resolve to the same
+        // port name here.
+        if kind == PortKind::of::<Sample>() || kind == PortKind::of::<SampleBlock>() {
+            Some(format!("ch{channel}"))
+        } else {
+            None
         }
     }
     fn input_required(&self, _: &Socket, _: &Value) -> bool {

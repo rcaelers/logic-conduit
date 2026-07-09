@@ -14,6 +14,7 @@
 //! `SpiTransfer` vs `ParallelWord` consumers.
 
 use dsl::DerivedLanes;
+use dsl::SampleBlock;
 use dsl::runtime::{
     AppManager, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy, ProcessNode,
 };
@@ -22,6 +23,7 @@ use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 mod binary_decoder;
+mod buffer;
 mod counter;
 #[cfg(not(target_arch = "wasm32"))]
 mod file_source;
@@ -29,6 +31,8 @@ mod file_source;
 mod file_writer;
 mod formatter;
 mod logic_gate;
+mod plugin;
+mod port_kind;
 mod spi_decoder;
 mod sr_flip_flop;
 #[cfg(not(target_arch = "wasm32"))]
@@ -41,42 +45,8 @@ mod word_matcher;
 
 // ── Stream kinds ─────────────────────────────────────────────────────────────
 
-/// How a UI socket maps onto runtime channel payloads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PortKind {
-    /// `Sample` edge stream (raw channels, gates, enables).
-    SampleEdge,
-    /// `SampleBlock` stream (binary decoder inputs).
-    Block,
-    /// `SpiTransfer` events.
-    SpiWords,
-    /// `ParallelWord` events.
-    ParallelWords,
-    /// `Trigger` events.
-    Trigger,
-    /// `NumberSample` level.
-    Number,
-    /// `TextSample` level.
-    Text,
-}
-
-/// Buffer policy (§5.3), keyed on the edge's kind; for `SampleEdge` the
-/// producer decides raw-channel vs control sizing.
-fn buffer_size(kind: PortKind, producer_is_source: bool) -> usize {
-    match kind {
-        PortKind::Block => 4,
-        PortKind::SampleEdge => {
-            if producer_is_source {
-                10_000_000
-            } else {
-                1_000
-            }
-        }
-        PortKind::SpiWords => 1_000,
-        PortKind::ParallelWords => 100_000,
-        PortKind::Trigger | PortKind::Number | PortKind::Text => 100,
-    }
-}
+pub use plugin::PluginContext;
+pub use port_kind::{PortKind, PortValue};
 
 // ── Errors, context ──────────────────────────────────────────────────────────
 
@@ -173,6 +143,13 @@ pub trait RuntimeBuilder {
     fn input_required(&self, _socket: &Socket, _state: &Value) -> bool {
         true
     }
+    /// Overrides the policy-table buffer size (§5.3) for this input's
+    /// incoming edge. `None` (default, every built-in node) keeps today's
+    /// `PortKind`-based sizing. Only a node whose buffer size is a
+    /// user-visible property (the `Buffer` node) needs this.
+    fn input_buffer_override(&self, _socket: &Socket, _state: &Value) -> Option<usize> {
+        None
+    }
     /// Instantiate the runtime node. `name` is the pipeline node name (used
     /// for thread naming/logs); `resolved` carries each input's kind so
     /// polymorphic consumers pick the matching concrete type.
@@ -230,6 +207,7 @@ impl BuilderRegistry {
             "Logic Gate".into(),
             Box::new(logic_gate::LogicGateBuilder),
         );
+        builders.insert("Buffer".into(), Box::new(buffer::BufferBuilder));
         builders.insert("Counter".into(), Box::new(counter::CounterBuilder));
         builders.insert(
             "String Formatter".into(),
@@ -251,6 +229,15 @@ impl BuilderRegistry {
         );
         builders.insert("Viewer".into(), Box::new(viewer::ViewerBuilder));
         Self(builders)
+    }
+
+    /// Adds (or overwrites) one builder, keyed the same way `standard()`
+    /// keys its own entries — the string must match the corresponding
+    /// `NodeDef::name()`. Lets a plugin crate extend the registry `standard()`
+    /// builds, without touching `standard()` itself.
+    pub fn insert(&mut self, name: impl Into<String>, builder: Box<dyn RuntimeBuilder>) -> &mut Self {
+        self.0.insert(name.into(), builder);
+        self
     }
 
     fn get(&self, def_name: &str) -> Option<&dyn RuntimeBuilder> {
@@ -493,7 +480,9 @@ pub fn lower(
         edges.push(CompiledEdge {
             from: (wire.from.node, out_port),
             to: (wire.to.node, in_port),
-            buffer: buffer_size(kind, from_builder.is_source()),
+            buffer: to_builder
+                .input_buffer_override(to_socket, &to_node.state)
+                .unwrap_or_else(|| kind.buffer_size(from_builder.is_source())),
             kind,
         });
     }
@@ -741,7 +730,7 @@ fn diff(
             continue;
         }
         for edge in new.edges.iter().filter(|edge| edge.to.0 == id) {
-            if edge.kind == PortKind::Block {
+            if edge.kind == PortKind::of::<SampleBlock>() {
                 return Err(format!(
                     "new node consumes block channels; block subscriptions cannot join mid-stream"
                 ));
@@ -785,7 +774,7 @@ fn diff(
         // is invisible to block streams and to source ports (their worker
         // threads snapshot destinations at start).
         for edge in new.edges.iter().filter(|edge| edge.to.0 == id) {
-            if edge.kind == PortKind::Block {
+            if edge.kind == PortKind::of::<SampleBlock>() {
                 return Err(format!(
                     "'{}' consumes block channels and cannot restart mid-stream",
                     new_node.runtime_name
@@ -1014,6 +1003,7 @@ mod tests {
     use dsl::runtime::{ConfigValue, Pipeline};
     #[cfg(not(target_arch = "wasm32"))]
     use dsl::BinaryFileWriter;
+    use dsl::{ParallelWord, Sample, Trigger};
     use node_graph::NodeGraphWidget;
     use std::path::{Path, PathBuf};
 
@@ -1035,9 +1025,11 @@ mod tests {
         let compiled = lower(widget.graph(), &BuilderRegistry::standard())
             .unwrap_or_else(|errors| panic!("lower failed: {errors:?}"));
 
-        // Every startup node has a runtime, including the viewer sink.
-        assert_eq!(compiled.nodes.len(), 11);
-        assert_eq!(compiled.edges.len(), 28);
+        // Every startup node has a runtime, including the viewer sink and
+        // the explicit buffer decoupling the viewer from the file writer's
+        // shared decoder output.
+        assert_eq!(compiled.nodes.len(), 12);
+        assert_eq!(compiled.edges.len(), 29);
 
         // Viewer lanes resolve with per-lane kinds and producer labels.
         let viewer = compiled
@@ -1047,15 +1039,15 @@ mod tests {
             .unwrap();
         let lanes = viewer.resolved.members(0);
         assert_eq!(lanes.len(), 5);
-        assert_eq!(lanes[0].1.kind, PortKind::SampleEdge);
+        assert_eq!(lanes[0].1.kind, PortKind::of::<Sample>());
         assert!(
             lanes
                 .iter()
-                .any(|(_, input)| input.kind == PortKind::ParallelWords
-                    && input.source == "Binary Decoder.Words")
+                .any(|(_, input)| input.kind == PortKind::of::<ParallelWord>()
+                    && input.source == "Viewer Buffer.Out")
         );
         assert!(lanes.iter().any(
-            |(_, input)| input.kind == PortKind::Trigger && input.source == "Match Start.Match"
+            |(_, input)| input.kind == PortKind::of::<Trigger>() && input.source == "Match Start.Match"
         ));
 
         // Kind negotiation spot checks: SPI clk reads edges, the binary
@@ -1082,8 +1074,8 @@ mod tests {
         // see `FileSourceBuilder::output_port`), so check the negotiated
         // kind directly via each node's `ResolvedInputs` instead of
         // sniffing a `d`/`b` prefix.
-        assert_eq!(spi.resolved.kind(0), Some(PortKind::SampleEdge)); // clk
-        assert_eq!(decoder.resolved.kind(0), Some(PortKind::Block)); // strobe
+        assert_eq!(spi.resolved.kind(0), Some(PortKind::of::<Sample>())); // clk
+        assert_eq!(decoder.resolved.kind(0), Some(PortKind::of::<SampleBlock>())); // strobe
         assert_eq!(edge_to(decoder.id, "strobe").buffer, 4);
         assert_eq!(edge_to(spi.id, "clk").buffer, 10_000_000);
         assert_eq!(edge_to(decoder.id, "d7").from.1, "ch7");
@@ -1118,8 +1110,8 @@ mod tests {
             .unwrap();
         let lanes = viewer.resolved.members(0);
         assert_eq!(lanes.len(), 2);
-        assert_eq!(lanes[0].1.kind, PortKind::SampleEdge);
-        assert_eq!(lanes[1].1.kind, PortKind::ParallelWords);
+        assert_eq!(lanes[0].1.kind, PortKind::of::<Sample>());
+        assert_eq!(lanes[1].1.kind, PortKind::of::<ParallelWord>());
     }
 
     #[test]
@@ -1147,6 +1139,72 @@ mod tests {
                 .any(|e| e.node == Some(writer) && e.message.contains("Filename")),
             "expected filename error, got {errors:?}"
         );
+    }
+
+    #[test]
+    fn buffer_node_kind_mismatch_is_rejected() {
+        use egui::Pos2;
+        use node_graph::{NodeDef, SocketDirection, SocketId};
+
+        let mut widget = NodeGraphWidget::new(nodes::build_registry());
+        let source = widget
+            .add_node_at(nodes::UartDemoSource::name(), Pos2::new(0.0, 0.0))
+            .unwrap();
+        let buf = widget
+            .add_node_at(nodes::Buffer::name(), Pos2::new(200.0, 0.0))
+            .unwrap();
+        let viewer = widget
+            .add_node_at(nodes::Viewer::name(), Pos2::new(400.0, 0.0))
+            .unwrap();
+
+        // UartDemoSource offers `Sample` ("Signal"); set the buffer to
+        // "Trigger" — no common kind on the source -> buffer edge, must be
+        // a compile error (regardless of what the buffer -> viewer edge
+        // downstream negotiates to).
+        let mut state = nodes::Buffer::state();
+        state.kind.select("Trigger");
+        widget.set_node_state(buf, serde_json::to_value(state).unwrap());
+
+        let connect = |widget: &mut NodeGraphWidget, from: (NodeId, &str), to: (NodeId, &str)| {
+            let from_socket = SocketId {
+                node: from.0,
+                index: output_index(widget, from.0, from.1),
+                direction: SocketDirection::Output,
+            };
+            let to_socket = SocketId {
+                node: to.0,
+                index: input_index(widget, to.0, to.1),
+                direction: SocketDirection::Input,
+            };
+            widget.graph_mut().add_connection(from_socket, to_socket);
+        };
+        connect(&mut widget, (source, "RX"), (buf, "In"));
+        // A dangling output is unreachable and gets pruned before kind
+        // negotiation runs — give the buffer a sink so it stays reachable
+        // and the mismatch on its input actually gets checked.
+        connect(&mut widget, (buf, "Out"), (viewer, "In"));
+
+        let errors = lower(widget.graph(), &BuilderRegistry::standard()).unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.node == Some(buf)),
+            "expected a compile error on the buffer node, got {errors:?}"
+        );
+    }
+
+    fn output_index(widget: &NodeGraphWidget, node: NodeId, name: &str) -> usize {
+        widget.graph().nodes[&node]
+            .outputs
+            .iter()
+            .position(|socket| socket.name == name)
+            .unwrap_or_else(|| panic!("no output socket '{name}'"))
+    }
+
+    fn input_index(widget: &NodeGraphWidget, node: NodeId, name: &str) -> usize {
+        widget.graph().nodes[&node]
+            .inputs
+            .iter()
+            .position(|socket| socket.name == name && socket.visible)
+            .unwrap_or_else(|| panic!("no input socket '{name}'"))
     }
 
     fn node_by_def(widget: &NodeGraphWidget, def: &str) -> NodeId {

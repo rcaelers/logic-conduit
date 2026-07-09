@@ -4,7 +4,7 @@
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_hex, parse_state};
 use crate::nodes;
 use dsl::runtime::{ConfigValue, NodeConfig, ProcessNode};
-use dsl::{MatchOp, ParallelWord, SpiTransfer, WordField, WordMatcher};
+use dsl::{MatchOp, ParallelWord, Sample, SpiTransfer, Trigger, WordField, WordMatcher};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -26,12 +26,12 @@ impl WordMatcherBuilder {
 
 impl RuntimeBuilder for WordMatcherBuilder {
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::SpiWords, PortKind::ParallelWords]
+        vec![PortKind::of::<SpiTransfer>(), PortKind::of::<ParallelWord>()]
     }
     fn offered_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
         match socket.def_index {
-            0 => vec![PortKind::Trigger],
-            1 => vec![PortKind::SampleEdge],
+            0 => vec![PortKind::of::<Trigger>()],
+            1 => vec![PortKind::of::<Sample>()],
             _ => vec![],
         }
     }
@@ -62,20 +62,23 @@ impl RuntimeBuilder for WordMatcherBuilder {
             WordField::Mosi
         };
         // The words input kind picks the concrete consumer type (§5.4).
-        match resolved.kind(0) {
-            Some(PortKind::SpiWords) => Ok(Box::new(
+        let kind0 = resolved.kind(0);
+        if kind0 == Some(PortKind::of::<SpiTransfer>()) {
+            Ok(Box::new(
                 WordMatcher::<SpiTransfer>::new(pattern, mask)
                     .with_field(field)
                     .with_op(op)
                     .with_name(name),
-            )),
-            Some(PortKind::ParallelWords) => Ok(Box::new(
+            ))
+        } else if kind0 == Some(PortKind::of::<ParallelWord>()) {
+            Ok(Box::new(
                 WordMatcher::<ParallelWord>::new(pattern, mask)
                     .with_field(field)
                     .with_op(op)
                     .with_name(name),
-            )),
-            _ => Err("words input is not connected".into()),
+            ))
+        } else {
+            Err("words input is not connected".into())
         }
     }
 

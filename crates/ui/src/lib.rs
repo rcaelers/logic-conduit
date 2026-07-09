@@ -1,6 +1,6 @@
 mod app;
-mod compiler;
+pub mod compiler;
 mod demo_signals;
-mod nodes;
+pub mod nodes;
 
 pub use app::App;

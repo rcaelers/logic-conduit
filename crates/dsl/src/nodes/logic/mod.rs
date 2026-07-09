@@ -31,12 +31,14 @@
 //!   event-driven merge would consume the fast input far past the slow one,
 //!   mass-clamping its edges and corrupting the output timeline.
 
+mod buffer;
 mod formatter;
 mod logic_gate;
 mod sr_latch;
 mod trigger_counter;
 mod word_matcher;
 
+pub use buffer::BufferNode;
 pub use formatter::TextFormatter;
 pub use logic_gate::{GateOp, LogicGate};
 pub use sr_latch::SrLatch;

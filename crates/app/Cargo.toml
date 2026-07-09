@@ -18,6 +18,10 @@ dsl-ui = { path = "../ui" }
 eframe = "0.35"
 egui = "0.35"
 log = "0.4"
+example-plugin = { path = "../../plugins/example-plugin", optional = true }
+
+[features]
+example-plugin = ["dep:example-plugin"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

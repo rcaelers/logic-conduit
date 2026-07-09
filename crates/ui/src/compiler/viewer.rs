@@ -3,7 +3,7 @@
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 use dsl::runtime::ProcessNode;
-use dsl::{ViewerLaneKind, ViewerSink};
+use dsl::{ParallelWord, Sample, SpiTransfer, Trigger, ViewerLaneKind, ViewerSink};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -15,10 +15,10 @@ impl RuntimeBuilder for ViewerBuilder {
     }
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
         vec![
-            PortKind::SampleEdge,
-            PortKind::SpiWords,
-            PortKind::ParallelWords,
-            PortKind::Trigger,
+            PortKind::of::<Sample>(),
+            PortKind::of::<SpiTransfer>(),
+            PortKind::of::<ParallelWord>(),
+            PortKind::of::<Trigger>(),
         ]
     }
     fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
@@ -51,19 +51,26 @@ impl RuntimeBuilder for ViewerBuilder {
         let prefix = state.label.value.trim().to_owned();
         let mut sink = ViewerSink::new(ctx.derived_lanes.clone()).with_name(name);
         for (_, input) in resolved.members(0) {
-            let kind = match input.kind {
-                PortKind::SampleEdge => ViewerLaneKind::Signal,
-                PortKind::SpiWords => ViewerLaneKind::SpiWords,
-                PortKind::ParallelWords => ViewerLaneKind::ParallelWords,
-                PortKind::Trigger => ViewerLaneKind::Trigger,
-                other => return Err(format!("viewer cannot display {other:?}")),
-            };
             let lane_name = if prefix.is_empty() {
                 input.source.clone()
             } else {
                 format!("{prefix}: {}", input.source)
             };
-            sink = sink.with_lane(kind, lane_name);
+            // `ViewerSink` only ever sees `Signal`/`Words`/`Trigger` —
+            // picking the concrete `T: WordSource` for a `Words` lane is
+            // this builder's job, not something the viewer itself needs to
+            // know (see `ViewerLaneKind`'s doc).
+            sink = if input.kind == PortKind::of::<Sample>() {
+                sink.with_lane(ViewerLaneKind::Signal, lane_name)
+            } else if input.kind == PortKind::of::<SpiTransfer>() {
+                sink.with_words_lane::<SpiTransfer>(lane_name)
+            } else if input.kind == PortKind::of::<ParallelWord>() {
+                sink.with_words_lane::<ParallelWord>(lane_name)
+            } else if input.kind == PortKind::of::<Trigger>() {
+                sink.with_lane(ViewerLaneKind::Trigger, lane_name)
+            } else {
+                return Err(format!("viewer cannot display {:?}", input.kind));
+            };
         }
         Ok(Box::new(sink))
     }

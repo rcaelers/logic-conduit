@@ -4,6 +4,7 @@ use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 use dsl::TextFormatter;
 use dsl::runtime::{ConfigValue, NodeConfig, ProcessNode};
+use dsl::{NumberSample, TextSample};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -11,10 +12,10 @@ pub(super) struct FormatterBuilder;
 
 impl RuntimeBuilder for FormatterBuilder {
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::Number]
+        vec![PortKind::of::<NumberSample>()]
     }
     fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::Text]
+        vec![PortKind::of::<TextSample>()]
     }
     fn input_port(
         &self,

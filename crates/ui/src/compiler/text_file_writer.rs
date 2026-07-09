@@ -3,6 +3,7 @@
 
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
 use dsl::TextFileWriter;
+use dsl::TextSample;
 use dsl::runtime::ProcessNode;
 use node_graph::Socket;
 use serde_json::Value;
@@ -14,7 +15,7 @@ impl RuntimeBuilder for TextFileWriterBuilder {
         true
     }
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::Text]
+        vec![PortKind::of::<TextSample>()]
     }
     fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
         vec![]

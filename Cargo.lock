@@ -939,6 +939,7 @@ dependencies = [
  "dsl-ui",
  "eframe",
  "egui",
+ "example-plugin",
  "log",
  "tracing-subscriber",
  "wasm-bindgen",
@@ -1241,6 +1242,19 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener",
  "pin-project-lite",
+]
+
+[[package]]
+name = "example-plugin"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "dsl",
+ "dsl-ui",
+ "egui",
+ "node-graph",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

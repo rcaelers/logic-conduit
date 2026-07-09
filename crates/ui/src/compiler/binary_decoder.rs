@@ -4,7 +4,7 @@ use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 use dsl::nodes::decoders::Endianness;
 use dsl::runtime::ProcessNode;
-use dsl::{CsPolarity, StrobeMode};
+use dsl::{CsPolarity, ParallelWord, Sample, SampleBlock, StrobeMode};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -26,12 +26,12 @@ impl BinaryDecoderBuilder {
 impl RuntimeBuilder for BinaryDecoderBuilder {
     fn accepted_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
         match socket.def_index {
-            3 => vec![PortKind::SampleEdge], // Enable is a level stream
-            _ => vec![PortKind::Block],      // Clock, D group, CS read blocks
+            3 => vec![PortKind::of::<Sample>()], // Enable is a level stream
+            _ => vec![PortKind::of::<SampleBlock>()], // Clock, D group, CS read blocks
         }
     }
     fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::ParallelWords]
+        vec![PortKind::of::<ParallelWord>()]
     }
     fn input_port(
         &self,
@@ -49,7 +49,7 @@ impl RuntimeBuilder for BinaryDecoderBuilder {
         }
     }
     fn output_port(&self, _socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
-        (kind == PortKind::ParallelWords).then(|| "words".into())
+        (kind == PortKind::of::<ParallelWord>()).then(|| "words".into())
     }
     fn input_required(&self, socket: &Socket, state: &Value) -> bool {
         match socket.def_index {

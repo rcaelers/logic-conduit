@@ -4,6 +4,7 @@ use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 use dsl::TriggerCounter;
 use dsl::runtime::ProcessNode;
+use dsl::{NumberSample, Trigger};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -11,10 +12,10 @@ pub(super) struct CounterBuilder;
 
 impl RuntimeBuilder for CounterBuilder {
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::Trigger]
+        vec![PortKind::of::<Trigger>()]
     }
     fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::Number]
+        vec![PortKind::of::<NumberSample>()]
     }
     fn input_port(&self, _: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
         Some("trigger".into())

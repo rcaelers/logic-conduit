@@ -15,7 +15,12 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "DSL Pipeline Editor",
         options,
-        Box::new(|cc| Ok(Box::new(dsl_ui::App::new(cc)))),
+        Box::new(|cc| {
+            Ok(Box::new(dsl_ui::App::new_with_plugins(cc, |_ctx| {
+                #[cfg(feature = "example-plugin")]
+                example_plugin::register(_ctx);
+            })))
+        }),
     )
 }
 

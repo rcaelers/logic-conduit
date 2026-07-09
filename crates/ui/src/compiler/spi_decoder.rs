@@ -4,7 +4,7 @@ use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 use dsl::nodes::decoders::BitOrder;
 use dsl::runtime::ProcessNode;
-use dsl::{CsPolarity, SpiDecoder, SpiMode};
+use dsl::{CsPolarity, Sample, SpiDecoder, SpiMode, SpiTransfer};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -25,10 +25,10 @@ impl SpiDecoderBuilder {
 
 impl RuntimeBuilder for SpiDecoderBuilder {
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::SampleEdge]
+        vec![PortKind::of::<Sample>()]
     }
     fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::SpiWords]
+        vec![PortKind::of::<SpiTransfer>()]
     }
     fn input_port(&self, socket: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
         match socket.def_index {
@@ -42,7 +42,7 @@ impl RuntimeBuilder for SpiDecoderBuilder {
     fn output_port(&self, _socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
         // Both UI word outputs map to the single transfer stream; the
         // MOSI/MISO split is the consumer's field selection (§4.2).
-        (kind == PortKind::SpiWords).then(|| "spi_transfers".into())
+        (kind == PortKind::of::<SpiTransfer>()).then(|| "spi_transfers".into())
     }
     fn input_required(&self, socket: &Socket, state: &Value) -> bool {
         let Ok(state) = Self::parsed(state) else {

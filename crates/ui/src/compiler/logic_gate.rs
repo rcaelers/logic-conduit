@@ -3,6 +3,7 @@
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 use dsl::runtime::ProcessNode;
+use dsl::Sample;
 use dsl::{GateOp, LogicGate};
 use node_graph::Socket;
 use serde_json::Value;
@@ -11,10 +12,10 @@ pub(super) struct LogicGateBuilder;
 
 impl RuntimeBuilder for LogicGateBuilder {
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::SampleEdge]
+        vec![PortKind::of::<Sample>()]
     }
     fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::SampleEdge]
+        vec![PortKind::of::<Sample>()]
     }
     fn input_port(
         &self,

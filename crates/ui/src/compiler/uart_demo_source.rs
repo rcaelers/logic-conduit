@@ -3,6 +3,7 @@
 
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
+use dsl::Sample;
 use dsl::runtime::ProcessNode;
 use node_graph::Socket;
 use serde_json::Value;
@@ -17,13 +18,13 @@ impl RuntimeBuilder for UartDemoSourceBuilder {
         vec![]
     }
     fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::SampleEdge]
+        vec![PortKind::of::<Sample>()]
     }
     fn input_port(&self, _: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
         None
     }
     fn output_port(&self, _socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
-        (kind == PortKind::SampleEdge).then(|| "rx".into())
+        (kind == PortKind::of::<Sample>()).then(|| "rx".into())
     }
     fn input_required(&self, _: &Socket, _: &Value) -> bool {
         false

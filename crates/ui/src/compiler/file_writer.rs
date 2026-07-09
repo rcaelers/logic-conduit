@@ -4,7 +4,7 @@
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 use dsl::runtime::ProcessNode;
-use dsl::{BinaryFileWriter, WriteWidth};
+use dsl::{BinaryFileWriter, ParallelWord, TextSample, WriteWidth};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -16,8 +16,8 @@ impl RuntimeBuilder for FileWriterBuilder {
     }
     fn accepted_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
         match socket.def_index {
-            0 => vec![PortKind::ParallelWords],
-            1 => vec![PortKind::Text],
+            0 => vec![PortKind::of::<ParallelWord>()],
+            1 => vec![PortKind::of::<TextSample>()],
             _ => vec![],
         }
     }

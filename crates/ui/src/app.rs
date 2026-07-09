@@ -20,8 +20,24 @@ pub struct App {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext) -> Self {
+        Self::new_with_plugins(cc, |_ctx| {})
+    }
+
+    /// Like [`Self::new`], but first runs `register_plugins` against a
+    /// [`compiler::PluginContext`] wrapping the freshly built registries.
+    /// This is the hook a downstream crate (e.g. `dsl-app`) uses to link in
+    /// compile-time plugin crates — `dsl-ui` itself never depends on any
+    /// plugin (a plugin depends on `dsl-ui`, so the reverse would be a
+    /// dependency cycle), so the actual `example_plugin::register(...)`
+    /// call lives at the binary crate that depends on both.
+    pub fn new_with_plugins(
+        cc: &eframe::CreationContext,
+        register_plugins: impl FnOnce(&mut compiler::PluginContext),
+    ) -> Self {
         install_fonts(&cc.egui_ctx);
-        let registry = nodes::build_registry();
+        let mut registry = nodes::build_registry();
+        let mut builders = compiler::BuilderRegistry::standard();
+        register_plugins(&mut compiler::PluginContext::new(&mut registry, &mut builders));
         let mut widget = NodeGraphWidget::new(registry);
         #[cfg(not(target_arch = "wasm32"))]
         nodes::populate_startup(&mut widget);
@@ -33,7 +49,7 @@ impl App {
             node_graph: widget,
             logic_analyzer,
             analyzer_split: 0.42,
-            builders: compiler::BuilderRegistry::standard(),
+            builders,
             run: None,
             run_message: None,
             error_badges: Vec::new(),

@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/app", "crates/dsl", "crates/logic_analyzer_viewer", "crates/node_graph", "crates/ui"]
+members = [".", "crates/app", "crates/dsl", "crates/logic_analyzer_viewer", "crates/node_graph", "crates/ui", "plugins/example-plugin"]
 default-members = ["."]
 resolver = "2"
 
@@ -14,6 +14,14 @@ default-run = "dsl-ui"
 [[bin]]
 name = "dsl-ui"
 path = "crates/app/src/main.rs"
+
+# This bin target compiles `crates/app/src/main.rs` again under the root
+# package's own identity (separate from `dsl-app`'s own `[[bin]]` of the
+# same name/path) — declaring the feature name here just keeps that
+# duplicate compilation's `#[cfg(feature = "example-plugin")]` check happy;
+# it's never enabled for this package.
+[features]
+example-plugin = []
 
 [dependencies]
 dsl = { path = "crates/dsl" }
