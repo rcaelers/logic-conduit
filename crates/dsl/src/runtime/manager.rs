@@ -360,7 +360,8 @@ impl PipelineManager {
                         InputPort::from_type_erased(Box::new(()) as Box<dyn Any + Send>)
                             .with_edge_query(Some(handle))
                     } else {
-                        let (id, rx) = list.subscribe(sub.buffer, sub.policy);
+                        let label = Some(format!("{}.{}", name, input_schemas[index].name));
+                        let (id, rx) = list.subscribe_with_label(sub.buffer, sub.policy, label);
                         input_subs.push((sub.from_node.clone(), sub.from_port.clone(), id));
                         InputPort::from_type_erased(rx)
                     }
@@ -656,7 +657,8 @@ impl PipelineManager {
                         InputPort::from_type_erased(Box::new(()) as Box<dyn Any + Send>)
                             .with_edge_query(Some(handle))
                     } else {
-                        let (id, rx) = list.subscribe(sub.buffer, sub.policy);
+                        let label = Some(format!("{}.{}", name, input_schemas[index].name));
+                        let (id, rx) = list.subscribe_with_label(sub.buffer, sub.policy, label);
                         input_subs.push((sub.from_node.clone(), sub.from_port.clone(), id));
                         InputPort::from_type_erased(rx)
                     }

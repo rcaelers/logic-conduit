@@ -687,10 +687,12 @@ impl DslFileSource {
             channel,
             header,
             sender,
+            destination,
             max_samples,
             shutdown,
             completed,
         } = config;
+        let label = channel_log_label(channel, destination.as_deref());
         let timestamp_step = (1_000_000_000.0 / header.samplerate_hz) as u64;
         let total_samples = max_samples
             .unwrap_or(header.total_samples)
@@ -702,15 +704,15 @@ impl DslFileSource {
         let mut items_sent: u64 = 0;
 
         info!(
-            "[ch{}] Starting channel reader thread ({} samples, {} blocks)",
-            channel, total_samples, header.total_blocks
+            "[{}] Starting channel reader thread ({} samples, {} blocks)",
+            label, total_samples, header.total_blocks
         );
 
         for block_num in 0..header.total_blocks {
             if shutdown.load(Ordering::Relaxed) {
                 debug!(
-                    "[ch{}] Shutdown signal received at block {}",
-                    channel, block_num
+                    "[{}] Shutdown signal received at block {}",
+                    label, block_num
                 );
                 break;
             }
@@ -740,16 +742,13 @@ impl DslFileSource {
                             let mut file = match archive_guard.by_name(&block_name) {
                                 Ok(f) => f,
                                 Err(_) => {
-                                    debug!(
-                                        "[ch{}] Block {} not found, stopping",
-                                        channel, block_num
-                                    );
+                                    debug!("[{}] Block {} not found, stopping", label, block_num);
                                     break;
                                 }
                             };
                             let mut buf = Vec::new();
                             if file.read_to_end(&mut buf).is_err() {
-                                debug!("[ch{}] Failed to read block {}", channel, block_num);
+                                debug!("[{}] Failed to read block {}", label, block_num);
                                 break;
                             }
                             Arc::<[u8]>::from(buf)
@@ -778,8 +777,8 @@ impl DslFileSource {
                     let edge = Sample::new(current_value, value_start_time);
                     if sender.send(edge).is_err() {
                         debug!(
-                            "[ch{}] All receivers disconnected at position {}",
-                            channel, position
+                            "[{}] All receivers disconnected at position {}",
+                            label, position
                         );
                         completed.fetch_add(1, Ordering::Relaxed);
                         return;
@@ -796,8 +795,8 @@ impl DslFileSource {
             if block_num > 0 && block_num % 10 == 0 {
                 let pct = (position as f64 / total_samples as f64) * 100.0;
                 debug!(
-                    "[ch{}] Progress: {:.1}% ({} samples, {} edges sent)",
-                    channel, pct, position, items_sent
+                    "[{}] Progress: {:.1}% ({} samples, {} edges sent)",
+                    label, pct, position, items_sent
                 );
             }
         }
@@ -810,8 +809,8 @@ impl DslFileSource {
         }
 
         info!(
-            "[ch{}] Channel reader complete: {} samples, {} edges sent",
-            channel, position, items_sent
+            "[{}] Channel reader complete: {} samples, {} edges sent",
+            label, position, items_sent
         );
 
         sender.close();
@@ -832,26 +831,25 @@ impl DslFileSource {
             channel,
             header,
             sender,
+            destination,
             max_samples,
             shutdown,
             completed,
         } = config;
+        let label = channel_log_label(channel, destination.as_deref());
         let timestamp_step = (1_000_000_000.0 / header.samplerate_hz) as u64;
         let total_samples = max_samples
             .unwrap_or(header.total_samples)
             .min(header.total_samples);
 
         info!(
-            "[ch{}] Starting block reader thread ({} samples, {} blocks)",
-            channel, total_samples, header.total_blocks
+            "[{}] Starting block reader thread ({} samples, {} blocks)",
+            label, total_samples, header.total_blocks
         );
 
         for block_num in 0..header.total_blocks {
             if shutdown.load(Ordering::Relaxed) {
-                debug!(
-                    "[ch{}] Block reader shutdown at block {}",
-                    channel, block_num
-                );
+                debug!("[{}] Block reader shutdown at block {}", label, block_num);
                 break;
             }
 
@@ -877,16 +875,13 @@ impl DslFileSource {
                             let mut file = match archive_guard.by_name(&block_name) {
                                 Ok(f) => f,
                                 Err(_) => {
-                                    debug!(
-                                        "[ch{}] Block {} not found, stopping",
-                                        channel, block_num
-                                    );
+                                    debug!("[{}] Block {} not found, stopping", label, block_num);
                                     break;
                                 }
                             };
                             let mut buf = Vec::new();
                             if file.read_to_end(&mut buf).is_err() {
-                                debug!("[ch{}] Failed to read block {}", channel, block_num);
+                                debug!("[{}] Failed to read block {}", label, block_num);
                                 break;
                             }
                             Arc::<[u8]>::from(buf)
@@ -913,8 +908,8 @@ impl DslFileSource {
 
             if sender.send(sample_block).is_err() {
                 debug!(
-                    "[ch{}] Block reader: all receivers disconnected at block {}",
-                    channel, block_num
+                    "[{}] Block reader: all receivers disconnected at block {}",
+                    label, block_num
                 );
                 completed.fetch_add(1, Ordering::Relaxed);
                 return;
@@ -925,15 +920,15 @@ impl DslFileSource {
                     / total_samples as f64)
                     * 100.0;
                 debug!(
-                    "[ch{}] Block progress: {:.1}% ({} blocks sent)",
-                    channel,
+                    "[{}] Block progress: {:.1}% ({} blocks sent)",
+                    label,
                     pct,
                     block_num + 1
                 );
             }
         }
 
-        info!("[ch{}] Block reader complete", channel);
+        info!("[{}] Block reader complete", label);
 
         sender.close();
         drop(sender);
@@ -1036,8 +1031,10 @@ impl ProcessNode for DslFileSource {
         // carry `Sample` and `SampleBlock` destinations simultaneously
         // (negotiated per connection — see `output_sample_kinds`), so
         // both queries run independently against the same port.
-        let mut edge_thread_configs: Vec<(usize, usize, Sender<Sample>)> = Vec::new();
-        let mut block_thread_configs: Vec<(usize, usize, Sender<SampleBlock>)> = Vec::new();
+        let mut edge_thread_configs: Vec<(usize, usize, Sender<Sample>, Option<String>)> =
+            Vec::new();
+        let mut block_thread_configs: Vec<(usize, usize, Sender<SampleBlock>, Option<String>)> =
+            Vec::new();
 
         for channel_idx in 0..self.num_channels as usize {
             let Some(port) = outputs.get(channel_idx) else {
@@ -1045,12 +1042,14 @@ impl ProcessNode for DslFileSource {
             };
             if let Some(senders) = port.split_senders::<Sample>() {
                 for (dest_idx, sender) in senders.into_iter().enumerate() {
-                    edge_thread_configs.push((channel_idx, dest_idx, sender));
+                    let destination = sender.destination_label().map(str::to_owned);
+                    edge_thread_configs.push((channel_idx, dest_idx, sender, destination));
                 }
             }
             if let Some(senders) = port.split_senders::<SampleBlock>() {
                 for (dest_idx, sender) in senders.into_iter().enumerate() {
-                    block_thread_configs.push((channel_idx, dest_idx, sender));
+                    let destination = sender.destination_label().map(str::to_owned);
+                    block_thread_configs.push((channel_idx, dest_idx, sender, destination));
                 }
             }
         }
@@ -1058,7 +1057,7 @@ impl ProcessNode for DslFileSource {
         let mut handles = Vec::new();
 
         // Spawn edge reader threads
-        for (channel_idx, dest_idx, sender) in edge_thread_configs.into_iter() {
+        for (channel_idx, dest_idx, sender, destination) in edge_thread_configs.into_iter() {
             let archive = Arc::clone(&self.archive);
             let blocks = Arc::clone(&self.blocks);
             let header = self.header.clone();
@@ -1075,6 +1074,7 @@ impl ProcessNode for DslFileSource {
                         channel: channel_idx,
                         header,
                         sender,
+                        destination,
                         max_samples,
                         shutdown,
                         completed,
@@ -1086,7 +1086,7 @@ impl ProcessNode for DslFileSource {
         }
 
         // Spawn block reader threads
-        for (channel_idx, dest_idx, sender) in block_thread_configs.into_iter() {
+        for (channel_idx, dest_idx, sender, destination) in block_thread_configs.into_iter() {
             let archive = Arc::clone(&self.archive);
             let blocks = Arc::clone(&self.blocks);
             let header = self.header.clone();
@@ -1103,6 +1103,7 @@ impl ProcessNode for DslFileSource {
                         channel: channel_idx,
                         header,
                         sender,
+                        destination,
                         max_samples,
                         shutdown,
                         completed,
@@ -1150,6 +1151,7 @@ struct ChannelReaderConfig {
     channel: usize,
     header: DslHeader,
     sender: Sender<Sample>,
+    destination: Option<String>,
     max_samples: Option<u64>,
     shutdown: Arc<AtomicBool>,
     completed: Arc<AtomicUsize>,
@@ -1162,9 +1164,17 @@ struct BlockReaderConfig {
     channel: usize,
     header: DslHeader,
     sender: Sender<SampleBlock>,
+    destination: Option<String>,
     max_samples: Option<u64>,
     shutdown: Arc<AtomicBool>,
     completed: Arc<AtomicUsize>,
+}
+
+fn channel_log_label(channel: usize, destination: Option<&str>) -> String {
+    match destination {
+        Some(destination) if !destination.is_empty() => format!("ch{channel} -> {destination}"),
+        _ => format!("ch{channel}"),
+    }
 }
 #[cfg(test)]
 mod tests {

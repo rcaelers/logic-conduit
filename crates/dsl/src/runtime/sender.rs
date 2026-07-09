@@ -59,6 +59,7 @@ struct Subscriber<T> {
     id: u64,
     tx: CrossbeamSender<ChannelMessage<T>>,
     policy: OverflowPolicy,
+    label: Option<String>,
     /// `Lossy` only: newest value that did not fit; retried before the next
     /// send and overwritten by it when still unsendable.
     pending: Option<T>,
@@ -118,6 +119,15 @@ impl<T: Clone + Send> SharedSenders<T> {
         buffer: usize,
         policy: OverflowPolicy,
     ) -> (u64, crossbeam_channel::Receiver<ChannelMessage<T>>) {
+        self.subscribe_with_label(buffer, policy, None)
+    }
+
+    pub fn subscribe_with_label(
+        &self,
+        buffer: usize,
+        policy: OverflowPolicy,
+        label: Option<String>,
+    ) -> (u64, crossbeam_channel::Receiver<ChannelMessage<T>>) {
         let (tx, rx) = bounded(buffer.max(1));
         let id = NEXT_SUBSCRIPTION_ID.fetch_add(1, Ordering::Relaxed);
         let mut inner = self.inner.lock().unwrap();
@@ -135,6 +145,7 @@ impl<T: Clone + Send> SharedSenders<T> {
             id,
             tx,
             policy,
+            label,
             pending: None,
         });
         (id, rx)
@@ -274,18 +285,41 @@ impl<T: Clone + Send> SharedSenders<T> {
 ///
 /// Includes watchdog monitoring to detect blocked sends.
 pub struct Sender<T> {
-    destinations: Vec<CrossbeamSender<ChannelMessage<T>>>,
+    destinations: Vec<Destination<T>>,
     /// Live-path subscribers, read on every send (so subscriptions added
     /// mid-stream take effect immediately).
     shared: Option<SharedSenders<T>>,
     watchdog_handle: Option<WatchdogHandle>,
 }
 
+struct Destination<T> {
+    tx: CrossbeamSender<ChannelMessage<T>>,
+    label: Option<String>,
+}
+
+impl<T> Clone for Destination<T> {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+            label: self.label.clone(),
+        }
+    }
+}
+
 impl<T: Clone + Send> Sender<T> {
     /// Create a new Sender from a vector of crossbeam senders
     pub fn new(destinations: Vec<CrossbeamSender<ChannelMessage<T>>>) -> Self {
+        Self::new_labeled(destinations.into_iter().map(|tx| (tx, None)).collect())
+    }
+
+    pub(crate) fn new_labeled(
+        destinations: Vec<(CrossbeamSender<ChannelMessage<T>>, Option<String>)>,
+    ) -> Self {
         Self {
-            destinations,
+            destinations: destinations
+                .into_iter()
+                .map(|(tx, label)| Destination { tx, label })
+                .collect(),
             shared: None,
             watchdog_handle: None,
         }
@@ -341,19 +375,27 @@ impl<T: Clone + Send> Sender<T> {
             inner
                 .subscribers
                 .iter()
-                .map(|subscriber| subscriber.tx.clone())
+                .map(|subscriber| (subscriber.tx.clone(), subscriber.label.clone()))
                 .collect::<Vec<_>>()
         });
         self.destinations
             .iter()
-            .cloned()
+            .map(|destination| (destination.tx.clone(), destination.label.clone()))
             .chain(shared_snapshot)
-            .map(|dest| Sender {
-                destinations: vec![dest],
+            .map(|(tx, label)| Sender {
+                destinations: vec![Destination { tx, label }],
                 shared: None,
                 watchdog_handle: self.watchdog_handle.clone(),
             })
             .collect()
+    }
+
+    pub fn destination_label(&self) -> Option<&str> {
+        if self.destinations.len() == 1 && self.shared.is_none() {
+            self.destinations[0].label.as_deref()
+        } else {
+            None
+        }
     }
 
     /// Get the number of broadcast destinations
@@ -393,7 +435,7 @@ impl<T: Clone + Send> Sender<T> {
         let mut last_error = None;
 
         for dest in &self.destinations {
-            match dest.send(ChannelMessage::Sample(value.clone())) {
+            match dest.tx.send(ChannelMessage::Sample(value.clone())) {
                 Ok(()) => any_success = true,
                 Err(SendError(msg)) => {
                     // Extract the inner value from the ChannelMessage for the error
@@ -428,7 +470,7 @@ impl<T: Clone + Send> Sender<T> {
     pub fn close(&self) {
         let _guard = self.watchdog_handle.as_ref().map(OperationGuard::new);
         for dest in &self.destinations {
-            let _ = dest.send(ChannelMessage::EndOfStream);
+            let _ = dest.tx.send(ChannelMessage::EndOfStream);
         }
     }
 
@@ -443,7 +485,8 @@ impl<T: Clone + Send> Sender<T> {
         }
 
         for dest in &self.destinations {
-            dest.try_send(ChannelMessage::Sample(value.clone()))
+            dest.tx
+                .try_send(ChannelMessage::Sample(value.clone()))
                 .map_err(|e| match e {
                     crossbeam_channel::TrySendError::Full(msg) => {
                         if let ChannelMessage::Sample(v) = msg {

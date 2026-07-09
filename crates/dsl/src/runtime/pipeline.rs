@@ -7,7 +7,7 @@ use super::ports::PortSchema;
 use super::protocol::ProtocolKind;
 use super::sample_kind;
 use super::scheduler::Scheduler;
-use super::type_registry::TYPE_REGISTRY;
+use super::type_registry::{LabeledSenderBox, TYPE_REGISTRY};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -80,7 +80,8 @@ impl Pipeline {
         let id = self.next_id;
         self.next_id += 1;
 
-        self.node_schemas.insert(id, NodeSchemas { inputs, outputs });
+        self.node_schemas
+            .insert(id, NodeSchemas { inputs, outputs });
         self.node_names.insert(name, id);
         self.nodes.push((id, Box::new(node)));
 
@@ -282,6 +283,11 @@ impl Pipeline {
         type PortKey = (usize, usize);
         let node_by_id: HashMap<usize, &Box<dyn ProcessNode>> =
             self.nodes.iter().map(|(id, node)| (*id, node)).collect();
+        let node_name_by_id: HashMap<usize, String> = self
+            .node_names
+            .iter()
+            .map(|(name, id)| (*id, name.clone()))
+            .collect();
 
         // Phase 0: negotiate a connection protocol per pending connection,
         // intersecting the producer's declared protocols (preference order)
@@ -303,7 +309,10 @@ impl Pipeline {
                 .outputs
                 .get(conn.from_port)
                 .ok_or_else(|| {
-                    format!("Node {} has no output port {}", conn.from_node, conn.from_port)
+                    format!(
+                        "Node {} has no output port {}",
+                        conn.from_node, conn.from_port
+                    )
                 })?
                 .protocols;
             let accepted = &to_schemas
@@ -372,10 +381,36 @@ impl Pipeline {
                         .ok_or_else(|| format!("Type {:?} not registered. Call register_type::<T>() before building pipeline.", conn.type_id))?;
 
                     receivers.insert((conn.to_node, conn.to_port), rx);
+                    let to_schemas = self
+                        .node_schemas
+                        .get(&conn.to_node)
+                        .ok_or_else(|| format!("Node {} not found", conn.to_node))?;
+                    let to_port = to_schemas
+                        .inputs
+                        .get(conn.to_port)
+                        .map(|schema| schema.name.as_str())
+                        .unwrap_or("in");
+                    let to_node = node_name_by_id
+                        .get(&conn.to_node)
+                        .map(String::as_str)
+                        .unwrap_or("consumer");
+                    let label = format!("{to_node}.{to_port}");
                     let groups = senders.entry((conn.from_node, conn.from_port)).or_default();
-                    match groups.iter_mut().find(|(type_id, _)| *type_id == conn.type_id) {
-                        Some((_, list)) => list.push(tx),
-                        None => groups.push((conn.type_id, vec![tx])),
+                    match groups
+                        .iter_mut()
+                        .find(|(type_id, _)| *type_id == conn.type_id)
+                    {
+                        Some((_, list)) => list.push(Box::new(LabeledSenderBox {
+                            sender: tx,
+                            label: Some(label),
+                        })),
+                        None => groups.push((
+                            conn.type_id,
+                            vec![Box::new(LabeledSenderBox {
+                                sender: tx,
+                                label: Some(label),
+                            })],
+                        )),
                     }
                 }
                 ProtocolKind::EdgeQuery => {

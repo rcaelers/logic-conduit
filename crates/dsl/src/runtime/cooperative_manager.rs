@@ -263,7 +263,10 @@ impl CooperativeManager {
                         ));
                     }
                     let closed = Arc::clone(&output.closed);
-                    let (id, rx_box) = output.list.subscribe(sub.buffer, sub.policy);
+                    let label = Some(format!("{}.{}", name, input_schemas[index].name));
+                    let (id, rx_box) = output
+                        .list
+                        .subscribe_with_label(sub.buffer, sub.policy, label);
                     let probe = make_probe(output.type_id, rx_box.as_ref(), closed)?;
                     input_subs.push((sub.from_node.clone(), sub.from_port.clone(), id));
                     probes.push(probe);
@@ -394,7 +397,10 @@ impl CooperativeManager {
                         ));
                     }
                     let closed = Arc::clone(&output.closed);
-                    let (id, rx_box) = output.list.subscribe(sub.buffer, sub.policy);
+                    let label = Some(format!("{}.{}", name, input_schemas[index].name));
+                    let (id, rx_box) = output
+                        .list
+                        .subscribe_with_label(sub.buffer, sub.policy, label);
                     let probe = make_probe(output.type_id, rx_box.as_ref(), closed)?;
                     input_subs.push((sub.from_node.clone(), sub.from_port.clone(), id));
                     probes.push(probe);

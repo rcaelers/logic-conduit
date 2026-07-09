@@ -12,6 +12,12 @@ pub trait ErasedSharedSenders: Send + Sync {
     /// Adds a subscriber channel; returns `(subscription id, boxed
     /// crossbeam receiver)` suitable for `InputPort::from_type_erased`.
     fn subscribe(&self, buffer: usize, policy: OverflowPolicy) -> (u64, Box<dyn Any + Send>);
+    fn subscribe_with_label(
+        &self,
+        buffer: usize,
+        policy: OverflowPolicy,
+        label: Option<String>,
+    ) -> (u64, Box<dyn Any + Send>);
     fn unsubscribe(&self, id: u64);
     /// EOS to all subscribers; late joiners get an immediate EOS.
     fn close(&self);
@@ -28,6 +34,15 @@ pub trait ErasedSharedSenders: Send + Sync {
 impl<T: Clone + Send + Sync + 'static> ErasedSharedSenders for SharedSenders<T> {
     fn subscribe(&self, buffer: usize, policy: OverflowPolicy) -> (u64, Box<dyn Any + Send>) {
         let (id, rx) = SharedSenders::subscribe(self, buffer, policy);
+        (id, Box::new(rx) as Box<dyn Any + Send>)
+    }
+    fn subscribe_with_label(
+        &self,
+        buffer: usize,
+        policy: OverflowPolicy,
+        label: Option<String>,
+    ) -> (u64, Box<dyn Any + Send>) {
+        let (id, rx) = SharedSenders::subscribe_with_label(self, buffer, policy, label);
         (id, Box::new(rx) as Box<dyn Any + Send>)
     }
     fn unsubscribe(&self, id: u64) {
@@ -53,6 +68,11 @@ type ChannelCreatorFn =
 type OutputWrapperFn =
     Box<dyn Fn(Vec<Box<dyn Any + Send>>) -> Result<Box<dyn Any + Send>, String> + Send + Sync>;
 type SharedCreatorFn = Box<dyn Fn(bool) -> Arc<dyn ErasedSharedSenders> + Send + Sync>;
+
+pub(crate) struct LabeledSenderBox {
+    pub sender: Box<dyn Any + Send>,
+    pub label: Option<String>,
+}
 
 pub(crate) struct TypeRegistry {
     channel_creators: HashMap<TypeId, ChannelCreatorFn>,
@@ -102,14 +122,25 @@ impl TypeRegistry {
 
                 let mut typed_senders = Vec::new();
                 for sender in senders {
-                    match sender.downcast::<CrossbeamSender<ChannelMessage<T>>>() {
-                        Ok(tx) => typed_senders.push(*tx),
-                        Err(_) => return Err("Type mismatch in sender".to_string()),
+                    match sender.downcast::<LabeledSenderBox>() {
+                        Ok(labeled) => {
+                            let LabeledSenderBox { sender, label } = *labeled;
+                            match sender.downcast::<CrossbeamSender<ChannelMessage<T>>>() {
+                                Ok(tx) => typed_senders.push((*tx, label)),
+                                Err(_) => return Err("Type mismatch in labeled sender".to_string()),
+                            }
+                        }
+                        Err(sender) => {
+                            match sender.downcast::<CrossbeamSender<ChannelMessage<T>>>() {
+                                Ok(tx) => typed_senders.push((*tx, None)),
+                                Err(_) => return Err("Type mismatch in sender".to_string()),
+                            }
+                        }
                     }
                 }
 
                 // Create Sender without watchdog (will be attached by OutputPort)
-                let broadcast_sender = Sender::new(typed_senders);
+                let broadcast_sender = Sender::new_labeled(typed_senders);
 
                 Ok(Box::new(broadcast_sender) as Box<dyn Any + Send>)
             }),
