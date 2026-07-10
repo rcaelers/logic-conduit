@@ -134,10 +134,10 @@ impl ProcessNode for ParallelDecoder {
         use crate::runtime::ports::{PortDirection, PortSchema};
 
         // strobe/dN/cs alias raw binary channels: prefer skip-ahead
-        // queries. enable_signal (pushed separately below, keeping the
-        // default `[Stream]`) is a computed control signal (from an SR
-        // latch, not a raw channel) with no EdgeQuery producer yet, so it
-        // always streams.
+        // queries. enable_signal usually comes from a computed control
+        // path (an SR latch / logic gate) whose producer only streams,
+        // but declares EdgeQuery too so that a graph wiring it straight
+        // to a raw channel gets point queries instead of a stream.
         let indexed_protocols = vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream];
 
         let mut schemas = Vec::new();
@@ -161,11 +161,14 @@ impl ProcessNode for ParallelDecoder {
         );
 
         // Edge input last
-        schemas.push(PortSchema::new::<Sample>(
-            "enable_signal",
-            1 + self.num_data_bits + 1,
-            PortDirection::Input,
-        ));
+        schemas.push(
+            PortSchema::new::<Sample>(
+                "enable_signal",
+                1 + self.num_data_bits + 1,
+                PortDirection::Input,
+            )
+            .with_protocols(indexed_protocols),
+        );
 
         schemas
     }
@@ -229,10 +232,11 @@ struct AssemblyState {
     first_ts: u64,
 }
 
-/// Streamed enable-signal state, threaded through `process_trigger` calls
-/// (query mode has no EdgeQuery producer for this port yet — see
-/// `ParallelDecoder::input_protocols`).
+/// Enable-signal state, threaded through `process_trigger` calls. Either a
+/// point-queried channel (`query`, when the connection negotiated
+/// `EdgeQuery`) or a streamed `Sample` level advanced edge by edge.
 struct EnableState<'a> {
+    query: Option<Arc<dyn EdgeQuery>>,
     current: bool,
     next_change_position: u64,
     input: Option<Receiver<'a, Sample>>,
@@ -241,12 +245,13 @@ struct EnableState<'a> {
 impl ParallelDecoder {
     /// Index-driven path: strobe triggers are located by direct skip-ahead
     /// queries instead of a per-sample block scan; data/CS are point-read
-    /// at each trigger. `enable_signal` still streams (no query producer
-    /// exists for it). One call processes every remaining trigger in the
-    /// file — there's no natural per-call window the way SpiDecoder has
-    /// CS transactions — so a call can run long on a pathologically dense
-    /// `AnyEdge` signal; that's the same signal shape query mode doesn't
-    /// help with in the first place (see `work()`'s `sparse_mode` gate).
+    /// at each trigger. `enable_signal` is point-read too when its
+    /// connection negotiated `EdgeQuery`, and streams otherwise. One call
+    /// processes every remaining trigger in the file — there's no natural
+    /// per-call window the way SpiDecoder has CS transactions — so a call
+    /// can run long on a pathologically dense `AnyEdge` signal; that's the
+    /// same signal shape query mode doesn't help with in the first place
+    /// (see `work()`'s `sparse_mode` gate).
     #[allow(clippy::too_many_arguments)]
     fn work_indexed(
         &mut self,
@@ -264,15 +269,25 @@ impl ParallelDecoder {
             .ok_or_else(|| WorkError::NodeError("Missing output".to_string()))?;
 
         let enable_port_idx = 1 + self.num_data_bits + 1;
-        let enable_recv = inputs
+        let enable_query = inputs
             .get(enable_port_idx)
-            .and_then(|port| port.get::<Sample>(&mut self.enable_buffer));
+            .and_then(|port| port.edge_query());
+        // An EdgeQuery-negotiated enable never has a channel — don't let
+        // the missing receiver read as "unconnected → always enabled".
+        let enable_recv = if enable_query.is_some() {
+            None
+        } else {
+            inputs
+                .get(enable_port_idx)
+                .and_then(|port| port.get::<Sample>(&mut self.enable_buffer))
+        };
         let mut enable = EnableState {
+            query: enable_query,
             current: self.current_enable_value,
             next_change_position: self.next_enable_change_position,
             input: enable_recv,
         };
-        if enable.input.is_none() {
+        if enable.query.is_none() && enable.input.is_none() {
             enable.current = true;
             enable.next_change_position = u64::MAX;
         }
@@ -424,9 +439,13 @@ impl ParallelDecoder {
             return Ok(0);
         }
 
-        // Check enable signal (edge-based, timestamps in nanoseconds).
+        // Check enable signal. Point-read when the connection negotiated
+        // EdgeQuery (same shared position domain as the CS/data queries);
+        // otherwise advance the streamed edge level (timestamps in ns).
         let timestamp_ns = position.saturating_mul(timestamp_step);
-        if timestamp_ns >= enable.next_change_position
+        if let Some(q) = &enable.query {
+            enable.current = q.value_at(position).map_err(query_err)?;
+        } else if timestamp_ns >= enable.next_change_position
             && let Some(enable_recv) = &mut enable.input
         {
             loop {
@@ -551,14 +570,25 @@ impl ParallelDecoder {
         }
 
         // Get edge input: enable_signal — optional; unconnected means
-        // always enabled.
+        // always enabled. When its connection negotiated EdgeQuery there
+        // is no channel at all — point-read it per trigger instead (this
+        // can happen even while the block inputs stream, e.g. a level
+        // strobe mode keeping query mode off).
         // Use local variables for enable state to avoid borrowing self
+        let enable_port_idx = 1 + self.num_data_bits + 1;
+        let enable_query = inputs
+            .get(enable_port_idx)
+            .and_then(|port| port.edge_query());
         let mut current_enable_value = self.current_enable_value;
         let mut next_enable_change_position = self.next_enable_change_position;
-        let mut enable_input = inputs
-            .get(1 + self.num_data_bits + 1)
-            .and_then(|port| port.get::<Sample>(&mut self.enable_buffer));
-        if enable_input.is_none() {
+        let mut enable_input = if enable_query.is_some() {
+            None
+        } else {
+            inputs
+                .get(enable_port_idx)
+                .and_then(|port| port.get::<Sample>(&mut self.enable_buffer))
+        };
+        if enable_query.is_none() && enable_input.is_none() {
             current_enable_value = true;
             next_enable_change_position = u64::MAX;
         }
@@ -635,9 +665,14 @@ impl ParallelDecoder {
                 continue;
             }
 
-            // Check enable signal (edge-based, timestamps in nanoseconds) — inline advance logic
+            // Check enable signal: point-read when EdgeQuery-negotiated,
+            // else advance the streamed edge level (inline advance logic).
             let timestamp_ns = position * timestamp_step;
-            if timestamp_ns >= next_enable_change_position
+            if let Some(q) = &enable_query {
+                current_enable_value = q
+                    .value_at(position)
+                    .map_err(|e| WorkError::NodeError(e.to_string()))?;
+            } else if timestamp_ns >= next_enable_change_position
                 && let Some(enable) = &mut enable_input
             {
                 loop {
@@ -875,6 +910,133 @@ mod tests {
             words.iter().map(|w| w.value).collect::<Vec<_>>(),
             vec![0x12, 0x34]
         );
+    }
+
+    /// Minimal in-memory [`EdgeQuery`] over a literal sample vector:
+    /// 1 GHz (position == nanosecond), matching `block_from_bits`'
+    /// `timestamp_step = 1`.
+    struct FakeChannel {
+        bits: Vec<bool>,
+    }
+
+    impl EdgeQuery for FakeChannel {
+        fn sample_period(&self) -> f64 {
+            1e-9
+        }
+        fn samplerate_hz(&self) -> f64 {
+            1e9
+        }
+        fn total_samples(&self) -> u64 {
+            self.bits.len() as u64
+        }
+        fn value_at(&self, position: u64) -> crate::Result<bool> {
+            Ok(self.bits[position as usize])
+        }
+        fn next_edge(
+            &self,
+            position: u64,
+            limit: u64,
+        ) -> crate::Result<Option<crate::runtime::capture::CaptureTransition>> {
+            let mut current = self.bits[position as usize];
+            for p in (position + 1)..limit.min(self.total_samples()) {
+                let value = self.bits[p as usize];
+                if value != current {
+                    return Ok(Some(crate::runtime::capture::CaptureTransition {
+                        sample: p,
+                        value,
+                    }));
+                }
+                current = value;
+            }
+            Ok(None)
+        }
+    }
+
+    fn query_input(wd: &Watchdog, bits: &[bool], name: &str) -> InputPort {
+        InputPort::from_type_erased(Box::new(()) as Box<dyn std::any::Any + Send>)
+            .with_edge_query(Some(Arc::new(FakeChannel {
+                bits: bits.to_vec(),
+            })))
+            .with_watchdog(wd.clone(), "pd".to_string(), name.to_string())
+    }
+
+    /// The 4-bit fixture of `run_4bit`, with an enable signal that is low
+    /// until position 4 — so the first word (value 1, strobe at position 1)
+    /// must be gated off and only 2@5, 3@9, 4@13 survive. Bus inputs and
+    /// the enable can each be wired streamed or query-backed.
+    fn run_4bit_gated(query_bus: bool, query_enable: bool) -> Vec<Word> {
+        let wd = Watchdog::new();
+        let n = 16usize;
+        let values = [0u64, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4];
+        let strobe: Vec<bool> = (0..n).map(|i| i % 4 == 1 || i % 4 == 2).collect();
+        let enable_bits: Vec<bool> = (0..n).map(|i| i >= 4).collect();
+
+        let bus_input = |bits: &[bool], name: &str| -> InputPort {
+            if query_bus {
+                query_input(&wd, bits, name)
+            } else {
+                block_input(&wd, block_from_bits(bits), name)
+            }
+        };
+        let mut inputs = vec![bus_input(&strobe, "strobe")];
+        for bit in 0..4 {
+            let bits: Vec<bool> = (0..n).map(|i| (values[i] >> bit) & 1 == 1).collect();
+            inputs.push(bus_input(&bits, &format!("d{bit}")));
+        }
+        inputs.push(unconnected(&wd, "cs"));
+        inputs.push(if query_enable {
+            query_input(&wd, &enable_bits, "enable_signal")
+        } else {
+            // The same level timeline as `enable_bits`, streamed the way a
+            // real Sample producer delivers it.
+            let (tx, rx) = bounded::<ChannelMessage<Sample>>(8);
+            tx.send(ChannelMessage::Sample(Sample::new(false, 0)))
+                .unwrap();
+            tx.send(ChannelMessage::Sample(Sample::new(true, 4))).unwrap();
+            drop(tx);
+            InputPort::new_with_watchdog(rx, &wd, "pd", "enable_signal")
+        });
+
+        let (out_tx, out_rx) = bounded::<ChannelMessage<Word>>(64);
+        let outputs = [OutputPort::new_with_watchdog(
+            Sender::new(vec![out_tx]),
+            &wd,
+            "pd",
+            "words",
+        )];
+
+        let mut decoder = ParallelDecoder::new(4, StrobeMode::RisingEdge, CsPolarity::Disabled);
+        loop {
+            match decoder.work(&inputs, &outputs) {
+                Ok(_) => {}
+                Err(WorkError::Shutdown) => break,
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+        out_rx
+            .try_iter()
+            .filter_map(|m| match m {
+                ChannelMessage::Sample(w) => Some(w),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Enable gating must behave identically whichever protocol each input
+    /// negotiated: fully streamed, mixed either way, or fully query-backed.
+    #[test]
+    fn enable_gating_is_protocol_independent() {
+        let expected: Vec<(u64, u64)> = vec![(2, 5), (3, 9), (4, 13)];
+        for (query_bus, query_enable) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let words = run_4bit_gated(query_bus, query_enable);
+            let view: Vec<_> = words.iter().map(|w| (w.value, w.timestamp_ns)).collect();
+            assert_eq!(
+                view, expected,
+                "query_bus={query_bus} query_enable={query_enable}"
+            );
+        }
     }
 
     // ── Differential test: query-mode output must match streaming-mode ──
