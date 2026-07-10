@@ -833,14 +833,29 @@ impl NodeGraphWidget {
         canvas_rect: Rect,
     ) {
         let response = &responses.canvas;
-        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-        if scroll.abs() > 0.1
+        let (scroll, zoom_delta, zoom_modifier) = ui.input(|i| {
+            (
+                i.smooth_scroll_delta,
+                i.zoom_delta(),
+                i.modifiers.ctrl || i.modifiers.command || i.modifiers.mac_cmd,
+            )
+        });
+        let has_scroll = scroll.length_sq() > 0.01;
+        let has_zoom = zoom_modifier && (zoom_delta - 1.0).abs() > 0.001;
+        if (has_scroll || has_zoom)
             && !self.menu.blocks_canvas_scroll(ui)
             && let Some(cursor) = ui.input(|i| i.pointer.hover_pos())
             && canvas_rect.contains(cursor)
         {
-            self.view
-                .zoom_around(cursor, origin, (1.0_f32 + scroll * 0.003).clamp(0.5, 2.0));
+            if has_zoom {
+                self.view
+                    .zoom_around(cursor, origin, zoom_delta.clamp(0.5, 2.0));
+            } else if zoom_modifier && scroll.y.abs() > 0.1 {
+                self.view
+                    .zoom_around(cursor, origin, (1.0_f32 + scroll.y * 0.003).clamp(0.5, 2.0));
+            } else if !zoom_modifier {
+                self.view.pan += scroll;
+            }
         }
 
         let pointer = response

@@ -108,8 +108,7 @@ impl LogicAnalyzerViewer {
         row_height: f32,
         annotations: &[Annotation],
     ) {
-        let box_color = Color32::from_rgb(88, 58, 28);
-        let border = Stroke::new(1.0, Color32::from_rgb(215, 140, 60));
+        let band_color = Color32::from_rgb(215, 140, 60);
         let box_top = y_top + row_height * 0.18;
         let box_bottom = y_top + row_height * 0.82;
         let (start_ns, end_ns) = self.visible_window_ns();
@@ -123,26 +122,49 @@ impl LogicAnalyzerViewer {
         let visible = &annotations[first..last];
 
         if visible.len() > wave_rect.width() as usize * 2 {
-            // Dense: per-column presence band.
+            // Dense window: bucket words into pixel-column runs, but keep
+            // the decision *local* — a lone word render as a labeled value
+            // box exactly like the sparse path (one 12k-word burst
+            // somewhere in view must not reduce every isolated word
+            // elsewhere to an anonymous tick). Only genuinely overlapping
+            // clusters — several words per pixel, where per-word values
+            // cannot exist at this zoom — collapse into a presence band;
+            // zooming in resolves them into value boxes.
             let span_ns = (end_ns - start_ns).max(1);
             let width = wave_rect.width().max(1.0);
-            let mut index = 0usize;
-            let mut column = 0u32;
-            while (column as f32) < width {
-                let column_end_ns =
-                    start_ns + ((column + 1) as u64).saturating_mul(span_ns) / width as u64;
-                let step = visible[index..]
-                    .partition_point(|annotation| annotation.start_ns < column_end_ns);
-                if step > 0 {
-                    let x0 = wave_rect.left() + column as f32;
-                    painter.rect_filled(
-                        Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(x0 + 1.0, box_bottom)),
-                        0.0,
-                        border.color,
+            let runs = dense_annotation_runs(visible, start_ns, span_ns, width as u32);
+            for (index, run) in runs.iter().enumerate() {
+                if run.count == 1 {
+                    let global = first + run.first_index;
+                    let annotation = &visible[run.first_index];
+                    let is_last_ever = global == annotations.len() - 1;
+                    let previous_duration_ns = (global > 0).then(|| {
+                        let previous = &annotations[global - 1];
+                        previous.end_ns.saturating_sub(previous.start_ns)
+                    });
+                    let next_x = runs
+                        .get(index + 1)
+                        .map(|next| wave_rect.left() + next.start_column as f32)
+                        .unwrap_or(wave_rect.right());
+                    self.draw_annotation_box(
+                        painter,
+                        wave_rect,
+                        box_top,
+                        box_bottom,
+                        annotation,
+                        is_last_ever,
+                        previous_duration_ns,
+                        next_x,
                     );
-                    index += step;
+                    continue;
                 }
-                column += 1;
+                let x0 = wave_rect.left() + run.start_column as f32;
+                let x1 = wave_rect.left() + (run.end_column + 1) as f32;
+                painter.rect_filled(
+                    Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(x1, box_bottom)),
+                    0.0,
+                    band_color,
+                );
             }
             return;
         }
@@ -159,35 +181,65 @@ impl LogicAnalyzerViewer {
                 let previous = &annotations[first + offset - 1];
                 previous.end_ns.saturating_sub(previous.start_ns)
             });
-            let effective_end = annotation_box_end(annotation, is_last_ever, previous_duration_ns);
-            let x0 = self.ns_to_x(wave_rect, annotation.start_ns);
-            let natural_x1 = self.ns_to_x(wave_rect, effective_end).max(x0 + 2.0);
-            let label = format!("{:02X}", annotation.value);
-            let label_width = annotation_label_width(&label);
             let next_x = annotations
                 .get(first + offset + 1)
                 .map(|next| self.ns_to_x(wave_rect, next.start_ns))
                 .unwrap_or(wave_rect.right());
-            let max_labeled_x1 = next_x.min(wave_rect.right()) - 3.0;
-            let x1 = if natural_x1 - x0 >= label_width {
-                natural_x1
-            } else if max_labeled_x1 - x0 >= label_width {
-                x0 + label_width
-            } else {
-                natural_x1
-            };
-            let rect = Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(x1, box_bottom));
-            painter.rect_filled(rect, 2.0, box_color);
-            painter.rect_stroke(rect, 2.0, border, egui::StrokeKind::Inside);
-            if rect.width() >= label_width {
-                painter.text(
-                    rect.center(),
-                    Align2::CENTER_CENTER,
-                    label,
-                    FontId::monospace(10.0),
-                    Color32::from_rgb(235, 220, 200),
-                );
-            }
+            self.draw_annotation_box(
+                painter,
+                wave_rect,
+                box_top,
+                box_bottom,
+                annotation,
+                is_last_ever,
+                previous_duration_ns,
+                next_x,
+            );
+        }
+    }
+
+    /// One word as a bordered value box, hex label included whenever it
+    /// fits: naturally, or by widening a narrow box up to `next_x` (the
+    /// left edge of whatever comes next — the following word, cluster, or
+    /// window edge).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_annotation_box(
+        &self,
+        painter: &Painter,
+        wave_rect: Rect,
+        box_top: f32,
+        box_bottom: f32,
+        annotation: &Annotation,
+        is_last_ever: bool,
+        previous_duration_ns: Option<u64>,
+        next_x: f32,
+    ) {
+        let box_color = Color32::from_rgb(88, 58, 28);
+        let border = Stroke::new(1.0, Color32::from_rgb(215, 140, 60));
+        let effective_end = annotation_box_end(annotation, is_last_ever, previous_duration_ns);
+        let x0 = self.ns_to_x(wave_rect, annotation.start_ns);
+        let natural_x1 = self.ns_to_x(wave_rect, effective_end).max(x0 + 2.0);
+        let label = format!("{:02X}", annotation.value);
+        let label_width = annotation_label_width(&label);
+        let max_labeled_x1 = next_x.min(wave_rect.right()) - 3.0;
+        let x1 = if natural_x1 - x0 >= label_width {
+            natural_x1
+        } else if max_labeled_x1 - x0 >= label_width {
+            x0 + label_width
+        } else {
+            natural_x1
+        };
+        let rect = Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(x1, box_bottom));
+        painter.rect_filled(rect, 2.0, box_color);
+        painter.rect_stroke(rect, 2.0, border, egui::StrokeKind::Inside);
+        if rect.width() >= label_width {
+            painter.text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                label,
+                FontId::monospace(10.0),
+                Color32::from_rgb(235, 220, 200),
+            );
         }
     }
 
@@ -247,6 +299,55 @@ impl LogicAnalyzerViewer {
             ));
         }
     }
+}
+
+/// One contiguous stretch of pixel columns containing annotation starts, in
+/// the dense (more words than pixels) rendering path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DenseRun {
+    start_column: u32,
+    /// Inclusive.
+    end_column: u32,
+    /// Index (into the visible slice) of the run's first word.
+    first_index: usize,
+    /// Words whose start falls inside the run.
+    count: usize,
+}
+
+/// Buckets `visible` (sorted by `start_ns`, all within the window) into
+/// per-pixel-column runs: adjacent columns that each contain at least one
+/// annotation start merge into one run with a total word count.
+fn dense_annotation_runs(
+    visible: &[Annotation],
+    start_ns: u64,
+    span_ns: u64,
+    width: u32,
+) -> Vec<DenseRun> {
+    let mut runs: Vec<DenseRun> = Vec::new();
+    let mut index = 0usize;
+    for column in 0..width {
+        let column_end_ns =
+            start_ns + ((column + 1) as u64).saturating_mul(span_ns) / width.max(1) as u64;
+        let step = visible[index..]
+            .partition_point(|annotation| annotation.start_ns < column_end_ns);
+        if step == 0 {
+            continue;
+        }
+        match runs.last_mut() {
+            Some(run) if run.end_column + 1 == column => {
+                run.end_column = column;
+                run.count += step;
+            }
+            _ => runs.push(DenseRun {
+                start_column: column,
+                end_column: column,
+                first_index: index,
+                count: step,
+            }),
+        }
+        index += step;
+    }
+    runs
 }
 
 /// Effective right edge for one annotation box. The most recent word ever
@@ -336,6 +437,77 @@ mod tests {
     fn annotation_label_width_scales_with_hex_digits() {
         assert!(annotation_label_width("600081") > annotation_label_width("4F"));
         assert!(annotation_label_width("4F") >= 26.0);
+    }
+
+    /// A lone word and a real cluster must come out as separate runs — the
+    /// lone one (count 1) is what the dense path still renders as a full
+    /// labeled value box instead of an anonymous tick.
+    #[test]
+    fn dense_runs_keep_isolated_words_separable_from_clusters() {
+        // Window: 0..1_000_000ns over 100 columns → 10_000ns per column.
+        // Burst: 3 words inside column 1; lone word in column 50; pair in
+        // column 80.
+        let word = |start_ns: u64| Annotation {
+            start_ns,
+            end_ns: start_ns,
+            value: 0,
+        };
+        let visible = [
+            word(10_000),
+            word(12_000),
+            word(14_000),
+            word(500_000),
+            word(800_000),
+            word(805_000),
+        ];
+        let runs = dense_annotation_runs(&visible, 0, 1_000_000, 100);
+        assert_eq!(
+            runs,
+            vec![
+                DenseRun {
+                    start_column: 1,
+                    end_column: 1,
+                    first_index: 0,
+                    count: 3
+                },
+                DenseRun {
+                    start_column: 50,
+                    end_column: 50,
+                    first_index: 3,
+                    count: 1
+                },
+                DenseRun {
+                    start_column: 80,
+                    end_column: 80,
+                    first_index: 4,
+                    count: 2
+                },
+            ]
+        );
+    }
+
+    /// A burst spanning several adjacent columns is one run, not one run
+    /// per pixel.
+    #[test]
+    fn dense_runs_merge_adjacent_columns() {
+        let word = |start_ns: u64| Annotation {
+            start_ns,
+            end_ns: start_ns,
+            value: 0,
+        };
+        // 100 columns over 0..100_000ns → 1_000ns per column; words every
+        // 250ns across columns 10..=13.
+        let visible: Vec<Annotation> = (0..16).map(|i| word(10_000 + i * 250)).collect();
+        let runs = dense_annotation_runs(&visible, 0, 100_000, 100);
+        assert_eq!(
+            runs,
+            vec![DenseRun {
+                start_column: 10,
+                end_column: 13,
+                first_index: 0,
+                count: 16
+            }]
+        );
     }
 
     #[test]
