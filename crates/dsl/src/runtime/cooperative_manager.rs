@@ -462,6 +462,13 @@ impl CooperativeManager {
         events
     }
 
+    /// Non-blocking stop, mirroring `PipelineManager::request_stop`. There
+    /// are no threads to wind down on this single-threaded manager, so the
+    /// stop is already complete when this returns.
+    pub fn request_stop(&mut self) {
+        self.stop_all();
+    }
+
     pub fn stop_all(&mut self) {
         for node in self.nodes.values() {
             close_outputs(node);

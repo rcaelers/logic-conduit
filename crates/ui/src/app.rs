@@ -134,7 +134,10 @@ impl App {
         let Some(run) = &mut self.run else {
             return;
         };
-        if run.is_finished() {
+        // No live edits once the run is done or winding down — `apply()`'s
+        // remove/restart paths join node threads, which a stopping run may
+        // not finish promptly.
+        if run.is_finished() || run.is_stopping() {
             return;
         }
 
@@ -180,7 +183,13 @@ impl App {
         ui.horizontal(|ui| {
             ui.add_space(6.0);
             let running = self.run.as_ref().is_some_and(|run| !run.is_finished());
-            if running {
+            let stopping = self.run.as_ref().is_some_and(|run| run.is_stopping());
+            if running && stopping {
+                // Wind-down signalled; threads are finishing their current
+                // work. Nothing to click — is_finished() flips shortly.
+                ui.spinner();
+                ui.label("Stopping…");
+            } else if running {
                 if ui.button("⏹ Stop").clicked()
                     && let Some(run) = &mut self.run
                 {

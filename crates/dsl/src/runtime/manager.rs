@@ -735,10 +735,15 @@ impl PipelineManager {
         events
     }
 
-    /// Stops everything: closes every output list (unblocking every waiting
-    /// consumer with end-of-stream), sets all stop flags, joins all threads.
-    /// Writer flushes run in the node `Drop`s, as offline.
-    pub fn stop_all(&mut self) {
+    /// Signals every node to stop — sets all stop flags and closes every
+    /// output list (unblocking every blocked send/recv with end-of-stream)
+    /// — **without joining the threads**. This is the stop an interactive
+    /// caller must use: [`Self::stop_all`]'s joins wait for each node to
+    /// finish its current `work()` call, which a frame loop can never
+    /// afford to block on. Poll [`Self::is_finished`] to observe the
+    /// wind-down; the exited threads are reaped by a later [`Self::stop_all`]
+    /// (instant once finished) or by drop. Idempotent.
+    pub fn request_stop(&self) {
         for node in self.nodes.values() {
             node.stop_flag.store(true, Ordering::Relaxed);
             for output in node.outputs.values() {
@@ -747,6 +752,13 @@ impl PipelineManager {
                 }
             }
         }
+    }
+
+    /// Stops everything: closes every output list (unblocking every waiting
+    /// consumer with end-of-stream), sets all stop flags, joins all threads.
+    /// Writer flushes run in the node `Drop`s, as offline.
+    pub fn stop_all(&mut self) {
+        self.request_stop();
         for (name, node) in self.nodes.drain() {
             if let Some(thread) = node.thread
                 && thread.join().is_err()
@@ -1179,6 +1191,53 @@ mod tests {
         assert!(
             start.elapsed() < Duration::from_secs(2),
             "stop_all took too long"
+        );
+        assert!(!out.lock().unwrap().is_empty());
+    }
+
+    /// The interactive stop: `request_stop` must return without joining
+    /// (the UI thread calls it mid-frame), and the run must then wind down
+    /// on its own so a later `stop_all` reap is instant.
+    #[test]
+    fn request_stop_is_nonblocking_and_winds_down() {
+        let mut manager = PipelineManager::new();
+        let out = Arc::new(Mutex::new(Vec::new()));
+        manager
+            .add_node(NodeSpec {
+                name: "source".into(),
+                node: Box::new(PacedSource {
+                    next: 0,
+                    max: i64::MAX, // endless
+                    pace: Duration::from_millis(1),
+                }),
+                inputs: vec![],
+            })
+            .unwrap();
+        manager
+            .add_node(collect_spec("sink", "source", "out", &out))
+            .unwrap();
+
+        std::thread::sleep(Duration::from_millis(30));
+        let start = std::time::Instant::now();
+        manager.request_stop();
+        assert!(
+            start.elapsed() < Duration::from_millis(100),
+            "request_stop must not join node threads"
+        );
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !manager.is_finished() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "run did not wind down after request_stop"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let reap_start = std::time::Instant::now();
+        manager.stop_all();
+        assert!(
+            reap_start.elapsed() < Duration::from_millis(100),
+            "reaping a finished run must be instant"
         );
         assert!(!out.lock().unwrap().is_empty());
     }

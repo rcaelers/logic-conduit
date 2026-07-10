@@ -801,6 +801,9 @@ pub struct LiveRun {
     /// title renames and in-place restarts.
     names: HashMap<NodeId, String>,
     lanes: DerivedLanes,
+    /// Set by [`Self::stop`]: the wind-down has been signalled but node
+    /// threads may still be finishing their current `work()` call.
+    stop_requested: bool,
 }
 
 /// Lowers and materializes `graph` under an [`AppManager`] — real OS threads
@@ -847,6 +850,7 @@ pub fn start_live(
         compiled,
         names,
         lanes: ctx.derived_lanes.clone(),
+        stop_requested: false,
     })
 }
 
@@ -939,8 +943,20 @@ impl LiveRun {
         self.manager.is_finished()
     }
 
+    /// Signals the wind-down and returns immediately — never joins node
+    /// threads, so it is safe to call from the frame loop (a node may be
+    /// mid-`work()` for a while yet; see `PipelineManager::request_stop`).
+    /// [`Self::is_finished`] flips once every thread has exited.
     pub fn stop(&mut self) {
-        self.manager.stop_all();
+        self.stop_requested = true;
+        self.manager.request_stop();
+    }
+
+    /// True from [`Self::stop`] until the run is dropped — used by the
+    /// toolbar to show "Stopping…" while threads finish their current
+    /// `work()` call.
+    pub fn is_stopping(&self) -> bool {
+        self.stop_requested
     }
 
     /// Drives up to `budget` `work()` calls forward. A no-op on the

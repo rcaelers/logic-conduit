@@ -70,6 +70,10 @@ impl WatchdogHandle {
 pub struct Watchdog {
     ports: Arc<Mutex<Vec<Weak<PortState>>>>,
     enabled: Arc<Mutex<bool>>,
+    /// Wakes the monitoring thread out of its poll sleep so `stop()` takes
+    /// effect immediately instead of after up to a full poll interval —
+    /// `stop()`'s callers join the thread, sometimes from the UI thread.
+    wakeup: Arc<std::sync::Condvar>,
 }
 
 impl Watchdog {
@@ -78,6 +82,7 @@ impl Watchdog {
         Self {
             ports: Arc::new(Mutex::new(Vec::new())),
             enabled: Arc::new(Mutex::new(true)),
+            wakeup: Arc::new(std::sync::Condvar::new()),
         }
     }
 
@@ -139,10 +144,15 @@ impl Watchdog {
         let watchdog = self.clone();
         std::thread::spawn(move || {
             loop {
-                std::thread::sleep(Duration::from_secs(1));
-
-                if !*watchdog.enabled.lock().unwrap() {
-                    break;
+                {
+                    let enabled = watchdog.enabled.lock().unwrap();
+                    let (enabled, _) = watchdog
+                        .wakeup
+                        .wait_timeout(enabled, Duration::from_secs(1))
+                        .unwrap();
+                    if !*enabled {
+                        break;
+                    }
                 }
 
                 watchdog.check_for_blocked();
@@ -150,9 +160,11 @@ impl Watchdog {
         })
     }
 
-    /// Stop the watchdog monitoring thread
+    /// Stop the watchdog monitoring thread. Takes effect immediately (the
+    /// poll sleep is interrupted), so a following join returns promptly.
     pub fn stop(&self) {
         *self.enabled.lock().unwrap() = false;
+        self.wakeup.notify_all();
     }
 }
 
