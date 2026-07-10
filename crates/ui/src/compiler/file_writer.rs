@@ -34,11 +34,21 @@ impl RuntimeBuilder for FileWriterBuilder {
     fn output_port(&self, _: &Socket, _: &Value, _: PortKind) -> Option<String> {
         None
     }
+    fn input_required(&self, socket: &Socket, state: &Value) -> bool {
+        match socket.def_index {
+            // The Filename input can stay unconnected when the node's own
+            // static filename (save-dialog prop) is set.
+            1 => parse_state::<nodes::FileWriterState>(state)
+                .map(|state| state.filename.value.trim().is_empty())
+                .unwrap_or(true),
+            _ => true,
+        }
+    }
     fn build(
         &self,
         name: &str,
         state: &Value,
-        _resolved: &ResolvedInputs,
+        resolved: &ResolvedInputs,
         _ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: nodes::FileWriterState = parse_state(state)?;
@@ -47,11 +57,16 @@ impl RuntimeBuilder for FileWriterBuilder {
             "U32 LE" => WriteWidth::U32Le,
             _ => WriteWidth::U8,
         };
-        Ok(Box::new(
-            BinaryFileWriter::new()
-                .with_width(width)
-                .with_index_csv(state.index_csv.value)
-                .with_name(name),
-        ))
+        let mut writer = BinaryFileWriter::new()
+            .with_width(width)
+            .with_index_csv(state.index_csv.value)
+            .with_name(name);
+        // Static fallback only when nothing is wired into Filename — a
+        // connected stream always wins.
+        let static_filename = state.filename.value.trim();
+        if resolved.kind(1).is_none() && !static_filename.is_empty() {
+            writer = writer.with_filename(static_filename);
+        }
+        Ok(Box::new(writer))
     }
 }

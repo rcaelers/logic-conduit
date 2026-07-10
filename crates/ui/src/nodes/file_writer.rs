@@ -1,12 +1,23 @@
 //! `File Writer` node (§4.8).
 
-use super::{COLOR_OUTPUT, Text, Words};
+use super::{COLOR_OUTPUT, TextSavePath, Words};
 use egui::Color32;
-use node_graph::{BoolValue, EnumValue, InputDef, NodeDef, OutputDef, PanelSection, PropDef};
+use node_graph::{
+    BoolValue, EnumValue, FileValue, InputDef, NodeDef, OutputDef, PanelSection, PropDef,
+};
 use serde::{Deserialize, Serialize};
+
+/// Empty save-dialog picker, shown inline on the `Filename` socket while it
+/// is unconnected; a connected filename stream always wins.
+pub fn default_writer_filename() -> FileValue {
+    FileValue::new_save("", "Save capture as")
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileWriterState {
+    /// Static fallback for an unconnected `Filename` input.
+    #[serde(default = "default_writer_filename")]
+    pub filename: FileValue,
     pub write_width: EnumValue,
     pub index_csv: BoolValue,
 }
@@ -28,7 +39,9 @@ impl NodeDef for FileWriter {
     fn inputs() -> Vec<InputDef<Self::State>> {
         vec![
             InputDef::new::<Words>("Data"),
-            InputDef::new::<Text>("Filename"),
+            // While unconnected, the socket shows a save-file picker in the
+            // node body — the static path the writer falls back to.
+            InputDef::control::<TextSavePath>("Filename", |state| &mut state.filename),
         ]
     }
 
@@ -38,6 +51,7 @@ impl NodeDef for FileWriter {
 
     fn state() -> Self::State {
         FileWriterState {
+            filename: default_writer_filename(),
             write_width: EnumValue::new(0, &["U8 (low byte)", "U16 LE", "U32 LE"]),
             index_csv: BoolValue::new(true),
         }

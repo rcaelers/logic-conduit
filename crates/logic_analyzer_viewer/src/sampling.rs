@@ -19,7 +19,7 @@ impl LogicAnalyzerViewer {
         };
         let samplerate_hz = capture.header.samplerate_hz;
         let (visible_start, visible_end) =
-            visible_sample_range(capture, self.visible_start_us, self.visible_span_us);
+            sampled_visible_range(capture, self.visible_start_us, self.visible_span_us);
         let target_points = layout.wave_rect.width().max(1.0).round() as usize;
 
         let key = (visible_start, visible_end, target_points);
@@ -427,4 +427,50 @@ pub(crate) fn visible_sample_range(capture: &CaptureInfo, start_us: f64, span_us
     let visible_end =
         us_to_sample(start_us + span_us, samplerate_hz).clamp(visible_start + 1, total_samples);
     (visible_start, visible_end)
+}
+
+fn sampled_visible_range(capture: &CaptureInfo, start_us: f64, span_us: f64) -> (u64, u64) {
+    let (visible_start, visible_end) = visible_sample_range(capture, start_us, span_us);
+    (
+        visible_start.saturating_sub(1),
+        visible_end.saturating_add(1).min(capture.header.total_samples),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dsl::CaptureMetadata;
+
+    fn capture(total_samples: u64) -> CaptureInfo {
+        CaptureInfo {
+            #[cfg(not(target_arch = "wasm32"))]
+            path: std::path::PathBuf::new(),
+            header: CaptureMetadata {
+                total_probes: 1,
+                samplerate: "1 GHz".to_string(),
+                samplerate_hz: 1_000_000_000.0,
+                sample_period: 1e-9,
+                total_samples,
+                total_blocks: 1,
+                samples_per_block: total_samples,
+                probe_names: vec!["0".to_string()],
+            },
+            duration_us: total_samples as f64 / 1_000.0,
+        }
+    }
+
+    #[test]
+    fn sampled_visible_range_adds_boundary_guard_samples() {
+        let capture = capture(1_000);
+        assert_eq!(visible_sample_range(&capture, 0.010, 0.022), (10, 32));
+        assert_eq!(sampled_visible_range(&capture, 0.010, 0.022), (9, 33));
+    }
+
+    #[test]
+    fn sampled_visible_range_clamps_at_capture_edges() {
+        let capture = capture(100);
+        assert_eq!(sampled_visible_range(&capture, 0.0, 0.010), (0, 11));
+        assert_eq!(sampled_visible_range(&capture, 0.095, 0.010), (94, 100));
+    }
 }

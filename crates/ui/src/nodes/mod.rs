@@ -133,6 +133,42 @@ impl SocketDef for Text {
     }
 }
 
+/// A [`Text`] input (same wire type, so any `Text` output connects) whose
+/// inline control — shown in the node body only while the socket is
+/// unconnected — is a save-file picker instead of a plain string field.
+pub struct TextSavePath;
+impl SocketDef for TextSavePath {
+    type Value = String;
+
+    fn type_name() -> &'static str {
+        Text::type_name()
+    }
+    fn color() -> Color32 {
+        Text::color()
+    }
+}
+impl node_graph::SocketWithControlDef for TextSavePath {
+    type Control = node_graph::FileValue;
+}
+
+/// The open-dialog counterpart of [`TextSavePath`]: a [`Text`] input whose
+/// inline control (shown while unconnected) is an open-file picker — pick
+/// an existing file, or wire a text filename in.
+pub struct TextOpenPath;
+impl SocketDef for TextOpenPath {
+    type Value = String;
+
+    fn type_name() -> &'static str {
+        Text::type_name()
+    }
+    fn color() -> Color32 {
+        Text::color()
+    }
+}
+impl node_graph::SocketWithControlDef for TextOpenPath {
+    type Control = node_graph::FileValue;
+}
+
 // ── Category colors ──────────────────────────────────────────────────────────
 
 const COLOR_SOURCES: Color32 = Color32::from_rgb(100, 75, 140);

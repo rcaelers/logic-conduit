@@ -36,8 +36,9 @@ pub use runtime::{NumberSample, TextSample, Trigger, Word};
 pub use nodes::UartDemoSource;
 #[cfg(not(target_arch = "wasm32"))]
 pub use nodes::{
-    CaptureMode, ClockEdge, ClockSource, DsLogicU3Pro16, DsLogicU3Pro16Source, DslCaptureReader,
-    DslChunkedCaptureReader, DslFileCaptureDataSource, DslFileSource, LinkSpeed, LogicAnalyzer,
+    CaptureMode, ClockEdge, ClockSource, DeferredDslFileSource, DsLogicU3Pro16,
+    DsLogicU3Pro16Source, DslCaptureReader, DslChunkedCaptureReader, DslFileCaptureDataSource,
+    DslFileSource, LinkSpeed, LogicAnalyzer,
     LogicAnalyzerError, LogicAnalyzerInfo, LogicAnalyzerResult, LogicAnalyzerSource,
     LogicCaptureConfig, LogicChunk, LogicEncoding, LogicEncodingRequest, LogicTrigger,
     LogicTriggerStage, RusbTransport, TriggerCondition, TriggerLogic, UsbTransport,

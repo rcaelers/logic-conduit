@@ -176,7 +176,9 @@ impl NodeGraphWidget {
                 let status = self.node_statuses.get(&id).map(String::as_str);
                 widget.draw(
                     painter,
+                    id,
                     node,
+                    &self.graph,
                     badge,
                     status,
                     &self.registry,

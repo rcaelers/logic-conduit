@@ -348,6 +348,10 @@ pub struct FileValue {
     pub dialog_title: String,
     #[serde(default)]
     pub filters: Vec<FileFilter>,
+    /// Browse with a *save* dialog (pick a new/overwrite target) instead of
+    /// an *open* dialog (pick an existing file).
+    #[serde(default)]
+    pub save: bool,
 }
 
 impl FileValue {
@@ -356,6 +360,17 @@ impl FileValue {
             value: value.into(),
             dialog_title: "Select file".to_string(),
             filters: Vec::new(),
+            save: false,
+        }
+    }
+
+    /// A picker whose browse button opens a save dialog.
+    pub fn new_save(value: impl Into<String>, dialog_title: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            dialog_title: dialog_title.into(),
+            filters: Vec::new(),
+            save: true,
         }
     }
 
@@ -375,6 +390,7 @@ impl FileValue {
                     .map(|extension| extension.to_string())
                     .collect(),
             }],
+            save: false,
         }
     }
 }
@@ -420,7 +436,12 @@ impl InlineControl for FileValue {
                                 filter.extensions.iter().map(String::as_str).collect();
                             dialog = dialog.add_filter(&filter.name, &extensions);
                         }
-                        if let Some(path) = dialog.pick_file() {
+                        let picked = if self.save {
+                            dialog.save_file()
+                        } else {
+                            dialog.pick_file()
+                        };
+                        if let Some(path) = picked {
                             self.value = path.display().to_string();
                         }
                     }

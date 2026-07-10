@@ -49,7 +49,8 @@ impl WriteWidth {
 
 /// Sink writing [`Word`] values to files named by a [`TextSample`] level.
 ///
-/// Inputs: `data` (0) — `Word`; `filename` (1) — `TextSample` level
+/// Inputs: `data` (0) — `Word`; `filename` (1) — `TextSample` level,
+/// optional when a static path was set via [`Self::with_filename`]
 /// Outputs: none
 pub struct BinaryFileWriter {
     name: String,
@@ -99,6 +100,14 @@ impl BinaryFileWriter {
 
     pub fn with_width(mut self, width: WriteWidth) -> Self {
         self.width = width;
+        self
+    }
+
+    /// Fixed output path, used when no `filename` input is connected. A
+    /// connected filename stream takes precedence (its t=0 level replaces
+    /// this before the first word is written).
+    pub fn with_filename(mut self, path: impl Into<String>) -> Self {
+        self.current_name = Some(path.into());
         self
     }
 
@@ -260,14 +269,23 @@ impl ProcessNode for BinaryFileWriter {
             .first()
             .and_then(|port| port.get::<Word>(&mut self.data_buffer))
             .ok_or_else(|| WorkError::NodeError("Missing data input".to_string()))?;
+        // Optional when a static filename was set via `with_filename` —
+        // an unconnected input writes everything to that one path.
         let mut names = inputs
             .get(1)
-            .and_then(|port| port.get::<TextSample>(&mut self.name_buffer))
-            .ok_or_else(|| WorkError::NodeError("Missing filename input".to_string()))?;
+            .and_then(|port| port.get::<TextSample>(&mut self.name_buffer));
+        if names.is_none() && self.current_name.is_none() && self.pending_names.is_empty() {
+            return Err(WorkError::NodeError(
+                "No filename: connect the filename input or set a static one".to_string(),
+            ));
+        }
 
         // The initial name is guaranteed by the level-stream contract (sent
         // at t=0), so a blocking wait for it is bounded and only happens once.
-        if self.current_name.is_none() && self.pending_names.is_empty() {
+        if let Some(names) = &mut names
+            && self.current_name.is_none()
+            && self.pending_names.is_empty()
+        {
             let initial = names.recv()?;
             self.pending_names.push_back(initial);
         }
@@ -284,8 +302,10 @@ impl ProcessNode for BinaryFileWriter {
         };
 
         // Opportunistically drain name changes (never blocks).
-        while let Ok(change) = names.try_recv() {
-            self.pending_names.push_back(change);
+        if let Some(names) = &mut names {
+            while let Ok(change) = names.try_recv() {
+                self.pending_names.push_back(change);
+            }
         }
 
         // Apply every name change the data stream has passed.
@@ -364,6 +384,65 @@ mod tests {
                 Err(e) => panic!("unexpected error: {e}"),
             }
         }
+    }
+
+    /// With a static filename set and the `filename` input unconnected,
+    /// everything is written to that one path — the "save dialog on the
+    /// node" case, no formatter needed.
+    #[test]
+    fn static_filename_without_filename_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("static.bin").display().to_string();
+
+        let wd = Watchdog::new();
+        let (data_tx, data_rx) = bounded::<ChannelMessage<Word>>(256);
+        let inputs = vec![
+            InputPort::new_with_watchdog(data_rx, &wd, "writer", "data"),
+            InputPort::disconnected().with_watchdog(
+                wd.clone(),
+                "writer".to_string(),
+                "filename".to_string(),
+            ),
+        ];
+        for (v, ts) in [(1u64, 100u64), (2, 200), (3, 300)] {
+            data_tx.send(ChannelMessage::Sample(word(v, ts))).unwrap();
+        }
+        drop(data_tx);
+
+        let mut writer = BinaryFileWriter::new().with_filename(&target);
+        loop {
+            match writer.work(&inputs, &[]) {
+                Ok(_) => {}
+                Err(WorkError::Shutdown) => break,
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+
+        assert_eq!(std::fs::read(&target).unwrap(), vec![1, 2, 3]);
+    }
+
+    /// No filename input *and* no static filename is a configuration
+    /// error, reported as such rather than silently writing nowhere.
+    #[test]
+    fn missing_filename_and_static_is_an_error() {
+        let wd = Watchdog::new();
+        let (data_tx, data_rx) = bounded::<ChannelMessage<Word>>(4);
+        let inputs = vec![
+            InputPort::new_with_watchdog(data_rx, &wd, "writer", "data"),
+            InputPort::disconnected().with_watchdog(
+                wd.clone(),
+                "writer".to_string(),
+                "filename".to_string(),
+            ),
+        ];
+        data_tx.send(ChannelMessage::Sample(word(1, 100))).unwrap();
+        drop(data_tx);
+
+        let mut writer = BinaryFileWriter::new();
+        assert!(matches!(
+            writer.work(&inputs, &[]),
+            Err(WorkError::NodeError(_))
+        ));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! `DSL File Source` node — reads channels from a `.dsl` capture file.
 
-use super::{COLOR_SOURCES, Signal};
+use super::{COLOR_SOURCES, Signal, TextOpenPath};
 use egui::Color32;
 use node_graph::{FileValue, InputDef, IntValue, NodeDef, OutputDef, Socket};
 use serde::{Deserialize, Serialize};
@@ -27,7 +27,9 @@ impl NodeDef for DslFileSource {
 
     fn inputs() -> Vec<InputDef<Self::State>> {
         vec![
-            InputDef::control::<node_graph::FileSocket>("File", |state| &mut state.file),
+            // A `Text` wire supplies the filename at run start; while
+            // unconnected the socket shows an open-file picker instead.
+            InputDef::control::<TextOpenPath>("File", |state| &mut state.file),
             InputDef::control::<node_graph::IntSocket>("Channels", |state| &mut state.channels),
         ]
     }

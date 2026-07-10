@@ -119,13 +119,18 @@ impl LogicAnalyzerViewer {
 
         // An activity segment wider than a couple of pixels (a coarse window
         // stretched by zooming in) only promises "at least one toggle in this
-        // range" — draw it as a solid band rather than inventing edge
-        // positions that a refresh would then contradict.
+        // range" — draw it as a solid band, with a center marker indicating
+        // activity without pretending to know the exact edge position.
         if right - left > 3.0 {
+            let marker_x = ((left + right) * 0.5).clamp(clip.left(), clip.right());
             painter.rect_filled(
                 Rect::from_min_max(Pos2::new(left, high_y), Pos2::new(right, low_y)),
                 0.0,
                 flat_stroke.color,
+            );
+            painter.line_segment(
+                [Pos2::new(marker_x, high_y), Pos2::new(marker_x, low_y)],
+                activity_stroke,
             );
             return;
         }

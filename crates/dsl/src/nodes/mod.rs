@@ -38,7 +38,8 @@ mod uart_demo_source;
 // Export DslFileSource and related types for file I/O
 #[cfg(not(target_arch = "wasm32"))]
 pub use dsl_file::{
-    DslCaptureReader, DslChunkedCaptureReader, DslFileCaptureDataSource, DslFileSource,
+    DeferredDslFileSource, DslCaptureReader, DslChunkedCaptureReader, DslFileCaptureDataSource,
+    DslFileSource,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use dslogic_u3pro16::{DsLogicU3Pro16, LinkSpeed, RusbTransport, UsbTransport};

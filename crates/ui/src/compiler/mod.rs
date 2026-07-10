@@ -495,7 +495,11 @@ pub fn lower(
         };
         let node_connected = connected.get(&id);
         for (index, socket) in node.inputs.iter().enumerate() {
-            if !socket.visible || socket.has_control {
+            // Control-bearing sockets go through `input_required` like any
+            // other: most are self-supplying config (their builders return
+            // false), but one can be conditionally required — the writer's
+            // Filename picker is required exactly while its value is empty.
+            if !socket.visible {
                 continue;
             }
             if socket.is_variadic_placeholder() {
@@ -1155,6 +1159,93 @@ mod tests {
                 .any(|e| e.node == Some(writer) && e.message.contains("Filename")),
             "expected filename error, got {errors:?}"
         );
+    }
+
+    /// A wired File socket on the DSL File Source builds the deferred
+    /// variant (filename arrives at run start over the wire); unconnected
+    /// keeps the build-time open, and unconnected + empty picker is
+    /// required (a compile error).
+    #[test]
+    fn file_source_with_wired_filename_builds_deferred_source() {
+        use crate::compiler::file_source::FileSourceBuilder;
+        use dsl::TextSample;
+
+        let builder = FileSourceBuilder;
+        let state = serde_json::to_value(nodes::DslFileSourceState {
+            file: node_graph::FileValue::new(""),
+            channels: node_graph::IntValue::new(4, 1, 32),
+        })
+        .unwrap();
+
+        let file_socket = Socket {
+            name: "File".into(),
+            type_name: "Text".into(),
+            color: egui::Color32::WHITE,
+            shape: node_graph::SocketShape::Circle,
+            allowed: vec![],
+            resolved_type: None,
+            def_index: 0,
+            variadic: None,
+            visible: true,
+            hidden: false,
+            has_control: true,
+        };
+        assert_eq!(
+            builder.accepted_kinds(&file_socket, &state),
+            vec![PortKind::of::<TextSample>()],
+            "the File socket accepts a Text filename wire"
+        );
+        assert!(
+            builder.input_required(&file_socket, &state),
+            "unconnected + empty picker must be a compile error"
+        );
+
+        let mut resolved = ResolvedInputs::default();
+        resolved.0.insert(
+            (0, 0),
+            ResolvedInput {
+                kind: PortKind::of::<TextSample>(),
+                source: "Formatter.Text".into(),
+            },
+        );
+        let node = builder
+            .build("src", &state, &resolved, &mut CompileCtx::default())
+            .expect("wired filename must not require the file to exist at build");
+        assert_eq!(
+            node.num_inputs(),
+            1,
+            "expected the deferred source (one filename input)"
+        );
+    }
+
+    /// The counterpart to `missing_writer_input_is_reported`: with the
+    /// writer's static filename (save-dialog prop) set, an unconnected
+    /// Filename input is fine — the graph compiles and the writer is built
+    /// with the static path.
+    #[test]
+    fn static_filename_makes_writer_filename_input_optional() {
+        let mut widget = startup_widget();
+        let graph = widget.graph_mut();
+        let writer = graph
+            .nodes
+            .values()
+            .find(|n| n.def_name() == "File Writer")
+            .unwrap()
+            .id;
+        let index = graph
+            .connections
+            .iter()
+            .position(|c| c.to.node == writer && c.to.index == 1)
+            .unwrap();
+        graph.remove_connection_at(index);
+
+        let mut state: nodes::FileWriterState =
+            serde_json::from_value(graph.nodes[&writer].state.clone()).unwrap();
+        state.filename = node_graph::FileValue::new_save("/tmp/capture.bin", "Save capture as");
+        widget.set_node_state(writer, serde_json::to_value(state).unwrap());
+
+        lower(widget.graph(), &BuilderRegistry::standard())
+            .unwrap_or_else(|errors| panic!("expected the graph to compile: {errors:?}"));
     }
 
     #[test]

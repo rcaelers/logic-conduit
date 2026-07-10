@@ -253,7 +253,9 @@ impl NodeWidget {
     pub(crate) fn draw(
         &self,
         painter: &Painter,
+        node_id: NodeId,
         node: &Node,
+        graph: &GraphState,
         badge: Option<&NodeBadge>,
         status: Option<&str>,
         registry: &NodeTypeRegistry,
@@ -415,8 +417,17 @@ impl NodeWidget {
             let sp = s(pos);
             let (color, shape) = registry.socket_display(sock);
             draw_socket(painter, sp, sz(SOCKET_RADIUS), shape, color);
-            let has_control = node.inputs.get(i).is_some_and(|s| s.has_control);
-            if !has_control {
+            // An input with an inline control normally gets its label from
+            // the control's hint text — but the control only renders while
+            // the socket is unconnected (`show_controls`), so a connected
+            // one falls back to the painted label like any plain socket.
+            let control_shown = sock.has_control
+                && !graph.is_input_connected(SocketId {
+                    node: node_id,
+                    index: i,
+                    direction: SocketDirection::Input,
+                });
+            if !control_shown {
                 painter.text(
                     Pos2::new(sp.x + sz(SOCKET_RADIUS + 4.0), sp.y),
                     egui::Align2::LEFT_CENTER,

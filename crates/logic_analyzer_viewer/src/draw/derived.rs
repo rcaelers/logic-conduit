@@ -161,15 +161,29 @@ impl LogicAnalyzerViewer {
             });
             let effective_end = annotation_box_end(annotation, is_last_ever, previous_duration_ns);
             let x0 = self.ns_to_x(wave_rect, annotation.start_ns);
-            let x1 = self.ns_to_x(wave_rect, effective_end).max(x0 + 2.0);
+            let natural_x1 = self.ns_to_x(wave_rect, effective_end).max(x0 + 2.0);
+            let label = format!("{:02X}", annotation.value);
+            let label_width = annotation_label_width(&label);
+            let next_x = annotations
+                .get(first + offset + 1)
+                .map(|next| self.ns_to_x(wave_rect, next.start_ns))
+                .unwrap_or(wave_rect.right());
+            let max_labeled_x1 = next_x.min(wave_rect.right()) - 3.0;
+            let x1 = if natural_x1 - x0 >= label_width {
+                natural_x1
+            } else if max_labeled_x1 - x0 >= label_width {
+                x0 + label_width
+            } else {
+                natural_x1
+            };
             let rect = Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(x1, box_bottom));
             painter.rect_filled(rect, 2.0, box_color);
             painter.rect_stroke(rect, 2.0, border, egui::StrokeKind::Inside);
-            if rect.width() >= 26.0 {
+            if rect.width() >= label_width {
                 painter.text(
                     rect.center(),
                     Align2::CENTER_CENTER,
-                    format!("{:02X}", annotation.value),
+                    label,
                     FontId::monospace(10.0),
                     Color32::from_rgb(235, 220, 200),
                 );
@@ -257,6 +271,10 @@ fn annotation_box_end(
     }
 }
 
+fn annotation_label_width(label: &str) -> f32 {
+    (label.chars().count() as f32 * 6.2 + 10.0).max(26.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +330,12 @@ mod tests {
         };
         assert_eq!(annotation_box_end(&annotation, true, Some(10_000)), 1_500);
         assert_eq!(annotation_box_end(&annotation, false, Some(10_000)), 1_500);
+    }
+
+    #[test]
+    fn annotation_label_width_scales_with_hex_digits() {
+        assert!(annotation_label_width("600081") > annotation_label_width("4F"));
+        assert!(annotation_label_width("4F") >= 26.0);
     }
 
     #[test]
