@@ -1,6 +1,6 @@
 [package]
 name = "logic-analyzer-viewer"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 authors = ["Rob Caelers <rob.caelers@gmail.com>"]
 
@@ -10,4 +10,4 @@ path = "src/lib.rs"
 
 [dependencies]
 dsl = { path = "../dsl" }
-egui = "0.35"
+egui = { workspace = true }

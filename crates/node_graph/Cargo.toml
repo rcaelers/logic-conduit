@@ -1,6 +1,6 @@
 [package]
 name = "node-graph"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 authors = ["Rob Caelers <rob.caelers@gmail.com>"]
 
@@ -9,7 +9,7 @@ name = "node_graph"
 path = "src/lib.rs"
 
 [dependencies]
-egui = { version = "0.35.0", features = ["serde"] }
-rfd = "0.17.2"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
+egui = { workspace = true, features = ["serde"] }
+rfd = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

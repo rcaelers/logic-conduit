@@ -1,6 +1,6 @@
 [package]
 name = "example-plugin"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 
 [lib]
@@ -11,9 +11,9 @@ path = "src/lib.rs"
 dsl = { path = "../../crates/dsl" }
 dsl-ui = { path = "../../crates/ui" }
 node-graph = { path = "../../crates/node_graph" }
-egui = "0.35"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+egui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
-crossbeam-channel = "0.5"
+crossbeam-channel = { workspace = true }
