@@ -1,6 +1,6 @@
 [package]
 name = "dsl-ui"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 authors = ["Rob Caelers <rob.caelers@gmail.com>"]
 
@@ -12,11 +12,11 @@ path = "src/lib.rs"
 dsl = { path = "../dsl" }
 logic-analyzer-viewer = { path = "../logic_analyzer_viewer" }
 node-graph = { path = "../node_graph" }
-eframe = "0.35"
-egui = "0.35"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-crossbeam-channel = "0.5"
+eframe = { workspace = true }
+egui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+crossbeam-channel = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
