@@ -58,7 +58,8 @@ pub use nodes::decoders::SpiDecoder;
 
 // Re-export control-path logic nodes and sinks
 pub use nodes::logic::{
-    BufferNode, GateOp, LogicGate, MatchOp, SrLatch, TextFormatter, TriggerCounter, WordMatcher,
+    BufferNode, GateOp, LogicGate, MatchOp, SrLatch, TextFormatter, TriggerAt, TriggerCounter,
+    WordMatcher,
 };
 pub use nodes::sinks::{
     Annotation, AnnotationFold, BinaryFileWriter, DerivedLane, DerivedLaneData, DerivedLanes,

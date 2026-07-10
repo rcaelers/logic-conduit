@@ -10,9 +10,11 @@ use crate::runtime::sample::Sample;
 use std::collections::VecDeque;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
-/// Longest box a word annotation may span when its end is inferred from the
-/// next word: keeps the last word of a burst from stretching across the idle
-/// gap to the next one.
+/// Longest box an *instantaneous* word annotation (`Word::duration_ns == 0`,
+/// e.g. a single-cycle parallel bus word) may span when its end is inferred
+/// from the next word: keeps the last word of a burst from stretching across
+/// the idle gap to the next one. Words that carry a real duration (SPI,
+/// UART) are stored with their true extent and never inferred.
 pub const MAX_ANNOTATION_NS: u64 = 1_000_000;
 
 /// Most items one lane drains from its channel per `work()` call. Bounds how
@@ -36,8 +38,10 @@ pub struct Annotation {
 pub enum DerivedLaneData {
     /// A boolean level stream, rendered like a channel waveform.
     Digital(Vec<Sample>),
-    /// Word boxes; `end_ns` is patched to the next word's start (capped at
-    /// [`MAX_ANNOTATION_NS`]) as words arrive.
+    /// Word boxes. A word carrying a real duration is stored closed with
+    /// its true `end_ns`; an instantaneous word's `end_ns` is patched to
+    /// the next word's start (capped at [`MAX_ANNOTATION_NS`]) as words
+    /// arrive.
     Annotations(Vec<Annotation>),
     /// Zero-width event markers (trigger timestamps, ns).
     Markers(Vec<u64>),
@@ -232,7 +236,8 @@ impl DerivedLanes {
         }
     }
 
-    fn append_word_batch(&self, lane: usize, words: impl IntoIterator<Item = (u64, u64)>) {
+    /// Items are `(start_ns, duration_ns, value)` — [`Word`]'s shape.
+    fn append_word_batch(&self, lane: usize, words: impl IntoIterator<Item = (u64, u64, u64)>) {
         let mut lanes = self.inner.write().unwrap();
         let Some(lane) = lanes.get_mut(lane) else {
             return;
@@ -242,7 +247,7 @@ impl DerivedLanes {
         else {
             return;
         };
-        for (start_ns, value) in words {
+        for (start_ns, duration_ns, value) in words {
             if let Some(previous) = annotations.last_mut()
                 && previous.end_ns == previous.start_ns
             {
@@ -258,11 +263,18 @@ impl DerivedLanes {
                 // `draw_derived_annotations`'s open-ended handling).
                 summary.push(previous);
             }
-            annotations.push(Annotation {
+            let annotation = Annotation {
                 start_ns,
-                end_ns: start_ns,
+                // A word with a real duration is closed right away at its
+                // true end; an instantaneous one stays "open" (end ==
+                // start) until the next word patches it above.
+                end_ns: start_ns + duration_ns,
                 value,
-            });
+            };
+            if duration_ns > 0 {
+                summary.push(&annotation);
+            }
+            annotations.push(annotation);
         }
     }
 
@@ -459,7 +471,9 @@ impl ProcessNode for ViewerSink {
                     if !batch.is_empty() {
                         store.append_word_batch(
                             lane.store_index,
-                            batch.into_iter().map(|w| (w.timestamp_ns, w.value)),
+                            batch
+                                .into_iter()
+                                .map(|w| (w.timestamp_ns, w.duration_ns, w.value)),
                         );
                     }
                 }
@@ -628,7 +642,7 @@ mod tests {
     fn annotation_end_is_capped_across_gaps() {
         let store = DerivedLanes::new();
         let lane = store.register("w", DerivedLaneData::Annotations(Vec::new()));
-        store.append_word_batch(lane, [(1_000, 1), (1_000 + MAX_ANNOTATION_NS * 10, 2)]);
+        store.append_word_batch(lane, [(1_000, 0, 1), (1_000 + MAX_ANNOTATION_NS * 10, 0, 2)]);
         let lanes = store.read();
         let DerivedLaneData::Annotations(annotations) = &lanes[0].data else {
             panic!("expected annotations");
@@ -667,6 +681,47 @@ mod tests {
         assert_eq!(summary.len(), 3);
     }
 
+    /// A word carrying a real duration (SPI, UART) is stored closed at its
+    /// true end immediately — never patched to the next word's start, never
+    /// left open for the renderer to estimate.
+    #[test]
+    fn word_with_duration_is_closed_at_its_true_end() {
+        let store = DerivedLanes::new();
+        let lane = store.register("w", DerivedLaneData::Annotations(Vec::new()));
+
+        // A 24-bit SPI-like word spanning 2_300ns, followed much later by
+        // another; the first's end must stay its own, not stretch to the
+        // second's start.
+        store.append_word_batch(lane, [(1_000, 2_300, 0x600081)]);
+        {
+            let lanes = store.read();
+            let DerivedLaneData::Annotations(annotations) = &lanes[0].data else {
+                panic!("expected annotations");
+            };
+            assert_eq!(
+                annotations.as_slice(),
+                &[Annotation {
+                    start_ns: 1_000,
+                    end_ns: 3_300,
+                    value: 0x600081
+                }]
+            );
+            // Closed immediately → in the summary at once, no one-entry lag.
+            let LaneSummary::Annotations(summary) = &lanes[0].summary else {
+                panic!("expected an annotations summary");
+            };
+            assert_eq!(summary.len(), 1);
+        }
+
+        store.append_word_batch(lane, [(500_000, 2_300, 0x600000)]);
+        let lanes = store.read();
+        let DerivedLaneData::Annotations(annotations) = &lanes[0].data else {
+            panic!("expected annotations");
+        };
+        assert_eq!(annotations[0].end_ns, 3_300, "true end must not be patched");
+        assert_eq!(annotations[1].end_ns, 502_300);
+    }
+
     #[test]
     fn summary_lags_the_most_recent_open_annotation_by_one() {
         // The mipmap can't retroactively patch an entry once it's pushed,
@@ -675,7 +730,7 @@ mod tests {
         let store = DerivedLanes::new();
         let lane = store.register("w", DerivedLaneData::Annotations(Vec::new()));
 
-        store.append_word_batch(lane, [(1_000, 0xAB)]);
+        store.append_word_batch(lane, [(1_000, 0, 0xAB)]);
         {
             let lanes = store.read();
             let LaneSummary::Annotations(summary) = &lanes[0].summary else {
@@ -684,7 +739,7 @@ mod tests {
             assert_eq!(summary.len(), 0, "the only word so far is still open");
         }
 
-        store.append_word_batch(lane, [(1_500, 0xCD)]);
+        store.append_word_batch(lane, [(1_500, 0, 0xCD)]);
         {
             let lanes = store.read();
             let LaneSummary::Annotations(summary) = &lanes[0].summary else {

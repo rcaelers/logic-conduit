@@ -45,8 +45,31 @@ impl MatchOp {
     }
 }
 
+/// Where in the matched word the emitted [`Trigger`] lands. A command
+/// logically takes effect once it has fully arrived, so `End` (the word's
+/// last sampling edge, `Word::end_ns`) is the default; for instantaneous
+/// words (`duration_ns == 0`) the two coincide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TriggerAt {
+    Start,
+    #[default]
+    End,
+}
+
+impl TriggerAt {
+    /// Parse from the wire names used by node configs.
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "start" => TriggerAt::Start,
+            "end" => TriggerAt::End,
+            _ => return None,
+        })
+    }
+}
+
 /// Emits a [`Trigger`] for every word where `(word & mask) OP (pattern &
-/// mask)` holds (`OP` = [`MatchOp`], `==` by default).
+/// mask)` holds (`OP` = [`MatchOp`], `==` by default). The trigger lands at
+/// the word's end by default ([`TriggerAt`]).
 ///
 /// Inputs: `words` — a [`Word`] stream (from any decoder — SPI, parallel
 /// bus, UART, … — the matcher has no notion of which one)
@@ -57,6 +80,7 @@ pub struct WordMatcher {
     pattern: u64,
     mask: u64,
     op: MatchOp,
+    trigger_at: TriggerAt,
     /// Width of the visualization pulse on the `matched` output.
     pulse_ns: u64,
     input_buffer: VecDeque<Word>,
@@ -73,6 +97,7 @@ impl WordMatcher {
             pattern,
             mask,
             op: MatchOp::default(),
+            trigger_at: TriggerAt::default(),
             pulse_ns: 1_000,
             input_buffer: VecDeque::new(),
             matches: 0,
@@ -88,6 +113,11 @@ impl WordMatcher {
 
     pub fn with_op(mut self, op: MatchOp) -> Self {
         self.op = op;
+        self
+    }
+
+    pub fn with_trigger_at(mut self, trigger_at: TriggerAt) -> Self {
+        self.trigger_at = trigger_at;
         self
     }
 
@@ -114,9 +144,9 @@ impl ProcessNode for WordMatcher {
         vec![PortSchema::new::<Word>("words", 0, PortDirection::Input)]
     }
 
-    /// Hot-appliable: `pattern` / `mask` (U64) and `op`. Takes effect for
-    /// the next word; in-flight words already consumed keep the old match
-    /// result (accepted §6.2 semantics).
+    /// Hot-appliable: `pattern` / `mask` (U64), `op`, and `trigger_at`.
+    /// Takes effect for the next word; in-flight words already consumed
+    /// keep the old match result (accepted §6.2 semantics).
     fn apply_config(
         &mut self,
         config: &crate::runtime::node::NodeConfig,
@@ -128,6 +158,10 @@ impl ProcessNode for WordMatcher {
                 ("mask", ConfigValue::U64(mask)) => self.mask = *mask,
                 ("op", ConfigValue::Text(op)) => match MatchOp::parse(op) {
                     Some(op) => self.op = op,
+                    None => return ConfigOutcome::NeedsRestart,
+                },
+                ("trigger_at", ConfigValue::Text(at)) => match TriggerAt::parse(at) {
+                    Some(at) => self.trigger_at = at,
                     None => return ConfigOutcome::NeedsRestart,
                 },
                 _ => return ConfigOutcome::NeedsRestart,
@@ -167,7 +201,10 @@ impl ProcessNode for WordMatcher {
         let word = input.recv()?;
         let value = word.value;
         if self.op.matches(value & self.mask, self.pattern & self.mask) {
-            let ts = word.timestamp_ns;
+            let ts = match self.trigger_at {
+                TriggerAt::Start => word.timestamp_ns,
+                TriggerAt::End => word.end_ns(),
+            };
             self.matches += 1;
             debug!(
                 "[{}] match #{}: 0x{:06X} at {}ns",
@@ -314,6 +351,47 @@ mod tests {
             })
             .collect();
         assert_eq!(triggers, vec![10, 30]);
+    }
+
+    /// The trigger lands at the word's end by default (where the command
+    /// has fully arrived), or at its start when configured — for
+    /// instantaneous words (duration 0) the two coincide.
+    #[test]
+    fn trigger_lands_at_word_end_by_default_and_start_when_configured() {
+        let run = |matcher: WordMatcher| -> Vec<u64> {
+            let wd = Watchdog::new();
+            let (tx, rx) = bounded::<ChannelMessage<Word>>(16);
+            let input = InputPort::new_with_watchdog(rx, &wd, "m", "words");
+            let (ttx, trx) = bounded::<ChannelMessage<Trigger>>(16);
+            let trigger_out =
+                OutputPort::new_with_watchdog(Sender::new(vec![ttx]), &wd, "m", "trigger");
+            let (ptx, _prx) = bounded::<ChannelMessage<Sample>>(16);
+            let pulse_out =
+                OutputPort::new_with_watchdog(Sender::new(vec![ptx]), &wd, "m", "matched");
+
+            // A 24-bit-word-like span (start 100, last edge 2_400) and an
+            // instantaneous word.
+            tx.send(ChannelMessage::Sample(Word::spanning(0xAA, 100, 2_300)))
+                .unwrap();
+            tx.send(ChannelMessage::Sample(Word::new(0xAA, 10_000)))
+                .unwrap();
+            drop(tx);
+
+            let mut m = matcher;
+            run_to_shutdown(&mut m, &[input], &[trigger_out, pulse_out]);
+            trx.try_iter()
+                .filter_map(|m| match m {
+                    ChannelMessage::Sample(t) => Some(t.timestamp_ns),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        assert_eq!(run(WordMatcher::new(0xAA, 0xFF)), vec![2_400, 10_000]);
+        assert_eq!(
+            run(WordMatcher::new(0xAA, 0xFF).with_trigger_at(TriggerAt::Start)),
+            vec![100, 10_000]
+        );
     }
 
     #[test]

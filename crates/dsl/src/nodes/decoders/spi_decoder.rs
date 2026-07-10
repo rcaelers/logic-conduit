@@ -426,6 +426,9 @@ impl SpiDecoder {
                 let timestamp = first_clock_edge
                     .map(position_to_ns)
                     .unwrap_or_else(|| position_to_ns(cs_active_start));
+                // `clk_position` is the word's last sampling edge — the
+                // word's real extent, first to last edge.
+                let duration = position_to_ns(clk_position).saturating_sub(timestamp);
 
                 words_emitted += 1;
                 debug!(
@@ -436,10 +439,10 @@ impl SpiDecoder {
                     timestamp as f64 / 1_000_000_000.0
                 );
                 if let Some(ref output) = mosi_output {
-                    output.send(Word::new(mosi_word, timestamp))?;
+                    output.send(Word::spanning(mosi_word, timestamp, duration))?;
                 }
                 if let Some(ref output) = miso_output {
-                    output.send(Word::new(miso_word, timestamp))?;
+                    output.send(Word::spanning(miso_word, timestamp, duration))?;
                 }
             }
         }
@@ -577,7 +580,8 @@ impl SpiDecoder {
             let mut mosi_word: u64 = 0;
             let mut miso_word: u64 = 0;
             let mut bits_collected: usize = 0;
-            let mut first_clock_edge: Option<u64> = None;
+            // The word's (first, last) sampling-edge timestamps so far.
+            let mut clock_edge_span: Option<(u64, u64)> = None;
 
             // Collect bits_per_word bits from CLK sampling edges.
             // MOSI/MISO are read on-demand via value_at_time when a
@@ -612,10 +616,11 @@ impl SpiDecoder {
                     continue;
                 }
 
-                // Record first clock edge timestamp
-                if first_clock_edge.is_none() {
-                    first_clock_edge = Some(edge.start_time_ns);
-                }
+                // Record first/last clock edge timestamps
+                clock_edge_span = Some(match clock_edge_span {
+                    None => (edge.start_time_ns, edge.start_time_ns),
+                    Some((first, _)) => (first, edge.start_time_ns),
+                });
 
                 // Sample data lines at CLK edge time
                 let sample_time = edge.start_time_ns.saturating_sub(1);
@@ -663,7 +668,10 @@ impl SpiDecoder {
 
             // We have a complete word
             if bits_collected == bits_per_word {
-                let timestamp = first_clock_edge.unwrap_or(cs_active_start);
+                // First to last sampling edge — the word's real extent.
+                let (timestamp, last_edge) =
+                    clock_edge_span.unwrap_or((cs_active_start, cs_active_start));
+                let duration = last_edge.saturating_sub(timestamp);
 
                 words_emitted += 1;
                 debug!(
@@ -674,10 +682,10 @@ impl SpiDecoder {
                     timestamp as f64 / 1_000_000_000.0
                 );
                 if let Some(ref output) = mosi_output {
-                    output.send(Word::new(mosi_word, timestamp))?;
+                    output.send(Word::spanning(mosi_word, timestamp, duration))?;
                 }
                 if let Some(ref output) = miso_output {
-                    output.send(Word::new(miso_word, timestamp))?;
+                    output.send(Word::spanning(miso_word, timestamp, duration))?;
                 }
             }
         }
@@ -800,8 +808,9 @@ mod tests {
                 })
                 .collect()
         };
-        assert_eq!(collect(mosi_rx), vec![Word::new(0b1010, 100)]);
-        assert_eq!(collect(miso_rx), vec![Word::new(0b0101, 100)]);
+        // The word spans its sampling edges: first at 100ns, last at 700ns.
+        assert_eq!(collect(mosi_rx), vec![Word::spanning(0b1010, 100, 600)]);
+        assert_eq!(collect(miso_rx), vec![Word::spanning(0b0101, 100, 600)]);
     }
 
     // ── Differential test: query-mode output must match streaming-mode ──
@@ -945,7 +954,7 @@ mod tests {
              to make this comparison meaningful"
         );
 
-        let as_tuple = |w: &Word| (w.value, w.timestamp_ns);
+        let as_tuple = |w: &Word| (w.value, w.timestamp_ns, w.duration_ns);
         let streamed_view: Vec<_> = streamed.iter().map(as_tuple).collect();
         let queried_view: Vec<_> = queried.iter().map(as_tuple).collect();
 

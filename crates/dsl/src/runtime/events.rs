@@ -28,20 +28,45 @@ impl Trigger {
 
 /// A single decoded word from any serial/parallel decoder (SPI, parallel
 /// bus, UART, I2C, …) — every decoder's output reduces to this: one value
-/// up to 64 bits wide, timestamped at the instant it completed. No decoder
-/// needs a payload type of its own beyond this — a decoder that wants to
-/// expose two independent word-shaped things (e.g. SPI's MOSI and MISO)
-/// does so via two output ports, not two fields on one struct.
+/// up to 64 bits wide, timestamped where it started. No decoder needs a
+/// payload type of its own beyond this — a decoder that wants to expose
+/// two independent word-shaped things (e.g. SPI's MOSI and MISO) does so
+/// via two output ports, not two fields on one struct.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Word {
     pub value: u64,
-    /// Timestamp in nanoseconds.
+    /// Timestamp of the word's start (its first sampling edge), ns.
     pub timestamp_ns: u64,
+    /// The word's real extent: start to its last sampling edge / frame
+    /// end, ns. `0` means instantaneous — a single-cycle parallel bus
+    /// word, whose value stands on the bus until the next strobe; the
+    /// viewer renders those as lasting until the next word, while a word
+    /// with a duration is drawn exactly that wide.
+    pub duration_ns: u64,
 }
 
 impl Word {
+    /// An instantaneous word (`duration_ns == 0`).
     pub fn new(value: u64, timestamp_ns: u64) -> Self {
-        Self { value, timestamp_ns }
+        Self {
+            value,
+            timestamp_ns,
+            duration_ns: 0,
+        }
+    }
+
+    /// A word spanning `[timestamp_ns, timestamp_ns + duration_ns]`.
+    pub fn spanning(value: u64, timestamp_ns: u64, duration_ns: u64) -> Self {
+        Self {
+            value,
+            timestamp_ns,
+            duration_ns,
+        }
+    }
+
+    /// The word's end (equals its start for instantaneous words).
+    pub fn end_ns(&self) -> u64 {
+        self.timestamp_ns + self.duration_ns
     }
 }
 

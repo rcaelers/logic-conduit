@@ -307,10 +307,12 @@ impl ProcessNode for UartDecoder {
         if frame_error && let Some(errors) = &error_out {
             errors.send(Trigger::new(t0))?;
         }
-        words_out.send(Word {
+        // The word spans its whole frame: start edge through the stop bits.
+        words_out.send(Word::spanning(
             value,
-            timestamp_ns: t0,
-        })?;
+            t0,
+            (frame_len_bits * bit_ns).round() as u64,
+        ))?;
         self.finished = rx.is_shutdown();
         Ok(1)
     }

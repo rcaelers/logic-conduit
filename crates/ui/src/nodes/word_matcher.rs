@@ -14,6 +14,14 @@ pub fn default_match_op() -> EnumValue {
     EnumValue::new(0, MATCH_OPS)
 }
 
+pub const TRIGGER_AT: &[&str] = &["Word start", "Word end"];
+
+/// Default is "Word end": a command logically takes effect once it has
+/// fully arrived (for instantaneous words the two coincide).
+pub fn default_trigger_at() -> EnumValue {
+    EnumValue::new(1, TRIGGER_AT)
+}
+
 fn parse_hex(text: &str) -> Option<u64> {
     let trimmed = text.trim();
     let digits = trimmed
@@ -30,6 +38,9 @@ pub struct WordMatcherState {
     /// Comparison of the masked word against the masked pattern.
     #[serde(default = "default_match_op")]
     pub op: EnumValue,
+    /// Whether the trigger lands at the matched word's start or end.
+    #[serde(default = "default_trigger_at")]
+    pub trigger_at: EnumValue,
     pub pulse_output: BoolValue,
 }
 
@@ -63,6 +74,7 @@ impl NodeDef for WordMatcher {
             pattern: StringValue::new("0x000000"),
             mask: StringValue::new("0xFFFFFF"),
             op: default_match_op(),
+            trigger_at: default_trigger_at(),
             pulse_output: BoolValue::new(false),
         }
     }
@@ -79,6 +91,7 @@ impl NodeDef for WordMatcher {
             vec![
                 PropDef::control("op", "Compare", |state| &mut state.op),
                 PropDef::control("mask", "Mask", |state| &mut state.mask),
+                PropDef::control("trigger_at", "Trigger at", |state| &mut state.trigger_at),
                 PropDef::control("pulse_output", "Pulse output", |state| {
                     &mut state.pulse_output
                 }),

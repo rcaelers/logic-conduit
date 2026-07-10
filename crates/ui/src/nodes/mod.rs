@@ -58,7 +58,7 @@ pub use tgck_recorder::TgckRecorder;
 pub use uart_decoder::{UartDecoder, UartDecoderState};
 pub use uart_demo_source::{UartDemoSource, UartDemoSourceState};
 pub use viewer::{Viewer, ViewerState};
-pub use word_matcher::{WordMatcher, WordMatcherState, default_match_op};
+pub use word_matcher::{WordMatcher, WordMatcherState, default_match_op, default_trigger_at};
 
 // ── Stream socket types (§3.3) ───────────────────────────────────────────────
 
@@ -257,6 +257,7 @@ pub fn populate_startup(widget: &mut node_graph::NodeGraphWidget) {
             pattern: StringValue::new(pattern),
             mask: StringValue::new("0xFFFFFF"),
             op: default_match_op(),
+            trigger_at: default_trigger_at(),
             pulse_output: BoolValue::new(false),
         })
         .unwrap()

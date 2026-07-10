@@ -243,15 +243,26 @@ struct EnableState<'a> {
 }
 
 impl ParallelDecoder {
+    /// Per-`work()`-call trigger budget for the index-driven path. Each
+    /// trigger costs a handful of index queries (microseconds), so this
+    /// keeps a call's worst-case duration in the low milliseconds — short
+    /// enough that the manager's between-calls stop check makes the node
+    /// feel instantly stoppable, long enough that the per-call overhead is
+    /// noise.
+    const QUERY_TRIGGERS_PER_CALL: usize = 4096;
+
     /// Index-driven path: strobe triggers are located by direct skip-ahead
     /// queries instead of a per-sample block scan; data/CS are point-read
     /// at each trigger. `enable_signal` is point-read too when its
-    /// connection negotiated `EdgeQuery`, and streams otherwise. One call
-    /// processes every remaining trigger in the file — there's no natural
-    /// per-call window the way SpiDecoder has CS transactions — so a call
-    /// can run long on a pathologically dense `AnyEdge` signal; that's the
-    /// same signal shape query mode doesn't help with in the first place
-    /// (see `work()`'s `sparse_mode` gate).
+    /// connection negotiated `EdgeQuery`, and streams otherwise. Each call
+    /// processes at most [`Self::QUERY_TRIGGERS_PER_CALL`] triggers, then
+    /// returns with its cursor persisted — there's no natural per-call
+    /// window the way SpiDecoder has CS transactions, and an uncapped call
+    /// would scan every remaining trigger in the file. That matters beyond
+    /// fairness: a fully gated-off stretch (CS active / enable low) makes
+    /// no channel calls at all, so a `work()` call stuck in it can only be
+    /// interrupted *between* calls — the manager's stop flag, which the UI
+    /// relies on to stop a run without freezing.
     #[allow(clippy::too_many_arguments)]
     fn work_indexed(
         &mut self,
@@ -309,6 +320,7 @@ impl ParallelDecoder {
         };
 
         let mut words_emitted = 0u64;
+        let mut triggers_processed = 0usize;
         let mut position = self.query_strobe_position;
         let exhausted;
 
@@ -341,10 +353,15 @@ impl ParallelDecoder {
                     &output,
                     &self.name,
                 )?;
+                triggers_processed += 1;
             }
         }
 
         loop {
+            if triggers_processed >= Self::QUERY_TRIGGERS_PER_CALL {
+                exhausted = false;
+                break;
+            }
             let next = match mode {
                 StrobeMode::RisingEdge => {
                     strobe_query.next_edge_with_value(position, true, total_samples)
@@ -379,6 +396,7 @@ impl ParallelDecoder {
                 &output,
                 &self.name,
             )?;
+            triggers_processed += 1;
         }
 
         self.query_strobe_position = position;
@@ -506,10 +524,13 @@ impl ParallelDecoder {
             return Ok(0);
         }
 
-        let word = Word {
-            value: assembly.value,
-            timestamp_ns: assembly.first_ts,
-        };
+        // First to last assembled cycle; a single-cycle word is an instant
+        // (its value stands on the bus until the next strobe).
+        let word = Word::spanning(
+            assembly.value,
+            assembly.first_ts,
+            timestamp_ns.saturating_sub(assembly.first_ts),
+        );
         assembly.value = 0;
         assembly.cycles = 0;
 
@@ -734,10 +755,13 @@ impl ParallelDecoder {
                 continue;
             }
 
-            let word = Word {
-                value: assembly_value,
-                timestamp_ns: assembly_first_ts,
-            };
+            // First to last assembled cycle; a single-cycle word is an
+            // instant (its value stands on the bus until the next strobe).
+            let word = Word::spanning(
+                assembly_value,
+                assembly_first_ts,
+                timestamp_ns.saturating_sub(assembly_first_ts),
+            );
             assembly_value = 0;
             assembly_cycles = 0;
 
@@ -1022,6 +1046,52 @@ mod tests {
             .collect()
     }
 
+    /// A long gated-off stretch makes no channel calls, so a `work()` call
+    /// stuck in it can only be interrupted between calls — the per-call
+    /// trigger budget is what keeps an index-driven run stoppable (and the
+    /// UI responsive). More triggers than one budget must take more than
+    /// one `work()` call.
+    #[test]
+    fn query_mode_yields_between_trigger_batches() {
+        let wd = Watchdog::new();
+        let n = 2 * ParallelDecoder::QUERY_TRIGGERS_PER_CALL + 100;
+        // Alternating strobe: every position ≥ 1 is an AnyEdge trigger.
+        let strobe: Vec<bool> = (0..n).map(|i| i % 2 == 1).collect();
+        let low = vec![false; n];
+
+        let inputs = [
+            query_input(&wd, &strobe, "strobe"),
+            query_input(&wd, &low, "d0"),
+            unconnected(&wd, "cs"),
+            // Enable low throughout: everything is gated off, so the scan
+            // never touches a channel at all.
+            query_input(&wd, &low, "enable_signal"),
+        ];
+        let (out_tx, out_rx) = bounded::<ChannelMessage<Word>>(4);
+        let outputs = [OutputPort::new_with_watchdog(
+            Sender::new(vec![out_tx]),
+            &wd,
+            "pd",
+            "words",
+        )];
+
+        let mut decoder = ParallelDecoder::new(1, StrobeMode::AnyEdge, CsPolarity::Disabled);
+        let mut ok_calls = 0usize;
+        loop {
+            match decoder.work(&inputs, &outputs) {
+                Ok(_) => ok_calls += 1,
+                Err(WorkError::Shutdown) => break,
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+            assert!(ok_calls < 100, "budget never exhausted the fixture");
+        }
+        assert!(
+            ok_calls >= 2,
+            "expected the scan to yield between trigger batches, got {ok_calls} Ok calls"
+        );
+        assert_eq!(out_rx.try_iter().count(), 0, "everything was gated off");
+    }
+
     /// Enable gating must behave identically whichever protocol each input
     /// negotiated: fully streamed, mixed either way, or fully query-backed.
     #[test]
@@ -1181,7 +1251,7 @@ mod tests {
              to make this comparison meaningful"
         );
 
-        let as_tuple = |w: &Word| (w.value, w.timestamp_ns);
+        let as_tuple = |w: &Word| (w.value, w.timestamp_ns, w.duration_ns);
         let streamed_view: Vec<_> = streamed.iter().map(as_tuple).collect();
         let queried_view: Vec<_> = queried.iter().map(as_tuple).collect();
 

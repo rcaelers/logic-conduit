@@ -1285,16 +1285,25 @@ mod tests {
 
     /// Wires a fresh Word Matcher (start pattern) into the SPI words stream
     /// and its trigger into the existing viewer; returns the matcher id.
+    /// Wires a new matcher onto the **binary decoder's** words — the one
+    /// event branch that stays live for the whole run. The SPI control
+    /// branch is index-driven (EdgeQuery) and decodes the entire capture
+    /// in seconds, long before the block-streaming path produces its first
+    /// capture file — a tap attached to it mid-run would join an
+    /// already-closed stream and correctly observe nothing (event streams
+    /// don't replay). Mask 0x0 matches every word, so the tap fires as
+    /// soon as any enabled window streams data.
     fn attach_matcher_tap(widget: &mut NodeGraphWidget) -> NodeId {
         let matcher = widget
             .add_node_at("Word Matcher", egui::Pos2::new(620.0, 600.0))
             .unwrap();
         let mut state: nodes::WordMatcherState =
             serde_json::from_value(widget.graph().nodes[&matcher].state.clone()).unwrap();
-        state.pattern = node_graph::StringValue::new("0x600081");
+        state.pattern = node_graph::StringValue::new("0x0");
+        state.mask = node_graph::StringValue::new("0x0");
         widget.set_node_state(matcher, serde_json::to_value(state).unwrap());
 
-        let spi = node_by_def(widget, "SPI Decoder");
+        let decoder = node_by_def(widget, "Binary Decoder");
         let viewer = node_by_def(widget, "Viewer");
         let out_idx = |graph: &node_graph::GraphState, id: NodeId, name: &str| {
             graph.nodes[&id]
@@ -1311,12 +1320,12 @@ mod tests {
                 .unwrap()
         };
         let graph = widget.graph_mut();
-        let spi_words = out_idx(graph, spi, "MOSI Words");
+        let decoder_words = out_idx(graph, decoder, "Words");
         let matcher_in = in_idx(graph, matcher, "Words");
         graph.add_connection(
             SocketId {
-                node: spi,
-                index: spi_words,
+                node: decoder,
+                index: decoder_words,
                 direction: node_graph::SocketDirection::Output,
             },
             SocketId {

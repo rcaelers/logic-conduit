@@ -5,7 +5,7 @@
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_hex, parse_state};
 use crate::nodes;
 use dsl::runtime::{ConfigValue, NodeConfig, ProcessNode};
-use dsl::{MatchOp, Sample, Trigger, Word, WordMatcher};
+use dsl::{MatchOp, Sample, Trigger, TriggerAt, Word, WordMatcher};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -21,6 +21,14 @@ impl WordMatcherBuilder {
             ">" => (MatchOp::Gt, "gt"),
             "≥" => (MatchOp::Ge, "ge"),
             _ => (MatchOp::Eq, "eq"),
+        }
+    }
+
+    /// UI "Trigger at" selection → runtime `TriggerAt` and its wire name.
+    fn trigger_at(selected: &str) -> (TriggerAt, &'static str) {
+        match selected {
+            "Word start" => (TriggerAt::Start, "start"),
+            _ => (TriggerAt::End, "end"),
         }
     }
 }
@@ -57,8 +65,12 @@ impl RuntimeBuilder for WordMatcherBuilder {
         let pattern = parse_hex(&state.pattern.value)?;
         let mask = parse_hex(&state.mask.value)?;
         let (op, _) = Self::match_op(state.op.selected());
+        let (trigger_at, _) = Self::trigger_at(state.trigger_at.selected());
         Ok(Box::new(
-            WordMatcher::new(pattern, mask).with_op(op).with_name(name),
+            WordMatcher::new(pattern, mask)
+                .with_op(op)
+                .with_trigger_at(trigger_at)
+                .with_name(name),
         ))
     }
 
@@ -75,6 +87,11 @@ impl RuntimeBuilder for WordMatcherBuilder {
         );
         let (_, op_name) = Self::match_op(state.op.selected());
         config.insert("op".into(), ConfigValue::Text(op_name.into()));
+        let (_, trigger_at_name) = Self::trigger_at(state.trigger_at.selected());
+        config.insert(
+            "trigger_at".into(),
+            ConfigValue::Text(trigger_at_name.into()),
+        );
         // The pulse-output toggle only affects UI socket visibility.
         Some(config)
     }
