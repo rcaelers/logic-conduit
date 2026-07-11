@@ -352,7 +352,7 @@ fn dense_annotation_runs(
 /// width as a same-framing estimate (falling back to the burst cap when
 /// there's no previous word to measure), rather than collapsing to an
 /// unreadable sliver.
-fn annotation_box_end(
+pub(crate) fn annotation_box_end(
     annotation: &Annotation,
     is_last_ever: bool,
     previous_duration_ns: Option<u64>,

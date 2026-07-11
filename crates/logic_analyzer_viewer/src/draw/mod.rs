@@ -2,6 +2,8 @@ mod channels;
 mod derived;
 mod measurement;
 
+pub(crate) use derived::annotation_box_end;
+
 use crate::cursor::{cursor_color, cursor_flag_geometry, cursor_flag_label};
 use crate::format::{badge_text_color, format_duration, format_time, nice_step};
 use crate::types::{AnalyzerLayout, RowKey};
