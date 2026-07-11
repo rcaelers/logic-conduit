@@ -36,14 +36,14 @@ impl ViewState {
     }
 
     /// Fits `canvas_bounds` into `viewport`, with the requested screen-space
-    /// padding, and centers it in the viewport.
+    /// padding, and centers it without exceeding the default 1x graph zoom.
     pub fn fit_to_rect(&mut self, canvas_bounds: Rect, viewport: Rect, origin: Pos2, padding: f32) {
         let available =
             (viewport.size() - Vec2::splat(padding.max(0.0) * 2.0)).max(Vec2::splat(1.0));
         let size = canvas_bounds.size().max(Vec2::splat(1.0));
         self.zoom = (available.x / size.x)
             .min(available.y / size.y)
-            .clamp(0.1, 5.0);
+            .clamp(0.1, 1.0);
         self.pan = viewport.center() - origin - canvas_bounds.center().to_vec2() * self.zoom;
     }
 }
@@ -66,5 +66,6 @@ mod tests {
         );
         assert!(viewport.shrink(40.0).contains_rect(fitted));
         assert!(fitted.center().distance(viewport.center()) < 0.01);
+        assert_eq!(view.zoom, 1.0);
     }
 }
