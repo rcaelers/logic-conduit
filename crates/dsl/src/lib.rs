@@ -54,8 +54,8 @@ pub use runtime::{
 pub use runtime::{CaptureIndexProgress, IndexSampler, exact_window_sample_limit};
 
 // Re-export streaming decoders
-pub use nodes::decoders::ParallelDecoder;
 pub use nodes::decoders::SpiDecoder;
+pub use nodes::decoders::{ParallelDecoder, ParallelInputStrategy};
 
 // Re-export control-path logic nodes and sinks
 pub use nodes::logic::{

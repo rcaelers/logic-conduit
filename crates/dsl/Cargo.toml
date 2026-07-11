@@ -27,5 +27,8 @@ memmap2 = { workspace = true }
 minifb = { workspace = true }
 rusb = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }

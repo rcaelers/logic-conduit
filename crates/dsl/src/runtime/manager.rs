@@ -1341,6 +1341,39 @@ mod tests {
         }
     }
 
+    /// A consumer that deliberately excludes EdgeQuery, mirroring the
+    /// Binary Decoder's explicit packed-stream strategy.
+    struct StreamProbe {
+        got_stream: Arc<AtomicBool>,
+        buffer: VecDeque<NumberSample>,
+    }
+
+    impl ProcessNode for StreamProbe {
+        fn name(&self) -> &str {
+            "stream_probe"
+        }
+        fn num_inputs(&self) -> usize {
+            1
+        }
+        fn num_outputs(&self) -> usize {
+            0
+        }
+        fn input_schema(&self) -> Vec<PortSchema> {
+            vec![
+                PortSchema::new::<NumberSample>("in", 0, PortDirection::Input)
+                    .with_protocols(vec![ProtocolKind::Stream]),
+            ]
+        }
+        fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
+            if inputs[0].edge_query().is_none()
+                && inputs[0].get::<NumberSample>(&mut self.buffer).is_some()
+            {
+                self.got_stream.store(true, Ordering::Relaxed);
+            }
+            Err(WorkError::Shutdown)
+        }
+    }
+
     #[test]
     fn edge_query_negotiated_even_after_producer_already_running() {
         let mut manager = PipelineManager::new();
@@ -1377,6 +1410,34 @@ mod tests {
             "consumer never received an EdgeQuery handle even though both \
              sides declared support for it"
         );
+    }
+
+    #[test]
+    fn stream_only_consumer_overrides_queryable_producer_in_live_manager() {
+        let mut manager = PipelineManager::new();
+        manager
+            .add_node(NodeSpec {
+                name: "source".into(),
+                node: Box::new(QueryableSource),
+                inputs: vec![],
+            })
+            .unwrap();
+
+        let got = Arc::new(AtomicBool::new(false));
+        manager
+            .add_node(NodeSpec {
+                name: "probe".into(),
+                node: Box::new(StreamProbe {
+                    got_stream: Arc::clone(&got),
+                    buffer: VecDeque::new(),
+                }),
+                inputs: vec![sub("source", "out")],
+            })
+            .unwrap();
+
+        wait_finished(&manager, Duration::from_secs(5));
+        manager.wait();
+        assert!(got.load(Ordering::Relaxed));
     }
 
     // ── SampleKind negotiation (live path) ──────────────────────────────

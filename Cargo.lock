@@ -921,6 +921,7 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "lazy_static",
+ "libc",
  "memmap2",
  "minifb",
  "rusb",

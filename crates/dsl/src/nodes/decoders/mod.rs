@@ -8,7 +8,7 @@ pub mod types;
 pub mod uart_decoder;
 
 // Re-export common types
-pub use types::{BitOrder, CsPolarity, Endianness, SpiMode, StrobeMode};
+pub use types::{BitOrder, CsPolarity, Endianness, ParallelInputStrategy, SpiMode, StrobeMode};
 
 // Re-export decoders
 pub use parallel_decoder::ParallelDecoder;

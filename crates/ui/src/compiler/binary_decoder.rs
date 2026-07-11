@@ -4,7 +4,7 @@ use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 use dsl::nodes::decoders::Endianness;
 use dsl::runtime::ProcessNode;
-use dsl::{CsPolarity, Sample, SampleBlock, StrobeMode, Word};
+use dsl::{CsPolarity, ParallelInputStrategy, Sample, SampleBlock, StrobeMode, Word};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -81,7 +81,12 @@ impl RuntimeBuilder for BinaryDecoderBuilder {
         };
         let mut decoder =
             dsl::ParallelDecoder::new(data_bits, strobe_mode, Self::cs_polarity(&state))
-                .with_name(name);
+                .with_name(name)
+                .with_input_strategy(match state.input_strategy.selected() {
+                    "Packed stream" => ParallelInputStrategy::PackedStream,
+                    "Indexed" => ParallelInputStrategy::Indexed,
+                    _ => ParallelInputStrategy::Auto,
+                });
         let cycles = state.word_size.value.clamp(1, 8) as usize;
         if cycles > 1 {
             let endianness = if state.endianness.selected() == "Big" {

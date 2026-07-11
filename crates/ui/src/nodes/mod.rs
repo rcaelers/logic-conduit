@@ -319,6 +319,7 @@ pub fn populate_startup(widget: &mut node_graph::NodeGraphWidget) {
                 "Low level",
             ],
         ),
+        input_strategy: binary_decoder::default_input_strategy(),
         word_size: IntValue::new(1, 1, 8),
         endianness: EnumValue::new(0, &["Little", "Big"]),
         cs_polarity: EnumValue::new(0, &["Disabled", "Active low", "Active high"]),

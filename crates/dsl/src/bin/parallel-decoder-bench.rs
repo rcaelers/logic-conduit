@@ -9,16 +9,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use clap::{Parser, ValueEnum};
-    use dsl::runtime::{EdgeQuery, ProtocolKind};
     use dsl::{
         CsPolarity, DerivedLaneData, DerivedLanes, DslFileSource, InputPort, OutputPort,
-        ParallelDecoder, Pipeline, PortSchema, ProcessNode, StrobeMode, ViewerLaneKind,
-        ViewerRetention, ViewerSink, Word, WorkError, WorkResult,
+        ParallelDecoder, ParallelInputStrategy, Pipeline, PortSchema, ProcessNode, StrobeMode,
+        ViewerLaneKind, ViewerRetention, ViewerSink, Word, WorkError, WorkResult,
     };
     use std::collections::VecDeque;
     use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
     #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -26,6 +24,16 @@ mod native {
         Indexed,
         Stream,
         Both,
+    }
+
+    impl BenchMode {
+        fn protocol_name(self) -> &'static str {
+            match self {
+                Self::Indexed => "edge-query",
+                Self::Stream => "packed-stream",
+                Self::Both => "multiple",
+            }
+        }
     }
 
     #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -116,69 +124,17 @@ mod native {
         viewer_max_entries: usize,
     }
 
-    struct ForceStreamOutput<N>(N);
-
-    impl<N: ProcessNode> ProcessNode for ForceStreamOutput<N> {
-        fn name(&self) -> &str {
-            self.0.name()
-        }
-
-        fn should_stop(&self) -> bool {
-            self.0.should_stop()
-        }
-
-        fn is_self_threading(&self) -> bool {
-            self.0.is_self_threading()
-        }
-
-        fn num_inputs(&self) -> usize {
-            self.0.num_inputs()
-        }
-
-        fn num_outputs(&self) -> usize {
-            self.0.num_outputs()
-        }
-
-        fn input_schema(&self) -> Vec<PortSchema> {
-            self.0.input_schema()
-        }
-
-        fn output_schema(&self) -> Vec<PortSchema> {
-            self.0
-                .output_schema()
-                .into_iter()
-                .map(|schema| schema.with_protocols(vec![ProtocolKind::Stream]))
-                .collect()
-        }
-
-        fn node_type(&self) -> &str {
-            self.0.node_type()
-        }
-
-        fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
-            self.0.work(inputs, outputs)
-        }
-
-        fn edge_query(
-            &self,
-            port: usize,
-            input_queries: &[Option<Arc<dyn EdgeQuery>>],
-        ) -> Option<Arc<dyn EdgeQuery>> {
-            self.0.edge_query(port, input_queries)
-        }
-    }
-
     struct CountWords {
-        count: Arc<AtomicU64>,
+        stats: Arc<Mutex<OutputStats>>,
         buffer: VecDeque<Word>,
     }
 
     impl CountWords {
         const DRAIN_BATCH: usize = 65_536;
 
-        fn new(count: Arc<AtomicU64>) -> Self {
+        fn new(stats: Arc<Mutex<OutputStats>>) -> Self {
             Self {
-                count,
+                stats,
                 buffer: VecDeque::new(),
             }
         }
@@ -216,9 +172,115 @@ mod native {
                     return Err(WorkError::Shutdown);
                 }
             };
-            self.count.fetch_add(received as u64, Ordering::Relaxed);
+            self.stats.lock().unwrap().extend_words(&batch);
             Ok(received)
         }
+    }
+
+    const FINGERPRINT_OFFSET: u64 = 0xcbf29ce484222325;
+    const FINGERPRINT_PRIME: u64 = 0x100000001b3;
+
+    fn fingerprint_u64(mut fingerprint: u64, value: u64) -> u64 {
+        for byte in value.to_le_bytes() {
+            fingerprint ^= u64::from(byte);
+            fingerprint = fingerprint.wrapping_mul(FINGERPRINT_PRIME);
+        }
+        fingerprint
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct OutputStats {
+        count: u64,
+        fingerprint: u64,
+    }
+
+    impl Default for OutputStats {
+        fn default() -> Self {
+            Self {
+                count: 0,
+                fingerprint: FINGERPRINT_OFFSET,
+            }
+        }
+    }
+
+    impl OutputStats {
+        fn extend_words(&mut self, words: &[Word]) {
+            for word in words {
+                self.fingerprint = fingerprint_u64(self.fingerprint, word.value);
+                self.fingerprint = fingerprint_u64(self.fingerprint, word.timestamp_ns);
+                self.fingerprint = fingerprint_u64(self.fingerprint, word.duration_ns);
+            }
+            self.count += words.len() as u64;
+        }
+
+        fn extend_annotations(&mut self, annotations: &[dsl::Annotation]) {
+            for annotation in annotations {
+                self.fingerprint = fingerprint_u64(self.fingerprint, annotation.value);
+                self.fingerprint = fingerprint_u64(self.fingerprint, annotation.start_ns);
+                self.fingerprint = fingerprint_u64(self.fingerprint, annotation.end_ns);
+            }
+            self.count += annotations.len() as u64;
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct ResourceMetrics {
+        user_seconds: f64,
+        system_seconds: f64,
+        peak_rss_bytes: u64,
+    }
+
+    impl ResourceMetrics {
+        fn report(self, elapsed: Duration) -> String {
+            let cpu_cores = (self.user_seconds + self.system_seconds) / elapsed.as_secs_f64();
+            format!(
+                "cpu_user_s={:.3} cpu_system_s={:.3} avg_cpu_cores={:.2} peak_rss_mib={:.1}",
+                self.user_seconds,
+                self.system_seconds,
+                cpu_cores,
+                self.peak_rss_bytes as f64 / (1024.0 * 1024.0),
+            )
+        }
+    }
+
+    #[cfg(unix)]
+    fn resource_usage() -> Option<ResourceMetrics> {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+        // SAFETY: `usage` points to writable storage for exactly one
+        // `libc::rusage`, and `getrusage` initializes it on success.
+        if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        // SAFETY: the successful call above initialized the structure.
+        let usage = unsafe { usage.assume_init() };
+        let timeval_seconds =
+            |time: libc::timeval| time.tv_sec as f64 + time.tv_usec as f64 / 1_000_000.0;
+        #[cfg(target_os = "macos")]
+        let peak_rss_bytes = usage.ru_maxrss.max(0) as u64;
+        #[cfg(not(target_os = "macos"))]
+        let peak_rss_bytes = (usage.ru_maxrss.max(0) as u64).saturating_mul(1024);
+        Some(ResourceMetrics {
+            user_seconds: timeval_seconds(usage.ru_utime),
+            system_seconds: timeval_seconds(usage.ru_stime),
+            peak_rss_bytes,
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn resource_usage() -> Option<ResourceMetrics> {
+        None
+    }
+
+    fn resource_delta(
+        before: Option<ResourceMetrics>,
+        after: Option<ResourceMetrics>,
+    ) -> Option<ResourceMetrics> {
+        let (before, after) = (before?, after?);
+        Some(ResourceMetrics {
+            user_seconds: (after.user_seconds - before.user_seconds).max(0.0),
+            system_seconds: (after.system_seconds - before.system_seconds).max(0.0),
+            peak_rss_bytes: after.peak_rss_bytes,
+        })
     }
 
     struct BenchResult {
@@ -230,6 +292,9 @@ mod native {
         samplerate_hz: f64,
         words: u64,
         words_measured: bool,
+        fingerprint: Option<u64>,
+        fingerprint_scope: Option<&'static str>,
+        resources: Option<ResourceMetrics>,
     }
 
     impl BenchResult {
@@ -238,38 +303,53 @@ mod native {
             let capture_seconds = self.samples as f64 / self.samplerate_hz;
             let msamples_per_second = self.samples as f64 / seconds / 1_000_000.0;
             let realtime = capture_seconds / seconds;
+            let resources = self
+                .resources
+                .map(|resources| resources.report(self.elapsed))
+                .unwrap_or_else(|| "cpu_user_s=unavailable cpu_system_s=unavailable avg_cpu_cores=unavailable peak_rss_mib=unavailable".to_string());
             if matches!(self.sink, SinkKind::Viewer) {
                 println!(
-                    "mode={:?} sink={:?} samples={} words_retained={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3}",
+                    "mode={:?} protocol={} sink={:?} samples={} words_retained={} output_hash={:016x} hash_scope={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3} {}",
                     self.mode,
+                    self.mode.protocol_name(),
                     self.sink,
                     self.samples,
                     self.words,
+                    self.fingerprint.expect("viewer result has a fingerprint"),
+                    self.fingerprint_scope
+                        .expect("viewer result has a hash scope"),
                     self.setup.as_secs_f64(),
                     seconds,
                     capture_seconds,
                     msamples_per_second,
                     realtime,
+                    resources,
                 );
             } else if self.words_measured {
                 let mwords_per_second = self.words as f64 / seconds / 1_000_000.0;
                 println!(
-                    "mode={:?} sink={:?} samples={} words={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} MWords_s={:.3} realtime_x={:.3}",
+                    "mode={:?} protocol={} sink={:?} samples={} words={} output_hash={:016x} hash_scope={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} MWords_s={:.3} realtime_x={:.3} {}",
                     self.mode,
+                    self.mode.protocol_name(),
                     self.sink,
                     self.samples,
                     self.words,
+                    self.fingerprint.expect("count result has a fingerprint"),
+                    self.fingerprint_scope
+                        .expect("count result has a hash scope"),
                     self.setup.as_secs_f64(),
                     seconds,
                     capture_seconds,
                     msamples_per_second,
                     mwords_per_second,
                     realtime,
+                    resources,
                 );
             } else {
                 println!(
-                    "mode={:?} sink={:?} samples={} words=unmeasured setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3}",
+                    "mode={:?} protocol={} sink={:?} samples={} words=unmeasured output_hash=unmeasured setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3} {}",
                     self.mode,
+                    self.mode.protocol_name(),
                     self.sink,
                     self.samples,
                     self.setup.as_secs_f64(),
@@ -277,6 +357,7 @@ mod native {
                     capture_seconds,
                     msamples_per_second,
                     realtime,
+                    resources,
                 );
             }
         }
@@ -296,24 +377,26 @@ mod native {
         let samplerate_hz = source.samplerate_hz();
         let source = source.with_max_samples(Some(samples));
         let cs_polarity = CsPolarity::from(args.cs_polarity);
-        let decoder = ParallelDecoder::new(args.data.len(), args.trigger.into(), cs_polarity);
+        let input_strategy = match mode {
+            BenchMode::Indexed => ParallelInputStrategy::Indexed,
+            BenchMode::Stream => ParallelInputStrategy::PackedStream,
+            BenchMode::Both => unreachable!("Both is expanded by main"),
+        };
+        let decoder = ParallelDecoder::new(args.data.len(), args.trigger.into(), cs_polarity)
+            .with_input_strategy(input_strategy);
 
-        let count = Arc::new(AtomicU64::new(0));
+        let output_stats = Arc::new(Mutex::new(OutputStats::default()));
         let mut viewer_store = None;
         let sink_port;
         let mut pipeline = Pipeline::new().with_default_buffer_size(args.buffer);
-        match mode {
-            BenchMode::Indexed => pipeline.add_process("source", source)?,
-            BenchMode::Stream => pipeline.add_process("source", ForceStreamOutput(source))?,
-            BenchMode::Both => unreachable!("Both is expanded by main"),
-        }
+        pipeline.add_process("source", source)?;
         pipeline.add_process("decoder", decoder)?;
         match args.sink {
             SinkKind::Discard => {
                 sink_port = None;
             }
             SinkKind::Count => {
-                pipeline.add_process("sink", CountWords::new(Arc::clone(&count)))?;
+                pipeline.add_process("sink", CountWords::new(Arc::clone(&output_stats)))?;
                 sink_port = Some("words");
             }
             SinkKind::Viewer => {
@@ -351,18 +434,26 @@ mod native {
         let setup_start = Instant::now();
         let scheduler = pipeline.build()?;
         let setup = setup_start.elapsed();
+        let resources_before = resource_usage();
         let run_start = Instant::now();
         scheduler.wait();
         let elapsed = run_start.elapsed();
+        let resources = resource_delta(resources_before, resource_usage());
 
-        let words = if let Some(store) = viewer_store {
+        let (stats, fingerprint_scope) = if let Some(store) = viewer_store {
             let lanes = store.read();
             match lanes.first().map(|lane| &lane.data) {
-                Some(DerivedLaneData::Annotations(words)) => words.len() as u64,
-                _ => 0,
+                Some(DerivedLaneData::Annotations(annotations)) => {
+                    let mut stats = OutputStats::default();
+                    stats.extend_annotations(annotations);
+                    (stats, Some("retained-annotations"))
+                }
+                _ => (OutputStats::default(), Some("retained-annotations")),
             }
+        } else if matches!(args.sink, SinkKind::Count) {
+            (*output_stats.lock().unwrap(), Some("decoded-words"))
         } else {
-            count.load(Ordering::Relaxed)
+            (OutputStats::default(), None)
         };
 
         Ok(BenchResult {
@@ -372,8 +463,11 @@ mod native {
             elapsed,
             samples,
             samplerate_hz,
-            words,
+            words: stats.count,
             words_measured: !matches!(args.sink, SinkKind::Discard),
+            fingerprint: fingerprint_scope.map(|_| stats.fingerprint),
+            fingerprint_scope,
+            resources,
         })
     }
 
@@ -404,8 +498,37 @@ mod native {
             BenchMode::Stream => &[BenchMode::Stream],
             BenchMode::Both => &[BenchMode::Indexed, BenchMode::Stream],
         };
+        let mut count_reference: Option<(BenchMode, u64, u64)> = None;
         for &mode in modes {
-            run(&args, mode)?.print();
+            let result = run(&args, mode)?;
+            result.print();
+            if matches!(args.sink, SinkKind::Count) {
+                let fingerprint = result
+                    .fingerprint
+                    .expect("count result must include a fingerprint");
+                if let Some((reference_mode, reference_count, reference_fingerprint)) =
+                    count_reference
+                {
+                    if result.words != reference_count || fingerprint != reference_fingerprint {
+                        return Err(format!(
+                            "decoded output mismatch: {:?} produced {} words/{:016x}, {:?} produced {} words/{:016x}",
+                            reference_mode,
+                            reference_count,
+                            reference_fingerprint,
+                            result.mode,
+                            result.words,
+                            fingerprint,
+                        )
+                        .into());
+                    }
+                    println!(
+                        "verification=match modes={:?},{:?} words={} output_hash={:016x}",
+                        reference_mode, result.mode, result.words, fingerprint
+                    );
+                } else {
+                    count_reference = Some((result.mode, result.words, fingerprint));
+                }
+            }
         }
         Ok(())
     }
@@ -413,6 +536,52 @@ mod native {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use std::fs::File;
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+
+        fn set_packed_bit(data: &mut [u8], sample: usize, value: bool) {
+            if value {
+                data[sample / 8] |= 1 << (sample % 8);
+            }
+        }
+
+        fn write_sparse_capture(path: &std::path::Path) {
+            const SAMPLES: usize = 65_536;
+            const TRIGGERS: [usize; 3] = [1_000, 30_000, 60_000];
+            let file = File::create(path).unwrap();
+            let mut archive = zip::ZipWriter::new(file);
+            let options =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            archive.start_file("header", options).unwrap();
+            archive
+                .write_all(
+                    b"total probes = 3\nsamplerate = 1 MHz\ntotal samples = 65536\ntotal blocks = 1\nprobe0 = D0\nprobe1 = D1\nprobe2 = Clock\n",
+                )
+                .unwrap();
+
+            let mut channels = vec![vec![0u8; SAMPLES / 8]; 3];
+            for &trigger in &TRIGGERS {
+                set_packed_bit(&mut channels[2], trigger, true);
+            }
+            for sample in 0..SAMPLES {
+                let value = match sample {
+                    0..1_000 => 0,
+                    1_000..30_000 => 1,
+                    30_000..60_000 => 2,
+                    _ => 3,
+                };
+                set_packed_bit(&mut channels[0], sample, value & 1 != 0);
+                set_packed_bit(&mut channels[1], sample, value & 2 != 0);
+            }
+            for (channel, data) in channels.iter().enumerate() {
+                archive
+                    .start_file(format!("L-{channel}/0"), options)
+                    .unwrap();
+                archive.write_all(data).unwrap();
+            }
+            archive.finish().unwrap();
+        }
 
         #[test]
         fn parses_explicit_capture_and_channel_mapping() {
@@ -463,6 +632,53 @@ mod native {
             .unwrap();
 
             assert!(matches!(args.sink, SinkKind::Discard));
+        }
+
+        #[test]
+        fn word_fingerprint_is_stable_and_order_sensitive() {
+            let first = Word::spanning(0x12, 1_000, 50);
+            let second = Word::spanning(0x27, 2_000, 75);
+            let mut a = OutputStats::default();
+            a.extend_words(&[first, second]);
+            let mut b = OutputStats::default();
+            b.extend_words(&[first]);
+            b.extend_words(&[second]);
+            let mut reversed = OutputStats::default();
+            reversed.extend_words(&[second, first]);
+
+            assert_eq!(a.count, 2);
+            assert_eq!(a.fingerprint, b.fingerprint);
+            assert_ne!(a.fingerprint, reversed.fingerprint);
+        }
+
+        #[test]
+        fn sparse_capture_matches_between_indexed_and_packed_protocols() {
+            let directory = tempfile::tempdir().unwrap();
+            let capture = directory.path().join("sparse.dsl");
+            write_sparse_capture(&capture);
+            let args = Args::try_parse_from([
+                "parallel-decoder-bench",
+                capture.to_str().unwrap(),
+                "--samples",
+                "65536",
+                "--mode",
+                "both",
+                "--sink",
+                "count",
+                "--strobe",
+                "2",
+                "--data",
+                "0,1",
+                "--trigger",
+                "rising",
+            ])
+            .unwrap();
+
+            let indexed = run(&args, BenchMode::Indexed).unwrap();
+            let packed = run(&args, BenchMode::Stream).unwrap();
+            assert_eq!(indexed.words, 3);
+            assert_eq!(indexed.words, packed.words);
+            assert_eq!(indexed.fingerprint, packed.fingerprint);
         }
     }
 }

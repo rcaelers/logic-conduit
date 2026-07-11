@@ -4,7 +4,7 @@
 //! and Sample inputs for low-bandwidth control signals (enable_signal).
 //! Outputs Word events.
 
-use super::types::{CsPolarity, Endianness, StrobeMode};
+use super::types::{CsPolarity, Endianness, ParallelInputStrategy, StrobeMode};
 use crate::runtime::Receiver;
 use crate::runtime::WorkError;
 use crate::runtime::capture::CaptureTransition;
@@ -29,6 +29,7 @@ pub struct ParallelDecoder {
     num_data_bits: usize,
     mode: StrobeMode,
     cs_polarity: CsPolarity,
+    input_strategy: ParallelInputStrategy,
 
     /// Bus cycles assembled into one output word (1 = one cycle per word)
     cycles_per_word: usize,
@@ -83,6 +84,7 @@ impl ParallelDecoder {
             num_data_bits,
             mode,
             cs_polarity,
+            input_strategy: ParallelInputStrategy::Auto,
             cycles_per_word: 1,
             endianness: Endianness::default(),
             enable_buffer: VecDeque::new(),
@@ -103,6 +105,11 @@ impl ParallelDecoder {
     /// With custom name
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
+        self
+    }
+
+    pub fn with_input_strategy(mut self, strategy: ParallelInputStrategy) -> Self {
+        self.input_strategy = strategy;
         self
     }
 
@@ -141,12 +148,20 @@ impl ProcessNode for ParallelDecoder {
     fn input_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
         use crate::runtime::ports::{PortDirection, PortSchema};
 
-        // strobe/dN/cs alias raw binary channels: prefer skip-ahead
-        // queries. enable_signal usually comes from a computed control
-        // path (an SR latch / logic gate) whose producer only streams,
-        // but declares EdgeQuery too so that a graph wiring it straight
-        // to a raw channel gets point queries instead of a stream.
-        let input_protocols = vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream];
+        // A level trigger must inspect every sample and therefore always
+        // streams. Edge-triggered modes honor the explicit strategy; Auto
+        // keeps the existing indexed-first preference.
+        let input_protocols = if matches!(self.mode, StrobeMode::HighLevel | StrobeMode::LowLevel) {
+            vec![ProtocolKind::Stream]
+        } else {
+            match self.input_strategy {
+                ParallelInputStrategy::Auto => {
+                    vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]
+                }
+                ParallelInputStrategy::PackedStream => vec![ProtocolKind::Stream],
+                ParallelInputStrategy::Indexed => vec![ProtocolKind::EdgeQuery],
+            }
+        };
 
         let mut schemas = Vec::new();
 
@@ -169,13 +184,15 @@ impl ProcessNode for ParallelDecoder {
         );
 
         // Edge input last
+        // Enable is a low-rate level input with its own transport choice;
+        // it is not constrained by how the raw packed channels arrive.
         schemas.push(
             PortSchema::new::<Sample>(
                 "enable_signal",
                 1 + self.num_data_bits + 1,
                 PortDirection::Input,
             )
-            .with_protocols(input_protocols),
+            .with_protocols(vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]),
         );
 
         schemas
@@ -933,6 +950,35 @@ mod tests {
             decoder.input_schema()[0].protocols,
             vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]
         );
+    }
+
+    #[test]
+    fn input_strategy_constrains_raw_signal_protocols() {
+        let packed = ParallelDecoder::new(2, StrobeMode::AnyEdge, CsPolarity::Disabled)
+            .with_input_strategy(ParallelInputStrategy::PackedStream);
+        let indexed = ParallelDecoder::new(2, StrobeMode::AnyEdge, CsPolarity::Disabled)
+            .with_input_strategy(ParallelInputStrategy::Indexed);
+
+        for schema in &packed.input_schema()[..4] {
+            assert_eq!(schema.protocols, vec![ProtocolKind::Stream]);
+        }
+        for schema in &indexed.input_schema()[..4] {
+            assert_eq!(schema.protocols, vec![ProtocolKind::EdgeQuery]);
+        }
+        assert_eq!(
+            packed.input_schema()[4].protocols,
+            vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream],
+            "the enable level chooses its transport independently"
+        );
+    }
+
+    #[test]
+    fn level_trigger_forces_packed_streaming() {
+        let decoder = ParallelDecoder::new(1, StrobeMode::HighLevel, CsPolarity::Disabled)
+            .with_input_strategy(ParallelInputStrategy::Indexed);
+        for schema in &decoder.input_schema()[..3] {
+            assert_eq!(schema.protocols, vec![ProtocolKind::Stream]);
+        }
     }
 
     fn block_from_bits(bits: &[bool]) -> SampleBlock {

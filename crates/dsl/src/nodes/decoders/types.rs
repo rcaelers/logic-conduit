@@ -58,3 +58,16 @@ pub enum StrobeMode {
     /// Sample when strobe is low (level-triggered)
     LowLevel,
 }
+
+/// Input transport strategy for the parallel decoder's raw signal inputs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ParallelInputStrategy {
+    /// Let protocol negotiation choose. File sources currently prefer an
+    /// indexed query when both transports are available.
+    #[default]
+    Auto,
+    /// Consume aligned packed sample blocks.
+    PackedStream,
+    /// Query strobe edges and data values from a random-access index.
+    Indexed,
+}
