@@ -208,7 +208,11 @@ pub fn build_registry() -> NodeTypeRegistry {
 
 // ── Startup graph: the CCD capture pipeline ─────────────────────────────
 
-fn output_index(widget: &node_graph::NodeGraphWidget, node: node_graph::NodeId, name: &str) -> usize {
+fn output_index(
+    widget: &node_graph::NodeGraphWidget,
+    node: node_graph::NodeId,
+    name: &str,
+) -> usize {
     widget.graph().nodes[&node]
         .outputs
         .iter()
@@ -216,7 +220,11 @@ fn output_index(widget: &node_graph::NodeGraphWidget, node: node_graph::NodeId, 
         .unwrap_or_else(|| panic!("no output socket '{name}'"))
 }
 
-fn input_index(widget: &node_graph::NodeGraphWidget, node: node_graph::NodeId, name: &str) -> usize {
+fn input_index(
+    widget: &node_graph::NodeGraphWidget,
+    node: node_graph::NodeId,
+    name: &str,
+) -> usize {
     widget.graph().nodes[&node]
         .inputs
         .iter()

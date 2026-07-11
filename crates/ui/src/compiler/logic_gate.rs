@@ -2,8 +2,8 @@
 
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
-use dsl::runtime::ProcessNode;
 use dsl::Sample;
+use dsl::runtime::ProcessNode;
 use dsl::{GateOp, LogicGate};
 use node_graph::Socket;
 use serde_json::Value;

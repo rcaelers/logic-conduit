@@ -96,7 +96,11 @@ impl PortValue for Sample {
         "SampleEdge"
     }
     fn buffer_size(producer_is_source: bool) -> usize {
-        if producer_is_source { 10_000_000 } else { 1_000 }
+        if producer_is_source {
+            10_000_000
+        } else {
+            1_000
+        }
     }
 }
 

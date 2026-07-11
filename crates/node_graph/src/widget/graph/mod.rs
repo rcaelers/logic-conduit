@@ -198,11 +198,18 @@ impl NodeGraphWidget {
 
     /// Saves the current graph as formatted JSON.
     pub fn save_to_path(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
-        self.sync_all_node_state();
-        let json = serde_json::to_string_pretty(&self.graph)
+        let json = serde_json::to_string_pretty(&self.snapshot_value()?)
             .map_err(|error| format!("could not serialize graph: {error}"))?;
         std::fs::write(path.as_ref(), json)
             .map_err(|error| format!("could not write {}: {error}", path.as_ref().display()))
+    }
+
+    /// Captures the current graph, including state still held by inline node
+    /// controls. Used by document persistence and dirty-state tracking.
+    pub fn snapshot_value(&mut self) -> Result<serde_json::Value, String> {
+        self.sync_all_node_state();
+        serde_json::to_value(&self.graph)
+            .map_err(|error| format!("could not serialize graph: {error}"))
     }
 
     /// Loads a graph from JSON and rebuilds its runtime node instances.

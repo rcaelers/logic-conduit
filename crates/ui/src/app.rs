@@ -14,6 +14,45 @@ enum FileCommand {
     Quit,
 }
 
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+fn is_quit_shortcut(event: &egui::Event) -> bool {
+    matches!(
+        event,
+        egui::Event::Key {
+            key: egui::Key::Q,
+            pressed: true,
+            modifiers,
+            ..
+        } if modifiers.matches_logically(egui::Modifiers::COMMAND)
+    )
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+pub enum NativeMenuCommand {
+    Load,
+    Save,
+    SaveAs,
+    Quit,
+}
+
+#[cfg(target_os = "macos")]
+struct NativeMenuBridge {
+    sender: crossbeam_channel::Sender<NativeMenuCommand>,
+    context: egui::Context,
+}
+
+#[cfg(target_os = "macos")]
+static NATIVE_MENU_BRIDGE: std::sync::OnceLock<NativeMenuBridge> = std::sync::OnceLock::new();
+
+#[cfg(target_os = "macos")]
+pub fn dispatch_native_menu_command(command: NativeMenuCommand) {
+    if let Some(bridge) = NATIVE_MENU_BRIDGE.get() {
+        let _ = bridge.sender.send(command);
+        bridge.context.request_repaint();
+    }
+}
+
 pub struct App {
     node_graph: NodeGraphWidget,
     logic_analyzer: LogicAnalyzerViewer,
@@ -26,6 +65,14 @@ pub struct App {
     file_message: Option<(String, bool /* is_error */)>,
     #[cfg(not(target_arch = "wasm32"))]
     current_file: Option<PathBuf>,
+    #[cfg(not(target_arch = "wasm32"))]
+    saved_graph: serde_json::Value,
+    #[cfg(not(target_arch = "wasm32"))]
+    close_confirmation: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    allow_close: bool,
+    #[cfg(target_os = "macos")]
+    native_menu_commands: crossbeam_channel::Receiver<NativeMenuCommand>,
     /// Nodes badged with compile errors; cleared on the next Run.
     error_badges: Vec<NodeId>,
     /// Last time the running pipeline was diffed against the edited graph.
@@ -83,8 +130,26 @@ impl App {
         let mut widget = NodeGraphWidget::new(registry);
         #[cfg(target_arch = "wasm32")]
         nodes::populate_uart_demo(&mut widget);
+        #[cfg(not(target_arch = "wasm32"))]
+        let saved_graph = widget
+            .snapshot_value()
+            .expect("new graph should always serialize");
         let mut logic_analyzer = LogicAnalyzerViewer::new();
         logic_analyzer.set_channels(demo_signals::channels());
+        #[cfg(target_os = "macos")]
+        let native_menu_commands = {
+            let (sender, receiver) = crossbeam_channel::unbounded();
+            assert!(
+                NATIVE_MENU_BRIDGE
+                    .set(NativeMenuBridge {
+                        sender,
+                        context: cc.egui_ctx.clone(),
+                    })
+                    .is_ok(),
+                "only one native application instance is supported"
+            );
+            receiver
+        };
         Self {
             node_graph: widget,
             logic_analyzer,
@@ -95,6 +160,14 @@ impl App {
             file_message: None,
             #[cfg(not(target_arch = "wasm32"))]
             current_file: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            saved_graph,
+            #[cfg(not(target_arch = "wasm32"))]
+            close_confirmation: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            allow_close: false,
+            #[cfg(target_os = "macos")]
+            native_menu_commands,
             error_badges: Vec::new(),
             last_live_sync: 0.0,
         }
@@ -110,6 +183,7 @@ impl App {
                 self.run_message = None;
                 self.error_badges.clear();
                 self.current_file = Some(path.clone());
+                self.mark_graph_saved();
                 self.file_message = Some((format!("Loaded {}", path.display()), false));
             }
             Err(error) => self.file_message = Some((error, true)),
@@ -130,16 +204,15 @@ impl App {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn save_file(&mut self) {
+    fn save_file(&mut self) -> bool {
         let Some(path) = self.current_file.clone() else {
-            self.save_file_as();
-            return;
+            return self.save_file_as();
         };
-        self.save_to_file(path);
+        self.save_to_file(path)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn save_file_as(&mut self) {
+    fn save_file_as(&mut self) -> bool {
         let mut dialog = rfd::FileDialog::new()
             .set_title("Save graph as")
             .set_file_name("pipeline.json")
@@ -154,23 +227,115 @@ impl App {
         }
         let path = dialog.save_file();
         let Some(path) = path else {
-            return;
+            return false;
         };
-        self.save_to_file(path);
+        self.save_to_file(path)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn save_to_file(&mut self, path: PathBuf) {
+    fn save_to_file(&mut self, path: PathBuf) -> bool {
         match self.node_graph.save_to_path(&path) {
             Ok(()) => {
                 self.current_file = Some(path.clone());
+                self.mark_graph_saved();
                 self.file_message = Some((format!("Saved {}", path.display()), false));
+                true
             }
+            Err(error) => {
+                self.file_message = Some((error, true));
+                false
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn mark_graph_saved(&mut self) {
+        match self.node_graph.snapshot_value() {
+            Ok(graph) => self.saved_graph = graph,
             Err(error) => self.file_message = Some((error, true)),
         }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    fn has_unsaved_changes(&mut self) -> bool {
+        self.node_graph
+            .snapshot_value()
+            .map_or(true, |graph| graph != self.saved_graph)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn request_quit(&mut self, ctx: &egui::Context) {
+        if self.has_unsaved_changes() {
+            self.close_confirmation = true;
+        } else {
+            self.allow_close = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn execute_file_command(&mut self, command: FileCommand, ctx: &egui::Context) {
+        match command {
+            FileCommand::Load => self.choose_and_load_file(),
+            FileCommand::Save => {
+                self.save_file();
+            }
+            FileCommand::SaveAs => {
+                self.save_file_as();
+            }
+            FileCommand::Quit => self.request_quit(ctx),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn show_close_confirmation(&mut self, ctx: &egui::Context) {
+        if !self.close_confirmation {
+            return;
+        }
+
+        enum CloseAction {
+            Save,
+            Discard,
+            Cancel,
+        }
+
+        let mut action = None;
+        egui::Window::new("Save changes?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label("Save changes to the graph before quitting?");
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        action = Some(CloseAction::Save);
+                    }
+                    if ui.button("Don't Save").clicked() {
+                        action = Some(CloseAction::Discard);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        action = Some(CloseAction::Cancel);
+                    }
+                });
+            });
+
+        match action {
+            Some(CloseAction::Save) if self.save_file() => {
+                self.close_confirmation = false;
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Some(CloseAction::Discard) => {
+                self.close_confirmation = false;
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Some(CloseAction::Cancel) => self.close_confirmation = false,
+            _ => {}
+        }
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
     fn show_menu_bar(&mut self, ui: &mut egui::Ui) {
         let load_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::O);
         let save_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
@@ -178,12 +343,15 @@ impl App {
             egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
             egui::Key::S,
         );
+        let quit_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Q);
         let mut command = if ui.input_mut(|input| input.consume_shortcut(&load_shortcut)) {
             Some(FileCommand::Load)
         } else if ui.input_mut(|input| input.consume_shortcut(&save_as_shortcut)) {
             Some(FileCommand::SaveAs)
         } else if ui.input_mut(|input| input.consume_shortcut(&save_shortcut)) {
             Some(FileCommand::Save)
+        } else if ui.input_mut(|input| input.consume_shortcut(&quit_shortcut)) {
+            Some(FileCommand::Quit)
         } else {
             None
         };
@@ -221,19 +389,21 @@ impl App {
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Quit").clicked() {
+                if ui
+                    .add(
+                        egui::Button::new("Quit")
+                            .shortcut_text(ui.ctx().format_shortcut(&quit_shortcut)),
+                    )
+                    .clicked()
+                {
                     command = Some(FileCommand::Quit);
                     ui.close();
                 }
             });
         });
 
-        match command {
-            Some(FileCommand::Load) => self.choose_and_load_file(),
-            Some(FileCommand::Save) => self.save_file(),
-            Some(FileCommand::SaveAs) => self.save_file_as(),
-            Some(FileCommand::Quit) => ui.send_viewport_cmd(egui::ViewportCommand::Close),
-            None => {}
+        if let Some(command) = command {
+            self.execute_file_command(command, ui.ctx());
         }
     }
 
@@ -515,9 +685,73 @@ mod font_tests {
     }
 }
 
+#[cfg(all(test, not(target_arch = "wasm32"), not(target_os = "macos")))]
+mod close_shortcut_tests {
+    use super::is_quit_shortcut;
+
+    #[test]
+    fn recognizes_command_q_key_presses() {
+        let press = egui::Event::Key {
+            key: egui::Key::Q,
+            physical_key: Some(egui::Key::Q),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        let release = egui::Event::Key {
+            key: egui::Key::Q,
+            physical_key: Some(egui::Key::Q),
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+
+        assert!(is_quit_shortcut(&press));
+        assert!(!is_quit_shortcut(&release));
+    }
+}
+
 impl eframe::App for App {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, _raw_input: &mut egui::RawInput) {
+        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+        {
+            let quit_requested = _raw_input.events.iter().any(is_quit_shortcut);
+            _raw_input.events.retain(|event| !is_quit_shortcut(event));
+            if quit_requested && !self.allow_close {
+                self.request_quit(_ctx);
+            }
+        }
+    }
+
+    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        while let Ok(command) = self.native_menu_commands.try_recv() {
+            let command = match command {
+                NativeMenuCommand::Load => FileCommand::Load,
+                NativeMenuCommand::Save => FileCommand::Save,
+                NativeMenuCommand::SaveAs => FileCommand::SaveAs,
+                NativeMenuCommand::Quit => FileCommand::Quit,
+            };
+            self.execute_file_command(command, _ctx);
+        }
+
+        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+        {
+            let os_close_requested = _ctx.input(|input| input.viewport().close_requested());
+            if !self.allow_close && os_close_requested {
+                if self.has_unsaved_changes() {
+                    self.close_confirmation = true;
+                    _ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                } else {
+                    self.allow_close = true;
+                    _ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
         self.show_menu_bar(ui);
 
         let available = ui.available_size();
@@ -590,5 +824,8 @@ impl eframe::App for App {
         ui.allocate_ui(egui::vec2(available.x, graph_height), |ui| {
             self.node_graph.show(ui);
         });
+
+        #[cfg(not(target_arch = "wasm32"))]
+        self.show_close_confirmation(ui.ctx());
     }
 }

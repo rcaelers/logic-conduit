@@ -203,10 +203,7 @@ impl BuilderRegistry {
             "SR Flip-Flop".into(),
             Box::new(sr_flip_flop::SrFlipFlopBuilder),
         );
-        builders.insert(
-            "Logic Gate".into(),
-            Box::new(logic_gate::LogicGateBuilder),
-        );
+        builders.insert("Logic Gate".into(), Box::new(logic_gate::LogicGateBuilder));
         builders.insert("Buffer".into(), Box::new(buffer::BufferBuilder));
         builders.insert("Counter".into(), Box::new(counter::CounterBuilder));
         builders.insert(
@@ -235,7 +232,11 @@ impl BuilderRegistry {
     /// keys its own entries — the string must match the corresponding
     /// `NodeDef::name()`. Lets a plugin crate extend the registry `standard()`
     /// builds, without touching `standard()` itself.
-    pub fn insert(&mut self, name: impl Into<String>, builder: Box<dyn RuntimeBuilder>) -> &mut Self {
+    pub fn insert(
+        &mut self,
+        name: impl Into<String>,
+        builder: Box<dyn RuntimeBuilder>,
+    ) -> &mut Self {
         self.0.insert(name.into(), builder);
         self
     }
@@ -1021,9 +1022,9 @@ pub fn start_app_run(
 mod tests {
     use super::*;
     use crate::nodes;
-    use dsl::runtime::{ConfigValue, Pipeline};
     #[cfg(not(target_arch = "wasm32"))]
     use dsl::BinaryFileWriter;
+    use dsl::runtime::{ConfigValue, Pipeline};
     use dsl::{Sample, Trigger, Word};
     use node_graph::NodeGraphWidget;
     use std::path::{Path, PathBuf};
@@ -1067,9 +1068,12 @@ mod tests {
                 .any(|(_, input)| input.kind == PortKind::of::<Word>()
                     && input.source == "Viewer Buffer.Out")
         );
-        assert!(lanes.iter().any(
-            |(_, input)| input.kind == PortKind::of::<Trigger>() && input.source == "Match Start.Match"
-        ));
+        assert!(
+            lanes
+                .iter()
+                .any(|(_, input)| input.kind == PortKind::of::<Trigger>()
+                    && input.source == "Match Start.Match")
+        );
 
         // Kind negotiation spot checks: SPI clk reads edges, the binary
         // decoder reads blocks — both fed from the same UI sockets.
@@ -1096,7 +1100,10 @@ mod tests {
         // kind directly via each node's `ResolvedInputs` instead of
         // sniffing a `d`/`b` prefix.
         assert_eq!(spi.resolved.kind(0), Some(PortKind::of::<Sample>())); // clk
-        assert_eq!(decoder.resolved.kind(0), Some(PortKind::of::<SampleBlock>())); // strobe
+        assert_eq!(
+            decoder.resolved.kind(0),
+            Some(PortKind::of::<SampleBlock>())
+        ); // strobe
         assert_eq!(edge_to(decoder.id, "strobe").buffer, 4);
         assert_eq!(edge_to(spi.id, "clk").buffer, 10_000_000);
         assert_eq!(edge_to(decoder.id, "d7").from.1, "ch7");
@@ -1724,7 +1731,10 @@ mod tests {
             if observed {
                 break;
             }
-            assert!(!run.is_finished(), "run finished before the tap observed anything");
+            assert!(
+                !run.is_finished(),
+                "run finished before the tap observed anything"
+            );
             assert!(
                 std::time::Instant::now() < deadline,
                 "tap never observed a trigger within deadline"
