@@ -16,7 +16,7 @@ pub struct AboutWindow {
 
 impl AboutWindow {
     pub fn new() -> Self {
-        Self { open: true } // TEMP: screenshot verification
+        Self { open: false }
     }
 
     pub fn open(&mut self) {
