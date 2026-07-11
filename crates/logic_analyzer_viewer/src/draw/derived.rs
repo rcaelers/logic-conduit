@@ -113,12 +113,7 @@ impl LogicAnalyzerViewer {
         let box_bottom = y_top + row_height * 0.82;
         let (start_ns, end_ns) = self.visible_window_ns();
 
-        // Boxes are at most MAX_ANNOTATION_NS long, so anything starting
-        // earlier than that before the window cannot reach into it.
-        let first = annotations.partition_point(|annotation| {
-            annotation.start_ns < start_ns.saturating_sub(MAX_ANNOTATION_NS)
-        });
-        let last = annotations.partition_point(|annotation| annotation.start_ns <= end_ns);
+        let (first, last) = visible_annotation_range(annotations, start_ns, end_ns);
         let visible = &annotations[first..last];
 
         if visible.len() > wave_rect.width() as usize * 2 {
@@ -232,9 +227,9 @@ impl LogicAnalyzerViewer {
         let rect = Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(x1, box_bottom));
         painter.rect_filled(rect, 2.0, box_color);
         painter.rect_stroke(rect, 2.0, border, egui::StrokeKind::Inside);
-        if rect.width() >= label_width {
+        if let Some(label_position) = annotation_label_position(rect, wave_rect, label_width) {
             painter.text(
-                rect.center(),
+                label_position,
                 Align2::CENTER_CENTER,
                 label,
                 FontId::monospace(10.0),
@@ -376,6 +371,40 @@ fn annotation_label_width(label: &str) -> f32 {
     (label.chars().count() as f32 * 6.2 + 10.0).max(26.0)
 }
 
+fn annotation_label_position(rect: Rect, wave_rect: Rect, label_width: f32) -> Option<Pos2> {
+    let visible_rect = rect.intersect(wave_rect);
+    (visible_rect.width() >= label_width).then(|| visible_rect.center())
+}
+
+/// Annotation starts are ordered and instantaneous parallel words are closed
+/// at the next word's start, so at most the immediately preceding annotation
+/// can overlap the left edge of the visible window.
+fn visible_annotation_range(
+    annotations: &[Annotation],
+    start_ns: u64,
+    end_ns: u64,
+) -> (usize, usize) {
+    let first_in_window = annotations.partition_point(|annotation| annotation.start_ns < start_ns);
+    let mut first = first_in_window.saturating_sub(1);
+    if first < first_in_window {
+        let annotation = &annotations[first];
+        let previous_duration_ns = (first > 0).then(|| {
+            let previous = &annotations[first - 1];
+            previous.end_ns.saturating_sub(previous.start_ns)
+        });
+        let end = annotation_box_end(
+            annotation,
+            first == annotations.len() - 1,
+            previous_duration_ns,
+        );
+        if end < start_ns {
+            first = first_in_window;
+        }
+    }
+    let last = annotations.partition_point(|annotation| annotation.start_ns <= end_ns);
+    (first, last.max(first))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,6 +463,74 @@ mod tests {
     fn annotation_label_width_scales_with_hex_digits() {
         assert!(annotation_label_width("600081") > annotation_label_width("4F"));
         assert!(annotation_label_width("4F") >= 26.0);
+    }
+
+    #[test]
+    fn clipped_annotation_uses_its_visible_width_for_the_label() {
+        let wave_rect = Rect::from_min_max(Pos2::new(100.0, 0.0), Pos2::new(300.0, 20.0));
+        let clipped_left = Rect::from_min_max(Pos2::new(50.0, 2.0), Pos2::new(180.0, 18.0));
+        let clipped_right = Rect::from_min_max(Pos2::new(260.0, 2.0), Pos2::new(350.0, 18.0));
+        let too_narrow = Rect::from_min_max(Pos2::new(290.0, 2.0), Pos2::new(350.0, 18.0));
+        let label_width = annotation_label_width("27");
+
+        assert_eq!(
+            annotation_label_position(clipped_left, wave_rect, label_width),
+            Some(Pos2::new(140.0, 10.0))
+        );
+        assert_eq!(
+            annotation_label_position(clipped_right, wave_rect, label_width),
+            Some(Pos2::new(280.0, 10.0))
+        );
+        assert_eq!(
+            annotation_label_position(too_narrow, wave_rect, label_width),
+            None
+        );
+    }
+
+    #[test]
+    fn visible_range_includes_a_long_word_starting_before_the_window() {
+        let annotations = [
+            Annotation {
+                start_ns: 1_000,
+                end_ns: 10_000_000,
+                value: 0x12,
+            },
+            Annotation {
+                start_ns: 10_000_000,
+                end_ns: 11_000_000,
+                value: 0x27,
+            },
+        ];
+
+        assert_eq!(
+            visible_annotation_range(&annotations, 9_000_000, 10_500_000),
+            (0, 2)
+        );
+        assert_eq!(
+            visible_annotation_range(&annotations, 5_000_000, 6_000_000),
+            (0, 1)
+        );
+    }
+
+    #[test]
+    fn visible_range_excludes_a_preceding_word_that_ended_before_the_window() {
+        let annotations = [
+            Annotation {
+                start_ns: 1_000,
+                end_ns: 2_000,
+                value: 0x12,
+            },
+            Annotation {
+                start_ns: 10_000_000,
+                end_ns: 11_000_000,
+                value: 0x27,
+            },
+        ];
+
+        assert_eq!(
+            visible_annotation_range(&annotations, 5_000_000, 6_000_000),
+            (1, 1)
+        );
     }
 
     /// A lone word and a real cluster must come out as separate runs — the

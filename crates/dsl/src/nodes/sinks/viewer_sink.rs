@@ -10,11 +10,9 @@ use crate::runtime::sample::Sample;
 use std::collections::VecDeque;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
-/// Longest box an *instantaneous* word annotation (`Word::duration_ns == 0`,
-/// e.g. a single-cycle parallel bus word) may span when its end is inferred
-/// from the next word: keeps the last word of a burst from stretching across
-/// the idle gap to the next one. Words that carry a real duration (SPI,
-/// UART) are stored with their true extent and never inferred.
+/// Longest estimated box for the final open instantaneous annotation when no
+/// next word exists to establish its real end. Closed instantaneous words
+/// extend to the next word; words carrying a duration use their true extent.
 pub const MAX_ANNOTATION_NS: u64 = 1_000_000;
 /// Suggested per-lane limit for continuous sources that explicitly select
 /// rolling retention. Finite sources retain their complete timeline.
@@ -65,8 +63,7 @@ pub enum DerivedLaneData {
     Digital(Vec<Sample>),
     /// Word boxes. A word carrying a real duration is stored closed with
     /// its true `end_ns`; an instantaneous word's `end_ns` is patched to
-    /// the next word's start (capped at [`MAX_ANNOTATION_NS`]) as words
-    /// arrive.
+    /// the next word's start as words arrive.
     Annotations(Vec<Annotation>),
     /// Zero-width event markers (trigger timestamps, ns).
     Markers(Vec<u64>),
@@ -301,7 +298,7 @@ impl DerivedLanes {
             if let Some(previous) = annotations.last_mut()
                 && previous.end_ns == previous.start_ns
             {
-                previous.end_ns = start_ns.min(previous.start_ns + MAX_ANNOTATION_NS);
+                previous.end_ns = start_ns;
                 // Only now that its `end_ns` is final can it join the
                 // summary — the mipmap is append-only and can never
                 // retroactively patch an entry once it's folded into a
@@ -720,7 +717,7 @@ mod tests {
     }
 
     #[test]
-    fn annotation_end_is_capped_across_gaps() {
+    fn instantaneous_annotation_extends_to_next_word_across_long_gaps() {
         let store = DerivedLanes::new();
         let lane = store.register("w", DerivedLaneData::Annotations(Vec::new()));
         store.append_word_batch(
@@ -731,7 +728,7 @@ mod tests {
         let DerivedLaneData::Annotations(annotations) = &lanes[0].data else {
             panic!("expected annotations");
         };
-        assert_eq!(annotations[0].end_ns, 1_000 + MAX_ANNOTATION_NS);
+        assert_eq!(annotations[0].end_ns, 1_000 + MAX_ANNOTATION_NS * 10);
     }
 
     #[test]
