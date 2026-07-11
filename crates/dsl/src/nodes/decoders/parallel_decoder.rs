@@ -1115,7 +1115,8 @@ mod tests {
         let wd = Watchdog::new();
         let sample_count = 2 * ParallelDecoder::STREAM_SAMPLES_PER_CALL + 10;
         let backing: Arc<[u8]> = Arc::from(vec![0u8; sample_count.div_ceil(8)].into_boxed_slice());
-        let strobe = SampleBlock::new(backing.clone(), 0, sample_count, 1);
+        let shared_backing = crate::runtime::BlockData::from(backing);
+        let strobe = SampleBlock::new(shared_backing.clone(), 0, sample_count, 1);
         let inputs = [
             block_input(&wd, strobe, "strobe"),
             block_input(&wd, block_from_bits(&vec![false; sample_count]), "d0"),
@@ -1133,7 +1134,7 @@ mod tests {
 
         assert_eq!(decoder.work(&inputs, &outputs).unwrap(), 0);
         let resident = decoder.stream_blocks.strobe.as_ref().unwrap();
-        assert!(Arc::ptr_eq(&backing, &resident.data));
+        assert!(shared_backing.shares_backing(&resident.data));
         assert_eq!(
             decoder.stream_blocks.offset,
             ParallelDecoder::STREAM_SAMPLES_PER_CALL

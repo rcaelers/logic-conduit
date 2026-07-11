@@ -27,7 +27,57 @@ use std::thread::JoinHandle;
 use tracing::{debug, info, warn};
 use zip::ZipArchive;
 
-type BlockCache = Arc<Mutex<HashMap<(usize, u64), Arc<[u8]>>>>;
+const DEFAULT_BLOCK_CACHE_WINDOWS: usize = 2;
+
+type BlockKey = (usize, u64);
+type BlockCache = Arc<Mutex<BoundedBlockCache>>;
+
+struct BoundedBlockCache {
+    entries: HashMap<BlockKey, BlockData>,
+    order: VecDeque<BlockKey>,
+    max_entries: usize,
+}
+
+impl BoundedBlockCache {
+    fn new(max_entries: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+            max_entries: max_entries.max(1),
+        }
+    }
+
+    fn get(&mut self, key: BlockKey) -> Option<BlockData> {
+        let data = self.entries.get(&key)?.clone();
+        self.touch(key);
+        Some(data)
+    }
+
+    fn insert(&mut self, key: BlockKey, data: BlockData) {
+        self.entries.insert(key, data);
+        self.touch(key);
+        while self.entries.len() > self.max_entries {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+    }
+
+    fn touch(&mut self, key: BlockKey) {
+        self.order.retain(|existing| *existing != key);
+        self.order.push_back(key);
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
 
 /// Windowed DSLogic capture reader for interactive viewers.
 ///
@@ -38,7 +88,7 @@ pub struct DslCaptureReader {
     path: PathBuf,
     archive: ZipArchive<File>,
     header: DslHeader,
-    cache: HashMap<(usize, u64), Arc<[u8]>>,
+    cache: HashMap<(usize, u64), BlockData>,
     cache_order: VecDeque<(usize, u64)>,
     max_cached_blocks: usize,
 }
@@ -113,7 +163,7 @@ impl DslCaptureReader {
         Ok(DslFileSource::get_bit(&data, sample_in_block))
     }
 
-    fn read_block_cached(&mut self, key: (usize, u64)) -> Result<Arc<[u8]>> {
+    fn read_block_cached(&mut self, key: (usize, u64)) -> Result<BlockData> {
         if let Some(data) = self.cache.get(&key).cloned() {
             self.touch_cache_key(key);
             return Ok(data);
@@ -128,10 +178,10 @@ impl DslCaptureReader {
                 .map_err(|_| Error::InvalidBlock(block_num))?;
             let mut data = Vec::new();
             file.read_to_end(&mut data)?;
-            Arc::<[u8]>::from(data)
+            BlockData::from(data)
         };
 
-        self.cache.insert(key, Arc::clone(&data));
+        self.cache.insert(key, data.clone());
         self.cache_order.push_back(key);
         self.trim_cache();
         Ok(data)
@@ -412,7 +462,9 @@ impl DslFileSource {
             path,
             archive: Arc::new(Mutex::new(archive)),
             header: header.clone(),
-            blocks: Arc::new(Mutex::new(HashMap::new())),
+            blocks: Arc::new(Mutex::new(BoundedBlockCache::new(
+                num_channels as usize * DEFAULT_BLOCK_CACHE_WINDOWS,
+            ))),
             num_channels,
             max_samples: None,
             shutdown: Arc::new(AtomicBool::new(false)),
@@ -499,16 +551,14 @@ impl DslFileSource {
             .ok_or_else(|| Error::ParseHeader(format!("Invalid sample rate: {}", samplerate)))?;
         let sample_period = 1.0 / samplerate_hz;
 
-        // Determine actual block size by reading the first block (blocks are fixed-size except last)
+        // ZIP metadata already contains the uncompressed byte count. Avoid
+        // decompressing the first 2 MiB block just to discover its size.
         let samples_per_block = {
             let block_name = "L-0/0";
-            let mut file = archive
+            let file = archive
                 .by_name(block_name)
                 .map_err(|_| Error::ParseHeader("Could not read first block".to_string()))?;
-            let mut buf = Vec::new();
-            file.read_to_end(&mut buf)
-                .map_err(|_| Error::ParseHeader("Could not read first block data".to_string()))?;
-            (buf.len() * 8) as u64 // Convert bytes to bits/samples
+            file.size() * 8
         };
 
         debug!(
@@ -585,34 +635,8 @@ impl DslFileSource {
 
         let sample_in_block = (position % self.header.samples_per_block) as usize;
 
-        // Check cache first
-        let key = (channel, block_num);
-        {
-            let blocks_guard = self.blocks.lock().unwrap();
-            if let Some(data) = blocks_guard.get(&key) {
-                return Ok(Self::get_bit(data, sample_in_block));
-            }
-        }
-
-        // Load block
-        let block_name = format!("L-{}/{}", channel, block_num);
-        let data = {
-            let mut archive_guard = self.archive.lock().unwrap();
-            let mut file = archive_guard
-                .by_name(&block_name)
-                .map_err(|_| Error::InvalidBlock(block_num))?;
-
-            let mut data = Vec::new();
-            file.read_to_end(&mut data)?;
-            Arc::<[u8]>::from(data)
-        };
-
+        let data = Self::load_block(&self.archive, &self.blocks, channel, block_num)?;
         let result = Self::get_bit(&data, sample_in_block);
-
-        // Cache it
-        let mut blocks_guard = self.blocks.lock().unwrap();
-        blocks_guard.insert(key, data);
-
         Ok(result)
     }
 
@@ -664,6 +688,35 @@ impl DslFileSource {
             return Some(value * multiplier);
         }
         None
+    }
+
+    fn load_block(
+        archive: &Arc<Mutex<ZipArchive<File>>>,
+        blocks: &BlockCache,
+        channel: usize,
+        block_num: u64,
+    ) -> Result<BlockData> {
+        let key = (channel, block_num);
+        if let Some(data) = blocks.lock().unwrap().get(key) {
+            return Ok(data);
+        }
+
+        // Archive access is serialized. Recheck the cache after obtaining
+        // that lock because another destination may have decompressed this
+        // block while this thread was waiting.
+        let mut archive_guard = archive.lock().unwrap();
+        if let Some(data) = blocks.lock().unwrap().get(key) {
+            return Ok(data);
+        }
+        let block_name = format!("L-{channel}/{block_num}");
+        let mut file = archive_guard
+            .by_name(&block_name)
+            .map_err(|_| Error::InvalidBlock(block_num))?;
+        let mut bytes = Vec::with_capacity(file.size() as usize);
+        file.read_to_end(&mut bytes)?;
+        let data = BlockData::from(bytes);
+        blocks.lock().unwrap().insert(key, data.clone());
+        Ok(data)
     }
 
     /// Worker thread that reads one channel's data and sends to one destination.
@@ -719,42 +772,11 @@ impl DslFileSource {
                 break;
             }
 
-            // Load block data (check cache first, then archive)
-            let block_data = {
-                let key = (channel, block_num);
-
-                // Check cache
-                {
-                    let cache_guard = blocks.lock().unwrap();
-                    if let Some(data) = cache_guard.get(&key) {
-                        Arc::clone(data)
-                    } else {
-                        drop(cache_guard);
-
-                        // Load from archive
-                        let block_name = format!("L-{}/{}", channel, block_num);
-                        let data = {
-                            let mut archive_guard = archive.lock().unwrap();
-                            let mut file = match archive_guard.by_name(&block_name) {
-                                Ok(f) => f,
-                                Err(_) => {
-                                    debug!("[{}] Block {} not found, stopping", label, block_num);
-                                    break;
-                                }
-                            };
-                            let mut buf = Vec::new();
-                            if file.read_to_end(&mut buf).is_err() {
-                                debug!("[{}] Failed to read block {}", label, block_num);
-                                break;
-                            }
-                            Arc::<[u8]>::from(buf)
-                        };
-
-                        // Insert into cache
-                        let mut cache_guard = blocks.lock().unwrap();
-                        cache_guard.insert(key, Arc::clone(&data));
-                        data
-                    }
+            let block_data = match Self::load_block(&archive, &blocks, channel, block_num) {
+                Ok(data) => data,
+                Err(error) => {
+                    debug!("[{}] Failed to read block {}: {}", label, block_num, error);
+                    break;
                 }
             };
 
@@ -814,38 +836,39 @@ impl DslFileSource {
         completed.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Worker thread that reads one channel's block data and sends SampleBlocks.
-    ///
-    /// Instead of walking bits and sending per-edge Samples, this sends raw
-    /// packed-bit blocks as `SampleBlock` — one send per ~16M samples. This is
-    /// orders of magnitude faster for downstream consumers that can process
-    /// packed bits directly (like the block-mode ParallelDecoder).
-    fn block_reader_thread(config: BlockReaderConfig) {
-        let BlockReaderConfig {
+    /// Sends aligned packed blocks to one destination node. All connected
+    /// channels for block N are delivered before this worker advances to
+    /// block N+1, while unrelated destinations keep independent workers.
+    fn block_reader_thread(config: BlockReaderGroupConfig) {
+        let BlockReaderGroupConfig {
             archive,
             blocks,
-            channel,
+            destinations,
+            group_label,
             header,
-            sender,
-            destination,
             max_samples,
             shutdown,
             completed,
         } = config;
-        let label = channel_log_label(channel, destination.as_deref());
         let timestamp_step = (1_000_000_000.0 / header.samplerate_hz) as u64;
         let total_samples = max_samples
             .unwrap_or(header.total_samples)
             .min(header.total_samples);
 
         info!(
-            "[{}] Starting block reader thread ({} samples, {} blocks)",
-            label, total_samples, header.total_blocks
+            "[{}] Starting aligned block reader ({} channels, {} samples, {} blocks)",
+            group_label,
+            destinations.len(),
+            total_samples,
+            header.total_blocks
         );
 
-        for block_num in 0..header.total_blocks {
+        'blocks: for block_num in 0..header.total_blocks {
             if shutdown.load(Ordering::Relaxed) {
-                debug!("[{}] Block reader shutdown at block {}", label, block_num);
+                debug!(
+                    "[{}] Block reader shutdown at block {}",
+                    group_label, block_num
+                );
                 break;
             }
 
@@ -854,80 +877,57 @@ impl DslFileSource {
                 break;
             }
 
-            // Load block data (check cache first, then archive)
-            let block_data = {
-                let key = (channel, block_num);
-
-                {
-                    let cache_guard = blocks.lock().unwrap();
-                    if let Some(data) = cache_guard.get(&key) {
-                        Arc::clone(data)
-                    } else {
-                        drop(cache_guard);
-
-                        let block_name = format!("L-{}/{}", channel, block_num);
-                        let data = {
-                            let mut archive_guard = archive.lock().unwrap();
-                            let mut file = match archive_guard.by_name(&block_name) {
-                                Ok(f) => f,
-                                Err(_) => {
-                                    debug!("[{}] Block {} not found, stopping", label, block_num);
-                                    break;
-                                }
-                            };
-                            let mut buf = Vec::new();
-                            if file.read_to_end(&mut buf).is_err() {
-                                debug!("[{}] Failed to read block {}", label, block_num);
-                                break;
-                            }
-                            Arc::<[u8]>::from(buf)
-                        };
-
-                        let mut cache_guard = blocks.lock().unwrap();
-                        cache_guard.insert(key, Arc::clone(&data));
-                        data
-                    }
-                }
-            };
-
-            // Calculate how many samples are valid in this block
-            let block_capacity = (block_data.len() * 8) as u64;
-            let samples_in_block =
-                block_capacity.min(total_samples - block_start_position) as usize;
-
-            let sample_block = SampleBlock::new(
-                block_data,
-                block_start_position,
-                samples_in_block,
-                timestamp_step,
-            );
-
-            if sender.send(sample_block).is_err() {
-                debug!(
-                    "[{}] Block reader: all receivers disconnected at block {}",
-                    label, block_num
+            let mut last_samples_in_block = 0usize;
+            for destination in &destinations {
+                let block_data =
+                    match Self::load_block(&archive, &blocks, destination.channel, block_num) {
+                        Ok(data) => data,
+                        Err(error) => {
+                            debug!(
+                                "[{}] Failed to read channel {} block {}: {}",
+                                group_label, destination.channel, block_num, error
+                            );
+                            break 'blocks;
+                        }
+                    };
+                let block_capacity = (block_data.len() * 8) as u64;
+                let samples_in_block =
+                    block_capacity.min(total_samples - block_start_position) as usize;
+                last_samples_in_block = samples_in_block;
+                let sample_block = SampleBlock::new(
+                    block_data,
+                    block_start_position,
+                    samples_in_block,
+                    timestamp_step,
                 );
-                completed.fetch_add(1, Ordering::Relaxed);
-                return;
+
+                if destination.sender.send(sample_block).is_err() {
+                    debug!(
+                        "[{}] Receiver disconnected at channel {} block {}",
+                        group_label, destination.channel, block_num
+                    );
+                    break 'blocks;
+                }
             }
 
             if block_num > 0 && block_num % 10 == 0 {
-                let pct = ((block_start_position + samples_in_block as u64) as f64
+                let pct = ((block_start_position + last_samples_in_block as u64) as f64
                     / total_samples as f64)
                     * 100.0;
                 debug!(
                     "[{}] Block progress: {:.1}% ({} blocks sent)",
-                    label,
+                    group_label,
                     pct,
                     block_num + 1
                 );
             }
         }
 
-        info!("[{}] Block reader complete", label);
+        info!("[{}] Block reader complete", group_label);
 
-        sender.close();
-        drop(sender);
+        for destination in destinations {
+            destination.sender.close();
+        }
         completed.fetch_add(1, Ordering::Relaxed);
     }
 }
@@ -1029,8 +1029,7 @@ impl ProcessNode for DslFileSource {
         // both queries run independently against the same port.
         let mut edge_thread_configs: Vec<(usize, usize, Sender<Sample>, Option<String>)> =
             Vec::new();
-        let mut block_thread_configs: Vec<(usize, usize, Sender<SampleBlock>, Option<String>)> =
-            Vec::new();
+        let mut block_thread_groups: HashMap<String, Vec<BlockDestination>> = HashMap::new();
 
         for channel_idx in 0..self.num_channels as usize {
             let Some(port) = outputs.get(channel_idx) else {
@@ -1045,7 +1044,15 @@ impl ProcessNode for DslFileSource {
             if let Some(senders) = port.split_senders::<SampleBlock>() {
                 for (dest_idx, sender) in senders.into_iter().enumerate() {
                     let destination = sender.destination_label().map(str::to_owned);
-                    block_thread_configs.push((channel_idx, dest_idx, sender, destination));
+                    let group =
+                        block_destination_group(channel_idx, dest_idx, destination.as_deref());
+                    block_thread_groups
+                        .entry(group)
+                        .or_default()
+                        .push(BlockDestination {
+                            channel: channel_idx,
+                            sender,
+                        });
                 }
             }
         }
@@ -1081,8 +1088,10 @@ impl ProcessNode for DslFileSource {
             handles.push(handle);
         }
 
-        // Spawn block reader threads
-        for (channel_idx, dest_idx, sender, destination) in block_thread_configs.into_iter() {
+        // Each destination node receives all of its raw channels from one
+        // block-major worker. Different destinations remain independent.
+        for (group_label, mut destinations) in block_thread_groups {
+            destinations.sort_by_key(|destination| destination.channel);
             let archive = Arc::clone(&self.archive);
             let blocks = Arc::clone(&self.blocks);
             let header = self.header.clone();
@@ -1091,15 +1100,14 @@ impl ProcessNode for DslFileSource {
             let completed = Arc::clone(&self.threads_completed);
 
             let handle = std::thread::Builder::new()
-                .name(format!("dsl_ch{}_block_dest{}", channel_idx, dest_idx))
+                .name(format!("dsl_blocks_{group_label}"))
                 .spawn(move || {
-                    Self::block_reader_thread(BlockReaderConfig {
+                    Self::block_reader_thread(BlockReaderGroupConfig {
                         archive,
                         blocks,
-                        channel: channel_idx,
+                        destinations,
+                        group_label,
                         header,
-                        sender,
-                        destination,
                         max_samples,
                         shutdown,
                         completed,
@@ -1114,7 +1122,7 @@ impl ProcessNode for DslFileSource {
         self.thread_handles = Some(handles);
 
         info!(
-            "File source: Spawned {} reader threads ({} channels × destinations)",
+            "File source: Spawned {} reader workers for {} available channels",
             self.num_threads, self.num_channels
         );
 
@@ -1276,14 +1284,18 @@ struct ChannelReaderConfig {
     completed: Arc<AtomicUsize>,
 }
 
-/// Configuration for a per-channel block reader thread
-struct BlockReaderConfig {
+struct BlockDestination {
+    channel: usize,
+    sender: Sender<SampleBlock>,
+}
+
+/// Configuration for one destination node's aligned block reader.
+struct BlockReaderGroupConfig {
     archive: Arc<Mutex<ZipArchive<File>>>,
     blocks: BlockCache,
-    channel: usize,
+    destinations: Vec<BlockDestination>,
+    group_label: String,
     header: DslHeader,
-    sender: Sender<SampleBlock>,
-    destination: Option<String>,
     max_samples: Option<u64>,
     shutdown: Arc<AtomicBool>,
     completed: Arc<AtomicUsize>,
@@ -1295,10 +1307,49 @@ fn channel_log_label(channel: usize, destination: Option<&str>) -> String {
         _ => format!("ch{channel}"),
     }
 }
+
+fn block_destination_group(
+    channel: usize,
+    destination_index: usize,
+    destination: Option<&str>,
+) -> String {
+    destination
+        .and_then(|label| label.rsplit_once('.').map(|(node, _)| node.to_string()))
+        .unwrap_or_else(|| format!("ch{channel}_dest{destination_index}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::runtime::node::ProcessNode;
+
+    #[test]
+    fn bounded_block_cache_evicts_least_recently_used_entry() {
+        let mut cache = BoundedBlockCache::new(2);
+        cache.insert((0, 0), BlockData::from(vec![0]));
+        cache.insert((1, 0), BlockData::from(vec![1]));
+        assert!(cache.get((0, 0)).is_some());
+        cache.insert((2, 0), BlockData::from(vec![2]));
+
+        assert_eq!(cache.len(), 2);
+        assert!(cache.get((0, 0)).is_some());
+        assert!(cache.get((1, 0)).is_none());
+        assert!(cache.get((2, 0)).is_some());
+    }
+
+    #[test]
+    fn block_destinations_group_by_consumer_node() {
+        assert_eq!(block_destination_group(0, 0, Some("decoder.d0")), "decoder");
+        assert_eq!(
+            block_destination_group(10, 0, Some("decoder.strobe")),
+            "decoder"
+        );
+        assert_ne!(
+            block_destination_group(0, 0, Some("decoder.d0")),
+            block_destination_group(0, 0, Some("viewer.in0"))
+        );
+        assert_eq!(block_destination_group(3, 2, None), "ch3_dest2");
+    }
 
     // ── DeferredDslFileSource ────────────────────────────────────────────
 

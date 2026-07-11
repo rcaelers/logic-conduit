@@ -1,7 +1,7 @@
 //! Core data types for signal processing
 
+use super::capture::BlockData;
 use std::fmt;
-use std::sync::Arc;
 
 /// Sample representing a signal value at a specific time
 ///
@@ -55,8 +55,8 @@ impl fmt::Display for Sample {
 /// zero transformation from the ZIP archive.
 #[derive(Clone, Debug)]
 pub struct SampleBlock {
-    /// Packed bit data (LSB-first). Shared via Arc for cheap cloning across broadcast.
-    pub data: Arc<[u8]>,
+    /// Packed bit data (LSB-first), with shared zero-copy backing and range.
+    pub data: BlockData,
     /// Position of the first sample in this block (0-based, global sample index)
     pub start_position: u64,
     /// Number of valid samples in this block (may be < capacity for the last block)
@@ -68,13 +68,13 @@ pub struct SampleBlock {
 impl SampleBlock {
     /// Create a new SampleBlock
     pub fn new(
-        data: Arc<[u8]>,
+        data: impl Into<BlockData>,
         start_position: u64,
         num_samples: usize,
         timestamp_step: u64,
     ) -> Self {
         Self {
-            data,
+            data: data.into(),
             start_position,
             num_samples,
             timestamp_step,
@@ -104,6 +104,24 @@ impl SampleBlock {
     pub fn end_position(&self) -> u64 {
         self.start_position + self.num_samples as u64
     }
+
+    /// Creates a byte-aligned sample subview without copying packed data.
+    /// Non-byte-aligned starts cannot use the existing LSB-at-bit-zero wire
+    /// representation and therefore return `None`.
+    pub fn sub_block(&self, sample_offset: usize, num_samples: usize) -> Option<Self> {
+        let sample_end = sample_offset.checked_add(num_samples)?;
+        if sample_offset % 8 != 0 || sample_end > self.num_samples {
+            return None;
+        }
+        let byte_offset = sample_offset / 8;
+        let byte_len = num_samples.div_ceil(8);
+        Some(Self {
+            data: self.data.slice(byte_offset, byte_len)?,
+            start_position: self.start_position.checked_add(sample_offset as u64)?,
+            num_samples,
+            timestamp_step: self.timestamp_step,
+        })
+    }
 }
 
 impl fmt::Display for SampleBlock {
@@ -115,5 +133,24 @@ impl fmt::Display for SampleBlock {
             self.num_samples,
             self.data.len()
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SampleBlock;
+
+    #[test]
+    fn byte_aligned_sub_block_shares_backing_and_positions() {
+        let block = SampleBlock::new(vec![0b1010_0101, 0b0011_1100, 0b1111_0000], 100, 24, 20);
+        let sub = block.sub_block(8, 12).unwrap();
+
+        assert!(block.data.shares_backing(&sub.data));
+        assert_eq!(&*sub.data, &[0b0011_1100, 0b1111_0000]);
+        assert_eq!(sub.start_position, 108);
+        assert_eq!(sub.num_samples, 12);
+        assert_eq!(sub.timestamp_step, 20);
+        assert!(block.sub_block(1, 8).is_none());
+        assert!(block.sub_block(16, 9).is_none());
     }
 }

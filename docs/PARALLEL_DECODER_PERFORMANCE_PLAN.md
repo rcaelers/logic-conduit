@@ -340,6 +340,61 @@ Planned changes:
   extend the block reader so DSL data can decompress directly into its final
   cache slot.
 
+Status: implemented for the packed file/live flow. `BlockData` is now the
+single shared backing type used by index reads and `SampleBlock`. It can:
+
+- Adopt a freshly decompressed `Vec<u8>` behind an `Arc` without reallocating
+  or copying its payload.
+- Wrap an existing `Arc<[u8]>` or mmap-backed raw-cache region.
+- Create cheap ranged views which retain the same backing allocation.
+
+`SampleBlock::sub_block` exposes byte-aligned sample subviews for future
+10,000-100,000-sample producers. Tests compare the original `Vec` pointer
+with the adopted `BlockData` pointer and verify backing identity across both
+`BlockData` ranges and decoder-resident blocks.
+
+`DslFileSource` now uses a bounded LRU containing two complete channel windows
+(`2 * num_channels` entries) instead of retaining every decompressed block.
+Cache misses are rechecked after taking the ZIP archive lock, preventing two
+destination workers from decompressing the same block concurrently. ZIP
+metadata supplies `samples_per_block`, so source construction no longer
+decompresses the first 2 MiB block merely to determine its size.
+
+Default `SampleBlock` connection capacity is two in both the library pipeline
+and desktop compiler; explicit custom capacities are still honored (with a
+minimum of one to preserve grouped-worker progress). Packed file outputs are
+grouped by destination node: one worker sends every required channel for block
+N before loading block N+1, while unrelated downstream branches retain
+independent workers. This bounds channel skew and prevents a fast channel from
+queuing a complete capture.
+
+The live analyzer demux now moves each per-channel packed vector into
+`BlockData` rather than cloning it before constructing `SampleBlock`. Raw
+`LogicChunk` fan-out was already an `Arc` clone and remains payload-copy-free.
+
+### Step 6 Result
+
+The release stream/discard benchmark over a 4-billion-sample prefix (80
+seconds of capture) produced:
+
+| Samples | Run time | Throughput | Real time | Peak RSS | Peak footprint |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 4,000,000,000 | 13.902 s | 287.737 MSamples/s | 5.755x | 141.3 MB | 135.8 MB |
+
+With four queued blocks per channel the same prefix peaked at 200.2 MB RSS;
+reducing the default to two lowered the high-water mark by about 59 MB without
+reducing throughput. Memory is now bounded by queue capacity, the two-window
+LRU, and decoder-resident blocks rather than capture duration. A transported
+10-million-sample count run still emitted exactly 2,399,972 words.
+
+The persistent `.raw` sidecar remains a separate, sparse random-access cache.
+A cold miss decompresses once into adopted `BlockData`, writes those bytes to
+the sidecar once, and subsequent reads are mmap-backed. Direct decompression
+into a sidecar slot was not added: it would couple ZIP decompression to cache
+file mutation and does not remove a payload copy from the live or streamed
+decoder path measured here. Its one-time materialization cost should remain a
+separate index/cold-cache metric rather than part of live throughput.
+
 ## Step 7: Batched Word Transport and Viewer Retention
 
 At 12 million cycles per second, scalar `Word` channel traffic can become the

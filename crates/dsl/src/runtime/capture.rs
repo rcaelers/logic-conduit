@@ -152,34 +152,109 @@ pub trait CaptureSource {
     }
 }
 
-/// Packed sample bytes for one block: either owned (e.g. freshly
-/// decompressed from an archive) or a zero-copy view into a memory-mapped
-/// cache file, where only the pages actually touched are faulted in.
-pub enum BlockData {
-    Owned(Arc<[u8]>),
+/// Shared packed bytes with a zero-copy visible range.
+///
+/// Fresh decompression uses `From<Vec<u8>>`: the vector moves behind an
+/// `Arc` without reallocating or copying its payload. Existing shared slices
+/// and memory maps remain valid backing types. Clones and `slice()` views only
+/// clone the backing `Arc`.
+#[derive(Clone)]
+pub struct BlockData {
+    backing: Arc<BlockBacking>,
+    offset: usize,
+    len: usize,
+}
+
+enum BlockBacking {
+    Owned(Vec<u8>),
+    Shared(Arc<[u8]>),
     #[cfg(not(target_arch = "wasm32"))]
-    Mapped {
-        map: Arc<memmap2::Mmap>,
-        offset: usize,
-        len: usize,
-    },
+    Mapped(Arc<memmap2::Mmap>),
+}
+
+impl BlockData {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn mapped(map: Arc<memmap2::Mmap>, offset: usize, len: usize) -> Self {
+        debug_assert!(offset.saturating_add(len) <= map.len());
+        Self {
+            backing: Arc::new(BlockBacking::Mapped(map)),
+            offset,
+            len,
+        }
+    }
+
+    /// Creates a view into this backing allocation without copying bytes.
+    pub fn slice(&self, offset: usize, len: usize) -> Option<Self> {
+        let end = offset.checked_add(len)?;
+        if end > self.len {
+            return None;
+        }
+        let absolute_offset = self.offset.checked_add(offset)?;
+        Some(Self {
+            backing: Arc::clone(&self.backing),
+            offset: absolute_offset,
+            len,
+        })
+    }
+
+    pub fn shares_backing(&self, other: &Self) -> bool {
+        if Arc::ptr_eq(&self.backing, &other.backing) {
+            return true;
+        }
+        match (self.backing.as_ref(), other.backing.as_ref()) {
+            (BlockBacking::Shared(left), BlockBacking::Shared(right)) => Arc::ptr_eq(left, right),
+            #[cfg(not(target_arch = "wasm32"))]
+            (BlockBacking::Mapped(left), BlockBacking::Mapped(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
+
+    fn backing_bytes(&self) -> &[u8] {
+        match self.backing.as_ref() {
+            BlockBacking::Owned(data) => data,
+            BlockBacking::Shared(data) => data,
+            #[cfg(not(target_arch = "wasm32"))]
+            BlockBacking::Mapped(map) => map,
+        }
+    }
+}
+
+impl std::fmt::Debug for BlockData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BlockData")
+            .field("offset", &self.offset)
+            .field("len", &self.len)
+            .finish_non_exhaustive()
+    }
 }
 
 impl std::ops::Deref for BlockData {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
-        match self {
-            BlockData::Owned(data) => data,
-            #[cfg(not(target_arch = "wasm32"))]
-            BlockData::Mapped { map, offset, len } => &map[*offset..*offset + *len],
-        }
+        &self.backing_bytes()[self.offset..self.offset + self.len]
     }
 }
 
 impl From<Arc<[u8]>> for BlockData {
     fn from(data: Arc<[u8]>) -> Self {
-        BlockData::Owned(data)
+        let len = data.len();
+        Self {
+            backing: Arc::new(BlockBacking::Shared(data)),
+            offset: 0,
+            len,
+        }
+    }
+}
+
+impl From<Vec<u8>> for BlockData {
+    fn from(data: Vec<u8>) -> Self {
+        let len = data.len();
+        Self {
+            backing: Arc::new(BlockBacking::Owned(data)),
+            offset: 0,
+            len,
+        }
     }
 }
 
@@ -242,3 +317,27 @@ pub type DslTransition = CaptureTransition;
 pub type DslSampledChannel = CaptureSampledChannel;
 pub type DslSampledWindow = CaptureSampledWindow;
 pub type DslWaveformSegment = CaptureWaveformSegment;
+
+#[cfg(test)]
+mod tests {
+    use super::BlockData;
+
+    #[test]
+    fn owned_block_adopts_vec_allocation_and_slices_share_it() {
+        let bytes = vec![10, 20, 30, 40, 50];
+        let allocation = bytes.as_ptr();
+        let data = BlockData::from(bytes);
+        assert_eq!(data.as_ptr(), allocation, "Vec payload must not be copied");
+
+        let view = data.slice(1, 3).unwrap();
+        assert_eq!(&*view, &[20, 30, 40]);
+        assert!(data.shares_backing(&view));
+        assert!(data.slice(4, 2).is_none());
+
+        let shared: std::sync::Arc<[u8]> = std::sync::Arc::from([1, 2, 3]);
+        assert!(
+            BlockData::from(shared.clone()).shares_backing(&BlockData::from(shared)),
+            "separate views over one shared slice must identify their backing"
+        );
+    }
+}

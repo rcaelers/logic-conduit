@@ -5,6 +5,7 @@ use super::errors::ConnectionError;
 use super::node::{InputPort, OutputPort, ProcessNode};
 use super::ports::PortSchema;
 use super::protocol::ProtocolKind;
+use super::sample::SampleBlock;
 use super::sample_kind;
 use super::scheduler::Scheduler;
 use super::type_registry::{LabeledSenderBox, TYPE_REGISTRY};
@@ -12,6 +13,8 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
+
+const DEFAULT_SAMPLE_BLOCK_BUFFER_SIZE: usize = 2;
 
 /// Cached per-node schema data, computed once in `add_process` while the
 /// node is still locally owned. Each `PortSchema` carries its own
@@ -96,13 +99,7 @@ impl Pipeline {
         to_node: &str,
         to_port: &str,
     ) -> Result<(), Box<ConnectionError>> {
-        self.connect_with_buffer(
-            from_node,
-            from_port,
-            to_node,
-            to_port,
-            self.default_buffer_size,
-        )
+        self.connect_impl(from_node, from_port, to_node, to_port, None)
     }
 
     /// Connect with custom buffer size
@@ -113,6 +110,17 @@ impl Pipeline {
         to_node: &str,
         to_port: &str,
         buffer_size: usize,
+    ) -> Result<(), Box<ConnectionError>> {
+        self.connect_impl(from_node, from_port, to_node, to_port, Some(buffer_size))
+    }
+
+    fn connect_impl(
+        &mut self,
+        from_node: &str,
+        from_port: &str,
+        to_node: &str,
+        to_port: &str,
+        buffer_size: Option<usize>,
     ) -> Result<(), Box<ConnectionError>> {
         // Look up node IDs
         let from_id = *self
@@ -191,7 +199,24 @@ impl Pipeline {
             ))));
         }
 
-        // Store connection with custom buffer size
+        // Packed blocks are commonly multi-megabyte allocations. A default
+        // queue of 1,000 is appropriate for small events but would retain an
+        // entire capture per channel here. Explicit buffer sizes remain
+        // authoritative for callers with a specific flow-control design.
+        let buffer_size = buffer_size.unwrap_or_else(|| {
+            if negotiated_type == TypeId::of::<SampleBlock>() {
+                self.default_buffer_size
+                    .min(DEFAULT_SAMPLE_BLOCK_BUFFER_SIZE)
+            } else {
+                self.default_buffer_size
+            }
+        });
+        let buffer_size = if negotiated_type == TypeId::of::<SampleBlock>() {
+            buffer_size.max(1)
+        } else {
+            buffer_size
+        };
+
         self.connections.push(PendingConnection {
             from_node: from_id,
             from_port: from_schema.index,
@@ -953,5 +978,26 @@ mod tests {
             result.is_err(),
             "connection with no common SampleKind should be rejected"
         );
+    }
+
+    #[test]
+    fn sample_block_connections_use_small_default_but_honor_explicit_size() {
+        let mut pipeline = Pipeline::new().with_default_buffer_size(1_000);
+        pipeline
+            .add_process("source", MultiKindSource { sent: false })
+            .unwrap();
+        pipeline.add_process("sink", BlockOnlySink).unwrap();
+        pipeline.connect("source", "out", "sink", "in").unwrap();
+        assert_eq!(pipeline.connections[0].buffer_size, 2);
+
+        let mut explicit = Pipeline::new().with_default_buffer_size(1_000);
+        explicit
+            .add_process("source", MultiKindSource { sent: false })
+            .unwrap();
+        explicit.add_process("sink", BlockOnlySink).unwrap();
+        explicit
+            .connect_with_buffer("source", "out", "sink", "in", 7)
+            .unwrap();
+        assert_eq!(explicit.connections[0].buffer_size, 7);
     }
 }

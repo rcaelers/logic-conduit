@@ -108,11 +108,11 @@ impl RawBlockCache {
         if self.bitmap[slot / 8] & (1 << (slot % 8)) == 0 {
             return None;
         }
-        Some(BlockData::Mapped {
-            map: Arc::clone(&self.map),
-            offset: self.slots_offset + slot * self.slot_bytes,
-            len: self.block_bytes(block),
-        })
+        Some(BlockData::mapped(
+            Arc::clone(&self.map),
+            self.slots_offset + slot * self.slot_bytes,
+            self.block_bytes(block),
+        ))
     }
 
     /// Stores freshly decompressed block bytes. Failures are ignored: the

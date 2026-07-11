@@ -109,7 +109,7 @@ impl PortValue for SampleBlock {
         "Block"
     }
     fn buffer_size(_producer_is_source: bool) -> usize {
-        4
+        2
     }
 }
 

@@ -512,10 +512,10 @@ impl Demux {
             samples += 1;
         }
         if samples != 0 {
-            for channel in 0..self.channels {
+            for (channel, data) in packed.into_iter().enumerate() {
                 if let Some(sender) = &blocks[channel] {
                     let _ = sender.send(SampleBlock::new(
-                        Arc::from(packed[channel].clone()),
+                        data,
                         start,
                         samples,
                         1_000_000_000 / self.sample_rate_hz,
@@ -546,5 +546,49 @@ impl fmt::Display for LogicChunk {
             "LogicChunk[bits={}, channels={}]",
             self.bit_len, self.channel_count
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::sender::ChannelMessage;
+    use crossbeam_channel::bounded;
+
+    #[test]
+    fn demux_emits_aligned_owned_channel_blocks() {
+        let channel0 = [false, true, false, true, true, false, true, false];
+        let channel1 = [true, true, false, false, true, true, false, false];
+        let mut interleaved = vec![0u8; 2];
+        for sample in 0..8 {
+            for (channel, values) in [channel0, channel1].iter().enumerate() {
+                if values[sample] {
+                    let bit = sample * 2 + channel;
+                    interleaved[bit / 8] |= 1 << (bit % 8);
+                }
+            }
+        }
+        let chunk = LogicChunk::interleaved(interleaved, 2, 0);
+        let (tx0, rx0) = bounded::<ChannelMessage<SampleBlock>>(1);
+        let (tx1, rx1) = bounded::<ChannelMessage<SampleBlock>>(1);
+        let blocks = vec![Some(Sender::new(vec![tx0])), Some(Sender::new(vec![tx1]))];
+        let edges: Vec<Option<Sender<Sample>>> = vec![None, None];
+        let mut demux = Demux::new(2, 50_000_000).unwrap();
+
+        demux.push(&chunk, &edges, &blocks).unwrap();
+
+        let block0 = match rx0.recv().unwrap() {
+            ChannelMessage::Sample(block) => block,
+            ChannelMessage::EndOfStream => panic!("unexpected end of stream"),
+        };
+        let block1 = match rx1.recv().unwrap() {
+            ChannelMessage::Sample(block) => block,
+            ChannelMessage::EndOfStream => panic!("unexpected end of stream"),
+        };
+        assert_eq!(&*block0.data, &[0b0101_1010]);
+        assert_eq!(&*block1.data, &[0b0011_0011]);
+        assert_eq!(block0.start_position, block1.start_position);
+        assert_eq!(block0.num_samples, 8);
+        assert_eq!(block1.num_samples, 8);
     }
 }
