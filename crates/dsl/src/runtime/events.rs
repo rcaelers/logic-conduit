@@ -81,7 +81,10 @@ pub struct NumberSample {
 
 impl NumberSample {
     pub fn new(value: i64, start_time_ns: u64) -> Self {
-        Self { value, start_time_ns }
+        Self {
+            value,
+            start_time_ns,
+        }
     }
 }
 

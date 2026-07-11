@@ -328,8 +328,8 @@ fn dense_annotation_runs(
     for column in 0..width {
         let column_end_ns =
             start_ns + ((column + 1) as u64).saturating_mul(span_ns) / width.max(1) as u64;
-        let step = visible[index..]
-            .partition_point(|annotation| annotation.start_ns < column_end_ns);
+        let step =
+            visible[index..].partition_point(|annotation| annotation.start_ns < column_end_ns);
         if step == 0 {
             continue;
         }
@@ -390,10 +390,7 @@ mod tests {
             end_ns: 100_000,
             value: 0x0A,
         };
-        assert_eq!(
-            annotation_box_end(&annotation, true, Some(10_000)),
-            110_000
-        );
+        assert_eq!(annotation_box_end(&annotation, true, Some(10_000)), 110_000);
     }
 
     #[test]

@@ -478,10 +478,7 @@ mod tests {
                 .iter()
                 .find(|(p, _)| *p > position && *p <= limit)
                 .map(
-                    |&(sample, value)| crate::runtime::capture::CaptureTransition {
-                        sample,
-                        value,
-                    },
+                    |&(sample, value)| crate::runtime::capture::CaptureTransition { sample, value },
                 ))
         }
     }

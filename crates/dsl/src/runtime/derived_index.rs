@@ -131,7 +131,12 @@ impl<T, F: LaneFold<T>> AppendOnlyMipmap<T, F> {
     /// [`Self::append_uncovered_tail`] always folds them in as one extra
     /// record rather than letting a coarse, zoomed-out view of a live lane
     /// silently miss whatever just arrived.
-    pub fn sampled_window(&self, start_ns: u64, end_ns: u64, target_points: usize) -> Vec<MipmapRecord> {
+    pub fn sampled_window(
+        &self,
+        start_ns: u64,
+        end_ns: u64,
+        target_points: usize,
+    ) -> Vec<MipmapRecord> {
         let budget = target_points.max(1).saturating_mul(4);
         for tier_index in (0..self.tiers.len()).rev() {
             let tier = &self.tiers[tier_index];

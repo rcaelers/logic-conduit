@@ -308,9 +308,15 @@ mod tests {
 
         run(rig, &mut TextFileWriter::new());
 
-        assert_eq!(std::fs::read_to_string(dir.path().join("a.csv")).unwrap(), "one\ntwo\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.csv")).unwrap(),
+            "one\ntwo\n"
+        );
         // The line at exactly the boundary timestamp lands in the new file.
-        assert_eq!(std::fs::read_to_string(dir.path().join("b.csv")).unwrap(), "three\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("b.csv")).unwrap(),
+            "three\n"
+        );
     }
 
     #[test]
@@ -333,7 +339,10 @@ mod tests {
         run(rig, &mut TextFileWriter::new());
 
         assert!(!dir.path().join("a.csv").exists());
-        assert_eq!(std::fs::read_to_string(dir.path().join("b.csv")).unwrap(), "only\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("b.csv")).unwrap(),
+            "only\n"
+        );
     }
 
     #[test]

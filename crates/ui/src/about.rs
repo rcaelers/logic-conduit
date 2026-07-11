@@ -62,8 +62,10 @@ impl AboutWindow {
     /// Dark hero strip with scrolling digital traces and a decode lane,
     /// echoing the logic analyzer view.
     fn banner(&self, ui: &mut egui::Ui) {
-        let (rect, _) =
-            ui.allocate_exact_size(egui::vec2(WINDOW_WIDTH, BANNER_HEIGHT), egui::Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(WINDOW_WIDTH, BANNER_HEIGHT),
+            egui::Sense::hover(),
+        );
         let painter = ui.painter().with_clip_rect(rect);
         let time = ui.input(|input| input.time) as f32;
         let scroll = time * SCROLL_SPEED;
@@ -196,7 +198,10 @@ fn draw_trace(
     points.push(egui::pos2(rect.right(), level_y(level)));
 
     let glow = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 26);
-    painter.add(egui::Shape::line(points.clone(), egui::Stroke::new(4.0, glow)));
+    painter.add(egui::Shape::line(
+        points.clone(),
+        egui::Stroke::new(4.0, glow),
+    ));
     painter.add(egui::Shape::line(points, egui::Stroke::new(1.5, color)));
 }
 

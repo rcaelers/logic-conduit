@@ -343,7 +343,11 @@ impl NodeGraphWidget {
         if let Some(resolved) = &socket.resolved_type {
             tooltip_row(ui, "Resolved type", resolved);
         }
-        tooltip_row(ui, "Supports", &self.socket_supported_types(socket_id, socket));
+        tooltip_row(
+            ui,
+            "Supports",
+            &self.socket_supported_types(socket_id, socket),
+        );
 
         let connections = self.connected_socket_labels(socket_id);
         tooltip_row(

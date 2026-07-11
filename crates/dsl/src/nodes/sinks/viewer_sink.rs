@@ -642,7 +642,10 @@ mod tests {
     fn annotation_end_is_capped_across_gaps() {
         let store = DerivedLanes::new();
         let lane = store.register("w", DerivedLaneData::Annotations(Vec::new()));
-        store.append_word_batch(lane, [(1_000, 0, 1), (1_000 + MAX_ANNOTATION_NS * 10, 0, 2)]);
+        store.append_word_batch(
+            lane,
+            [(1_000, 0, 1), (1_000 + MAX_ANNOTATION_NS * 10, 0, 2)],
+        );
         let lanes = store.read();
         let DerivedLaneData::Annotations(annotations) = &lanes[0].data else {
             panic!("expected annotations");
@@ -654,10 +657,7 @@ mod tests {
     fn summary_tracks_digital_samples_as_they_arrive() {
         let store = DerivedLanes::new();
         let lane = store.register("d", DerivedLaneData::Digital(Vec::new()));
-        store.append_digital_batch(
-            lane,
-            [Sample::new(true, 100), Sample::new(false, 300)],
-        );
+        store.append_digital_batch(lane, [Sample::new(true, 100), Sample::new(false, 300)]);
         let lanes = store.read();
         let LaneSummary::Digital(summary) = &lanes[0].summary else {
             panic!("expected a digital summary");

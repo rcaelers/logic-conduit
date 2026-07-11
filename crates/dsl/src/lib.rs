@@ -38,10 +38,10 @@ pub use nodes::UartDemoSource;
 pub use nodes::{
     CaptureMode, ClockEdge, ClockSource, DeferredDslFileSource, DsLogicU3Pro16,
     DsLogicU3Pro16Source, DslCaptureReader, DslChunkedCaptureReader, DslFileCaptureDataSource,
-    DslFileSource, LinkSpeed, LogicAnalyzer,
-    LogicAnalyzerError, LogicAnalyzerInfo, LogicAnalyzerResult, LogicAnalyzerSource,
-    LogicCaptureConfig, LogicChunk, LogicEncoding, LogicEncodingRequest, LogicTrigger,
-    LogicTriggerStage, RusbTransport, TriggerCondition, TriggerLogic, UsbTransport,
+    DslFileSource, LinkSpeed, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
+    LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
+    LogicEncodingRequest, LogicTrigger, LogicTriggerStage, RusbTransport, TriggerCondition,
+    TriggerLogic, UsbTransport,
 };
 
 pub use runtime::{

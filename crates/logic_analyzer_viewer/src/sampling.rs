@@ -1,6 +1,8 @@
-use crate::types::{AnalyzerLayout, CaptureInfo, ExactWindow, PulseMeasurement, RowKey, Transition};
-use crate::viewer::LogicAnalyzerViewer;
 use crate::channel::channels_from_window;
+use crate::types::{
+    AnalyzerLayout, CaptureInfo, ExactWindow, PulseMeasurement, RowKey, Transition,
+};
+use crate::viewer::LogicAnalyzerViewer;
 use dsl::CaptureWaveformSegment;
 use egui::Pos2;
 
@@ -59,7 +61,11 @@ impl LogicAnalyzerViewer {
     /// measurement accurate at any zoom, this pulls a small exact window
     /// straight from the index around the pointer instead of reusing the
     /// (possibly summarized) data backing the main view.
-    pub(crate) fn sample_hover_measurement(&mut self, layout: AnalyzerLayout, pointer: Option<Pos2>) {
+    pub(crate) fn sample_hover_measurement(
+        &mut self,
+        layout: AnalyzerLayout,
+        pointer: Option<Pos2>,
+    ) {
         let previous = self.hover_measurement.take();
         let Some(pointer) = pointer else {
             return;
@@ -163,8 +169,7 @@ impl LogicAnalyzerViewer {
                 // the narrow window; one more search finds it.
                 if measurement.period_end_us.is_none() && end_is_toggle {
                     let end_sample = us_to_sample(measurement.end_us, samplerate_hz);
-                    if let Some((sample, _)) =
-                        self.next_transition_after(channel_index, end_sample)
+                    if let Some((sample, _)) = self.next_transition_after(channel_index, end_sample)
                     {
                         let period_end_us = sample_to_us(sample, samplerate_hz);
                         if period_end_us - measurement.start_us > measurement.width_us() {
@@ -183,7 +188,11 @@ impl LogicAnalyzerViewer {
         self.hover_measurement = measurement.map(|measurement| PulseMeasurement {
             channel_row,
             is_event,
-            period_end_us: if is_event { None } else { measurement.period_end_us },
+            period_end_us: if is_event {
+                None
+            } else {
+                measurement.period_end_us
+            },
             ..measurement
         });
     }
@@ -420,7 +429,11 @@ pub(crate) fn sample_to_us(sample: u64, samplerate_hz: f64) -> f64 {
     sample as f64 * 1_000_000.0 / samplerate_hz
 }
 
-pub(crate) fn visible_sample_range(capture: &CaptureInfo, start_us: f64, span_us: f64) -> (u64, u64) {
+pub(crate) fn visible_sample_range(
+    capture: &CaptureInfo,
+    start_us: f64,
+    span_us: f64,
+) -> (u64, u64) {
     let samplerate_hz = capture.header.samplerate_hz;
     let total_samples = capture.header.total_samples;
     let visible_start = us_to_sample(start_us, samplerate_hz).min(total_samples.saturating_sub(1));
@@ -433,7 +446,9 @@ fn sampled_visible_range(capture: &CaptureInfo, start_us: f64, span_us: f64) -> 
     let (visible_start, visible_end) = visible_sample_range(capture, start_us, span_us);
     (
         visible_start.saturating_sub(1),
-        visible_end.saturating_add(1).min(capture.header.total_samples),
+        visible_end
+            .saturating_add(1)
+            .min(capture.header.total_samples),
     )
 }
 

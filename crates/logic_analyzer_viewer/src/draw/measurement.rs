@@ -38,8 +38,7 @@ impl LogicAnalyzerViewer {
             .period_end_us
             .map(|period_end_us| self.time_to_x_unclamped(wave_rect, period_end_us));
 
-        let in_range =
-            |x: f32| x >= wave_rect.left() && x <= wave_rect.right();
+        let in_range = |x: f32| x >= wave_rect.left() && x <= wave_rect.right();
         let x0 = x0_raw.clamp(wave_rect.left(), wave_rect.right());
         let x1 = x1_raw.clamp(wave_rect.left(), wave_rect.right());
         let start_in_view = !measurement.start_open && in_range(x0_raw);
@@ -48,12 +47,28 @@ impl LogicAnalyzerViewer {
         // itself wasn't just the open window edge.
         let mid_in_view = (has_period || !measurement.end_open) && in_range(x1_raw);
 
-        self.draw_measurement_bracket(painter, x0, x1, level1_y, start_in_view, mid_in_view, yellow);
+        self.draw_measurement_bracket(
+            painter,
+            x0,
+            x1,
+            level1_y,
+            start_in_view,
+            mid_in_view,
+            yellow,
+        );
 
         if let Some(x2_raw) = x2_raw {
             let x2 = x2_raw.clamp(wave_rect.left(), wave_rect.right());
             let end_in_view = in_range(x2_raw);
-            self.draw_measurement_bracket(painter, x1, x2, level2_y, mid_in_view, end_in_view, yellow);
+            self.draw_measurement_bracket(
+                painter,
+                x1,
+                x2,
+                level2_y,
+                mid_in_view,
+                end_in_view,
+                yellow,
+            );
             // Ties the two brackets together at the toggle they share.
             if mid_in_view {
                 painter.line_segment([Pos2::new(x1, level1_y), Pos2::new(x1, level2_y)], stroke);

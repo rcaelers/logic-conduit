@@ -40,13 +40,13 @@
 use clap::Parser;
 use crossbeam_channel::TryRecvError;
 use dsl::DslFileSource;
+use dsl::Word;
 use dsl::nodes::decoders::{CsPolarity, SpiMode, StrobeMode};
 use dsl::nodes::decoders::{ParallelDecoder, SpiDecoder};
 use dsl::runtime::{
     InputPort, OutputPort, Pipeline, PortDirection, PortSchema, ProcessNode, Sample, WorkError,
     WorkResult,
 };
-use dsl::Word;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -688,8 +688,7 @@ impl ProcessNode for ControlledParallelWriter {
                 if self.current_file.is_none() {
                     info!(
                         ">>> First word while enabled - new capture file (enabled at position {}, word at {} ns)",
-                        self.current_enable_timestamp,
-                        word.timestamp_ns
+                        self.current_enable_timestamp, word.timestamp_ns
                     );
                     self.open_new_file()
                         .map_err(|e| WorkError::NodeError(format!("Failed to open file: {}", e)))?;
@@ -899,12 +898,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "spi_decoder",
         "clk",
     )?;
-    pipeline.connect(
-        "source",
-        &format!("ch{}", args.spi_cs),
-        "spi_decoder",
-        "cs",
-    )?;
+    pipeline.connect("source", &format!("ch{}", args.spi_cs), "spi_decoder", "cs")?;
     pipeline.connect(
         "source",
         &format!("ch{}", args.spi_mosi),

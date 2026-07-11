@@ -95,7 +95,10 @@ enum Probe {
         CrossbeamReceiver<ChannelMessage<NumberSample>>,
         Arc<AtomicBool>,
     ),
-    Text(CrossbeamReceiver<ChannelMessage<TextSample>>, Arc<AtomicBool>),
+    Text(
+        CrossbeamReceiver<ChannelMessage<TextSample>>,
+        Arc<AtomicBool>,
+    ),
 }
 
 impl Probe {
@@ -274,11 +277,7 @@ impl CooperativeManager {
             .map(|schema| {
                 let sender = output_lists[&schema.name].list.sender_box();
                 OutputPort::from_type_erased(output_lists[&schema.name].type_id, sender)
-                    .with_watchdog(
-                    self.watchdog.clone(),
-                    name.clone(),
-                    schema.name.clone(),
-                )
+                    .with_watchdog(self.watchdog.clone(), name.clone(), schema.name.clone())
             })
             .collect();
 
@@ -409,11 +408,7 @@ impl CooperativeManager {
             .map(|schema| {
                 let sender = old.output_lists[&schema.name].list.sender_box();
                 OutputPort::from_type_erased(old.output_lists[&schema.name].type_id, sender)
-                    .with_watchdog(
-                    self.watchdog.clone(),
-                    name.to_owned(),
-                    schema.name.clone(),
-                )
+                    .with_watchdog(self.watchdog.clone(), name.to_owned(), schema.name.clone())
             })
             .collect();
 

@@ -17,8 +17,8 @@
 
 use clap::Parser;
 use dsl::DslFileSource;
-use dsl::nodes::decoders::{SpiDecoder, SpiMode};
 use dsl::Word;
+use dsl::nodes::decoders::{SpiDecoder, SpiMode};
 use dsl::runtime::{InputPort, OutputPort, Pipeline, ProcessNode, WorkError, WorkResult};
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -262,12 +262,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "spi_decoder",
         "clk",
     )?;
-    pipeline.connect(
-        "source",
-        &format!("ch{}", args.spi_cs),
-        "spi_decoder",
-        "cs",
-    )?;
+    pipeline.connect("source", &format!("ch{}", args.spi_cs), "spi_decoder", "cs")?;
     pipeline.connect(
         "source",
         &format!("ch{}", args.spi_mosi),
@@ -283,12 +278,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(csv_path) = &args.csv_output {
         info!("CSV output: {}", csv_path);
         pipeline.add_process("csv_writer", SpiCsvWriter::new(csv_path, args.n)?)?;
-        pipeline.connect(
-            "spi_decoder",
-            "mosi_words",
-            "csv_writer",
-            "spi_transfers",
-        )?;
+        pipeline.connect("spi_decoder", "mosi_words", "csv_writer", "spi_transfers")?;
     }
 
     // Build and run

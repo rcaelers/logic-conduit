@@ -82,7 +82,10 @@ fn build_output_lists(
         let type_ids: Vec<TypeId> = if sample_kinds.is_empty() {
             vec![schema.type_id]
         } else {
-            sample_kinds.iter().map(|kind| kind.payload_type()).collect()
+            sample_kinds
+                .iter()
+                .map(|kind| kind.payload_type())
+                .collect()
         };
         // Sticky-ness is a property of the concrete payload (a `Sample`
         // level wants late-joiner priming; a `SampleBlock` burst must not
@@ -1262,7 +1265,11 @@ mod tests {
         fn value_at(&self, _position: u64) -> crate::Result<bool> {
             Ok(true)
         }
-        fn next_edge(&self, _position: u64, _limit: u64) -> crate::Result<Option<CaptureTransition>> {
+        fn next_edge(
+            &self,
+            _position: u64,
+            _limit: u64,
+        ) -> crate::Result<Option<CaptureTransition>> {
             Ok(None)
         }
     }

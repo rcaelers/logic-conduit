@@ -453,11 +453,7 @@ impl SpiDecoder {
 
     /// Streaming path: unchanged behavior for live sources or any
     /// connection that didn't negotiate `EdgeQuery`.
-    fn work_streamed(
-        &mut self,
-        inputs: &[InputPort],
-        outputs: &[OutputPort],
-    ) -> WorkResult<usize> {
+    fn work_streamed(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
         // Extract config values before borrowing channel_buffers
         let cs_polarity = self.cs_polarity;
         let cs_is_active = |value: bool| -> bool {
@@ -763,7 +759,7 @@ mod tests {
             Sample::new(false, 600), // bit3 = 0
         ];
         let miso_samples = [
-            Sample::new(false, 0), // bit0 = 0
+            Sample::new(false, 0),   // bit0 = 0
             Sample::new(true, 200),  // bit1 = 1
             Sample::new(false, 400), // bit2 = 0
             Sample::new(true, 600),  // bit3 = 1
@@ -890,11 +886,7 @@ mod tests {
     /// words. `force_stream` wraps the source so the connection
     /// negotiates `Stream` instead of the `EdgeQuery` both sides would
     /// otherwise prefer.
-    fn decode_wipneus5(
-        path: &std::path::Path,
-        max_samples: u64,
-        force_stream: bool,
-    ) -> Vec<Word> {
+    fn decode_wipneus5(path: &std::path::Path, max_samples: u64, force_stream: bool) -> Vec<Word> {
         use crate::DslFileSource;
         use crate::runtime::Pipeline;
 

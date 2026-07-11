@@ -430,7 +430,10 @@ mod tests {
         drop(rig.outputs);
 
         let filenames = drain(&rig.filenames);
-        assert_eq!(filenames, vec!["capture_0001_tgck.csv", "capture_0002_tgck.csv"]);
+        assert_eq!(
+            filenames,
+            vec!["capture_0001_tgck.csv", "capture_0002_tgck.csv"]
+        );
 
         let rows = drain(&rig.rows);
         assert_eq!(rows.len(), 2, "header + one record: {rows:?}");

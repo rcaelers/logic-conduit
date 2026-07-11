@@ -224,7 +224,11 @@ impl LogicAnalyzerViewer {
                         }
                         DerivedLaneData::Annotations(annotations) => {
                             self.draw_derived_annotations(
-                                &clip, wave_rect, y_top, row_height, annotations,
+                                &clip,
+                                wave_rect,
+                                y_top,
+                                row_height,
+                                annotations,
                             );
                         }
                         DerivedLaneData::Markers(markers) => {

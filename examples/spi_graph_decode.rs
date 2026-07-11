@@ -147,32 +147,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "spi_decoder",
         "clk",
     )?;
-    pipeline.connect(
-        "source",
-        &format!("ch{}", args.spi_cs),
-        "spi_decoder",
-        "cs",
-    )?;
+    pipeline.connect("source", &format!("ch{}", args.spi_cs), "spi_decoder", "cs")?;
     pipeline.connect(
         "source",
         &format!("ch{}", args.spi_mosi),
         "spi_decoder",
         "mosi",
     )?;
-    pipeline.connect_with_buffer(
-        "spi_decoder",
-        "mosi_words",
-        "start_matcher",
-        "words",
-        1_000,
-    )?;
-    pipeline.connect_with_buffer(
-        "spi_decoder",
-        "mosi_words",
-        "stop_matcher",
-        "words",
-        1_000,
-    )?;
+    pipeline.connect_with_buffer("spi_decoder", "mosi_words", "start_matcher", "words", 1_000)?;
+    pipeline.connect_with_buffer("spi_decoder", "mosi_words", "stop_matcher", "words", 1_000)?;
     pipeline.connect_with_buffer("start_matcher", "trigger", "latch", "set", 100)?;
     pipeline.connect_with_buffer("stop_matcher", "trigger", "latch", "reset", 100)?;
     pipeline.connect_with_buffer("latch", "q", "parallel_decoder", "enable_signal", 100)?;

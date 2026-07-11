@@ -145,11 +145,7 @@ impl ProcessNode for PulseMeasureNode {
         1
     }
     fn input_schema(&self) -> Vec<PortSchema> {
-        vec![PortSchema::new::<Sample>(
-            "signal",
-            0,
-            PortDirection::Input,
-        )]
+        vec![PortSchema::new::<Sample>("signal", 0, PortDirection::Input)]
     }
     fn output_schema(&self) -> Vec<PortSchema> {
         vec![PortSchema::new::<PulseWidth>(
@@ -185,9 +181,9 @@ impl ProcessNode for PulseMeasureNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossbeam_channel::bounded;
     use dsl::runtime::sender::{ChannelMessage, Sender};
     use dsl::runtime::watchdog::Watchdog;
-    use crossbeam_channel::bounded;
 
     #[test]
     fn register_populates_both_registries() {

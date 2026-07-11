@@ -5,8 +5,8 @@ use crate::types::{
 };
 use crate::viewer::LogicAnalyzerViewer;
 use dsl::{
-    AppendOnlyMipmap, CaptureMetadata, CaptureSampledWindow, CaptureWaveformSegment, DerivedLaneData,
-    DigitalFold, LaneSummary, MarkerFold, MipmapRecord, Sample,
+    AppendOnlyMipmap, CaptureMetadata, CaptureSampledWindow, CaptureWaveformSegment,
+    DerivedLaneData, DigitalFold, LaneSummary, MarkerFold, MipmapRecord, Sample,
 };
 use egui::{Color32, CursorIcon, PointerButton, Pos2, Rect, Response, Ui, vec2};
 use std::borrow::Cow;
@@ -46,7 +46,10 @@ impl LogicAnalyzerViewer {
     pub(crate) fn row_label(&self, key: &RowKey) -> Option<RowLabel> {
         match key {
             RowKey::Channel(index) => {
-                let channel = self.channels.iter().find(|channel| channel.index == *index)?;
+                let channel = self
+                    .channels
+                    .iter()
+                    .find(|channel| channel.index == *index)?;
                 Some(RowLabel {
                     name: channel.name.clone(),
                     badge_text: index.to_string(),
@@ -607,10 +610,7 @@ mod tests {
             "decoded.rx",
             DerivedLaneData::Digital(vec![Sample::new(true, 1_000), Sample::new(false, 3_000)]),
         );
-        lanes.register(
-            "decoded.words",
-            DerivedLaneData::Annotations(Vec::new()),
-        );
+        lanes.register("decoded.words", DerivedLaneData::Annotations(Vec::new()));
         viewer.set_derived_lanes(lanes);
         // `show()` does this every frame in the real app; the tests below
         // don't drive a frame, so they need it explicitly to see the lanes
@@ -732,8 +732,8 @@ mod tests {
         lanes.register(
             "decoded.rx",
             DerivedLaneData::Digital(vec![
-                Sample::new(true, 100_000),    // in view
-                Sample::new(false, 500_000),   // in view
+                Sample::new(true, 100_000),     // in view
+                Sample::new(false, 500_000),    // in view
                 Sample::new(true, 10_000_000),  // one entry past the edge: the pad
                 Sample::new(false, 20_000_000), // further still: must not appear
             ]),
@@ -923,9 +923,6 @@ mod tests {
         viewer.set_row_name(&RowKey::Channel(0), String::new());
         assert_eq!(viewer.row_label(&RowKey::Channel(0)).unwrap().name, "0");
         viewer.set_row_name(&derived_key, String::new());
-        assert_eq!(
-            viewer.row_label(&derived_key).unwrap().name,
-            "decoded.rx"
-        );
+        assert_eq!(viewer.row_label(&derived_key).unwrap().name, "decoded.rx");
     }
 }
