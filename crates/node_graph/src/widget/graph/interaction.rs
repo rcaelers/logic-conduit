@@ -931,7 +931,7 @@ impl NodeGraphWidget {
             // Blender-style "active" node: the properties panel follows the
             // most recent selection.
             if node.selected {
-                self.active_node = Some(id);
+                self.set_active_node(id);
             }
         }
     }
@@ -1031,6 +1031,28 @@ impl NodeGraphWidget {
             return;
         }
 
+        // Zoom-to-selection (Blender's numpad-`.`) and rename-active (F2)
+        // are special-cased here, like Home above, rather than routed
+        // through `self.hotkeys`: both need `layout`/`origin` (for viewport
+        // fitting and for placing the rename popup at the node's screen
+        // position) that the generic action dispatch doesn't carry.
+        if no_focus
+            && pointer.is_some()
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Period))
+        {
+            self.fit_selection_to_viewport(layout, canvas_rect, origin);
+            return;
+        }
+
+        if no_focus
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::F2))
+            && let Some(active) = self.active_node
+            && let Some(&header_rect) = layout.header_screen_rects.get(&active)
+        {
+            self.start_renaming_node(active, header_rect.left_bottom());
+            return;
+        }
+
         if no_focus {
             let any_selected = self.graph.nodes.values().any(|node| node.selected)
                 || self.graph.frames.iter().any(|frame| frame.selected);
@@ -1110,9 +1132,20 @@ impl NodeGraphWidget {
             self.menu.open_popup(context_screen_pos, entries);
         }
 
+        // Shift+A opens the Add search at the pointer (Blender's Add menu);
+        // plain A/Alt+A (select-all/deselect-all) are ordinary `GraphAction`s
+        // dispatched through `self.hotkeys` below — this one stays
+        // special-cased because positioning the popup needs the screen
+        // pointer and canvas origin, which the generic action dispatch
+        // doesn't carry.
         if no_focus
             && !placing
-            && ui.input(|i| i.key_pressed(egui::Key::A) && !i.modifiers.ctrl && !i.modifiers.alt)
+            && ui.input(|i| {
+                i.key_pressed(egui::Key::A)
+                    && i.modifiers.shift
+                    && !i.modifiers.ctrl
+                    && !i.modifiers.alt
+            })
         {
             let screen_pos = pointer.unwrap_or(canvas_rect.center());
             let canvas_pos = self.view.screen_to_canvas(origin, screen_pos);

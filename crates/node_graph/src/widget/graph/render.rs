@@ -513,6 +513,58 @@ impl NodeGraphWidget {
             self.frame_rename = None;
         }
     }
+
+    /// Inline rename overlay for a node (Phase 2, F2) — same mechanism as
+    /// `show_frame_rename`, writing to `node.title` instead.
+    pub(super) fn show_node_rename(&mut self, ctx: &egui::Context) {
+        let Some(state) = &mut self.node_rename else {
+            return;
+        };
+
+        let mut apply = false;
+        let mut cancel = false;
+        egui::Window::new("Rename Node")
+            .id(egui::Id::new("node_graph_rename_node"))
+            .fixed_pos(state.screen_pos)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut state.text)
+                        .desired_width(240.0)
+                        .hint_text("Node name"),
+                );
+                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    apply = true;
+                } else {
+                    // Re-requesting focus here would mask the surrender above,
+                    // since `lost_focus()` reads live state, not a frame snapshot.
+                    response.request_focus();
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("OK").clicked() {
+                        apply = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            cancel = true;
+        }
+        if apply {
+            if let Some(state) = self.node_rename.take() {
+                self.push_undo_snapshot();
+                if let Some(node) = self.graph.nodes.get_mut(&state.node_id) {
+                    node.title = state.text;
+                }
+            }
+        } else if cancel {
+            self.node_rename = None;
+        }
+    }
 }
 
 fn tooltip_row(ui: &mut egui::Ui, label: &str, value: impl Into<String>) {

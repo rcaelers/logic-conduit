@@ -46,6 +46,15 @@ impl Shortcut {
             key,
         }
     }
+    pub fn alt(key: egui::Key) -> Self {
+        Self {
+            modifiers: egui::Modifiers {
+                alt: true,
+                ..egui::Modifiers::NONE
+            },
+            key,
+        }
+    }
 
     fn consume(&self, ui: &mut egui::Ui) -> bool {
         if ui.input_mut(|input| {

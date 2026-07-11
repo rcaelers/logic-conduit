@@ -1,5 +1,5 @@
 pub(super) use super::super::menu::Shortcut;
-use super::{FrameRenameState, NodeGraphWidget};
+use super::{FrameRenameState, NodeGraphWidget, NodeRenameState};
 use crate::model::{Connection, FrameId, Node, NodeId, SocketDirection, SocketId};
 use egui::{Color32, Pos2, Vec2};
 use serde::{Deserialize, Serialize};
@@ -91,6 +91,15 @@ pub(super) enum GraphAction {
     },
     ToggleMinimap,
     TogglePanel,
+    /// Selects every node and frame (Phase 2, Blender's `A`).
+    SelectAll,
+    /// Deselects everything (Phase 2, Blender's Alt+A).
+    DeselectAll,
+    /// Connects the active node to the previously-active one via the first
+    /// compatible socket pair found, trying both directions (Phase 2,
+    /// Blender's `F` "Make Link"). A no-op if there's no previous active
+    /// node, they're the same node, or nothing compatible is found.
+    LinkActiveToPrevious,
 }
 
 pub(super) struct HotkeyRegistry {
@@ -116,6 +125,17 @@ impl HotkeyRegistry {
         );
         r.bind(Shortcut::key(egui::Key::M), GraphAction::ToggleMinimap);
         r.bind(Shortcut::key(egui::Key::N), GraphAction::TogglePanel);
+        r.bind(
+            Shortcut::key(egui::Key::H),
+            GraphAction::ToggleCollapsed { target: None },
+        );
+        // Plain `A` (select-all) and Alt+A (deselect-all) live here; Shift+A
+        // (open Add search at the pointer) is special-cased in
+        // `handle_input` instead, since it needs the screen pointer/canvas
+        // origin this registry's dispatch doesn't carry.
+        r.bind(Shortcut::key(egui::Key::A), GraphAction::SelectAll);
+        r.bind(Shortcut::alt(egui::Key::A), GraphAction::DeselectAll);
+        r.bind(Shortcut::key(egui::Key::F), GraphAction::LinkActiveToPrevious);
         r
     }
 
@@ -279,7 +299,82 @@ impl NodeGraphWidget {
                 self.toggle_panel();
                 ActionEffect::None
             }
+            GraphAction::SelectAll => {
+                for node in self.graph.nodes.values_mut() {
+                    node.selected = true;
+                }
+                for frame in &mut self.graph.frames {
+                    frame.selected = true;
+                }
+                // Give the panel something sane to show, matching a normal
+                // click-select — the newest node, if any exist.
+                if let Some(id) = self.graph.nodes.keys().max_by_key(|id| id.0).copied() {
+                    self.set_active_node(id);
+                }
+                ActionEffect::None
+            }
+            GraphAction::DeselectAll => {
+                for node in self.graph.nodes.values_mut() {
+                    node.selected = false;
+                }
+                for frame in &mut self.graph.frames {
+                    frame.selected = false;
+                }
+                ActionEffect::None
+            }
+            GraphAction::LinkActiveToPrevious => {
+                if let (Some(previous), Some(active)) =
+                    (self.previous_active_node, self.active_node)
+                    && previous != active
+                    && let Some((from, to)) = self.first_compatible_link(previous, active)
+                {
+                    self.push_undo_snapshot();
+                    self.graph.add_connection(from, to);
+                    self.run_update(from.node);
+                    self.run_update(to.node);
+                }
+                ActionEffect::None
+            }
         }
+    }
+
+    /// First (output, input) socket pair — visible sockets only — that
+    /// directly connects `a` and `b`, tried in both directions (`a`→`b`
+    /// first, then `b`→`a`). Used by `LinkActiveToPrevious` (Phase 2).
+    fn first_compatible_link(&self, a: NodeId, b: NodeId) -> Option<(SocketId, SocketId)> {
+        self.first_compatible_link_directed(a, b)
+            .or_else(|| self.first_compatible_link_directed(b, a))
+    }
+
+    fn first_compatible_link_directed(
+        &self,
+        from_node: NodeId,
+        to_node: NodeId,
+    ) -> Option<(SocketId, SocketId)> {
+        let from = self.graph.nodes.get(&from_node)?;
+        let to = self.graph.nodes.get(&to_node)?;
+        for (out_idx, output) in from.outputs.iter().enumerate() {
+            if !output.visible {
+                continue;
+            }
+            for (in_idx, input) in to.inputs.iter().enumerate() {
+                if input.visible && input.accepts(output.effective_type()) {
+                    return Some((
+                        SocketId {
+                            node: from_node,
+                            index: out_idx,
+                            direction: SocketDirection::Output,
+                        },
+                        SocketId {
+                            node: to_node,
+                            index: in_idx,
+                            direction: SocketDirection::Input,
+                        },
+                    ));
+                }
+            }
+        }
+        None
     }
 
     /// `pub(super)`: also called from `interaction.rs` to cancel a placement
@@ -561,7 +656,9 @@ impl NodeGraphWidget {
             last_pasted = Some(new_id);
             pasted += 1;
         }
-        self.active_node = last_pasted.or(self.active_node);
+        if let Some(id) = last_pasted {
+            self.set_active_node(id);
+        }
 
         let new_connections: Vec<_> = payload
             .connections
@@ -622,6 +719,19 @@ impl NodeGraphWidget {
         self.frame_rename = Some(FrameRenameState {
             frame_id: target,
             text: frame.label.clone(),
+            screen_pos,
+        });
+    }
+
+    /// Opens the inline rename overlay for `target` (Phase 2, F2) — same
+    /// mechanism as `start_renaming_frame`, writing to `node.title` instead.
+    pub(super) fn start_renaming_node(&mut self, target: NodeId, screen_pos: Pos2) {
+        let Some(node) = self.graph.nodes.get(&target) else {
+            return;
+        };
+        self.node_rename = Some(NodeRenameState {
+            node_id: target,
+            text: node.title.clone(),
             screen_pos,
         });
     }
@@ -995,5 +1105,87 @@ mod action_tests {
 
         assert!(effect == ActionEffect::None);
         assert_eq!(widget.graph.nodes.len(), 1);
+    }
+
+    #[test]
+    fn select_all_selects_every_node_and_frame() {
+        let mut widget = test_widget();
+        let a = widget.add_node_at("Source", Pos2::new(0.0, 0.0)).unwrap();
+        let b = widget.add_node_at("Sink", Pos2::new(0.0, 0.0)).unwrap();
+        widget
+            .graph
+            .add_frame("F".to_owned(), Color32::WHITE, vec![a]);
+
+        widget.execute_action(GraphAction::SelectAll, &egui::Context::default(), None);
+
+        assert!(widget.graph.nodes[&a].selected);
+        assert!(widget.graph.nodes[&b].selected);
+        assert!(widget.graph.frames[0].selected);
+    }
+
+    #[test]
+    fn deselect_all_clears_every_selection() {
+        let mut widget = test_widget();
+        let a = widget.add_node_at("Source", Pos2::new(0.0, 0.0)).unwrap();
+        widget.graph.nodes.get_mut(&a).unwrap().selected = true;
+        let frame_id = widget
+            .graph
+            .add_frame("F".to_owned(), Color32::WHITE, vec![a]);
+        widget
+            .graph
+            .frames
+            .iter_mut()
+            .find(|f| f.id == frame_id)
+            .unwrap()
+            .selected = true;
+
+        widget.execute_action(GraphAction::DeselectAll, &egui::Context::default(), None);
+
+        assert!(!widget.graph.nodes[&a].selected);
+        assert!(!widget.graph.frames[0].selected);
+    }
+
+    #[test]
+    fn link_active_to_previous_connects_compatible_sockets() {
+        let mut widget = test_widget();
+        let source = widget
+            .add_node_at("Source", Pos2::new(0.0, 0.0))
+            .expect("source node should be created");
+        let sink = widget
+            .add_node_at("Sink", Pos2::new(100.0, 0.0))
+            .expect("sink node should be created");
+        // `add_node_at` makes each new node the active one, so after adding
+        // both, `previous_active_node` is `source` and `active_node` is
+        // `sink` — exactly the "select A, then B, press F" sequence.
+        assert_eq!(widget.previous_active_node, Some(source));
+        assert_eq!(widget.active_node, Some(sink));
+
+        widget.execute_action(
+            GraphAction::LinkActiveToPrevious,
+            &egui::Context::default(),
+            None,
+        );
+
+        assert_eq!(widget.graph.connections.len(), 1);
+        let connection = &widget.graph.connections[0];
+        assert_eq!(connection.from.node, source);
+        assert_eq!(connection.to.node, sink);
+    }
+
+    #[test]
+    fn link_active_to_previous_is_a_noop_without_two_distinct_nodes() {
+        let mut widget = test_widget();
+        widget
+            .add_node_at("Source", Pos2::new(0.0, 0.0))
+            .expect("source node should be created");
+        // Only one node was ever added, so there's no previous active node.
+
+        widget.execute_action(
+            GraphAction::LinkActiveToPrevious,
+            &egui::Context::default(),
+            None,
+        );
+
+        assert!(widget.graph.connections.is_empty());
     }
 }

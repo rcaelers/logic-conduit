@@ -38,8 +38,12 @@ pub struct NodeGraphWidget {
     undo_stack: Vec<GraphState>,
     redo_stack: Vec<GraphState>,
     frame_rename: Option<FrameRenameState>,
+    node_rename: Option<NodeRenameState>,
     /// Most recently clicked/added node; the properties panel shows it.
     active_node: Option<NodeId>,
+    /// The active node just before the current one — Blender's "F" (Make
+    /// Link, Phase 2) connects between these two.
+    previous_active_node: Option<NodeId>,
     panel: PanelState,
     /// Badges set from outside the graph (compiler errors, runtime status);
     /// they take precedence over def-driven badges.
@@ -51,6 +55,12 @@ pub struct NodeGraphWidget {
 
 struct FrameRenameState {
     frame_id: FrameId,
+    text: String,
+    screen_pos: Pos2,
+}
+
+struct NodeRenameState {
+    node_id: NodeId,
     text: String,
     screen_pos: Pos2,
 }
@@ -119,7 +129,9 @@ impl NodeGraphWidget {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             frame_rename: None,
+            node_rename: None,
             active_node: None,
+            previous_active_node: None,
             panel: PanelState::default(),
             external_badges: HashMap::new(),
             node_statuses: HashMap::new(),
@@ -164,11 +176,21 @@ impl NodeGraphWidget {
             let nid = node.id;
             self.runtime.insert(nid, instance);
             self.graph.add_node(node);
-            self.active_node = Some(nid);
+            self.set_active_node(nid);
             Some(nid)
         } else {
             None
         }
+    }
+
+    /// Sets the active node, tracking the *previous* one (unless it's
+    /// already the same node) — Blender's "F" link shortcut (Phase 2)
+    /// connects between the two.
+    fn set_active_node(&mut self, id: NodeId) {
+        if self.active_node != Some(id) {
+            self.previous_active_node = self.active_node;
+        }
+        self.active_node = Some(id);
     }
 
     /// Replaces a node's state wholesale and re-runs its def (sockets,
@@ -235,6 +257,34 @@ impl NodeGraphWidget {
             self.view.fit_to_rect(bounds, viewport, origin, 48.0);
         } else {
             self.view = ViewState::default();
+        }
+    }
+
+    /// Zooms to fit the current selection (Phase 2, Blender's numpad-`.`) —
+    /// falls back to fitting the whole graph, matching `Home`, when nothing
+    /// is selected.
+    fn fit_selection_to_viewport(
+        &mut self,
+        layout: &layout::GraphWidgetLayout,
+        viewport: egui::Rect,
+        origin: Pos2,
+    ) {
+        let node_bounds = self
+            .graph
+            .nodes
+            .values()
+            .filter(|node| node.selected)
+            .filter_map(|node| layout.node_rects.get(&node.id).copied());
+        let frame_bounds = self
+            .graph
+            .frames
+            .iter()
+            .filter(|frame| frame.selected)
+            .filter_map(|frame| layout.frame_rects.get(&frame.id).copied());
+        let bounds = node_bounds.chain(frame_bounds).reduce(|a, b| a.union(b));
+        match bounds {
+            Some(bounds) => self.view.fit_to_rect(bounds, viewport, origin, 48.0),
+            None => self.fit_graph_to_viewport(layout, viewport, origin),
         }
     }
 
@@ -385,6 +435,7 @@ impl NodeGraphWidget {
         }
         self.show_panel_tab_bar(ui, tab_bar_rect);
         self.show_frame_rename(ui.ctx());
+        self.show_node_rename(ui.ctx());
     }
 
     /// One-line hint of available actions for the current interaction
@@ -405,9 +456,9 @@ impl NodeGraphWidget {
                 let any_selected = self.graph.nodes.values().any(|node| node.selected)
                     || self.graph.frames.iter().any(|frame| frame.selected);
                 if any_selected {
-                    "Shift+D Duplicate · X Delete · Ctrl+J Frame · N Panel"
+                    "Shift+D Duplicate · F2 Rename · H Collapse · X Delete · F Link · . Zoom to Selection"
                 } else {
-                    "A Add · RMB Menu · MMB Pan · Ctrl+RMB-drag Cut wires"
+                    "Shift+A Add · A Select All · RMB Menu · MMB Pan"
                 }
             }
         }
