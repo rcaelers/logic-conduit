@@ -579,10 +579,12 @@ mod tests {
 
         let block0 = match rx0.recv().unwrap() {
             ChannelMessage::Sample(block) => block,
+            ChannelMessage::Batch(_) => panic!("unexpected batch"),
             ChannelMessage::EndOfStream => panic!("unexpected end of stream"),
         };
         let block1 = match rx1.recv().unwrap() {
             ChannelMessage::Sample(block) => block,
+            ChannelMessage::Batch(_) => panic!("unexpected batch"),
             ChannelMessage::EndOfStream => panic!("unexpected end of stream"),
         };
         assert_eq!(&*block0.data, &[0b0101_1010]);

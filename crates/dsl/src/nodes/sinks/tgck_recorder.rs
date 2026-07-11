@@ -411,6 +411,7 @@ mod tests {
         rx.try_iter()
             .filter_map(|message| match message {
                 ChannelMessage::Sample(sample) => Some(sample.value),
+                ChannelMessage::Batch(_) => None,
                 ChannelMessage::EndOfStream => None,
             })
             .collect()

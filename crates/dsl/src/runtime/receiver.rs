@@ -38,6 +38,13 @@ pub struct Receiver<'a, T> {
 }
 
 impl<'a, T> Receiver<'a, T> {
+    fn unpack_batch(buffer: &mut VecDeque<T>, items: Vec<T>) -> Option<T> {
+        let mut items = items.into_iter();
+        let first = items.next()?;
+        buffer.extend(items);
+        Some(first)
+    }
+
     /// Create a new receiver with watchdog monitoring.
     pub fn new(
         receiver: &'a CrossbeamReceiver<ChannelMessage<T>>,
@@ -80,16 +87,23 @@ impl<'a, T> Receiver<'a, T> {
 
         // Create watchdog guard if watchdog is attached (zero-cost: just 8-byte stack ref + 2 atomic stores)
         let _guard = self.watchdog_handle.as_ref().map(OperationGuard::new);
-        match self.receiver.recv() {
-            Ok(ChannelMessage::Sample(item)) => Ok(item),
-            Ok(ChannelMessage::EndOfStream) => {
-                self.eos.store(true, Ordering::Relaxed);
-                tracing::debug!("Receiver::recv() - EndOfStream received");
-                Err(WorkError::Shutdown)
-            }
-            Err(_) => {
-                tracing::debug!("Receiver::recv() - channel disconnected, returning Shutdown");
-                Err(WorkError::Shutdown)
+        loop {
+            match self.receiver.recv() {
+                Ok(ChannelMessage::Sample(item)) => return Ok(item),
+                Ok(ChannelMessage::Batch(items)) => {
+                    if let Some(item) = Self::unpack_batch(self.buffer, items) {
+                        return Ok(item);
+                    }
+                }
+                Ok(ChannelMessage::EndOfStream) => {
+                    self.eos.store(true, Ordering::Relaxed);
+                    tracing::debug!("Receiver::recv() - EndOfStream received");
+                    return Err(WorkError::Shutdown);
+                }
+                Err(_) => {
+                    tracing::debug!("Receiver::recv() - channel disconnected, returning Shutdown");
+                    return Err(WorkError::Shutdown);
+                }
             }
         }
     }
@@ -107,18 +121,29 @@ impl<'a, T> Receiver<'a, T> {
         if self.buffer.is_empty() {
             // Create watchdog guard if watchdog is attached (zero-cost: just 8-byte stack ref + 2 atomic stores)
             let _guard = self.watchdog_handle.as_ref().map(OperationGuard::new);
-            match self.receiver.recv() {
-                Ok(ChannelMessage::Sample(item)) => {
-                    self.buffer.push_back(item);
-                }
-                Ok(ChannelMessage::EndOfStream) => {
-                    self.eos.store(true, Ordering::Relaxed);
-                    tracing::debug!("Receiver::peek() - EndOfStream received");
-                    return Err(WorkError::Shutdown);
-                }
-                Err(_) => {
-                    tracing::debug!("Receiver::peek() - channel disconnected, returning Shutdown");
-                    return Err(WorkError::Shutdown);
+            loop {
+                match self.receiver.recv() {
+                    Ok(ChannelMessage::Sample(item)) => {
+                        self.buffer.push_back(item);
+                        break;
+                    }
+                    Ok(ChannelMessage::Batch(items)) => {
+                        self.buffer.extend(items);
+                        if !self.buffer.is_empty() {
+                            break;
+                        }
+                    }
+                    Ok(ChannelMessage::EndOfStream) => {
+                        self.eos.store(true, Ordering::Relaxed);
+                        tracing::debug!("Receiver::peek() - EndOfStream received");
+                        return Err(WorkError::Shutdown);
+                    }
+                    Err(_) => {
+                        tracing::debug!(
+                            "Receiver::peek() - channel disconnected, returning Shutdown"
+                        );
+                        return Err(WorkError::Shutdown);
+                    }
                 }
             }
         }
@@ -136,13 +161,82 @@ impl<'a, T> Receiver<'a, T> {
             return Ok(item);
         }
         // No watchdog needed - this doesn't block
-        match self.receiver.try_recv() {
-            Ok(ChannelMessage::Sample(item)) => Ok(item),
-            Ok(ChannelMessage::EndOfStream) => {
-                self.eos.store(true, Ordering::Relaxed);
-                Err(crossbeam_channel::TryRecvError::Disconnected)
+        loop {
+            match self.receiver.try_recv() {
+                Ok(ChannelMessage::Sample(item)) => return Ok(item),
+                Ok(ChannelMessage::Batch(items)) => {
+                    if let Some(item) = Self::unpack_batch(self.buffer, items) {
+                        return Ok(item);
+                    }
+                }
+                Ok(ChannelMessage::EndOfStream) => {
+                    self.eos.store(true, Ordering::Relaxed);
+                    return Err(crossbeam_channel::TryRecvError::Disconnected);
+                }
+                Err(error) => return Err(error),
             }
-            Err(e) => Err(e),
+        }
+    }
+
+    /// Appends up to `limit` available items, consuming scalar and batch
+    /// envelopes without one channel operation per item. Returns `Empty` or
+    /// `Disconnected` only when no item was appended.
+    pub fn try_recv_many(
+        &mut self,
+        output: &mut Vec<T>,
+        limit: usize,
+    ) -> Result<usize, crossbeam_channel::TryRecvError> {
+        if limit == 0 {
+            return Ok(0);
+        }
+        let mut received = 0usize;
+        while received < limit {
+            if let Some(item) = self.buffer.pop_front() {
+                output.push(item);
+                received += 1;
+            } else {
+                break;
+            }
+        }
+        if self.eos.load(Ordering::Relaxed) {
+            return if received == 0 {
+                Err(crossbeam_channel::TryRecvError::Disconnected)
+            } else {
+                Ok(received)
+            };
+        }
+
+        while received < limit {
+            match self.receiver.try_recv() {
+                Ok(ChannelMessage::Sample(item)) => {
+                    output.push(item);
+                    received += 1;
+                }
+                Ok(ChannelMessage::Batch(mut items)) => {
+                    let take = (limit - received).min(items.len());
+                    let remainder = items.split_off(take);
+                    received += items.len();
+                    output.extend(items);
+                    self.buffer.extend(remainder);
+                }
+                Ok(ChannelMessage::EndOfStream) => {
+                    self.eos.store(true, Ordering::Relaxed);
+                    break;
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    self.eos.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
+        }
+
+        if received > 0 {
+            Ok(received)
+        } else if self.eos.load(Ordering::Relaxed) {
+            Err(crossbeam_channel::TryRecvError::Disconnected)
+        } else {
+            Err(crossbeam_channel::TryRecvError::Empty)
         }
     }
 
@@ -161,13 +255,20 @@ impl<'a, T> Receiver<'a, T> {
         }
         // Watchdog guard for timeout recv if watchdog is attached (zero-cost: just 8-byte stack ref + 2 atomic stores)
         let _guard = self.watchdog_handle.as_ref().map(OperationGuard::new);
-        match self.receiver.recv_timeout(timeout) {
-            Ok(ChannelMessage::Sample(item)) => Ok(item),
-            Ok(ChannelMessage::EndOfStream) => {
-                self.eos.store(true, Ordering::Relaxed);
-                Err(crossbeam_channel::RecvTimeoutError::Disconnected)
+        loop {
+            match self.receiver.recv_timeout(timeout) {
+                Ok(ChannelMessage::Sample(item)) => return Ok(item),
+                Ok(ChannelMessage::Batch(items)) => {
+                    if let Some(item) = Self::unpack_batch(self.buffer, items) {
+                        return Ok(item);
+                    }
+                }
+                Ok(ChannelMessage::EndOfStream) => {
+                    self.eos.store(true, Ordering::Relaxed);
+                    return Err(crossbeam_channel::RecvTimeoutError::Disconnected);
+                }
+                Err(error) => return Err(error),
             }
-            Err(e) => Err(e),
         }
     }
 
@@ -286,6 +387,12 @@ impl<'b, 'a, T> ReceiverSelector<'b, 'a, T> {
             let ch_idx = index_map[sel_idx];
             match oper.recv(self.channels[ch_idx].receiver) {
                 Ok(ChannelMessage::Sample(item)) => return Ok((ch_idx, item)),
+                Ok(ChannelMessage::Batch(items)) => {
+                    if let Some(item) = Receiver::unpack_batch(self.channels[ch_idx].buffer, items)
+                    {
+                        return Ok((ch_idx, item));
+                    }
+                }
                 Ok(ChannelMessage::EndOfStream) => {
                     self.channels[ch_idx].eos.store(true, Ordering::Relaxed);
                     tracing::debug!(
@@ -346,6 +453,12 @@ impl<'b, 'a, T> ReceiverSelector<'b, 'a, T> {
             let rx_idx = index_map[sel_idx];
             match oper.recv(self.channels[rx_idx].receiver) {
                 Ok(ChannelMessage::Sample(item)) => return Ok((rx_idx, item)),
+                Ok(ChannelMessage::Batch(items)) => {
+                    if let Some(item) = Receiver::unpack_batch(self.channels[rx_idx].buffer, items)
+                    {
+                        return Ok((rx_idx, item));
+                    }
+                }
                 Ok(ChannelMessage::EndOfStream) => {
                     self.channels[rx_idx].eos.store(true, Ordering::Relaxed);
                     tracing::debug!(
@@ -397,6 +510,30 @@ mod tests {
         assert_eq!(pr.recv().unwrap(), 99);
 
         drop(tx);
+    }
+
+    #[test]
+    fn scalar_and_bulk_receivers_flatten_batch_envelopes() {
+        let (tx, rx) = bounded::<ChannelMessage<i32>>(4);
+        tx.send(ChannelMessage::Batch(vec![1, 2, 3, 4])).unwrap();
+        tx.send(ChannelMessage::Sample(5)).unwrap();
+        tx.send(ChannelMessage::EndOfStream).unwrap();
+        let mut buffer = VecDeque::new();
+        let wd = test_watchdog();
+        let handle = wd.register_port("test", "recv", "batch");
+        let eos = AtomicBool::new(false);
+        let mut receiver = Receiver::new(&rx, &mut buffer, handle, &eos);
+
+        assert_eq!(receiver.recv().unwrap(), 1);
+        let mut bulk = Vec::new();
+        assert_eq!(receiver.try_recv_many(&mut bulk, 3).unwrap(), 3);
+        assert_eq!(bulk, vec![2, 3, 4]);
+        assert_eq!(receiver.try_recv_many(&mut bulk, 8).unwrap(), 1);
+        assert_eq!(bulk, vec![2, 3, 4, 5]);
+        assert!(matches!(
+            receiver.try_recv_many(&mut bulk, 8),
+            Err(crossbeam_channel::TryRecvError::Disconnected)
+        ));
     }
 
     #[test]

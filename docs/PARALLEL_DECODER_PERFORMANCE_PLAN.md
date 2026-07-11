@@ -413,6 +413,56 @@ live operation at this rate requires an explicit policy:
 Decoder, transport, and viewer throughput must be reported separately so a
 downstream retention limit is not mistaken for an input-scanning regression.
 
+Status: implemented. `ChannelMessage<T>` now has a generic `Batch(Vec<T>)`
+envelope. `Sender::send_batch` sends one envelope per decoder work window;
+normal `Receiver<T>` methods flatten it transparently, preserving every
+existing scalar consumer and port schema. `Receiver::try_recv_many` lets
+batch-aware sinks move up to 65,536 entries at once without one channel call
+per item. Static and supervisor-owned/shared senders both support batches;
+lossy shared subscribers coalesce an overflowing batch to its newest item.
+
+`ParallelDecoder` accumulates completed words for one bounded query/stream
+window and sends one batch. The counter benchmark and `ViewerSink` use the
+bulk receive API. Default word-channel capacity is eight envelopes in the
+library and desktop compiler, so batched queues remain bounded; explicit
+buffer-node/custom capacities remain available. File inputs remain
+index-preferred because the warmed indexed path is now fastest, while live
+analyzers naturally negotiate packed streaming because they do not offer
+`EdgeQuery`.
+
+`ViewerSink` has an explicit `ViewerRetention` policy. The desktop default is
+`MaxEntries(1_000_000)` per lane. When a lane exceeds its limit it drops the
+oldest quarter in one operation and rebuilds the matching mipmap, avoiding a
+full-vector shift on every incoming batch. `Unlimited` remains available for
+an archival caller, and the benchmark exposes `--viewer-max-entries` so a
+bounded correctness fixture can retain every expected word. Tests cover
+batch flattening and bulk draining, static/shared/lossy senders, scalar
+SPI/UART/buffer/matcher compatibility, retention order, open annotation
+handling, and summary rebuilding.
+
+### Step 7 Result
+
+Warm 10-million-sample medians on the reference capture:
+
+| Mode | Sink | Before batching | After batching | Improvement | Words retained/count |
+| --- | --- | ---: | ---: | ---: | ---: |
+| indexed | count | 22.225 MSamples/s | 142.380 MSamples/s | 6.41x | 2,399,972 |
+| indexed | viewer | 3.510 MSamples/s | 140.616 MSamples/s | 40.06x | 2,399,972 |
+| stream | count | 28.195 MSamples/s | 94.995 MSamples/s | 3.37x | 2,399,972 |
+| stream | viewer | 2.933 MSamples/s | 96.210 MSamples/s | 32.80x | 2,399,972 |
+
+Every path now exceeds the 60 MSamples/s decoder target and the 55
+MSamples/s file-to-viewer target. The count and viewer fixtures preserve the
+exact 2,399,972-word result.
+
+A sustained 200-million-sample streamed viewer run using the production
+one-million-entry retention limit completed at 112.434 MSamples/s (2.249x
+real time), retained 869,396 newest annotations after chunked trimming, and
+peaked at 205.1 MB RSS / 199.6 MB footprint. For comparison, a four-million
+entry limit reached 104.280 MSamples/s but peaked at 367.1 MB RSS. Retention
+therefore bounds continuous operation without pushing the decode pipeline
+below real time.
+
 ## Delivery Order
 
 1. Benchmark harness and recorded baseline.

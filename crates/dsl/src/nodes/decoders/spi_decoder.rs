@@ -852,7 +852,10 @@ mod tests {
     }
 
     /// Test-only sink that collects everything sent to its single input.
-    struct CollectWords(std::sync::Arc<std::sync::Mutex<Vec<Word>>>);
+    struct CollectWords {
+        collected: std::sync::Arc<std::sync::Mutex<Vec<Word>>>,
+        buffer: VecDeque<Word>,
+    }
 
     impl ProcessNode for CollectWords {
         fn name(&self) -> &str {
@@ -869,13 +872,12 @@ mod tests {
             vec![PortSchema::new::<Word>("data", 0, PortDirection::Input)]
         }
         fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
-            let mut buf = VecDeque::new();
             let mut recv = inputs
                 .first()
-                .and_then(|p| p.get::<Word>(&mut buf))
+                .and_then(|p| p.get::<Word>(&mut self.buffer))
                 .ok_or_else(|| WorkError::NodeError("Missing collector input".into()))?;
             let item = recv.recv()?;
-            self.0.lock().unwrap().push(item);
+            self.collected.lock().unwrap().push(item);
             Ok(1)
         }
     }
@@ -906,7 +908,13 @@ mod tests {
         }
         pipeline.add_process("spi", decoder).unwrap();
         pipeline
-            .add_process("collect", CollectWords(collected.clone()))
+            .add_process(
+                "collect",
+                CollectWords {
+                    collected: collected.clone(),
+                    buffer: VecDeque::new(),
+                },
+            )
             .unwrap();
 
         pipeline.connect("source", "ch7", "spi", "clk").unwrap();

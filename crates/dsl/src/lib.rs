@@ -63,9 +63,9 @@ pub use nodes::logic::{
     WordMatcher,
 };
 pub use nodes::sinks::{
-    Annotation, AnnotationFold, BinaryFileWriter, DerivedLane, DerivedLaneData, DerivedLanes,
-    DigitalFold, LaneSummary, MarkerFold, TextFileWriter, TgckRecorder, ViewerLaneKind, ViewerSink,
-    WriteWidth,
+    Annotation, AnnotationFold, BinaryFileWriter, DEFAULT_VIEWER_MAX_ENTRIES, DerivedLane,
+    DerivedLaneData, DerivedLanes, DigitalFold, LaneSummary, MarkerFold, TextFileWriter,
+    TgckRecorder, ViewerLaneKind, ViewerRetention, ViewerSink, WriteWidth,
 };
 pub use runtime::derived_index::{AppendOnlyMipmap, LaneFold, MipmapRecord};
 

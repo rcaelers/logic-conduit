@@ -146,26 +146,26 @@ impl ProcessNode for ParallelDecoder {
         // path (an SR latch / logic gate) whose producer only streams,
         // but declares EdgeQuery too so that a graph wiring it straight
         // to a raw channel gets point queries instead of a stream.
-        let indexed_protocols = vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream];
+        let input_protocols = vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream];
 
         let mut schemas = Vec::new();
 
         // Block inputs first
         schemas.push(
             PortSchema::new::<SampleBlock>("strobe", 0, PortDirection::Input)
-                .with_protocols(indexed_protocols.clone()),
+                .with_protocols(input_protocols.clone()),
         );
 
         for i in 0..self.num_data_bits {
             schemas.push(
                 PortSchema::new::<SampleBlock>(format!("d{}", i), 1 + i, PortDirection::Input)
-                    .with_protocols(indexed_protocols.clone()),
+                    .with_protocols(input_protocols.clone()),
             );
         }
 
         schemas.push(
             PortSchema::new::<SampleBlock>("cs", 1 + self.num_data_bits, PortDirection::Input)
-                .with_protocols(indexed_protocols.clone()),
+                .with_protocols(input_protocols.clone()),
         );
 
         // Edge input last
@@ -175,7 +175,7 @@ impl ProcessNode for ParallelDecoder {
                 1 + self.num_data_bits + 1,
                 PortDirection::Input,
             )
-            .with_protocols(indexed_protocols),
+            .with_protocols(input_protocols),
         );
 
         schemas
@@ -505,6 +505,9 @@ impl ParallelDecoder {
         }
 
         let mut words_emitted = 0u64;
+        let mut word_batch = output
+            .as_ref()
+            .map(|_| Vec::with_capacity(buffers.eligible_positions.len()));
         for (trigger_index, &position) in buffers.eligible_positions.iter().enumerate() {
             if buffers.reset_before[trigger_index] {
                 assembly.cycles = 0;
@@ -533,12 +536,12 @@ impl ParallelDecoder {
                 continue;
             }
 
-            if let Some(output) = &output {
-                output.send(Word::spanning(
+            if let Some(batch) = &mut word_batch {
+                batch.push(Word::spanning(
                     assembly.value,
                     assembly.first_ts,
                     timestamp_ns.saturating_sub(assembly.first_ts),
-                ))?;
+                ));
             }
             assembly.value = 0;
             assembly.cycles = 0;
@@ -556,6 +559,11 @@ impl ParallelDecoder {
         self.assembly_value = assembly.value;
         self.assembly_cycles = assembly.cycles;
         self.assembly_first_ts = assembly.first_ts;
+        if let (Some(output), Some(batch)) = (&output, word_batch)
+            && !batch.is_empty()
+        {
+            output.send_batch(batch)?;
+        }
 
         debug!(
             "[{}] Query-mode batch {} done: {} words, {} total",
@@ -722,6 +730,9 @@ impl ParallelDecoder {
             .saturating_add(Self::STREAM_SAMPLES_PER_CALL)
             .min(num_samples);
         let mut words_emitted = 0u64;
+        let mut word_batch = output
+            .as_ref()
+            .map(|_| Vec::with_capacity(window_end - window_start));
         let mut last_strobe_value = self.last_strobe_value;
         let mut assembly_value = self.assembly_value;
         let mut assembly_cycles = self.assembly_cycles;
@@ -859,8 +870,8 @@ impl ParallelDecoder {
                 assembly_value = 0;
                 assembly_cycles = 0;
 
-                if let Some(output) = &output {
-                    output.send(word)?;
+                if let Some(batch) = &mut word_batch {
+                    batch.push(word);
                 }
                 words_emitted += 1;
             }
@@ -883,6 +894,11 @@ impl ParallelDecoder {
             blocks.data.clear();
             blocks.cs = None;
             blocks.offset = 0;
+        }
+        if let (Some(output), Some(batch)) = (&output, word_batch)
+            && !batch.is_empty()
+        {
+            output.send_batch(batch)?;
         }
 
         if self.work_call_count.is_multiple_of(10) || words_emitted > 0 {
@@ -913,6 +929,10 @@ mod tests {
         assert_eq!(decoder.cs_polarity, CsPolarity::ActiveLow);
         // Block inputs: strobe + 8 data + cs = 10, Edge input: enable = 1, Total = 11
         assert_eq!(decoder.num_inputs(), 11);
+        assert_eq!(
+            decoder.input_schema()[0].protocols,
+            vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]
+        );
     }
 
     fn block_from_bits(bits: &[bool]) -> SampleBlock {
@@ -938,6 +958,18 @@ mod tests {
             "pd".to_string(),
             name.to_string(),
         )
+    }
+
+    fn collect_messages<T>(receiver: crossbeam_channel::Receiver<ChannelMessage<T>>) -> Vec<T> {
+        let mut collected = Vec::new();
+        for message in receiver.try_iter() {
+            match message {
+                ChannelMessage::Sample(item) => collected.push(item),
+                ChannelMessage::Batch(items) => collected.extend(items),
+                ChannelMessage::EndOfStream => {}
+            }
+        }
+        collected
     }
 
     /// 4-bit bus, strobe rising at positions 1,5,9,13, bus values 1,2,3,4.
@@ -970,13 +1002,7 @@ mod tests {
                 Err(e) => panic!("unexpected error: {e}"),
             }
         }
-        out_rx
-            .try_iter()
-            .filter_map(|m| match m {
-                ChannelMessage::Sample(w) => Some(w),
-                _ => None,
-            })
-            .collect()
+        collect_messages(out_rx)
     }
 
     #[test]
@@ -1064,13 +1090,7 @@ mod tests {
                 Err(error) => panic!("unexpected error: {error}"),
             }
         }
-        out_rx
-            .try_iter()
-            .filter_map(|message| match message {
-                ChannelMessage::Sample(word) => Some(word),
-                _ => None,
-            })
-            .collect()
+        collect_messages(out_rx)
     }
 
     #[test]
@@ -1320,13 +1340,7 @@ mod tests {
             decoder.work(&inputs, &outputs),
             Err(WorkError::Shutdown)
         ));
-        let words: Vec<_> = out_rx
-            .try_iter()
-            .filter_map(|message| match message {
-                ChannelMessage::Sample(word) => Some(word),
-                _ => None,
-            })
-            .collect();
+        let words = collect_messages(out_rx);
         assert_eq!(words.len(), 1);
         assert_eq!(words[0].value, 0b11);
         assert_eq!(words[0].timestamp_ns, 5);
@@ -1387,13 +1401,7 @@ mod tests {
                 Err(e) => panic!("unexpected error: {e}"),
             }
         }
-        out_rx
-            .try_iter()
-            .filter_map(|m| match m {
-                ChannelMessage::Sample(w) => Some(w),
-                _ => None,
-            })
-            .collect()
+        collect_messages(out_rx)
     }
 
     /// A long gated-off stretch makes no channel calls, so a `work()` call
@@ -1500,7 +1508,10 @@ mod tests {
     }
 
     /// Test-only sink that collects everything sent to its single input.
-    struct CollectWords(Arc<std::sync::Mutex<Vec<Word>>>);
+    struct CollectWords {
+        collected: Arc<std::sync::Mutex<Vec<Word>>>,
+        buffer: VecDeque<Word>,
+    }
 
     impl ProcessNode for CollectWords {
         fn name(&self) -> &str {
@@ -1517,13 +1528,12 @@ mod tests {
             vec![PortSchema::new::<Word>("data", 0, PortDirection::Input)]
         }
         fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
-            let mut buf = VecDeque::new();
             let mut recv = inputs
                 .first()
-                .and_then(|p| p.get::<Word>(&mut buf))
+                .and_then(|p| p.get::<Word>(&mut self.buffer))
                 .ok_or_else(|| WorkError::NodeError("Missing collector input".into()))?;
             let item = recv.recv()?;
-            self.0.lock().unwrap().push(item);
+            self.collected.lock().unwrap().push(item);
             Ok(1)
         }
     }
@@ -1562,7 +1572,13 @@ mod tests {
         }
         pipeline.add_process("decoder", decoder).unwrap();
         pipeline
-            .add_process("collect", CollectWords(collected.clone()))
+            .add_process(
+                "collect",
+                CollectWords {
+                    collected: collected.clone(),
+                    buffer: VecDeque::new(),
+                },
+            )
             .unwrap();
 
         pipeline

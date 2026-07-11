@@ -117,10 +117,11 @@ impl PortValue for Word {
     fn kind_name() -> &'static str {
         "Word"
     }
-    // Uses the trait default (100) — see the buffer policy in
-    // `docs/APP_DESIGN.md`: word-shaped kinds no longer get a
-    // special-cased large buffer to silently absorb skew between branches;
-    // a graph that genuinely needs that inserts an explicit `Buffer` node.
+    fn buffer_size(_producer_is_source: bool) -> usize {
+        // Capacity counts envelopes; a parallel-decoder envelope can carry
+        // up to one full work-window batch.
+        8
+    }
 }
 
 impl PortValue for Trigger {

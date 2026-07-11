@@ -12,8 +12,8 @@ mod native {
     use dsl::runtime::{EdgeQuery, ProtocolKind};
     use dsl::{
         CsPolarity, DerivedLaneData, DerivedLanes, DslFileSource, InputPort, OutputPort,
-        ParallelDecoder, Pipeline, PortSchema, ProcessNode, StrobeMode, ViewerLaneKind, ViewerSink,
-        Word, WorkError, WorkResult,
+        ParallelDecoder, Pipeline, PortSchema, ProcessNode, StrobeMode, ViewerLaneKind,
+        ViewerRetention, ViewerSink, Word, WorkError, WorkResult,
     };
     use std::collections::VecDeque;
     use std::path::PathBuf;
@@ -110,6 +110,10 @@ mod native {
         /// Crossbeam buffer capacity for each pipeline connection.
         #[arg(long, default_value_t = 1_000)]
         buffer: usize,
+
+        /// Maximum retained annotations for the viewer sink.
+        #[arg(long, default_value_t = 4_000_000)]
+        viewer_max_entries: usize,
     }
 
     struct ForceStreamOutput<N>(N);
@@ -170,7 +174,7 @@ mod native {
     }
 
     impl CountWords {
-        const DRAIN_BATCH: usize = 4_096;
+        const DRAIN_BATCH: usize = 65_536;
 
         fn new(count: Arc<AtomicU64>) -> Self {
             Self {
@@ -204,11 +208,14 @@ mod native {
                 .and_then(|port| port.get::<Word>(&mut self.buffer))
                 .ok_or_else(|| WorkError::NodeError("missing word input".to_string()))?;
 
-            input.recv()?;
-            let mut received = 1usize;
-            while received < Self::DRAIN_BATCH && input.try_recv().is_ok() {
-                received += 1;
-            }
+            let mut batch = Vec::with_capacity(Self::DRAIN_BATCH);
+            let received = match input.try_recv_many(&mut batch, Self::DRAIN_BATCH) {
+                Ok(received) => received,
+                Err(crossbeam_channel::TryRecvError::Empty) => return Ok(0),
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    return Err(WorkError::Shutdown);
+                }
+            };
             self.count.fetch_add(received as u64, Ordering::Relaxed);
             Ok(received)
         }
@@ -231,7 +238,20 @@ mod native {
             let capture_seconds = self.samples as f64 / self.samplerate_hz;
             let msamples_per_second = self.samples as f64 / seconds / 1_000_000.0;
             let realtime = capture_seconds / seconds;
-            if self.words_measured {
+            if matches!(self.sink, SinkKind::Viewer) {
+                println!(
+                    "mode={:?} sink={:?} samples={} words_retained={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3}",
+                    self.mode,
+                    self.sink,
+                    self.samples,
+                    self.words,
+                    self.setup.as_secs_f64(),
+                    seconds,
+                    capture_seconds,
+                    msamples_per_second,
+                    realtime,
+                );
+            } else if self.words_measured {
                 let mwords_per_second = self.words as f64 / seconds / 1_000_000.0;
                 println!(
                     "mode={:?} sink={:?} samples={} words={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} MWords_s={:.3} realtime_x={:.3}",
@@ -300,7 +320,9 @@ mod native {
                 let store = DerivedLanes::new();
                 pipeline.add_process(
                     "sink",
-                    ViewerSink::new(store.clone()).with_lane(ViewerLaneKind::Words, "parallel"),
+                    ViewerSink::new(store.clone())
+                        .with_retention(ViewerRetention::MaxEntries(args.viewer_max_entries.max(1)))
+                        .with_lane(ViewerLaneKind::Words, "parallel"),
                 )?;
                 viewer_store = Some(store);
                 sink_port = Some("in0");
@@ -422,6 +444,7 @@ mod native {
             assert_eq!(args.data, vec![2, 4, 6]);
             assert_eq!(args.cs, Some(8));
             assert!(matches!(args.cs_polarity, BenchCsPolarity::ActiveLow));
+            assert_eq!(args.viewer_max_entries, 4_000_000);
         }
 
         #[test]

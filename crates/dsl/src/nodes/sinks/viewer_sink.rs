@@ -16,13 +16,30 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 /// the idle gap to the next one. Words that carry a real duration (SPI,
 /// UART) are stored with their true extent and never inferred.
 pub const MAX_ANNOTATION_NS: u64 = 1_000_000;
+pub const DEFAULT_VIEWER_MAX_ENTRIES: usize = 1_000_000;
 
 /// Most items one lane drains from its channel per `work()` call. Bounds how
 /// long one call holds `DerivedLanes`' write lock and, more importantly,
 /// stops `ViewerSink` from racing a fast producer to keep its channel
 /// perpetually empty — a channel that's allowed to actually fill is what
 /// lets its `Block` overflow policy engage and slow the producer down.
-const DRAIN_BATCH_SIZE: usize = 256;
+const DRAIN_BATCH_SIZE: usize = 65_536;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewerRetention {
+    Unlimited,
+    MaxEntries(usize),
+}
+
+impl ViewerRetention {
+    fn trim_target(self, len: usize) -> Option<usize> {
+        let Self::MaxEntries(max) = self else {
+            return None;
+        };
+        let max = max.max(1);
+        (len > max).then_some((max - max / 4).max(1))
+    }
+}
 
 /// A decoded word drawn as a labeled box. The label is formatted at render
 /// time from `value` — storing strings per word would multiply the memory
@@ -220,7 +237,17 @@ impl DerivedLanes {
     /// once per `ViewerSink::work()` invocation per lane, rather than once
     /// per item, so a burst of decoded entries doesn't take (and contend
     /// the UI thread's `read()` for) the lock once per item.
+    #[cfg(test)]
     fn append_digital_batch(&self, lane: usize, samples: impl IntoIterator<Item = Sample>) {
+        self.append_digital_batch_retained(lane, samples, ViewerRetention::Unlimited);
+    }
+
+    fn append_digital_batch_retained(
+        &self,
+        lane: usize,
+        samples: impl IntoIterator<Item = Sample>,
+        retention: ViewerRetention,
+    ) {
         let mut lanes = self.inner.write().unwrap();
         let Some(lane) = lanes.get_mut(lane) else {
             return;
@@ -234,10 +261,25 @@ impl DerivedLanes {
             summary.push(&sample);
             existing.push(sample);
         }
+        if let Some(target) = retention.trim_target(existing.len()) {
+            existing.drain(..existing.len() - target);
+            *summary = AppendOnlyMipmap::new();
+            summary.extend(existing.iter());
+        }
     }
 
     /// Items are `(start_ns, duration_ns, value)` — [`Word`]'s shape.
+    #[cfg(test)]
     fn append_word_batch(&self, lane: usize, words: impl IntoIterator<Item = (u64, u64, u64)>) {
+        self.append_word_batch_retained(lane, words, ViewerRetention::Unlimited);
+    }
+
+    fn append_word_batch_retained(
+        &self,
+        lane: usize,
+        words: impl IntoIterator<Item = (u64, u64, u64)>,
+        retention: ViewerRetention,
+    ) {
         let mut lanes = self.inner.write().unwrap();
         let Some(lane) = lanes.get_mut(lane) else {
             return;
@@ -276,9 +318,28 @@ impl DerivedLanes {
             }
             annotations.push(annotation);
         }
+        if let Some(target) = retention.trim_target(annotations.len()) {
+            annotations.drain(..annotations.len() - target);
+            *summary = AppendOnlyMipmap::new();
+            summary.extend(
+                annotations
+                    .iter()
+                    .filter(|annotation| annotation.end_ns != annotation.start_ns),
+            );
+        }
     }
 
+    #[cfg(test)]
     fn append_marker_batch(&self, lane: usize, timestamps: impl IntoIterator<Item = u64>) {
+        self.append_marker_batch_retained(lane, timestamps, ViewerRetention::Unlimited);
+    }
+
+    fn append_marker_batch_retained(
+        &self,
+        lane: usize,
+        timestamps: impl IntoIterator<Item = u64>,
+        retention: ViewerRetention,
+    ) {
         let mut lanes = self.inner.write().unwrap();
         let Some(lane) = lanes.get_mut(lane) else {
             return;
@@ -291,6 +352,11 @@ impl DerivedLanes {
         for timestamp_ns in timestamps {
             summary.push(&timestamp_ns);
             markers.push(timestamp_ns);
+        }
+        if let Some(target) = retention.trim_target(markers.len()) {
+            markers.drain(..markers.len() - target);
+            *summary = AppendOnlyMipmap::new();
+            summary.extend(markers.iter());
         }
     }
 }
@@ -331,6 +397,7 @@ pub struct ViewerSink {
     name: String,
     store: DerivedLanes,
     lanes: Vec<Lane>,
+    retention: ViewerRetention,
 }
 
 impl ViewerSink {
@@ -339,11 +406,17 @@ impl ViewerSink {
             name: "viewer".to_string(),
             store,
             lanes: Vec::new(),
+            retention: ViewerRetention::MaxEntries(DEFAULT_VIEWER_MAX_ENTRIES),
         }
     }
 
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
+        self
+    }
+
+    pub fn with_retention(mut self, retention: ViewerRetention) -> Self {
+        self.retention = retention;
         self
     }
 
@@ -442,16 +515,10 @@ impl ProcessNode for ViewerSink {
                         lane.eos = true;
                         continue;
                     };
-                    let mut batch: Vec<$ty> = Vec::new();
-                    while batch.len() < DRAIN_BATCH_SIZE {
-                        match receiver.try_recv() {
-                            Ok(item) => batch.push(item),
-                            Err(TryRecvError::Empty) => break,
-                            Err(TryRecvError::Disconnected) => {
-                                lane.eos = true;
-                                break;
-                            }
-                        }
+                    let mut batch: Vec<$ty> = Vec::with_capacity(DRAIN_BATCH_SIZE);
+                    match receiver.try_recv_many(&mut batch, DRAIN_BATCH_SIZE) {
+                        Ok(_) | Err(TryRecvError::Empty) => {}
+                        Err(TryRecvError::Disconnected) => lane.eos = true,
                     }
                     batch
                 }};
@@ -462,18 +529,23 @@ impl ProcessNode for ViewerSink {
                     let batch = drain_batch!(Sample, buffer);
                     progress += batch.len();
                     if !batch.is_empty() {
-                        store.append_digital_batch(lane.store_index, batch);
+                        store.append_digital_batch_retained(
+                            lane.store_index,
+                            batch,
+                            self.retention,
+                        );
                     }
                 }
                 LaneBuffer::Words(buffer) => {
                     let batch = drain_batch!(Word, buffer);
                     progress += batch.len();
                     if !batch.is_empty() {
-                        store.append_word_batch(
+                        store.append_word_batch_retained(
                             lane.store_index,
                             batch
                                 .into_iter()
                                 .map(|w| (w.timestamp_ns, w.duration_ns, w.value)),
+                            self.retention,
                         );
                     }
                 }
@@ -481,9 +553,10 @@ impl ProcessNode for ViewerSink {
                     let batch = drain_batch!(Trigger, buffer);
                     progress += batch.len();
                     if !batch.is_empty() {
-                        store.append_marker_batch(
+                        store.append_marker_batch_retained(
                             lane.store_index,
                             batch.into_iter().map(|item| item.timestamp_ns),
+                            self.retention,
                         );
                     }
                 }
@@ -767,5 +840,42 @@ mod tests {
         };
         assert_eq!(markers.len(), ENTRIES as usize);
         assert_eq!(markers.last(), Some(&(ENTRIES - 1)));
+    }
+
+    #[test]
+    fn viewer_retention_drops_oldest_chunk_and_rebuilds_summary() {
+        let store = DerivedLanes::new();
+        let mut sink = ViewerSink::new(store.clone())
+            .with_retention(ViewerRetention::MaxEntries(4))
+            .with_lane(ViewerLaneKind::Words, "words");
+        let wd = Watchdog::new();
+        let (tx, rx) = bounded::<ChannelMessage<Word>>(2);
+        tx.send(ChannelMessage::Batch(
+            (0..6).map(|index| Word::new(index, index * 100)).collect(),
+        ))
+        .unwrap();
+        drop(tx);
+
+        run_sink(
+            &mut sink,
+            vec![InputPort::new_with_watchdog(rx, &wd, "viewer", "in0")],
+        );
+
+        let lanes = store.read();
+        let DerivedLaneData::Annotations(annotations) = &lanes[0].data else {
+            panic!("expected annotations");
+        };
+        assert_eq!(
+            annotations
+                .iter()
+                .map(|annotation| annotation.value)
+                .collect::<Vec<_>>(),
+            vec![3, 4, 5]
+        );
+        let LaneSummary::Annotations(summary) = &lanes[0].summary else {
+            panic!("expected annotation summary");
+        };
+        assert_eq!(summary.len(), 2, "the newest annotation remains open");
+        assert_eq!(summary.sampled_window(0, 1_000, 10)[0].start_ns, 300);
     }
 }

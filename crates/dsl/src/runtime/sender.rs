@@ -32,6 +32,8 @@ use super::watchdog::{OperationGuard, WatchdogHandle};
 pub enum ChannelMessage<T> {
     /// A data sample
     Sample(T),
+    /// Multiple ordered samples transported in one channel operation.
+    Batch(Vec<T>),
     /// End-of-stream marker — no more data will be sent
     EndOfStream,
 }
@@ -198,17 +200,31 @@ impl<T: Clone + Send> SharedSenders<T> {
     /// after it is released, so a stalled consumer never blocks a
     /// concurrent subscribe/unsubscribe.
     fn send(&self, value: &T) -> Result<(), ()> {
+        self.send_message(ChannelMessage::Sample(value.clone()), Some(value))
+    }
+
+    fn send_batch(&self, values: &[T]) -> Result<(), ()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        self.send_message(ChannelMessage::Batch(values.to_vec()), values.last())
+    }
+
+    fn send_message(&self, message: ChannelMessage<T>, sticky_last: Option<&T>) -> Result<(), ()> {
         struct BlockedSend<T> {
             id: u64,
             tx: CrossbeamSender<ChannelMessage<T>>,
             deadline: Option<Duration>,
+            message: ChannelMessage<T>,
         }
 
         let mut blocked: Vec<BlockedSend<T>> = Vec::new();
         {
             let mut inner = self.inner.lock().unwrap();
-            if inner.sticky {
-                inner.last = Some(value.clone());
+            if inner.sticky
+                && let Some(last) = sticky_last
+            {
+                inner.last = Some(last.clone());
             }
             let mut dead: Vec<u64> = Vec::new();
             for subscriber in &mut inner.subscribers {
@@ -220,29 +236,34 @@ impl<T: Clone + Send> SharedSenders<T> {
                             // Still full: the new value supersedes it.
                             let _ = pending;
                         }
-                        Err(TrySendError::Full(_)) => unreachable!("we only send Sample"),
+                        Err(TrySendError::Full(_)) => unreachable!("pending values are scalar"),
                         Err(TrySendError::Disconnected(_)) => {
                             dead.push(subscriber.id);
                             continue;
                         }
                     }
                 }
-                match subscriber
-                    .tx
-                    .try_send(ChannelMessage::Sample(value.clone()))
-                {
+                match subscriber.tx.try_send(message.clone()) {
                     Ok(()) => {}
-                    Err(TrySendError::Full(_)) => match subscriber.policy {
+                    Err(TrySendError::Full(message)) => match subscriber.policy {
                         OverflowPolicy::Block => blocked.push(BlockedSend {
                             id: subscriber.id,
                             tx: subscriber.tx.clone(),
                             deadline: None,
+                            message,
                         }),
-                        OverflowPolicy::Lossy => subscriber.pending = Some(value.clone()),
+                        OverflowPolicy::Lossy => {
+                            subscriber.pending = match message {
+                                ChannelMessage::Sample(value) => Some(value),
+                                ChannelMessage::Batch(values) => values.into_iter().last(),
+                                ChannelMessage::EndOfStream => None,
+                            };
+                        }
                         OverflowPolicy::Disconnect(deadline) => blocked.push(BlockedSend {
                             id: subscriber.id,
                             tx: subscriber.tx.clone(),
                             deadline: Some(deadline),
+                            message,
                         }),
                     },
                     Err(TrySendError::Disconnected(_)) => dead.push(subscriber.id),
@@ -256,15 +277,13 @@ impl<T: Clone + Send> SharedSenders<T> {
         for send in blocked {
             match send.deadline {
                 None => {
-                    if send.tx.send(ChannelMessage::Sample(value.clone())).is_err() {
+                    if send.tx.send(send.message).is_err() {
                         let mut inner = self.inner.lock().unwrap();
                         inner.subscribers.retain(|s| s.id != send.id);
                     }
                 }
                 Some(deadline) => {
-                    let result = send
-                        .tx
-                        .send_timeout(ChannelMessage::Sample(value.clone()), deadline);
+                    let result = send.tx.send_timeout(send.message, deadline);
                     if result.is_err() {
                         let mut inner = self.inner.lock().unwrap();
                         inner.subscribers.retain(|s| s.id != send.id);
@@ -454,6 +473,47 @@ impl<T: Clone + Send> Sender<T> {
         Ok(())
     }
 
+    /// Sends an ordered batch in one channel operation. `Receiver<T>`
+    /// transparently flattens the envelope for scalar consumers.
+    pub fn send_batch(&self, values: Vec<T>) -> Result<(), SendError<Vec<T>>> {
+        if values.is_empty() || (self.destinations.is_empty() && self.shared.is_none()) {
+            return Ok(());
+        }
+
+        let _guard = self.watchdog_handle.as_ref().map(OperationGuard::new);
+        if let Some(shared) = &self.shared {
+            let _ = shared.send_batch(&values);
+        }
+        if self.destinations.is_empty() {
+            return Ok(());
+        }
+
+        let mut remaining = Some(values);
+        let mut any_success = false;
+        let mut last_error = None;
+        let last_destination = self.destinations.len() - 1;
+        for (index, destination) in self.destinations.iter().enumerate() {
+            let batch = if index == last_destination {
+                remaining
+                    .take()
+                    .expect("batch retained for last destination")
+            } else {
+                remaining.as_ref().expect("batch still available").clone()
+            };
+            match destination.tx.send(ChannelMessage::Batch(batch)) {
+                Ok(()) => any_success = true,
+                Err(SendError(ChannelMessage::Batch(batch))) => {
+                    last_error = Some(SendError(batch));
+                }
+                Err(SendError(_)) => unreachable!("send_batch only sends Batch envelopes"),
+            }
+        }
+        if !any_success && let Some(error) = last_error {
+            return Err(error);
+        }
+        Ok(())
+    }
+
     /// Signal end-of-stream to all destinations
     ///
     /// Sends `ChannelMessage::EndOfStream` to each destination, signaling that
@@ -535,6 +595,7 @@ mod shared_tests {
         rx.try_iter()
             .filter_map(|message| match message {
                 ChannelMessage::Sample(sample) => Some(sample),
+                ChannelMessage::Batch(_) => None,
                 ChannelMessage::EndOfStream => None,
             })
             .collect()
@@ -565,6 +626,38 @@ mod shared_tests {
             drain(&late),
             vec![Sample::new(false, 200), Sample::new(true, 300)]
         );
+    }
+
+    #[test]
+    fn static_and_shared_senders_preserve_batch_envelopes() {
+        let (tx, rx) = crossbeam_channel::bounded(2);
+        Sender::new(vec![tx]).send_batch(vec![1, 2, 3]).unwrap();
+        assert!(matches!(
+            rx.recv(),
+            Ok(ChannelMessage::Batch(values)) if values == vec![1, 2, 3]
+        ));
+
+        let shared = SharedSenders::<u32>::new(false);
+        let sender = Sender::from_shared(shared.clone());
+        let (_, rx) = shared.subscribe(2, OverflowPolicy::Block);
+        sender.send_batch(vec![4, 5, 6]).unwrap();
+        assert!(matches!(
+            rx.recv(),
+            Ok(ChannelMessage::Batch(values)) if values == vec![4, 5, 6]
+        ));
+    }
+
+    #[test]
+    fn lossy_batch_coalesces_to_its_latest_value() {
+        let shared = SharedSenders::<u32>::new(false);
+        let sender = Sender::from_shared(shared.clone());
+        let (_, rx) = shared.subscribe(1, OverflowPolicy::Lossy);
+
+        sender.send(1).unwrap();
+        sender.send_batch(vec![2, 3, 4]).unwrap();
+        assert!(matches!(rx.recv(), Ok(ChannelMessage::Sample(1))));
+        sender.send(5).unwrap();
+        assert!(matches!(rx.recv(), Ok(ChannelMessage::Sample(4))));
     }
 
     #[test]

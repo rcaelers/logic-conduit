@@ -15,6 +15,7 @@ use std::sync::Arc;
 use tracing::{debug, info};
 
 const DEFAULT_SAMPLE_BLOCK_BUFFER_SIZE: usize = 2;
+const DEFAULT_WORD_BUFFER_SIZE: usize = 8;
 
 /// Cached per-node schema data, computed once in `add_process` while the
 /// node is still locally owned. Each `PortSchema` carries its own
@@ -207,6 +208,8 @@ impl Pipeline {
             if negotiated_type == TypeId::of::<SampleBlock>() {
                 self.default_buffer_size
                     .min(DEFAULT_SAMPLE_BLOCK_BUFFER_SIZE)
+            } else if negotiated_type == TypeId::of::<crate::runtime::events::Word>() {
+                self.default_buffer_size.min(DEFAULT_WORD_BUFFER_SIZE)
             } else {
                 self.default_buffer_size
             }
