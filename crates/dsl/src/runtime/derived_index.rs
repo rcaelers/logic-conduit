@@ -1,5 +1,5 @@
 //! Incremental multi-resolution summary index for derived lanes
-//! (`ANALYSIS_PIPELINE_DESIGN.md` §4.9), so the viewer never has to rescan
+//! (`docs/LOGIC_ANALYZER_VIEWER_DESIGN.md`), so the viewer never has to rescan
 //! millions of raw entries per frame just to render (or measure) a
 //! zoomed-out window.
 //!

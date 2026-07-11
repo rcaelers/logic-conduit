@@ -1,7 +1,7 @@
 //! Control-path logic nodes
 //!
 //! Small composable nodes that turn decoded word streams into control levels
-//! (see `ANALYSIS_PIPELINE_DESIGN.md` §4.2–§4.7):
+//! (see `docs/PIPELINE_DESIGN.md`):
 //!
 //! - [`WordMatcher`] — word stream → [`Trigger`](crate::runtime::Trigger)
 //!   events on pattern match

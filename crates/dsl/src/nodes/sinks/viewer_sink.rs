@@ -1,6 +1,6 @@
 //! Viewer sink: pushes decoded streams into a shared lane store the UI
 //! renders as extra rows under the raw channels
-//! (`ANALYSIS_PIPELINE_DESIGN.md` §4.9).
+//! (`docs/LOGIC_ANALYZER_VIEWER_DESIGN.md`).
 
 use crate::runtime::derived_index::{AppendOnlyMipmap, LaneFold, MipmapRecord};
 use crate::runtime::events::{Trigger, Word};
@@ -296,7 +296,7 @@ impl DerivedLanes {
 }
 
 /// The three shapes a viewer lane's data can take
-/// (`ANALYSIS_PIPELINE_DESIGN.md` §4.9) — every decoder's output reduces to
+/// (`docs/LOGIC_ANALYZER_VIEWER_DESIGN.md`) — every decoder's output reduces to
 /// one of these, so the viewer itself never needs to know which decoder
 /// produced a lane: a level stream (`Signal`), a stream of decoded values
 /// (`Words`, i.e. [`Word`]), or a stream of instantaneous events (`Trigger`).
@@ -325,7 +325,7 @@ struct Lane {
 /// stall a busy one — but each lane's channel is drained in bounded batches
 /// (`DRAIN_BATCH_SIZE`), not to exhaustion, so a channel that a producer is
 /// filling faster than this sink drains it stays full and the producer's
-/// own send genuinely blocks (`ANALYSIS_PIPELINE_DESIGN.md` §6.4) — real
+/// own send genuinely blocks (`docs/PIPELINE_DESIGN.md`, flow control) — real
 /// backpressure, not a silent drop once storage fills up.
 pub struct ViewerSink {
     name: String,
@@ -433,7 +433,7 @@ impl ProcessNode for ViewerSink {
             // Bounded, not drained to exhaustion: letting a burst fill this
             // lane's channel (rather than racing to empty it every call) is
             // what makes the channel's own bound + `Block` overflow policy
-            // (`ANALYSIS_PIPELINE_DESIGN.md` §6.4) actually apply real
+            // (`docs/PIPELINE_DESIGN.md`, flow control) actually apply real
             // backpressure to the producer instead of never engaging.
             macro_rules! drain_batch {
                 ($ty:ty, $buffer:expr) => {{

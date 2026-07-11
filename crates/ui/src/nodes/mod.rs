@@ -1,12 +1,12 @@
 //! Node definitions for the analysis-pipeline editor.
 //!
-//! Socket styling follows `ANALYSIS_PIPELINE_DESIGN.md` §3.2: the shape
+//! Socket styling follows `docs/APP_DESIGN.md`: the shape
 //! encodes how a value exists in time (■ static config, ● level stream,
 //! ◆ event stream) and the color encodes the payload family, shared across
 //! shapes (green logic, amber pulse, orange words, blue integer, rose text).
 //! Red is reserved for error feedback, grey for the wildcard.
 //!
-//! Prop placement follows §4.12: the node body carries sockets and the
+//! Prop placement follows `docs/APP_DESIGN.md`: the node body carries sockets and the
 //! controls someone tweaks while reading the graph; everything else lives in
 //! the properties panel (N).
 //!
@@ -60,7 +60,7 @@ pub use uart_demo_source::{UartDemoSource, UartDemoSourceState};
 pub use viewer::{Viewer, ViewerState};
 pub use word_matcher::{WordMatcher, WordMatcherState, default_match_op, default_trigger_at};
 
-// ── Stream socket types (§3.3) ───────────────────────────────────────────────
+// ── Stream socket types (`docs/APP_DESIGN.md`) ───────────────────────────────────────────────
 
 /// Logic level stream (`Sample` at runtime): defined at every instant.
 pub struct Signal;
@@ -206,7 +206,7 @@ pub fn build_registry() -> NodeTypeRegistry {
     registry
 }
 
-// ── Startup graph: the CCD capture pipeline (§1) ─────────────────────────────
+// ── Startup graph: the CCD capture pipeline ─────────────────────────────
 
 fn output_index(widget: &node_graph::NodeGraphWidget, node: node_graph::NodeId, name: &str) -> usize {
     widget.graph().nodes[&node]
@@ -242,7 +242,7 @@ fn connect(
     widget.graph_mut().add_connection(from_socket, to_socket);
 }
 
-/// Builds the CCD analysis pipeline of `ANALYSIS_PIPELINE_DESIGN.md` §1 as
+/// Builds the CCD analysis pipeline (`graphs/ccd_pipeline.json`) as
 /// the startup graph, wired for `_captures/wipneus5.dsl` (SPI cs=8 clk=7
 /// mosi=6; parallel strobe=10 (ACDK), data D0..D7 = ch 0..7).
 ///
@@ -318,7 +318,7 @@ pub fn populate_startup(widget: &mut node_graph::NodeGraphWidget) {
     decoder_state.sample_on.select("Both (DDR)");
     widget.set_node_state(decoder, serde_json::to_value(decoder_state).unwrap());
 
-    // Decoupling point (`ANALYSIS_PIPELINE_DESIGN.md` §5.3): the viewer's
+    // Decoupling point (`docs/APP_DESIGN.md`, buffer policy): the viewer's
     // own backpressure must not stall the file writer sharing this same
     // decoder output, so only the viewer branch gets an explicit buffer —
     // the writer stays directly connected to get full-rate, undelayed data.
@@ -504,7 +504,7 @@ mod tests {
         assert_eq!(loaded.graph().connections.len(), 29);
     }
 
-    /// Save/load round-trip (§7 Phase 6): serializing the graph to JSON and
+    /// Save/load round-trip: serializing the graph to JSON and
     /// restoring it through the registry (the File > Save/Load path) must
     /// compile to the same pipeline.
     #[test]

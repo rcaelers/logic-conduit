@@ -18,7 +18,7 @@
 //!   re-skinning table) is populated as a side effect of
 //!   [`Self::register_node`] walking that node's `inputs()`/`outputs()` —
 //!   there is deliberately no separate socket registry (see
-//!   `SOCKET_TYPE_DESIGN.md`'s no-global-cast-table stance).
+//!   `docs/NODE_GRAPH_DESIGN.md`'s no-global-cast-table stance).
 //! - A `PortValue` (e.g. a plugin's own stream payload marker) just needs
 //!   `impl PortValue for T`; `PortKind::of::<T>()` computes identity fresh
 //!   from `TypeId::of::<T>()` every call, nothing to precompute or cache.

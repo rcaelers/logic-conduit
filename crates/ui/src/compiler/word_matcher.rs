@@ -1,6 +1,6 @@
 //! `Word Matcher` builder — fires a trigger when a decoded word matches a
 //! pattern/mask. Works on any decoder's `Word` output, no decoder-specific
-//! knowledge needed (§5.4).
+//! knowledge needed (kind negotiation, `docs/APP_DESIGN.md`).
 
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_hex, parse_state};
 use crate::nodes;

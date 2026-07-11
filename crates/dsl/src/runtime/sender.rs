@@ -1,6 +1,6 @@
 //! Broadcast sender with watchdog monitoring for deadlock detection
 //!
-//! Two broadcast flavors coexist (design §6.1):
+//! Two broadcast flavors coexist (`docs/PIPELINE_DESIGN.md`):
 //!
 //! - **Static destinations** (`Sender::new`): the offline `Pipeline::build`
 //!   path. Endpoints move into node threads; teardown is the crossbeam
@@ -9,7 +9,7 @@
 //!   the live path. The list is owned by the `PipelineManager`, so a node
 //!   thread exiting does *not* close downstream channels, subscribers can be
 //!   added/removed mid-stream, and level channels prime late joiners with
-//!   the last value (the §3.1 contract extended to join time).
+//!   the last value (the level-stream contract extended to join time).
 
 use crossbeam_channel::{SendError, Sender as CrossbeamSender, TrySendError, bounded};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -36,7 +36,7 @@ pub enum ChannelMessage<T> {
     EndOfStream,
 }
 
-/// What a full subscriber buffer does to the producer (design §6.4).
+/// What a full subscriber buffer does to the producer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverflowPolicy {
     /// Block until the subscriber has room — lossless flow control
@@ -369,7 +369,7 @@ impl<T: Clone + Send> Sender<T> {
         // hand each destination to its own worker thread, so subscribers
         // added *after* the split are not seen by those threads. The live
         // compiler therefore treats new subscriptions directly on source
-        // ports as a full-restart edit (§6 deferred: per-block snapshots).
+        // ports as a full-restart edit (deferred: per-block snapshots).
         let shared_snapshot = self.shared.iter().flat_map(|shared| {
             let inner = shared.inner.lock().unwrap();
             inner

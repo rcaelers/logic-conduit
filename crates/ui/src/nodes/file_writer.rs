@@ -1,4 +1,4 @@
-//! `File Writer` node (§4.8).
+//! `File Writer` node.
 
 use super::{COLOR_OUTPUT, TextSavePath, Words};
 use egui::Color32;

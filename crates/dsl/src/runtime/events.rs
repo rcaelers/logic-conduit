@@ -1,7 +1,7 @@
 //! Event and level stream types for control-path channels
 //!
 //! Two kinds of stream flow between control nodes (see
-//! `ANALYSIS_PIPELINE_DESIGN.md` §3.1):
+//! `docs/PIPELINE_DESIGN.md`):
 //!
 //! - **Events** ([`Trigger`], [`Word`]): timestamped occurrences with no
 //!   value between occurrences. They can only be reacted to.

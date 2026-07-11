@@ -1,4 +1,4 @@
-//! `DSLogic U3Pro16` node (§4.10) — USB hardware capture source. No matching
+//! `DSLogic U3Pro16` node — USB hardware capture source. No matching
 //! `compiler` builder exists yet (there is no runtime driver wired up); the
 //! node is editable but not runnable.
 
@@ -11,7 +11,7 @@ use node_graph::{
 use serde::{Deserialize, Serialize};
 
 /// Selectable sample rates; the stream-mode channel-count constraint limits
-/// which are reachable (§4.10).
+/// which are reachable.
 const U3_RATES: &[(&str, u64)] = &[
     ("1 MHz", 1_000_000),
     ("2 MHz", 2_000_000),

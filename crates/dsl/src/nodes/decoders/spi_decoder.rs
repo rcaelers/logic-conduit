@@ -733,7 +733,7 @@ mod tests {
     /// MOSI and MISO are independent `Word` streams on independent output
     /// ports — the regression test for the bug this design fixes (the old
     /// single-`SpiTransfer`-port design could never actually deliver MISO
-    /// to a consumer; see `ANALYSIS_PIPELINE_DESIGN.md` and this file's
+    /// to a consumer; see `docs/PIPELINE_DESIGN.md` and this file's
     /// module doc). 4-bit words, MSB-first: MOSI = 0b1010, MISO = 0b0101,
     /// sampled on CLK's rising edge (Mode0).
     #[test]

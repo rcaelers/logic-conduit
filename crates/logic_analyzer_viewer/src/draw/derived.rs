@@ -4,7 +4,7 @@ use dsl::{Annotation, Sample};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
 impl LogicAnalyzerViewer {
-    // ── Derived lanes (§4.9) ─────────────────────────────────────────────────
+    // ── Derived lanes ─────────────────────────────────────────────────
     //
     // Content only — the label (name, badge) is drawn once for every row
     // kind by `draw_rows`, not here.

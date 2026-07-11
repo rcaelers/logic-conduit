@@ -1,4 +1,4 @@
-//! `SPI Decoder` node (§4.1).
+//! `SPI Decoder` node.
 
 use super::{COLOR_DECODERS, Signal, Words};
 use egui::Color32;

@@ -1,4 +1,4 @@
-//! `String Formatter` node (§4.7).
+//! `String Formatter` node.
 
 use super::{COLOR_LOGIC, Number, Text};
 use egui::Color32;

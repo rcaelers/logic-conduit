@@ -17,7 +17,7 @@ use super::edge_query::EdgeQuery;
 use std::sync::Arc;
 
 /// A configuration value delivered to a running node (live reconfiguration,
-/// design §6.2). Deliberately a tiny bespoke type: the runtime crate stays
+/// `docs/APP_DESIGN.md`). Deliberately a tiny bespoke type: the runtime crate stays
 /// serde-free and nodes match on plain fields.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfigValue {

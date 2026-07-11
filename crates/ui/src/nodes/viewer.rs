@@ -1,4 +1,4 @@
-//! `Viewer` node (§4.9).
+//! `Viewer` node.
 
 use super::{COLOR_OUTPUT, Signal, Trigger, Words};
 use egui::Color32;

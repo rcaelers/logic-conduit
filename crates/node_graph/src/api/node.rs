@@ -188,7 +188,7 @@ impl<S: 'static> PropDef<S> {
     }
 }
 
-/// A titled, collapsible group of props in the properties panel (§4.11):
+/// A titled, collapsible group of props in the properties panel:
 /// the home of low-frequency configuration that would bloat the node body.
 pub struct PanelSection<S> {
     pub title: &'static str,

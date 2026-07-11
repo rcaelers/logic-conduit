@@ -1,4 +1,4 @@
-//! `TGCK Recorder` node (§7 Phase 6).
+//! `TGCK Recorder` node.
 
 use super::{COLOR_OUTPUT, Signal, Text, Words};
 use egui::Color32;

@@ -1,4 +1,4 @@
-//! `UART Decoder` node (§4.13, single line).
+//! `UART Decoder` node (single line).
 
 use super::{COLOR_DECODERS, Signal, Trigger, Words};
 use egui::Color32;

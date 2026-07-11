@@ -21,7 +21,8 @@ pub trait PortValue: Send + Sync + Clone + 'static {
     /// Stable identity used in diagnostics (`PortKind`'s `Debug` output).
     fn kind_name() -> &'static str;
 
-    /// Channel buffer size (§5.3). `producer_is_source` is the compiled
+    /// Channel buffer size (`docs/APP_DESIGN.md`, buffer policy).
+    /// `producer_is_source` is the compiled
     /// edge's "producer is a graph source" fact, not a property of `Self` —
     /// only `Sample` cares. Default (100) matches every other existing
     /// kind's fixed size.
@@ -112,8 +113,8 @@ impl PortValue for Word {
     fn kind_name() -> &'static str {
         "Word"
     }
-    // Uses the trait default (100) — see §5.3 in
-    // `ANALYSIS_PIPELINE_DESIGN.md`: word-shaped kinds no longer get a
+    // Uses the trait default (100) — see the buffer policy in
+    // `docs/APP_DESIGN.md`: word-shaped kinds no longer get a
     // special-cased large buffer to silently absorb skew between branches;
     // a graph that genuinely needs that inserts an explicit `Buffer` node.
 }

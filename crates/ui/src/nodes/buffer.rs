@@ -1,4 +1,4 @@
-//! `Buffer` node (`ANALYSIS_PIPELINE_DESIGN.md` §5.3) — an explicit,
+//! `Buffer` node (`docs/PIPELINE_DESIGN.md`, flow control) — an explicit,
 //! user-placed decoupling point. Wires to/from anything (`AnySocket`); the
 //! payload kind it actually carries is picked explicitly via `kind`, not
 //! inferred — the compiler's kind negotiation has no way to express
@@ -44,7 +44,7 @@ impl NodeDef for Buffer {
     fn outputs() -> Vec<OutputDef<Self::State>> {
         // Stays visually `Any`-styled regardless of the resolved kind —
         // only inputs get visual type resolution today
-        // (`SOCKET_TYPE_DESIGN.md`: "the only polymorphic output is the
+        // (`docs/NODE_GRAPH_DESIGN.md`: "the only polymorphic output is the
         // reroute node's `Any`"). Cosmetic only.
         vec![OutputDef::new::<AnySocket>("Out")]
     }

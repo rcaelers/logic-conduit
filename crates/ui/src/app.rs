@@ -267,7 +267,7 @@ impl App {
         self.node_graph.clear_node_statuses();
         self.run_message = None;
 
-        // Fresh lane store per run: stale lanes vanish atomically (§5.5).
+        // Fresh lane store per run: stale lanes vanish atomically.
         let mut ctx = compiler::CompileCtx::default();
         self.logic_analyzer
             .set_derived_lanes(ctx.derived_lanes.clone());
@@ -281,7 +281,8 @@ impl App {
     }
 
     /// Drives the run forward and, periodically, diffs the edited graph
-    /// against it and applies what can be applied live (§6.5): taps, branch
+    /// against it and applies what can be applied live (`docs/APP_DESIGN.md`,
+    /// live editing): taps, branch
     /// removals, hot prop changes, in-place restarts. Edits that need a full
     /// restart leave the run untouched and say so.
     ///
@@ -305,7 +306,7 @@ impl App {
         }
         self.last_live_sync = now;
 
-        // Per-node progress in the headers (§7 Phase 6) — also after the
+        // Per-node progress in the headers — also after the
         // run finished, so the final counts stick.
         for (id, items) in run.progress() {
             let status = (items > 0).then(|| format_count(items));

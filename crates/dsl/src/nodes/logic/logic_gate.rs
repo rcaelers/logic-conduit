@@ -53,7 +53,7 @@ impl GateOp {
 /// consumed far past the other input's current position and late edges
 /// clamped en masse). The cost is lag, not deadlock: the output advances at
 /// the pace of the laggiest input, which is the accepted-lag model of the
-/// level-stream contract (§3.1).
+/// level-stream contract.
 ///
 /// An input whose connection negotiated the `EdgeQuery` protocol (e.g. a
 /// raw source channel wired straight into the gate) is never streamed at

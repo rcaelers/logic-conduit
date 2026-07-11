@@ -1,4 +1,4 @@
-//! `Binary Decoder` node (§4.5).
+//! `Binary Decoder` node.
 
 use super::{COLOR_DECODERS, Signal, Words};
 use egui::Color32;

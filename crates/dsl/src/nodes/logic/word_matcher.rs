@@ -146,7 +146,7 @@ impl ProcessNode for WordMatcher {
 
     /// Hot-appliable: `pattern` / `mask` (U64), `op`, and `trigger_at`.
     /// Takes effect for the next word; in-flight words already consumed
-    /// keep the old match result (accepted §6.2 semantics).
+    /// keep the old match result (accepted hot-reconfigure semantics).
     fn apply_config(
         &mut self,
         config: &crate::runtime::node::NodeConfig,

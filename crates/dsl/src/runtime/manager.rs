@@ -1,4 +1,4 @@
-//! Live pipeline supervisor (`ANALYSIS_PIPELINE_DESIGN.md` §6.1)
+//! Live pipeline supervisor (`docs/PIPELINE_DESIGN.md`, live supervision)
 //!
 //! Unlike [`Pipeline::build`](super::pipeline::Pipeline::build), which moves
 //! every channel endpoint into node threads and forgets them, the
@@ -53,7 +53,7 @@ pub struct NodeSpec {
     pub inputs: Vec<Option<InputSub>>,
 }
 
-/// Level streams (§3.1) get sticky lists: the last value primes late
+/// Level streams get sticky lists: the last value primes late
 /// joiners. Events (words, triggers, blocks) must not — replaying a stale
 /// event would fabricate history.
 fn is_level_type(type_id: TypeId) -> bool {

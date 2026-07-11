@@ -1,5 +1,5 @@
 //! `Buffer` builder — see `crates/ui/src/nodes/buffer.rs` and
-//! `ANALYSIS_PIPELINE_DESIGN.md` §5.3.
+//! the buffer policy in `docs/APP_DESIGN.md`.
 
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;

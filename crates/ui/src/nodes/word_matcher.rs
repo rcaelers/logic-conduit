@@ -1,4 +1,4 @@
-//! `Word Matcher` node (§4.2).
+//! `Word Matcher` node.
 
 use super::{COLOR_LOGIC, Signal, Trigger, Words};
 use egui::Color32;

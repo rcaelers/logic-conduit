@@ -26,7 +26,7 @@ impl SocketDef for AnySocket {
     }
 }
 
-// Builtin config sockets follow the graph-wide styling axes (design §3.2):
+// Builtin config sockets follow the graph-wide styling axes:
 // square = static config, and the hue is the payload family shared with the
 // stream types (green logic, blue integer, violet float, rose text, tan file).
 // Red is reserved for error feedback, grey for the wildcard.

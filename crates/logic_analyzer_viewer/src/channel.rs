@@ -358,7 +358,7 @@ impl LogicAnalyzerViewer {
     }
 
     /// Row-addressable channel view spanning both raw channels and any
-    /// derived `Digital` or `Markers` lane (§4.9), resolved through
+    /// derived `Digital` or `Markers` lane, resolved through
     /// `row_order` so the visual position (drag-reordered, interleaved)
     /// always matches what's actually on screen — the same `LogicChannel`
     /// shape either way, so hover measurement and cursor snap don't need a

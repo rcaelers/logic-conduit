@@ -1,14 +1,14 @@
-//! Graph → Pipeline compiler (`ANALYSIS_PIPELINE_DESIGN.md` §5).
+//! Graph → Pipeline compiler (`docs/APP_DESIGN.md`).
 //!
 //! Two stages: `lower()` turns the UI graph into a pure, diffable
 //! `CompiledGraph` IR (prune to sink-reachable nodes, follow reroutes,
 //! validate, negotiate per-edge stream kinds); `start_live()` materializes
-//! it into a running [`LiveRun`], the supervisor-driven live path (§6) used
+//! it into a running [`LiveRun`], the supervisor-driven live path used
 //! by both the app and its own tests — nothing builds an offline `Pipeline`
 //! from this IR anymore; that's what `examples/*.rs` do directly against
 //! `dsl::Pipeline` for headless/scripted captures.
 //!
-//! Kind negotiation (§5.4): each edge picks `offered ∩ accepted`, producer
+//! Kind negotiation: each edge picks `offered ∩ accepted`, producer
 //! preference order winning. That is what maps one UI `Signal` socket onto
 //! the source's dual `d{i}`/`b{i}` ports; every `Words` socket carries the
 //! same `Word` runtime type regardless of which decoder produced it.
@@ -73,7 +73,7 @@ impl CompileError {
 }
 
 /// Shared resources handed to builders. A fresh `DerivedLanes` store per
-/// run makes stale viewer lanes vanish atomically on re-run (§5.5).
+/// run makes stale viewer lanes vanish atomically on re-run.
 #[derive(Default)]
 pub struct CompileCtx {
     pub derived_lanes: DerivedLanes,
@@ -143,7 +143,7 @@ pub trait RuntimeBuilder {
     fn input_required(&self, _socket: &Socket, _state: &Value) -> bool {
         true
     }
-    /// Overrides the policy-table buffer size (§5.3) for this input's
+    /// Overrides the policy-table buffer size (`docs/APP_DESIGN.md`) for this input's
     /// incoming edge. `None` (default, every built-in node) keeps today's
     /// `PortKind`-based sizing. Only a node whose buffer size is a
     /// user-visible property (the `Buffer` node) needs this.
@@ -162,7 +162,7 @@ pub trait RuntimeBuilder {
     ) -> Result<Box<dyn ProcessNode>, String>;
 
     /// Runtime configuration for a *hot* state change, if this node type can
-    /// apply the whole state without restarting (§6.2 "Prop change" row).
+    /// apply the whole state without restarting (a hot prop change).
     /// `None` (default) means a state change restarts the node in place.
     fn hot_config(&self, _state: &Value) -> Option<NodeConfig> {
         None
@@ -261,7 +261,7 @@ pub(super) fn parse_hex(text: &str) -> Result<u64, String> {
 // ── IR ───────────────────────────────────────────────────────────────────────
 
 /// Pure description — no threads, no channels. Cheap to rebuild on every
-/// edit and cheap to diff (live reconfiguration, §6).
+/// edit and cheap to diff (live reconfiguration).
 #[derive(Debug, Clone, Default)]
 pub struct CompiledGraph {
     pub nodes: Vec<CompiledNode>,
@@ -574,7 +574,7 @@ fn has_cycle(nodes: &[NodeId], edges: &[CompiledEdge]) -> bool {
     visited != nodes.len()
 }
 
-// ── Live pipeline (§6) ───────────────────────────────────────────────────────
+// ── Live pipeline ───────────────────────────────────────────────────────
 
 /// Producers-before-consumers order; `lower` already rejected cycles.
 fn topo_order(compiled: &CompiledGraph) -> Vec<NodeId> {
@@ -674,7 +674,7 @@ impl ApplySummary {
 pub enum ApplyError {
     /// The edited graph does not lower; the running pipeline is untouched.
     Compile(Vec<CompileError>),
-    /// The edit class cannot be applied live (§6.2 bottom row); the running
+    /// The edit class cannot be applied live (source changed/replaced); the running
     /// pipeline is untouched — stop and rerun to pick it up.
     NeedsFullRestart(String),
     /// A live edit failed midway (e.g. a node failed to build).
@@ -699,7 +699,8 @@ fn wiring_of(compiled: &CompiledGraph, id: NodeId) -> BTreeSet<(String, u32, Str
 }
 
 /// Classifies the difference between the running IR and the edited one
-/// (§6.2). Returns the edit list, or the reason a full restart is needed.
+/// (the edit classes of `docs/APP_DESIGN.md`). Returns the edit list, or
+/// the reason a full restart is needed.
 fn diff(
     old: &CompiledGraph,
     new: &CompiledGraph,
@@ -1324,7 +1325,7 @@ mod tests {
             .id
     }
 
-    // ── diff classification (§6.2) ───────────────────────────────────────────
+    // ── diff classification ───────────────────────────────────────────
 
     #[test]
     fn diff_classifies_matcher_pattern_change_as_hot_config() {
@@ -1660,7 +1661,7 @@ mod tests {
         widget
     }
 
-    /// The §7 Phase-5 gate: attach a matcher tap mid-run and detach it
+    /// The live-tap gate: attach a matcher tap mid-run and detach it
     /// again; the untouched writer branch must produce byte-identical
     /// output to an uninterrupted reference run, and the tap must actually
     /// have collected data while attached.
@@ -1764,7 +1765,7 @@ mod tests {
         }
     }
 
-    /// The Phase-3 correctness gate (§7): the compiled startup graph must
+    /// The golden correctness gate: the compiled startup graph must
     /// produce byte-identical output to the hand-built Phase-1 pipeline.
     /// Slow (full 12.7B-sample capture) — run explicitly:
     /// `cargo test -p dsl-ui --release -- --ignored golden`
@@ -1797,7 +1798,7 @@ mod tests {
         let widget = golden_widget(&capture, &graph_dir);
 
         // Through the live path: shared sender lists + supervisor-driven
-        // shutdown must reproduce the offline byte-exact behavior (§7.5.1).
+        // shutdown must reproduce the offline byte-exact behavior.
         let mut ctx = CompileCtx::default();
         let lanes = ctx.derived_lanes.clone();
         let mut run = start_live(widget.graph(), &BuilderRegistry::standard(), &mut ctx)

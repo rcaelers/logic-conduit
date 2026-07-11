@@ -1,6 +1,6 @@
 //! Blender-style properties panel (N-panel): a resizable strip docked to the
 //! right border of the graph view showing the *active* node's low-frequency
-//! configuration (design §4.11). Widgets render in screen space at full
+//! configuration. Widgets render in screen space at full
 //! size, unaffected by graph zoom; edits mutate the same node state as
 //! inline controls and run `on_update` through the same path.
 

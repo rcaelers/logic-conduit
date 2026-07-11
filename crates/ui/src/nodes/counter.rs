@@ -1,4 +1,4 @@
-//! `Counter` node (§4.6).
+//! `Counter` node.
 
 use super::{COLOR_LOGIC, Number, Trigger};
 use egui::Color32;

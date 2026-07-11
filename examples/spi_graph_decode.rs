@@ -1,7 +1,7 @@
 //! Example: SPI-controlled parallel decode built from decomposed graph nodes
 //!
 //! Functionally the same pipeline as `spi_controlled_decode.rs`, but built
-//! from the reusable primitives of `ANALYSIS_PIPELINE_DESIGN.md` Phase 1
+//! from the reusable control-path primitives (`docs/PIPELINE_DESIGN.md`)
 //! instead of the fused `SpiCommandController`/`ControlledParallelWriter`:
 //!
 //! ```text

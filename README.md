@@ -1,220 +1,156 @@
-# DSL Logic Analyzer Streaming Decoder
+# DSL Pipeline Editor
 
-A high-performance streaming architecture for DSLogic logic analyzer signal processing in Rust.
+A desktop application for decoding and analyzing DSLogic logic-analyzer captures. You draw
+a decode pipeline as a node graph — sources, protocol decoders, logic, file writers, a
+waveform viewer — press **Run**, and watch the results appear live in the built-in logic
+analyzer view. Graphs run on a streaming, thread-per-node engine and can be edited while
+they run.
 
 ## Features
 
-- **Thread-per-node parallel processing** using crossbeam channels
-- **Generic channel support**: 1-16 channels with bit-packing for bandwidth reduction
-- **Full protocol decoders**: SPI and parallel bus decoders
-- **DSL file source**: Efficient replay of DSLogic capture files
-- **Type-safe pipeline builder**: Named ports with compile-time type checking
+- **Node-graph editor** (Blender-style): searchable add menu, frames, reroutes, undo/redo,
+  copy/paste, a properties panel, and per-node validation badges.
+- **Logic analyzer view** for multi-GB `.dsl` captures: realtime pan/zoom at any scale
+  (background indexing, never blocks the UI), time cursors, exact pulse measurement,
+  and live lanes showing decoded output while a pipeline runs.
+- **Protocol decoders**: SPI, UART, parallel/binary bus (SDR and DDR); plus matchers,
+  gates, flip-flops, counters, formatters, and file writers for building
+  trigger-and-capture logic out of nodes.
+- **Live editing**: attach a new matcher or viewer lane, tweak a pattern, or remove a
+  branch while the pipeline is running — the engine applies the smallest possible change.
+- **Sources**: `.dsl` capture file replay and live DSLogic U3Pro16 USB capture.
 
-## Architecture
+## Quick start
 
-The system uses a thread-per-node streaming architecture:
+```bash
+# Build and start the editor (release mode recommended)
+cargo run --release --bin dsl-ui
 
-```text
-┌──────────────────────┐     ┌─────────────┐     ┌───────┐
-│   DslFileSource      │────▶│  SpiDecoder │────▶│ Sink  │
-│      (Thread 1)      │     │  (Thread 2) │     │(Thr 3)│
-└──────────────────────┘     └─────────────┘     └───────┘
-       Sample×N              SpiTransfer          Print
+# Or open a graph directly
+cargo run --release --bin dsl-ui -- graphs/ccd_pipeline.json
 ```
 
-Each node runs in its own thread, connected by bounded crossbeam channels for automatic backpressure.
+The editor starts with an empty graph. Use **File ▸ Load** (`⌘O`/`Ctrl+O`) to open a saved
+graph — example graphs are in [graphs/](graphs) — then press **▶ Run** in the toolbar.
+If the graph contains a *DSL File Source* node, its capture file opens automatically in
+the waveform view above the graph.
 
-## Quick Start
+## The editor
 
-### Basic File Replay
+The window is split by a draggable divider: the **logic analyzer view** on top, the
+**node graph** below, with the Run/Stop toolbar between them.
 
-```rust
-use dsl::Pipeline;
-use dsl::nodes::DslFileSource;
+### Editing the graph
 
-// Create pipeline
-let mut pipeline = Pipeline::new();
+| Action | How |
+|---|---|
+| Add a node | `A` or right-click ▸ Add / Search |
+| Connect | Drag from a socket to a compatible socket (incompatible ones won't snap) |
+| Disconnect | Drag a wire off its input |
+| Select | Click; box-drag; shift-click to extend |
+| Move | Drag node headers |
+| Pan / zoom | Drag empty canvas / scroll |
+| Cut, copy, paste | `⌘X` / `⌘C` / `⌘V` (works across app instances) |
+| Duplicate | `⇧D` |
+| Delete | `Delete`, `Backspace`, or `X` |
+| Undo / redo | `⌘Z` / `⇧⌘Z` |
+| Properties panel | `N` (or the tab strip on the right edge) — settings of the active node |
+| Minimap | `M` |
+| Frames (group nodes) | select ▸ `⌘J`; rename/recolor via right-click |
+| Hide unconnected sockets | `⌘H`; collapse a node via right-click |
+| Reroute wires | Add a *Reroute* node as a wire waypoint |
 
-// Add file source (16 channels)
-pipeline.add_process("source", DslFileSource::new("capture.dsl", 16)?)?;
+(macOS `⌘` = Ctrl on Linux/Windows.)
 
-// Add decoder
-pipeline.add_process("spi", SpiDecoder::new(
-    SpiMode::Mode0,
-    24,     // bits per word
-    true,   // has MOSI
-    false,  // no MISO
-))?;
+Socket shapes and colors tell you what fits where: **circles** are continuous signals
+(logic levels, counts, text — anything with a value at every instant), **diamonds** are
+events (decoded words, triggers), **squares** are fixed settings. Colors group payload
+kinds (green = logic, orange = words, amber = triggers, blue = numbers, rose = text).
+Nodes that can't compile show a badge explaining why.
 
-// Connect using named ports
-pipeline.connect("source", "d7", "spi", "clk")?;
-pipeline.connect("source", "d8", "spi", "cs")?;
-pipeline.connect("source", "d6", "spi", "mosi")?;
+### Running
 
-// Build and run
-let scheduler = pipeline.build()?;
-scheduler.wait();
-```
+**▶ Run** compiles the graph and starts it; the toolbar shows *Live* while data flows and
+node headers show live item counts. You can keep editing while it runs — most changes
+(new branches, removed branches, pattern/template tweaks) apply within half a second
+without disturbing the rest of the pipeline; changes that need a full restart say so in
+the toolbar. **⏹ Stop** winds the run down; output files are flushed and closed.
 
-See [examples/spi_controlled_decode.rs](examples/spi_controlled_decode.rs) for a complete example with multi-file output.
+### The logic analyzer view
 
-### Live DSLogic U3Pro16 capture
+| Action | How |
+|---|---|
+| Pan / zoom | Drag, scroll horizontally / scroll vertically (zooms around the pointer) |
+| Fit whole capture | Double-click or `F` |
+| Time cursors | Double-click the ruler to add; drag a cursor's flag to move it |
+| Measure a pulse | Hover it — width, period, and duty cycle, exact at any zoom |
+| Rename a row | Double-click its label |
+| Reorder rows | Drag labels |
+| Colors | Profile selector (top right): DSView or Classic |
 
-The U3Pro16 driver is a normal source node. Its `d0..dN` and `b0..bN` ports
-use the same types as `DslFileSource`, so they connect directly to the current
-SPI and parallel decoders. `dN` refers to the Nth enabled physical input (the
-enabled inputs are ordered by input number); `raw` exposes lossless packed
-`LogicChunk` values for consumers that need the original USB representation.
-
-```rust,no_run
-use dsl::{CaptureMode, ClockSource, DsLogicU3Pro16, LogicCaptureConfig, LogicEncodingRequest, LogicTrigger, Pipeline};
-
-let settings = LogicCaptureConfig {
-    mode: CaptureMode::Finite,
-    sample_rate_hz: 100_000_000,
-    input_mask: 0b11_0000_0000, // logical d0=physical input 8, d1=input 9
-    sample_limit: 1_000_000,
-    trigger_percent: 50,
-    threshold_volts: Some(1.65),
-    trigger: LogicTrigger::default(),
-    encoding: LogicEncodingRequest::Raw,
-    clock: ClockSource::Internal,
-    input_filter: false,
-};
-
-let analyzer = DsLogicU3Pro16::open_first()?;
-// FPGA configuration is automatic when `DSLOGIC_U3PRO16_FPGA_IMAGE` points
-// to the exact DSLogicU3Pro16.bin image (or it is in a standard local path).
-
-let mut pipeline = Pipeline::new();
-pipeline.add_process("source", analyzer.into_source(settings)?)?;
-// `source:d0` and `source:d1` can now connect to decoder inputs.
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
-
-`LogicCaptureConfig` and the `LogicAnalyzer` interface are driver-neutral;
-the U3Pro16 translates them to its private protocol packet. A future libsigrok
-bridge can implement that interface (or the lower-level `UsbTransport` seam)
-and immediately use `LogicAnalyzerSource`.
-
-## Core Components
-
-### Sample Type
-
-- **`Sample`**: Boolean signal with timestamp (value + start_time)
-  - Used for all individual channel data
-
-### Protocol Types
-
-- **`SpiTransfer`**: Decoded SPI transaction (mosi, miso, timing info)
-- **`ParallelWord`**: Decoded parallel bus word (value, timing info)
+While a pipeline runs, *Viewer* nodes add live rows below the capture channels: digital
+traces, decoded-word boxes, and trigger markers.
 
 ### Nodes
 
-All nodes implement the `ProcessNode` trait:
+| Category | Nodes |
+|---|---|
+| Sources | DSL File Source · DSLogic U3Pro16 (live USB capture) · UART Demo Source |
+| Decoders | SPI Decoder · UART Decoder · Binary Decoder (parallel bus, SDR/DDR) · I2C Decoder (placeholder — editable but not yet runnable) |
+| Logic | Word Matcher · SR Flip-Flop · Logic Gate (NOT/AND/OR/XOR/…) · Counter · String Formatter · Buffer |
+| Sinks | File Writer · Text File Writer · TGCK Recorder · Viewer |
 
-- **Sources**: `DslFileSource` (0 inputs, N outputs)
-- **Processors**: `SpiDecoder`, `ParallelDecoder` (N inputs, M outputs)
-- **Sinks**: Custom nodes for output/analysis (N inputs, 0 outputs)
+A typical trigger-and-capture graph: decode SPI commands, match start/stop words, drive an
+SR flip-flop that gates a parallel-bus decoder, count captures into generated filenames,
+and write each start/stop window to its own file — see
+[graphs/ccd_pipeline.json](graphs/ccd_pipeline.json).
 
-### Runtime
-
-- **`Pipeline`**: Type-safe graph construction with named ports
-- **`Scheduler`**: Thread-per-node execution with automatic watchdog monitoring
-- **`ProcessNode`**: Core trait defining node behavior
-
-## Protocol Decoders
-
-### SPI Decoder
-
-```rust
-use dsl::nodes::decoders::{SpiDecoder, SpiMode};
-
-let spi = SpiDecoder::new(
-    SpiMode::Mode0,  // CPOL=0, CPHA=0
-    24,              // bits per word
-    true,            // has MOSI
-    false,           // no MISO (3 inputs: CLK, CS, MOSI)
-);
-```
-
-**Features:**
-- All SPI modes (0-3)
-- Configurable word size (1-64 bits)
-- MOSI/MISO optional
-- CS active-low detection
-
-**Inputs:** CLK, CS, MOSI (optional), MISO (optional)  
-**Output:** `SpiTransfer` events
-
-### Parallel Bus Decoder
-
-```rust
-use dsl::nodes::decoders::{ParallelDecoder, StrobeMode};
-
-let parallel = ParallelDecoder::new(
-    8,                       // 8 data bits
-    StrobeMode::RisingEdge,  // strobe trigger
-    CsPolarity::ActiveLow,   // CS polarity
-);
-```
-
-**Features:**
-- 1-64 data bits
-- Rising/falling/any edge or level triggers
-- Enable signal support
-- CS signal for gating
-
-**Inputs:** strobe, d0..dN, enable_signal, cs  
-**Output:** `ParallelWord` events
-
-## Building & Testing
+## Command line & logging
 
 ```bash
-# Build (release mode recommended for performance)
-cargo build --release
+cargo run --release --bin dsl-ui -- <graph.json>   # open a graph at startup
 
-# Run tests
-cargo test
-
-# Run examples (always use --release for file processing)
-cargo run --release --example spi_controlled_decode -- --file scan.dsl
+# Logging via RUST_LOG (per-module filtering)
+RUST_LOG=info cargo run --release --bin dsl-ui
+RUST_LOG=info,dsl::nodes::decoders::spi_decoder=debug cargo run --release --bin dsl-ui
 ```
 
-## Examples
+If a pipeline appears stuck, the built-in watchdog logs which node is blocked on which
+port after ~5 seconds.
 
-- **`spi_decode.rs`** - Basic SPI decoding with CSV output
-- **`spi_controlled_decode.rs`** - SPI-controlled parallel decode with multi-file capture
+## Building & testing
 
-Run with debug logging:
 ```bash
-RUST_LOG=debug cargo run --release --example spi_decode
+cargo build --release      # release strongly recommended for capture processing
+cargo test                 # workspace tests
 ```
 
-## Performance
+The repository is a Cargo workspace: `crates/dsl` (streaming engine, decoders, file/USB
+sources), `crates/node_graph` (reusable node editor widget), `crates/logic_analyzer_viewer`
+(waveform widget), `crates/ui` (application + graph compiler), `crates/app` (binary), and
+`plugins/example-plugin` (an example compile-time extension: build with
+`--features example-plugin`).
 
-- **Parallel processing**: Each node runs on its own CPU core
-- **Lock-free channels**: Crossbeam MPSC with minimal contention
-- **Bit-packing**: 12ch @ 250MHz = 375MB/s raw → 47MB/s packed (8x reduction)
-- **Automatic backpressure**: Bounded channels prevent memory overflow
+Standalone examples of driving the engine from Rust live in [examples/](examples)
+(e.g. `spi_graph_decode.rs`, `u3pro16_spi_decode.rs`):
 
-**Tested configurations:**
-- 12 channels @ 250MHz
-- 16 channels @ 200MHz
+```bash
+cargo run --release --example spi_graph_decode -- --file capture.dsl
+```
 
 ## Documentation
 
-- **[API.md](API.md)** - Complete API documentation
-- **[DESIGN.md](DESIGN.md)** - Architecture and design decisions
-- **[TRACING.md](TRACING.md)** - Watchdog and debug logging guide
-
-## Dependencies
-
-- `crossbeam-channel` - Lock-free MPSC channels
-- `zip` - DSL file reading
-- `thiserror` - Error handling
-- `tracing` - Structured logging with watchdog support
-- `clap` - CLI parsing (examples only)
+| Document | Contents |
+|---|---|
+| [docs/APP_DESIGN.md](docs/APP_DESIGN.md) | Application shell, node set, graph→pipeline compiler, live editing |
+| [docs/NODE_GRAPH_DESIGN.md](docs/NODE_GRAPH_DESIGN.md) | Node editor architecture: model, socket type system, widget |
+| [docs/NODE_GRAPH_API.md](docs/NODE_GRAPH_API.md) | Embedding the editor widget and defining node types |
+| [docs/LOGIC_ANALYZER_VIEWER_DESIGN.md](docs/LOGIC_ANALYZER_VIEWER_DESIGN.md) | Waveform viewer: index format, sampling, rendering |
+| [docs/LOGIC_ANALYZER_VIEWER_API.md](docs/LOGIC_ANALYZER_VIEWER_API.md) | Embedding the viewer widget |
+| [docs/PIPELINE_DESIGN.md](docs/PIPELINE_DESIGN.md) | Streaming engine: nodes, channels, backpressure, live supervision |
+| [docs/DSLOGIC_U3PRO16_PROTOCOL.md](docs/DSLOGIC_U3PRO16_PROTOCOL.md) | DSLogic U3Pro16 USB protocol (hardware reference) |
+| [docs/REGISTERS.md](docs/REGISTERS.md) | Hardware register reference |
+| [docs/CCD_DATA_STREAM.md](docs/CCD_DATA_STREAM.md) | The CCD data stream the example pipeline decodes |
 
 ## Development
 
@@ -222,4 +158,4 @@ This project was developed collaboratively with AI assistance (Claude/GitHub Cop
 
 ## License
 
-MIT - see [LICENSE](LICENSE) file for details
+MIT — see [LICENSE](LICENSE).

@@ -1,4 +1,4 @@
-//! `SR Flip-Flop` node (§4.3).
+//! `SR Flip-Flop` node.
 
 use super::{COLOR_LOGIC, Signal, Trigger};
 use egui::Color32;

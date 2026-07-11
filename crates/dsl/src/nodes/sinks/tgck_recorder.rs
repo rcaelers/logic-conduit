@@ -1,4 +1,4 @@
-//! TGCK line-boundary recorder (design §7 Phase 6)
+//! TGCK line-boundary recorder
 //!
 //! Restores the per-capture `*_tgck.csv` feature of the original
 //! `ControlledParallelWriter`: for every TGCK cycle it records where the
@@ -120,7 +120,7 @@ fn tgck_csv_path(filename: &str) -> String {
 ///
 /// Inputs: `words` — `Word` (the enable-gated data stream, same as
 /// the writer's); `tgck` — `Sample` edges; `filename` — `TextSample` level
-/// (never blocked on, §3.1). Outputs: `rows` — `TextSample` events, the CSV
+/// (never blocked on, per the level-stream contract). Outputs: `rows` — `TextSample` events, the CSV
 /// header and each finalized record; `filename` — `TextSample` level, the
 /// `_tgck.csv`-suffixed passthrough of the `filename` input. A window opens
 /// at the first word after a filename change and closes (emitting its rows,
@@ -238,7 +238,7 @@ impl ProcessNode for TgckRecorder {
         let position = word.timestamp_ns;
         self.last_position = position;
 
-        // Filename changes: never block (§3.1), apply those at or before
+        // Filename changes: never block (level-stream contract), apply those at or before
         // this word — each one closes the current window and, regardless of
         // whether that window produced rows, passes the derived `_tgck.csv`
         // name through immediately (the level-stream contract requires a

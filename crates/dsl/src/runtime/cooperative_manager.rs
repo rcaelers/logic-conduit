@@ -29,7 +29,7 @@
 //! `made_progress` loop comes back around. This is what makes it safe for
 //! [`crate::nodes::sinks::ViewerSink`] (or any node) to actually let a
 //! `Block`-policy channel fill and genuinely stall its producer's `send()`
-//! (`ANALYSIS_PIPELINE_DESIGN.md` §6.4) instead of that call permanently
+//! (`docs/PIPELINE_DESIGN.md`, flow control) instead of that call permanently
 //! wedging the one cooperative thread. **This check is a per-cycle
 //! snapshot, not a hold on the channel** — `self.nodes` is a `HashMap`
 //! with unspecified iteration order, so a producer can still be visited

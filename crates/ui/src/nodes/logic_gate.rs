@@ -1,4 +1,4 @@
-//! `Logic Gate` node (§4.4).
+//! `Logic Gate` node.
 
 use super::{COLOR_LOGIC, Signal};
 use egui::Color32;
