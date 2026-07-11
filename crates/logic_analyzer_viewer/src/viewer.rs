@@ -3,15 +3,17 @@ use crate::types::{
     AnalyzerLayout, CaptureInfo, ColorProfile, IndexBuildProgress, PulseMeasurement, RowDragState,
     RowKey, RowRenameState, TimeCursor, Transition,
 };
-use dsl::{CaptureIndex, DerivedLanes};
 #[cfg(not(target_arch = "wasm32"))]
 use dsl::CaptureDataSource;
+use dsl::{CaptureIndex, DerivedLanes};
 use egui::{FontId, Pos2, Rect, Sense, Ui, vec2};
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc::{self, Receiver};
+
+const DEFAULT_VISIBLE_SPAN_US: f64 = 900.0;
 
 /// One channel's digital waveform as raw (time, level) transitions — the
 /// generic way for a host application to hand [`LogicAnalyzerViewer::set_channels`]
@@ -86,7 +88,7 @@ impl LogicAnalyzerViewer {
             sampled_key: None,
             hover_measurement: None,
             visible_start_us: 0.0,
-            visible_span_us: 900.0,
+            visible_span_us: DEFAULT_VISIBLE_SPAN_US,
             #[cfg(not(target_arch = "wasm32"))]
             capture_path: None,
             capture_info: None,
@@ -213,7 +215,12 @@ impl LogicAnalyzerViewer {
         let row_rename_started = self.handle_row_label_input(ui, &response, layout);
         let row_dragging = self.handle_row_reorder(ui, &response, layout);
         let cursor_input = self.handle_cursor_input(ui, &response, layout);
-        if (response.double_clicked()
+        let home_pressed = response.hovered()
+            && ui.ctx().memory(|memory| memory.focused().is_none())
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Home));
+        if home_pressed {
+            self.reset_time_view();
+        } else if (response.double_clicked()
             && !cursor_input.ruler_double_click
             && !row_rename_started)
             || (response.hovered() && ui.input(|input| input.key_pressed(egui::Key::F)))
@@ -357,6 +364,19 @@ impl LogicAnalyzerViewer {
         }
     }
 
+    /// Returns the time viewport to its origin and default scale. When a
+    /// capture is loaded, the default scale is its complete duration.
+    pub(crate) fn reset_time_view(&mut self) {
+        self.visible_start_us = 0.0;
+        if let Some(capture) = self.capture_info.as_ref() {
+            self.visible_span_us = capture.duration_us.max(1.0);
+            self.fit_to_capture = true;
+        } else {
+            self.visible_span_us = DEFAULT_VISIBLE_SPAN_US;
+            self.fit_to_capture = false;
+        }
+    }
+
     pub(crate) fn clamp_to_capture_duration(&mut self) {
         if let Some(capture) = self.capture_info.as_ref() {
             let duration_us = capture.duration_us;
@@ -365,5 +385,21 @@ impl LogicAnalyzerViewer {
                 .visible_start_us
                 .clamp(0.0, (duration_us - self.visible_span_us).max(0.0));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_VISIBLE_SPAN_US, LogicAnalyzerViewer};
+
+    #[test]
+    fn reset_time_view_returns_to_the_default_without_a_capture() {
+        let mut viewer = LogicAnalyzerViewer::new();
+        viewer.visible_start_us = 120.0;
+        viewer.visible_span_us = 12.0;
+        viewer.reset_time_view();
+
+        assert_eq!(viewer.visible_start_us, 0.0);
+        assert_eq!(viewer.visible_span_us, DEFAULT_VISIBLE_SPAN_US);
     }
 }
