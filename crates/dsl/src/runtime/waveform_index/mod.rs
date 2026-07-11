@@ -864,6 +864,36 @@ mod tests {
     }
 
     #[test]
+    fn activity_ratio_hint_distinguishes_sparse_and_dense_signals() -> Result<()> {
+        let samples_per_block = 4_096_u64;
+        let total_samples = 65_536_u64;
+
+        let sparse_blocks =
+            single_channel_blocks_from_fn(total_samples, samples_per_block, |sample| {
+                matches!(sample, 1_000 | 30_000 | 60_000)
+            });
+        let sparse_source =
+            MemoryCaptureDataSource::new(total_samples, samples_per_block, sparse_blocks);
+        let sparse = IndexSampler::open_data_source(sparse_source.clone())?
+            .activity_ratio_hint(0, total_samples)?;
+
+        let dense_blocks =
+            single_channel_blocks_from_fn(total_samples, samples_per_block, |sample| {
+                (sample / 4) % 2 == 1
+            });
+        let dense_source =
+            MemoryCaptureDataSource::new(total_samples, samples_per_block, dense_blocks);
+        let dense = IndexSampler::open_data_source(dense_source.clone())?
+            .activity_ratio_hint(0, total_samples)?;
+
+        assert!(sparse < 0.01, "sparse activity ratio was {sparse}");
+        assert!(dense > 0.99, "dense activity ratio was {dense}");
+        sparse_source.remove_index();
+        dense_source.remove_index();
+        Ok(())
+    }
+
+    #[test]
     fn block_level_partial_range_does_not_leak_earlier_block_activity() -> Result<()> {
         let samples_per_block = 16_384_u64;
         let total_samples = samples_per_block * 2;

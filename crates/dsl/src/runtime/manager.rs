@@ -21,7 +21,9 @@
 //! offline drop-cascade — supervisor-driven, same semantics.
 
 use super::edge_query::EdgeQuery;
-use super::node::{ConfigOutcome, InputPort, NodeConfig, OutputPort, ProcessNode};
+use super::node::{
+    ConfigOutcome, InputPort, InputProtocolCandidate, NodeConfig, OutputPort, ProcessNode,
+};
 use super::ports::PortSchema;
 use super::protocol::ProtocolKind;
 use super::sample_kind::{self, SampleKind};
@@ -128,23 +130,55 @@ fn build_output_lists(
     Ok(outputs)
 }
 
-/// Negotiates one connection's protocol the same way `Pipeline::build`
-/// does (producer preference order wins) and returns the EdgeQuery handle
-/// if that's what it settled on, `None` if it settled on `Stream` (the
-/// caller subscribes normally in that case).
-fn negotiate_edge_query(
-    output: &OutputList,
-    consumer_accepts: &[ProtocolKind],
-) -> Option<Arc<dyn EdgeQuery>> {
-    let negotiated = output
-        .protocols
-        .iter()
-        .find(|protocol| consumer_accepts.contains(protocol))?;
-    if *negotiated == ProtocolKind::EdgeQuery {
-        output.edge_query.clone()
-    } else {
-        None
+fn select_node_input_protocols(
+    name: &str,
+    node: &dyn ProcessNode,
+    input_schemas: &[PortSchema],
+    inputs: &[Option<InputSub>],
+    nodes: &HashMap<String, RunningNode>,
+) -> Result<Vec<Option<ProtocolKind>>, String> {
+    let mut candidates = vec![None; input_schemas.len()];
+    for (index, sub) in inputs.iter().enumerate() {
+        let Some(sub) = sub else {
+            continue;
+        };
+        let producer = nodes
+            .get(&sub.from_node)
+            .ok_or_else(|| format!("producer '{}' not running", sub.from_node))?;
+        let output = producer.outputs.get(&sub.from_port).ok_or_else(|| {
+            format!(
+                "producer '{}' has no port '{}'",
+                sub.from_node, sub.from_port
+            )
+        })?;
+        candidates[index] = Some(InputProtocolCandidate {
+            offered: output.protocols.clone(),
+            edge_query: output.edge_query.clone(),
+        });
     }
+    let selected = node.select_input_protocols(&candidates);
+    if selected.len() != input_schemas.len() {
+        return Err(format!(
+            "node '{name}' returned {} protocol choices for {} inputs",
+            selected.len(),
+            input_schemas.len()
+        ));
+    }
+    for (index, candidate) in candidates.iter().enumerate() {
+        let Some(candidate) = candidate else {
+            continue;
+        };
+        let protocol = selected[index]
+            .ok_or_else(|| format!("no common protocol for node '{name}' input {index}"))?;
+        if !candidate.offered.contains(&protocol)
+            || !input_schemas[index].protocols.contains(&protocol)
+        {
+            return Err(format!(
+                "node '{name}' selected unsupported protocol {protocol:?} for input {index}"
+            ));
+        }
+    }
+    Ok(selected)
 }
 
 /// Negotiates one connection's payload type (`output`'s declared
@@ -325,6 +359,13 @@ impl PipelineManager {
         // only point where its `edge_query` can ever be queried — see
         // `OutputList::edge_query`'s doc.
         let outputs = build_output_lists(node.as_ref(), &output_schemas)?;
+        let selected_protocols = select_node_input_protocols(
+            &name,
+            node.as_ref(),
+            &input_schemas,
+            &inputs,
+            &self.nodes,
+        )?;
 
         // Wire inputs: subscribe into the producers' lists, unless this
         // connection negotiates EdgeQuery (producer has a cached handle for
@@ -357,9 +398,13 @@ impl PipelineManager {
                             sub.from_node, sub.from_port, name, input_schemas[index].name
                         )
                     })?;
-                    if let Some(handle) =
-                        negotiate_edge_query(output, &input_schemas[index].protocols)
-                    {
+                    if selected_protocols[index] == Some(ProtocolKind::EdgeQuery) {
+                        let handle = output.edge_query.clone().ok_or_else(|| {
+                            format!(
+                                "producer '{}.{}' has no query handle",
+                                sub.from_node, sub.from_port
+                            )
+                        })?;
                         InputPort::from_type_erased(Box::new(()) as Box<dyn Any + Send>)
                             .with_edge_query(Some(handle))
                     } else {
@@ -627,6 +672,8 @@ impl PipelineManager {
                 input_schemas.len()
             ));
         }
+        let selected_protocols =
+            select_node_input_protocols(name, node.as_ref(), &input_schemas, &inputs, &self.nodes)?;
         let mut input_ports: Vec<InputPort> = Vec::with_capacity(inputs.len());
         let mut input_subs: Vec<(String, String, u64)> = Vec::new();
         for (index, sub) in inputs.iter().enumerate() {
@@ -654,9 +701,13 @@ impl PipelineManager {
                             sub.from_node, sub.from_port, name, input_schemas[index].name
                         )
                     })?;
-                    if let Some(handle) =
-                        negotiate_edge_query(output, &input_schemas[index].protocols)
-                    {
+                    if selected_protocols[index] == Some(ProtocolKind::EdgeQuery) {
+                        let handle = output.edge_query.clone().ok_or_else(|| {
+                            format!(
+                                "producer '{}.{}' has no query handle",
+                                sub.from_node, sub.from_port
+                            )
+                        })?;
                         InputPort::from_type_erased(Box::new(()) as Box<dyn Any + Send>)
                             .with_edge_query(Some(handle))
                     } else {
@@ -1348,6 +1399,54 @@ mod tests {
         buffer: VecDeque<NumberSample>,
     }
 
+    struct CoordinatedStreamProbe {
+        got_two_streams: Arc<AtomicBool>,
+        buffers: [VecDeque<NumberSample>; 2],
+    }
+
+    impl ProcessNode for CoordinatedStreamProbe {
+        fn name(&self) -> &str {
+            "coordinated_stream_probe"
+        }
+        fn num_inputs(&self) -> usize {
+            2
+        }
+        fn num_outputs(&self) -> usize {
+            0
+        }
+        fn input_schema(&self) -> Vec<PortSchema> {
+            (0..2)
+                .map(|index| {
+                    PortSchema::new::<NumberSample>(
+                        format!("in{index}"),
+                        index,
+                        PortDirection::Input,
+                    )
+                    .with_protocols(vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream])
+                })
+                .collect()
+        }
+        fn select_input_protocols(
+            &self,
+            candidates: &[Option<InputProtocolCandidate>],
+        ) -> Vec<Option<ProtocolKind>> {
+            candidates
+                .iter()
+                .map(|candidate| candidate.as_ref().map(|_| ProtocolKind::Stream))
+                .collect()
+        }
+        fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
+            let streams = inputs.iter().enumerate().all(|(index, input)| {
+                input.edge_query().is_none()
+                    && input
+                        .get::<NumberSample>(&mut self.buffers[index])
+                        .is_some()
+            });
+            self.got_two_streams.store(streams, Ordering::Relaxed);
+            Err(WorkError::Shutdown)
+        }
+    }
+
     impl ProcessNode for StreamProbe {
         fn name(&self) -> &str {
             "stream_probe"
@@ -1434,6 +1533,35 @@ mod tests {
                 inputs: vec![sub("source", "out")],
             })
             .unwrap();
+
+        wait_finished(&manager, Duration::from_secs(5));
+        manager.wait();
+        assert!(got.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn live_manager_honors_one_coordinated_choice_for_multiple_inputs() {
+        let mut manager = PipelineManager::new();
+        manager
+            .add_node_deferred(NodeSpec {
+                name: "source".into(),
+                node: Box::new(QueryableSource),
+                inputs: vec![],
+            })
+            .unwrap();
+
+        let got = Arc::new(AtomicBool::new(false));
+        manager
+            .add_node_deferred(NodeSpec {
+                name: "probe".into(),
+                node: Box::new(CoordinatedStreamProbe {
+                    got_two_streams: Arc::clone(&got),
+                    buffers: std::array::from_fn(|_| VecDeque::new()),
+                }),
+                inputs: vec![sub("source", "out"), sub("source", "out")],
+            })
+            .unwrap();
+        manager.start_all_deferred().unwrap();
 
         wait_finished(&manager, Duration::from_secs(5));
         manager.wait();

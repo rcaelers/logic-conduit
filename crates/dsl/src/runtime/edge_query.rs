@@ -26,6 +26,13 @@ pub trait EdgeQuery: Send + Sync {
     /// Total number of samples in the channel.
     fn total_samples(&self) -> u64;
 
+    /// Fraction of 64-sample index groups containing at least one
+    /// transition, when the concrete source can answer from summary data.
+    /// `None` means no inexpensive density hint is available.
+    fn activity_ratio_hint(&self) -> Option<f64> {
+        None
+    }
+
     /// Value of the channel at `position`.
     fn value_at(&self, position: u64) -> Result<bool>;
 

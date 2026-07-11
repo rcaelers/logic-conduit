@@ -104,6 +104,17 @@ The threshold must be benchmark-derived and recorded in one place. Diagnostics
 and benchmark output must state the chosen protocol and density estimate.
 Explicit `Packed stream` and `Indexed` settings always override Auto.
 
+Status: complete. `EdgeQuery::activity_ratio_hint` exposes the fraction
+of active 64-sample index groups, and the file-backed implementation computes
+it solely from the mmap'd waveform index. Synthetic tests measure below 1% for
+isolated pulses and above 99% for a toggle every four samples. Static and live
+runtime negotiation now presents all input candidates to the consumer at once;
+the Parallel Decoder applies one strobe-derived decision to strobe, every data
+input, and CS. The reference DDR capture reports ratio `1.000000`, selects
+packed streaming, and matches the explicit indexed/packed count and fingerprint
+(11,999,858 words, `5872c3203a967271` over 50 million samples). The generated
+sparse capture selects indexed queries and also matches both explicit modes.
+
 ## Step 4: Window Fragment Refactor
 
 Separate packed decoding into two phases.

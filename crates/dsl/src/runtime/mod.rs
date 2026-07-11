@@ -46,7 +46,7 @@ pub use manager::{DisconnectEvent, InputSub, NodeSpec, PipelineManager};
 pub type AppManager = PipelineManager;
 #[cfg(target_arch = "wasm32")]
 pub type AppManager = CooperativeManager;
-pub use node::{ConfigOutcome, ConfigValue, NodeConfig, ProcessNode};
+pub use node::{ConfigOutcome, ConfigValue, InputProtocolCandidate, NodeConfig, ProcessNode};
 pub use ports::{InputPort, OutputPort, Pipeline, PortDirection, PortSchema, register_type};
 pub use protocol::ProtocolKind;
 pub use receiver::{Receiver, ReceiverSelector};

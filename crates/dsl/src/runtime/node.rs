@@ -14,7 +14,14 @@ pub use super::receiver::Receiver;
 pub use super::sender::Sender;
 
 use super::edge_query::EdgeQuery;
+use super::protocol::ProtocolKind;
 use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct InputProtocolCandidate {
+    pub offered: Vec<ProtocolKind>,
+    pub edge_query: Option<Arc<dyn EdgeQuery>>,
+}
 
 /// A configuration value delivered to a running node (live reconfiguration,
 /// `docs/APP_DESIGN.md`). Deliberately a tiny bespoke type: the runtime crate stays
@@ -77,6 +84,30 @@ pub trait ProcessNode: Send {
     /// Default implementation returns empty list for backward compatibility
     fn output_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
         Vec::new()
+    }
+
+    /// Selects one transport per input after producers have exposed their
+    /// actual capabilities and optional query metadata. The default keeps
+    /// producer preference order. Stateful consumers may override this to
+    /// make one coordinated choice across a group of inputs.
+    fn select_input_protocols(
+        &self,
+        candidates: &[Option<InputProtocolCandidate>],
+    ) -> Vec<Option<ProtocolKind>> {
+        let schemas = self.input_schema();
+        candidates
+            .iter()
+            .enumerate()
+            .map(|(index, candidate)| {
+                let candidate = candidate.as_ref()?;
+                let accepted = &schemas.get(index)?.protocols;
+                candidate
+                    .offered
+                    .iter()
+                    .find(|protocol| accepted.contains(protocol))
+                    .copied()
+            })
+            .collect()
     }
 
     /// Get node type identifier for serialization

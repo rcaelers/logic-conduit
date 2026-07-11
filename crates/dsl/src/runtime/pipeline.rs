@@ -2,7 +2,7 @@
 
 use super::edge_query::EdgeQuery;
 use super::errors::ConnectionError;
-use super::node::{InputPort, OutputPort, ProcessNode};
+use super::node::{InputPort, InputProtocolCandidate, OutputPort, ProcessNode};
 use super::ports::PortSchema;
 use super::protocol::ProtocolKind;
 use super::sample::SampleBlock;
@@ -317,13 +317,10 @@ impl Pipeline {
             .map(|(name, id)| (*id, name.clone()))
             .collect();
 
-        // Phase 0: negotiate a connection protocol per pending connection,
-        // intersecting the producer's declared protocols (preference order)
-        // with the consumer's, straight from the schema cache built in
-        // `add_process` — every port defaults to `[Stream]` on both ends,
-        // so a connection between two ports that don't know about richer
-        // protocols always negotiates `Stream` — today's behavior, unchanged.
-        let mut protocols: Vec<ProtocolKind> = Vec::with_capacity(self.connections.len());
+        // Phase 0: materialize the actual producer capabilities needed by
+        // consumers. Query handles are cached once per output port and also
+        // carry density metadata used by grouped Auto selection.
+        let mut edge_queries: HashMap<PortKey, Arc<dyn EdgeQuery>> = HashMap::new();
         for conn in &self.connections {
             let from_schemas = self
                 .node_schemas
@@ -348,42 +345,77 @@ impl Pipeline {
                 .get(conn.to_port)
                 .ok_or_else(|| format!("Node {} has no input port {}", conn.to_node, conn.to_port))?
                 .protocols;
-            let protocol = produced
-                .iter()
-                .find(|p| accepted.contains(p))
-                .copied()
-                .ok_or_else(|| {
-                    format!(
-                        "No common connection protocol between node {} port {} and node {} port {}",
-                        conn.from_node, conn.from_port, conn.to_node, conn.to_port
-                    )
-                })?;
-            protocols.push(protocol);
+            if produced.contains(&ProtocolKind::EdgeQuery)
+                && accepted.contains(&ProtocolKind::EdgeQuery)
+            {
+                let key = (conn.from_node, conn.from_port);
+                if !edge_queries.contains_key(&key)
+                    && let Some(handle) =
+                        node_by_id[&conn.from_node].edge_query(conn.from_port, &[])
+                {
+                    edge_queries.insert(key, handle);
+                }
+            }
         }
 
-        // Phase 0.5: build one EdgeQuery handle per producing port that has
-        // at least one EdgeQuery-negotiated destination. `input_queries` is
-        // `&[]` today — only zero-input source nodes implement `edge_query`
-        // — so this doesn't need to run in dependency order; a future
-        // pass-through node would upgrade this to a topological pass.
-        let mut edge_queries: HashMap<PortKey, Arc<dyn EdgeQuery>> = HashMap::new();
-        for (conn, &protocol) in self.connections.iter().zip(&protocols) {
-            if protocol != ProtocolKind::EdgeQuery {
-                continue;
+        // Present all connected inputs to each consumer at once. The
+        // default hook preserves producer preference order; consumers such
+        // as ParallelDecoder can coordinate a whole raw-input group.
+        let mut candidates_by_node: HashMap<usize, Vec<Option<InputProtocolCandidate>>> = self
+            .node_schemas
+            .iter()
+            .map(|(&id, schemas)| (id, vec![None; schemas.inputs.len()]))
+            .collect();
+        for conn in &self.connections {
+            let mut offered = self.node_schemas[&conn.from_node].outputs[conn.from_port]
+                .protocols
+                .clone();
+            let edge_query = edge_queries.get(&(conn.from_node, conn.from_port)).cloned();
+            if edge_query.is_none() {
+                offered.retain(|protocol| *protocol != ProtocolKind::EdgeQuery);
             }
-            let key = (conn.from_node, conn.from_port);
-            if edge_queries.contains_key(&key) {
-                continue;
-            }
-            let from_node = node_by_id[&conn.from_node];
-            let handle = from_node.edge_query(conn.from_port, &[]).ok_or_else(|| {
-                format!(
-                    "Node {} port {} negotiated EdgeQuery but declined to provide a handle",
-                    conn.from_node, conn.from_port
-                )
-            })?;
-            edge_queries.insert(key, handle);
+            candidates_by_node.get_mut(&conn.to_node).unwrap()[conn.to_port] =
+                Some(InputProtocolCandidate {
+                    offered,
+                    edge_query,
+                });
         }
+
+        let mut selected_by_input: HashMap<PortKey, ProtocolKind> = HashMap::new();
+        for (&node_id, candidates) in &candidates_by_node {
+            let node = node_by_id[&node_id];
+            let selected = node.select_input_protocols(candidates);
+            let schemas = &self.node_schemas[&node_id].inputs;
+            if selected.len() != schemas.len() {
+                return Err(format!(
+                    "Node {} returned {} protocol choices for {} inputs",
+                    node_id,
+                    selected.len(),
+                    schemas.len()
+                ));
+            }
+            for (input, candidate) in candidates.iter().enumerate() {
+                let Some(candidate) = candidate else {
+                    continue;
+                };
+                let protocol = selected[input].ok_or_else(|| {
+                    format!("No common protocol for node {node_id} input {input}")
+                })?;
+                if !candidate.offered.contains(&protocol)
+                    || !schemas[input].protocols.contains(&protocol)
+                {
+                    return Err(format!(
+                        "Node {node_id} selected unsupported protocol {protocol:?} for input {input}"
+                    ));
+                }
+                selected_by_input.insert((node_id, input), protocol);
+            }
+        }
+        let protocols: Vec<ProtocolKind> = self
+            .connections
+            .iter()
+            .map(|conn| selected_by_input[&(conn.to_node, conn.to_port)])
+            .collect();
 
         // Phase 1: Create channels for Stream-negotiated connections only,
         // accumulating receivers and senders; collect the EdgeQuery handle

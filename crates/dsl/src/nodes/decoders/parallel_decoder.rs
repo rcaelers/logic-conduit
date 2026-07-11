@@ -10,7 +10,9 @@ use crate::runtime::WorkError;
 use crate::runtime::capture::CaptureTransition;
 use crate::runtime::edge_query::EdgeQuery;
 use crate::runtime::events::Word;
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkResult};
+use crate::runtime::node::{
+    InputPort, InputProtocolCandidate, OutputPort, ProcessNode, WorkResult,
+};
 use crate::runtime::protocol::ProtocolKind;
 use crate::runtime::sample::{Sample, SampleBlock};
 use std::collections::VecDeque;
@@ -66,6 +68,18 @@ pub struct ParallelDecoder {
 }
 
 impl ParallelDecoder {
+    /// Above this fraction of active 64-sample strobe groups, packed scans
+    /// are preferred over indexed point queries in Auto mode.
+    pub const AUTO_PACKED_ACTIVITY_RATIO: f64 = 0.25;
+
+    pub fn auto_protocol_for_activity_ratio(activity_ratio: f64) -> ProtocolKind {
+        if activity_ratio >= Self::AUTO_PACKED_ACTIVITY_RATIO {
+            ProtocolKind::Stream
+        } else {
+            ProtocolKind::EdgeQuery
+        }
+    }
+
     /// Create a new parallel decoder
     ///
     /// # Arguments
@@ -202,6 +216,75 @@ impl ProcessNode for ParallelDecoder {
         use crate::runtime::ports::{PortDirection, PortSchema};
 
         vec![PortSchema::new::<Word>("words", 0, PortDirection::Output)]
+    }
+
+    fn select_input_protocols(
+        &self,
+        candidates: &[Option<InputProtocolCandidate>],
+    ) -> Vec<Option<ProtocolKind>> {
+        let schemas = self.input_schema();
+        let mut selected: Vec<Option<ProtocolKind>> = candidates
+            .iter()
+            .enumerate()
+            .map(|(index, candidate)| {
+                let candidate = candidate.as_ref()?;
+                let accepted = &schemas.get(index)?.protocols;
+                candidate
+                    .offered
+                    .iter()
+                    .find(|protocol| accepted.contains(protocol))
+                    .copied()
+            })
+            .collect();
+
+        let edge_triggered = matches!(
+            self.mode,
+            StrobeMode::RisingEdge | StrobeMode::FallingEdge | StrobeMode::AnyEdge
+        );
+        if self.input_strategy != ParallelInputStrategy::Auto || !edge_triggered {
+            return selected;
+        }
+        let Some(activity_ratio) = candidates
+            .first()
+            .and_then(Option::as_ref)
+            .and_then(|candidate| candidate.edge_query.as_ref())
+            .and_then(|query| query.activity_ratio_hint())
+        else {
+            return selected;
+        };
+
+        let preferred = Self::auto_protocol_for_activity_ratio(activity_ratio);
+        let alternate = if preferred == ProtocolKind::Stream {
+            ProtocolKind::EdgeQuery
+        } else {
+            ProtocolKind::Stream
+        };
+        let raw_inputs = 1 + self.num_data_bits + 1;
+        let group_supports = |protocol| {
+            candidates[..raw_inputs]
+                .iter()
+                .enumerate()
+                .filter_map(|(index, candidate)| {
+                    candidate.as_ref().map(|candidate| (index, candidate))
+                })
+                .all(|(index, candidate)| {
+                    candidate.offered.contains(&protocol)
+                        && schemas[index].protocols.contains(&protocol)
+                })
+        };
+        let protocol = if group_supports(preferred) {
+            Some(preferred)
+        } else if group_supports(alternate) {
+            Some(alternate)
+        } else {
+            None
+        };
+        for (index, candidate) in candidates[..raw_inputs].iter().enumerate() {
+            if candidate.is_some() {
+                selected[index] = protocol;
+            }
+        }
+        selected
     }
 
     fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
@@ -979,6 +1062,70 @@ mod tests {
         for schema in &decoder.input_schema()[..3] {
             assert_eq!(schema.protocols, vec![ProtocolKind::Stream]);
         }
+    }
+
+    struct DensityQuery(f64);
+
+    impl EdgeQuery for DensityQuery {
+        fn sample_period(&self) -> f64 {
+            1.0
+        }
+        fn samplerate_hz(&self) -> f64 {
+            1.0
+        }
+        fn total_samples(&self) -> u64 {
+            1
+        }
+        fn activity_ratio_hint(&self) -> Option<f64> {
+            Some(self.0)
+        }
+        fn value_at(&self, _position: u64) -> crate::Result<bool> {
+            Ok(false)
+        }
+        fn next_edge(
+            &self,
+            _position: u64,
+            _limit: u64,
+        ) -> crate::Result<Option<CaptureTransition>> {
+            Ok(None)
+        }
+    }
+
+    fn auto_candidates(activity: f64) -> Vec<Option<InputProtocolCandidate>> {
+        let query: Arc<dyn EdgeQuery> = Arc::new(DensityQuery(activity));
+        (0..5)
+            .map(|_| {
+                Some(InputProtocolCandidate {
+                    offered: vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream],
+                    edge_query: Some(Arc::clone(&query)),
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn auto_strategy_selects_one_protocol_for_the_complete_raw_group() {
+        let decoder = ParallelDecoder::new(2, StrobeMode::AnyEdge, CsPolarity::Disabled);
+        let dense = decoder.select_input_protocols(&auto_candidates(0.9));
+        let sparse = decoder.select_input_protocols(&auto_candidates(0.01));
+
+        assert_eq!(&dense[..4], &[Some(ProtocolKind::Stream); 4]);
+        assert_eq!(&sparse[..4], &[Some(ProtocolKind::EdgeQuery); 4]);
+        assert_eq!(
+            dense[4],
+            Some(ProtocolKind::EdgeQuery),
+            "enable transport remains independent"
+        );
+    }
+
+    #[test]
+    fn auto_strategy_falls_back_as_a_group_when_one_input_lacks_preferred_protocol() {
+        let decoder = ParallelDecoder::new(2, StrobeMode::AnyEdge, CsPolarity::Disabled);
+        let mut candidates = auto_candidates(0.01);
+        candidates[1].as_mut().unwrap().offered = vec![ProtocolKind::Stream];
+
+        let selected = decoder.select_input_protocols(&candidates);
+        assert_eq!(&selected[..4], &[Some(ProtocolKind::Stream); 4]);
     }
 
     fn block_from_bits(bits: &[bool]) -> SampleBlock {

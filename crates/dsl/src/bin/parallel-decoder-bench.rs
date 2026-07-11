@@ -9,6 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use clap::{Parser, ValueEnum};
+    use dsl::runtime::ProtocolKind;
     use dsl::{
         CsPolarity, DerivedLaneData, DerivedLanes, DslFileSource, InputPort, OutputPort,
         ParallelDecoder, ParallelInputStrategy, Pipeline, PortSchema, ProcessNode, StrobeMode,
@@ -23,6 +24,7 @@ mod native {
     enum BenchMode {
         Indexed,
         Stream,
+        Auto,
         Both,
     }
 
@@ -31,6 +33,7 @@ mod native {
             match self {
                 Self::Indexed => "edge-query",
                 Self::Stream => "packed-stream",
+                Self::Auto => "auto",
                 Self::Both => "multiple",
             }
         }
@@ -295,6 +298,8 @@ mod native {
         fingerprint: Option<u64>,
         fingerprint_scope: Option<&'static str>,
         resources: Option<ResourceMetrics>,
+        selected_protocol: &'static str,
+        strobe_activity_ratio: Option<f64>,
     }
 
     impl BenchResult {
@@ -307,11 +312,16 @@ mod native {
                 .resources
                 .map(|resources| resources.report(self.elapsed))
                 .unwrap_or_else(|| "cpu_user_s=unavailable cpu_system_s=unavailable avg_cpu_cores=unavailable peak_rss_mib=unavailable".to_string());
+            let activity = self
+                .strobe_activity_ratio
+                .map(|ratio| format!("{ratio:.6}"))
+                .unwrap_or_else(|| "unavailable".to_string());
             if matches!(self.sink, SinkKind::Viewer) {
                 println!(
-                    "mode={:?} protocol={} sink={:?} samples={} words_retained={} output_hash={:016x} hash_scope={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3} {}",
+                    "mode={:?} protocol={} strobe_activity_ratio={} sink={:?} samples={} words_retained={} output_hash={:016x} hash_scope={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3} {}",
                     self.mode,
-                    self.mode.protocol_name(),
+                    self.selected_protocol,
+                    activity,
                     self.sink,
                     self.samples,
                     self.words,
@@ -328,9 +338,10 @@ mod native {
             } else if self.words_measured {
                 let mwords_per_second = self.words as f64 / seconds / 1_000_000.0;
                 println!(
-                    "mode={:?} protocol={} sink={:?} samples={} words={} output_hash={:016x} hash_scope={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} MWords_s={:.3} realtime_x={:.3} {}",
+                    "mode={:?} protocol={} strobe_activity_ratio={} sink={:?} samples={} words={} output_hash={:016x} hash_scope={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} MWords_s={:.3} realtime_x={:.3} {}",
                     self.mode,
-                    self.mode.protocol_name(),
+                    self.selected_protocol,
+                    activity,
                     self.sink,
                     self.samples,
                     self.words,
@@ -347,9 +358,10 @@ mod native {
                 );
             } else {
                 println!(
-                    "mode={:?} protocol={} sink={:?} samples={} words=unmeasured output_hash=unmeasured setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3} {}",
+                    "mode={:?} protocol={} strobe_activity_ratio={} sink={:?} samples={} words=unmeasured output_hash=unmeasured setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3} {}",
                     self.mode,
-                    self.mode.protocol_name(),
+                    self.selected_protocol,
+                    activity,
                     self.sink,
                     self.samples,
                     self.setup.as_secs_f64(),
@@ -380,10 +392,32 @@ mod native {
         let input_strategy = match mode {
             BenchMode::Indexed => ParallelInputStrategy::Indexed,
             BenchMode::Stream => ParallelInputStrategy::PackedStream,
+            BenchMode::Auto => ParallelInputStrategy::Auto,
             BenchMode::Both => unreachable!("Both is expanded by main"),
         };
         let decoder = ParallelDecoder::new(args.data.len(), args.trigger.into(), cs_polarity)
             .with_input_strategy(input_strategy);
+
+        let setup_start = Instant::now();
+        let strobe_activity_ratio = if matches!(mode, BenchMode::Auto) {
+            source
+                .edge_query(args.strobe, &[])
+                .and_then(|query| query.activity_ratio_hint())
+        } else {
+            None
+        };
+        let selected_protocol = match mode {
+            BenchMode::Indexed => BenchMode::Indexed.protocol_name(),
+            BenchMode::Stream => BenchMode::Stream.protocol_name(),
+            BenchMode::Auto => strobe_activity_ratio
+                .map(ParallelDecoder::auto_protocol_for_activity_ratio)
+                .map(|protocol| match protocol {
+                    ProtocolKind::Stream => "packed-stream",
+                    ProtocolKind::EdgeQuery => "edge-query",
+                })
+                .unwrap_or("auto-fallback"),
+            BenchMode::Both => unreachable!("Both is expanded by main"),
+        };
 
         let output_stats = Arc::new(Mutex::new(OutputStats::default()));
         let mut viewer_store = None;
@@ -431,7 +465,6 @@ mod native {
             pipeline.connect("decoder", "words", "sink", sink_port)?;
         }
 
-        let setup_start = Instant::now();
         let scheduler = pipeline.build()?;
         let setup = setup_start.elapsed();
         let resources_before = resource_usage();
@@ -468,6 +501,8 @@ mod native {
             fingerprint: fingerprint_scope.map(|_| stats.fingerprint),
             fingerprint_scope,
             resources,
+            selected_protocol,
+            strobe_activity_ratio,
         })
     }
 
@@ -496,7 +531,8 @@ mod native {
         let modes: &[BenchMode] = match args.mode {
             BenchMode::Indexed => &[BenchMode::Indexed],
             BenchMode::Stream => &[BenchMode::Stream],
-            BenchMode::Both => &[BenchMode::Indexed, BenchMode::Stream],
+            BenchMode::Auto => &[BenchMode::Auto],
+            BenchMode::Both => &[BenchMode::Indexed, BenchMode::Stream, BenchMode::Auto],
         };
         let mut count_reference: Option<(BenchMode, u64, u64)> = None;
         for &mode in modes {
@@ -656,6 +692,12 @@ mod native {
             let directory = tempfile::tempdir().unwrap();
             let capture = directory.path().join("sparse.dsl");
             write_sparse_capture(&capture);
+            let source = DslFileSource::new(&capture, 3).unwrap();
+            let activity = source
+                .edge_query(2, &[])
+                .and_then(|query| query.activity_ratio_hint())
+                .expect("file-backed strobe should expose an activity hint");
+            assert!(activity < 0.01, "sparse activity ratio was {activity}");
             let args = Args::try_parse_from([
                 "parallel-decoder-bench",
                 capture.to_str().unwrap(),
@@ -676,9 +718,12 @@ mod native {
 
             let indexed = run(&args, BenchMode::Indexed).unwrap();
             let packed = run(&args, BenchMode::Stream).unwrap();
+            let auto = run(&args, BenchMode::Auto).unwrap();
             assert_eq!(indexed.words, 3);
             assert_eq!(indexed.words, packed.words);
             assert_eq!(indexed.fingerprint, packed.fingerprint);
+            assert_eq!(indexed.fingerprint, auto.fingerprint);
+            assert_eq!(auto.selected_protocol, "edge-query");
         }
     }
 }
