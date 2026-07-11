@@ -23,6 +23,11 @@ mod macos_menu {
                 unsafe { msg_send![super(self), init] }
             }
 
+            #[unsafe(method(showAbout:))]
+            fn show_about(&self, _sender: &AnyObject) {
+                dispatch_native_menu_command(NativeMenuCommand::About);
+            }
+
             #[unsafe(method(loadGraph:))]
             fn load_graph(&self, _sender: &AnyObject) {
                 dispatch_native_menu_command(NativeMenuCommand::Load);
@@ -116,6 +121,14 @@ mod macos_menu {
                     unsafe {
                         item.setTarget(Some(&handler as &AnyObject));
                         item.setAction(Some(sel!(quitApplication:)));
+                    }
+                }
+                // Point the standard "About …" item at our in-app window
+                // instead of the Cocoa about panel.
+                if item.action() == Some(sel!(orderFrontStandardAboutPanel:)) {
+                    unsafe {
+                        item.setTarget(Some(&handler as &AnyObject));
+                        item.setAction(Some(sel!(showAbout:)));
                     }
                 }
             }

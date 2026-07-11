@@ -1,3 +1,4 @@
+mod about;
 mod app;
 pub mod compiler;
 mod demo_signals;

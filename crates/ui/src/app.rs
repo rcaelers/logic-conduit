@@ -1,3 +1,4 @@
+use crate::about::AboutWindow;
 use crate::compiler;
 use crate::demo_signals;
 use crate::nodes;
@@ -30,6 +31,7 @@ fn is_quit_shortcut(event: &egui::Event) -> bool {
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy)]
 pub enum NativeMenuCommand {
+    About,
     Load,
     Save,
     SaveAs,
@@ -73,6 +75,7 @@ pub struct App {
     allow_close: bool,
     #[cfg(target_os = "macos")]
     native_menu_commands: crossbeam_channel::Receiver<NativeMenuCommand>,
+    about: AboutWindow,
     /// Nodes badged with compile errors; cleared on the next Run.
     error_badges: Vec<NodeId>,
     /// Last time the running pipeline was diffed against the edited graph.
@@ -168,6 +171,7 @@ impl App {
             allow_close: false,
             #[cfg(target_os = "macos")]
             native_menu_commands,
+            about: AboutWindow::new(),
             error_badges: Vec::new(),
             last_live_sync: 0.0,
         }
@@ -397,6 +401,12 @@ impl App {
                     .clicked()
                 {
                     command = Some(FileCommand::Quit);
+                    ui.close();
+                }
+            });
+            ui.menu_button("Help", |ui| {
+                if ui.button("About DSL Pipeline Editor").clicked() {
+                    self.about.open();
                     ui.close();
                 }
             });
@@ -727,6 +737,10 @@ impl eframe::App for App {
         #[cfg(target_os = "macos")]
         while let Ok(command) = self.native_menu_commands.try_recv() {
             let command = match command {
+                NativeMenuCommand::About => {
+                    self.about.open();
+                    continue;
+                }
                 NativeMenuCommand::Load => FileCommand::Load,
                 NativeMenuCommand::Save => FileCommand::Save,
                 NativeMenuCommand::SaveAs => FileCommand::SaveAs,
@@ -824,6 +838,8 @@ impl eframe::App for App {
         ui.allocate_ui(egui::vec2(available.x, graph_height), |ui| {
             self.node_graph.show(ui);
         });
+
+        self.about.show(ui.ctx());
 
         #[cfg(not(target_arch = "wasm32"))]
         self.show_close_confirmation(ui.ctx());
