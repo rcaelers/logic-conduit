@@ -14,8 +14,7 @@ impl WorkerPool {
         let workers = thread::available_parallelism()
             .map(|count| count.get())
             .unwrap_or(1)
-            .min(8)
-            .max(1);
+            .clamp(1, 8);
         // Decoders bound their own in-flight work. This shared queue only
         // absorbs simultaneous submissions from several decoder nodes.
         let (sender, receiver) = bounded::<Job>(workers * 4);

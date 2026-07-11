@@ -287,6 +287,44 @@ Performance gates on the reference machine:
 - cancellation latency must remain below 100 ms;
 - output count and fingerprint must match the sequential reference exactly.
 
+Status: complete. The final defaults are four scan workers per native
+Parallel Decoder, eight process-wide compute threads maximum, 65,536 samples
+per scan fragment, `2 * workers` outstanding fragments, a 25% Auto activity
+threshold, and 4,096 annotations per viewer-summary chunk. wasm remains
+sequential. Explicit worker counts from 1-8 remain available to the benchmark
+and decoder builder.
+
+Sustained release validation on the dense reference capture:
+
+| Workload | Samples | Throughput | Real time | Peak RSS |
+| --- | ---: | ---: | ---: | ---: |
+| Auto packed, discard | 1,000,000,000 | 565.6 MSamples/s | 11.31x | 176 MiB |
+| Auto packed, unlimited viewer | 200,000,000 | 474.7 MSamples/s | 9.50x | 1,222 MiB |
+
+The viewer retained all 47,999,433 annotations in the 200-million-sample run
+with fingerprint `edbfc01f07fb1b1c`; its memory is dominated by the required
+complete raw annotation timeline. Indexed, explicit packed, and Auto count
+runs over the same 200 million samples all produced 47,999,433 words with
+fingerprint `175831e21f59c527`. Auto used packed jobs for a generated dense
+capture and indexed queries for a generated sparse capture through the real
+pipeline, rather than merely reporting the density prediction.
+
+Correctness coverage now includes every fragment split for all five strobe
+modes, partial three-cycle words and CS resets, streamed and queried enable,
+documented active-low and active-high CS levels in both input protocols,
+deliberately reversed worker completion, sequential/parallel multi-window
+differential output, viewer chunk rollover, cursor/rendering behavior, and
+live-manager stop/restart/reconfigure/branch edits. The audit found and fixed
+reversed Parallel Decoder CS predicates: active-low now decodes while low and
+active-high while high, matching `CsPolarity`'s documented contract. A queued
+parallel scan scheduler test passes the 100 ms stop-latency gate. Native
+workspace and wasm compilation pass.
+
+`cargo test -p dsl` still has twelve unrelated legacy `dsl_file` tests that
+require an untracked `scan.dsl` in the working directory; that fixture is not
+in the repository. The focused decoder, benchmark, viewer, derived-index, and
+live-manager suites pass without it.
+
 If a phase misses its performance gate, keep its correctness refactor only
 when it simplifies the next measurement; otherwise revert that phase before
 continuing.

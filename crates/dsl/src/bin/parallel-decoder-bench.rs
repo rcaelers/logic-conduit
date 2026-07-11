@@ -728,6 +728,35 @@ mod native {
             archive.finish().unwrap();
         }
 
+        fn write_dense_capture(path: &std::path::Path) {
+            const SAMPLES: usize = 65_536;
+            let file = File::create(path).unwrap();
+            let mut archive = zip::ZipWriter::new(file);
+            let options =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            archive.start_file("header", options).unwrap();
+            archive
+                .write_all(
+                    b"total probes = 3\nsamplerate = 1 MHz\ntotal samples = 65536\ntotal blocks = 1\nprobe0 = D0\nprobe1 = D1\nprobe2 = Clock\n",
+                )
+                .unwrap();
+
+            let mut channels = vec![vec![0u8; SAMPLES / 8]; 3];
+            for sample in 0..SAMPLES {
+                let value = (sample / 4) & 0b11;
+                set_packed_bit(&mut channels[0], sample, value & 1 != 0);
+                set_packed_bit(&mut channels[1], sample, value & 2 != 0);
+                set_packed_bit(&mut channels[2], sample, sample % 4 == 1 || sample % 4 == 2);
+            }
+            for (channel, data) in channels.iter().enumerate() {
+                archive
+                    .start_file(format!("L-{channel}/0"), options)
+                    .unwrap();
+                archive.write_all(data).unwrap();
+            }
+            archive.finish().unwrap();
+        }
+
         #[test]
         fn parses_explicit_capture_and_channel_mapping() {
             let args = Args::try_parse_from([
@@ -823,6 +852,8 @@ mod native {
                 "0,1",
                 "--trigger",
                 "rising",
+                "--workers",
+                "4",
             ])
             .unwrap();
 
@@ -834,6 +865,49 @@ mod native {
             assert_eq!(indexed.fingerprint, packed.fingerprint);
             assert_eq!(indexed.fingerprint, auto.fingerprint);
             assert_eq!(auto.selected_protocol, "edge-query");
+            assert_eq!(auto.max_outstanding, 0);
+            assert!(packed.max_outstanding > 0);
+        }
+
+        #[test]
+        fn dense_capture_auto_negotiates_parallel_packed_streaming() {
+            let directory = tempfile::tempdir().unwrap();
+            let capture = directory.path().join("dense.dsl");
+            write_dense_capture(&capture);
+            let source = DslFileSource::new(&capture, 3).unwrap();
+            let activity = source
+                .edge_query(2, &[])
+                .and_then(|query| query.activity_ratio_hint())
+                .expect("file-backed strobe should expose an activity hint");
+            assert!(activity > 0.99, "dense activity ratio was {activity}");
+            let args = Args::try_parse_from([
+                "parallel-decoder-bench",
+                capture.to_str().unwrap(),
+                "--samples",
+                "65536",
+                "--mode",
+                "both",
+                "--sink",
+                "count",
+                "--strobe",
+                "2",
+                "--data",
+                "0,1",
+                "--trigger",
+                "rising",
+                "--workers",
+                "4",
+            ])
+            .unwrap();
+
+            let indexed = run(&args, BenchMode::Indexed).unwrap();
+            let packed = run(&args, BenchMode::Stream).unwrap();
+            let auto = run(&args, BenchMode::Auto).unwrap();
+            assert_eq!(indexed.words, 16_384);
+            assert_eq!(indexed.fingerprint, packed.fingerprint);
+            assert_eq!(indexed.fingerprint, auto.fingerprint);
+            assert_eq!(auto.selected_protocol, "packed-stream");
+            assert!(auto.max_outstanding > 0);
         }
     }
 }

@@ -205,7 +205,7 @@ impl ParallelDecoder {
                 .inner
                 .workers
                 .store(workers, Ordering::Relaxed);
-            return workers;
+            workers
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -551,8 +551,8 @@ fn packed_bus_value(data: &[SampleBlock], local_index: usize) -> u64 {
 #[inline]
 fn cs_eligible(config: StreamScanConfig, cs: Option<&SampleBlock>, local_index: usize) -> bool {
     match (config.cs_polarity, cs) {
-        (CsPolarity::ActiveLow, Some(cs)) => packed_bit(&cs.data, local_index),
-        (CsPolarity::ActiveHigh, Some(cs)) => !packed_bit(&cs.data, local_index),
+        (CsPolarity::ActiveLow, Some(cs)) => !packed_bit(&cs.data, local_index),
+        (CsPolarity::ActiveHigh, Some(cs)) => packed_bit(&cs.data, local_index),
         _ => true,
     }
 }
@@ -1042,12 +1042,12 @@ impl ParallelDecoder {
         buffers.reset_before.clear();
         let mut reset_before_next = false;
         for (trigger_index, &position) in buffers.positions.iter().enumerate() {
-            let cs_inactive = match cs_polarity {
-                CsPolarity::ActiveLow => buffers.cs_values[trigger_index],
-                CsPolarity::ActiveHigh => !buffers.cs_values[trigger_index],
+            let cs_active = match cs_polarity {
+                CsPolarity::ActiveLow => !buffers.cs_values[trigger_index],
+                CsPolarity::ActiveHigh => buffers.cs_values[trigger_index],
                 CsPolarity::Disabled => true,
             };
-            if !cs_inactive {
+            if !cs_active {
                 reset_before_next = true;
                 continue;
             }
@@ -1935,9 +1935,9 @@ mod tests {
                 )
             })
             .collect();
-        // Active-low CS is eligible while high in the decoder's established
-        // polarity convention. These low spans gate triggers and reset any
-        // partial word on both sides of many possible fragment boundaries.
+        // Active-low CS is eligible only in these low spans. The surrounding
+        // high spans gate triggers and reset partial words across many
+        // possible fragment boundaries.
         let cs_bits: Vec<bool> = (0..sample_count)
             .map(|position| !matches!(position, 29..=38 | 84..=90 | 128..=136))
             .collect();
@@ -2149,6 +2149,60 @@ mod tests {
         assert!(parallel.len() > 10_000);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn queued_parallel_scan_stops_within_latency_budget() {
+        use crate::runtime::Scheduler;
+        use std::time::{Duration, Instant};
+
+        let sample_count = ParallelDecoder::STREAM_SAMPLES_PER_CALL * 1_024;
+        let byte_count = sample_count.div_ceil(u8::BITS as usize);
+        let strobe = SampleBlock::new(
+            Arc::<[u8]>::from(vec![0xaa; byte_count].into_boxed_slice()),
+            0,
+            sample_count,
+            1,
+        );
+        let data = SampleBlock::new(
+            Arc::<[u8]>::from(vec![0u8; byte_count].into_boxed_slice()),
+            0,
+            sample_count,
+            1,
+        );
+
+        let mut scheduler = Scheduler::new();
+        let inputs = vec![
+            block_input(scheduler.watchdog(), strobe, "strobe"),
+            block_input(scheduler.watchdog(), data, "d0"),
+            unconnected(scheduler.watchdog(), "cs"),
+            unconnected(scheduler.watchdog(), "enable_signal"),
+        ];
+        let decoder = ParallelDecoder::new(1, StrobeMode::AnyEdge, CsPolarity::Disabled)
+            .with_input_strategy(ParallelInputStrategy::PackedStream)
+            .with_parallel_workers(4);
+        let metrics = decoder.parallel_metrics();
+        scheduler.start_process(Box::new(decoder), inputs, Vec::new());
+
+        let dispatch_deadline = Instant::now() + Duration::from_secs(1);
+        while metrics.snapshot().max_outstanding == 0 && Instant::now() < dispatch_deadline {
+            std::thread::yield_now();
+        }
+        assert!(
+            metrics.snapshot().max_outstanding > 0,
+            "decoder did not dispatch parallel work"
+        );
+
+        let stop = scheduler.stop_handle();
+        let started = Instant::now();
+        stop.stop();
+        scheduler.wait();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "parallel decoder stop took {elapsed:?}"
+        );
+    }
+
     #[test]
     fn word_assembly_little_endian() {
         let mut decoder = ParallelDecoder::new(4, StrobeMode::RisingEdge, CsPolarity::Disabled)
@@ -2252,6 +2306,66 @@ mod tests {
             .with_watchdog(wd.clone(), "pd".to_string(), name.to_string())
     }
 
+    fn run_1bit_cs_level(query: bool, polarity: CsPolarity, cs_value: bool) -> Vec<Word> {
+        let wd = Watchdog::new();
+        let strobe = [false, true, false, true];
+        let data = [true; 4];
+        let cs = [cs_value; 4];
+        let input = |bits: &[bool], name: &str| {
+            if query {
+                query_input(&wd, bits, name)
+            } else {
+                block_input(&wd, block_from_bits(bits), name)
+            }
+        };
+        let inputs = [
+            input(&strobe, "strobe"),
+            input(&data, "d0"),
+            input(&cs, "cs"),
+            unconnected(&wd, "enable_signal"),
+        ];
+        let (out_tx, out_rx) = bounded::<ChannelMessage<Word>>(4);
+        let outputs = [OutputPort::new_with_watchdog(
+            Sender::new(vec![out_tx]),
+            &wd,
+            "pd",
+            "words",
+        )];
+        let mut decoder = ParallelDecoder::new(1, StrobeMode::RisingEdge, polarity);
+        loop {
+            match decoder.work(&inputs, &outputs) {
+                Ok(_) => {}
+                Err(WorkError::Shutdown) => break,
+                Err(error) => panic!("unexpected error: {error}"),
+            }
+        }
+        collect_messages(out_rx)
+    }
+
+    #[test]
+    fn cs_polarities_use_the_documented_active_level_in_both_protocols() {
+        for query in [false, true] {
+            assert_eq!(
+                run_1bit_cs_level(query, CsPolarity::ActiveLow, false).len(),
+                2,
+                "active-low CS must decode while low, query={query}"
+            );
+            assert!(
+                run_1bit_cs_level(query, CsPolarity::ActiveLow, true).is_empty(),
+                "active-low CS must gate while high, query={query}"
+            );
+            assert_eq!(
+                run_1bit_cs_level(query, CsPolarity::ActiveHigh, true).len(),
+                2,
+                "active-high CS must decode while high, query={query}"
+            );
+            assert!(
+                run_1bit_cs_level(query, CsPolarity::ActiveHigh, false).is_empty(),
+                "active-high CS must gate while low, query={query}"
+            );
+        }
+    }
+
     #[test]
     fn query_mode_does_not_read_data_at_gated_triggers() {
         let wd = Watchdog::new();
@@ -2266,8 +2380,8 @@ mod tests {
         let inputs = [
             query_input(&wd, &[false, true, false, true], "strobe"),
             data_input,
-            // Active-low CS remains low, gating every rising strobe.
-            query_input(&wd, &[false; 4], "cs"),
+            // Active-low CS remains high (inactive), gating every trigger.
+            query_input(&wd, &[true; 4], "cs"),
             unconnected(&wd, "enable_signal"),
         ];
         let (out_tx, out_rx) = bounded::<ChannelMessage<Word>>(4);
