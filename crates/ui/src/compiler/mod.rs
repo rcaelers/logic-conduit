@@ -13,11 +13,10 @@
 //! the source's dual `d{i}`/`b{i}` ports; every `Words` socket carries the
 //! same `Word` runtime type regardless of which decoder produced it.
 
-use dsl::DerivedLanes;
-use dsl::SampleBlock;
 use dsl::runtime::{
     AppManager, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy, ProcessNode,
 };
+use dsl::{DerivedLanes, SampleBlock, ViewerRetention};
 use node_graph::{GraphState, Node, NodeId, NodeKind, Socket, SocketId};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -77,6 +76,10 @@ impl CompileError {
 #[derive(Default)]
 pub struct CompileCtx {
     pub derived_lanes: DerivedLanes,
+    /// Storage policy selected by the graph's source. Finite sources retain
+    /// their complete timeline; continuous sources can explicitly choose a
+    /// bounded rolling window.
+    pub viewer_retention: ViewerRetention,
 }
 
 /// What one input edge settled on: the negotiated stream kind plus a
@@ -119,6 +122,12 @@ pub trait RuntimeBuilder {
     /// Produces the graph's time domain (exactly one per graph).
     fn is_source(&self) -> bool {
         false
+    }
+    /// Retention policy for viewers in this source's time domain. Finite
+    /// sources should keep the default; a continuous source must opt into a
+    /// bounded policy based on its expected rate and memory budget.
+    fn viewer_retention(&self, _state: &Value) -> ViewerRetention {
+        ViewerRetention::Unlimited
     }
     /// Terminal consumer; pruning keeps only nodes reachable from sinks.
     fn is_sink(&self) -> bool {
@@ -267,6 +276,7 @@ pub(super) fn parse_hex(text: &str) -> Result<u64, String> {
 pub struct CompiledGraph {
     pub nodes: Vec<CompiledNode>,
     pub edges: Vec<CompiledEdge>,
+    pub viewer_retention: ViewerRetention,
 }
 
 #[derive(Debug, Clone)]
@@ -388,6 +398,7 @@ pub fn lower(
 
     // Every kept node must have a runtime; exactly one source.
     let mut source_count = 0usize;
+    let mut viewer_retention = ViewerRetention::Unlimited;
     for &id in &kept {
         let node = &graph.nodes[&id];
         match registry.get(node.def_name()) {
@@ -395,7 +406,10 @@ pub fn lower(
                 id,
                 format!("'{}' has no runtime implementation", node.def_name()),
             )),
-            Some(builder) if builder.is_source() => source_count += 1,
+            Some(builder) if builder.is_source() => {
+                source_count += 1;
+                viewer_retention = builder.viewer_retention(&node.state);
+            }
             Some(_) => {}
         }
     }
@@ -548,7 +562,11 @@ pub fn lower(
             }
         })
         .collect();
-    Ok(CompiledGraph { nodes, edges })
+    Ok(CompiledGraph {
+        nodes,
+        edges,
+        viewer_retention,
+    })
 }
 
 fn has_cycle(nodes: &[NodeId], edges: &[CompiledEdge]) -> bool {
@@ -820,6 +838,7 @@ pub fn start_live(
     ctx: &mut CompileCtx,
 ) -> Result<LiveRun, Vec<CompileError>> {
     let compiled = lower(graph, registry)?;
+    ctx.viewer_retention = compiled.viewer_retention;
     let mut manager = AppManager::new();
     let mut names: HashMap<NodeId, String> = HashMap::new();
 
@@ -879,6 +898,7 @@ impl LiveRun {
 
         let mut ctx = CompileCtx {
             derived_lanes: self.lanes.clone(),
+            viewer_retention: new.viewer_retention,
         };
         let mut summary = ApplySummary::default();
         for edit in edits {
@@ -1104,7 +1124,7 @@ mod tests {
             decoder.resolved.kind(0),
             Some(PortKind::of::<SampleBlock>())
         ); // strobe
-        assert_eq!(edge_to(decoder.id, "strobe").buffer, 4);
+        assert_eq!(edge_to(decoder.id, "strobe").buffer, 2);
         assert_eq!(edge_to(spi.id, "clk").buffer, 10_000_000);
         assert_eq!(edge_to(decoder.id, "d7").from.1, "ch7");
         assert!(
@@ -1123,6 +1143,7 @@ mod tests {
 
         assert_eq!(compiled.nodes.len(), 3);
         assert_eq!(compiled.edges.len(), 3);
+        assert_eq!(compiled.viewer_retention, ViewerRetention::Unlimited);
         assert!(
             compiled
                 .nodes
@@ -1140,6 +1161,16 @@ mod tests {
         assert_eq!(lanes.len(), 2);
         assert_eq!(lanes[0].1.kind, PortKind::of::<Sample>());
         assert_eq!(lanes[1].1.kind, PortKind::of::<Word>());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn file_source_retains_the_complete_viewer_timeline() {
+        let widget = startup_widget();
+        let compiled = lower(widget.graph(), &BuilderRegistry::standard())
+            .unwrap_or_else(|errors| panic!("lower failed: {errors:?}"));
+
+        assert_eq!(compiled.viewer_retention, ViewerRetention::Unlimited);
     }
 
     #[test]

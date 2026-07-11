@@ -16,6 +16,8 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 /// the idle gap to the next one. Words that carry a real duration (SPI,
 /// UART) are stored with their true extent and never inferred.
 pub const MAX_ANNOTATION_NS: u64 = 1_000_000;
+/// Suggested per-lane limit for continuous sources that explicitly select
+/// rolling retention. Finite sources retain their complete timeline.
 pub const DEFAULT_VIEWER_MAX_ENTRIES: usize = 1_000_000;
 
 /// Most items one lane drains from its channel per `work()` call. Bounds how
@@ -29,6 +31,12 @@ const DRAIN_BATCH_SIZE: usize = 65_536;
 pub enum ViewerRetention {
     Unlimited,
     MaxEntries(usize),
+}
+
+impl Default for ViewerRetention {
+    fn default() -> Self {
+        Self::Unlimited
+    }
 }
 
 impl ViewerRetention {
@@ -406,7 +414,7 @@ impl ViewerSink {
             name: "viewer".to_string(),
             store,
             lanes: Vec::new(),
-            retention: ViewerRetention::MaxEntries(DEFAULT_VIEWER_MAX_ENTRIES),
+            retention: ViewerRetention::Unlimited,
         }
     }
 
@@ -840,6 +848,12 @@ mod tests {
         };
         assert_eq!(markers.len(), ENTRIES as usize);
         assert_eq!(markers.last(), Some(&(ENTRIES - 1)));
+    }
+
+    #[test]
+    fn viewer_retains_the_complete_timeline_by_default() {
+        let sink = ViewerSink::new(DerivedLanes::new());
+        assert_eq!(sink.retention, ViewerRetention::Unlimited);
     }
 
     #[test]

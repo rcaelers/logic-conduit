@@ -48,7 +48,9 @@ impl RuntimeBuilder for ViewerBuilder {
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: nodes::ViewerState = parse_state(state)?;
         let prefix = state.label.value.trim().to_owned();
-        let mut sink = ViewerSink::new(ctx.derived_lanes.clone()).with_name(name);
+        let mut sink = ViewerSink::new(ctx.derived_lanes.clone())
+            .with_name(name)
+            .with_retention(ctx.viewer_retention);
         for (_, input) in resolved.members(0) {
             let lane_name = if prefix.is_empty() {
                 input.source.clone()

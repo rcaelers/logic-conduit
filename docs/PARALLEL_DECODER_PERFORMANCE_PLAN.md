@@ -403,8 +403,7 @@ then add a batch transport if needed. Preferred options are a `WordBatch`
 payload or a batch variant in the channel envelope that receivers can flatten
 for compatibility.
 
-The viewer currently appends every decoded annotation permanently. Continuous
-live operation at this rate requires an explicit policy:
+Continuous live operation at this rate requires an explicit viewer policy:
 
 - Rolling in-memory retention for live viewing, or
 - File-backed/paged exact annotations with the existing mipmap retained for
@@ -430,15 +429,18 @@ index-preferred because the warmed indexed path is now fastest, while live
 analyzers naturally negotiate packed streaming because they do not offer
 `EdgeQuery`.
 
-`ViewerSink` has an explicit `ViewerRetention` policy. The desktop default is
-`MaxEntries(1_000_000)` per lane. When a lane exceeds its limit it drops the
-oldest quarter in one operation and rebuilds the matching mipmap, avoiding a
-full-vector shift on every incoming batch. `Unlimited` remains available for
-an archival caller, and the benchmark exposes `--viewer-max-entries` so a
-bounded correctness fixture can retain every expected word. Tests cover
-batch flattening and bulk draining, static/shared/lossy senders, scalar
-SPI/UART/buffer/matcher compatibility, retention order, open annotation
-handling, and summary rebuilding.
+`ViewerSink` has an explicit `ViewerRetention` policy and defaults to
+`Unlimited`, preserving the complete timeline for finite inputs. The desktop
+compiler carries a source-selected policy into each viewer; the built-in DSL
+file and UART demo sources are finite and therefore unlimited. A continuous
+source builder can explicitly select `MaxEntries(1_000_000)` (or another
+budget) per lane. When a bounded lane exceeds its limit it drops the oldest
+quarter in one operation and rebuilds the matching mipmap, avoiding a
+full-vector shift on every incoming batch. The benchmark exposes
+`--viewer-max-entries` for sustained bounded runs. Tests cover batch
+flattening and bulk draining, static/shared/lossy senders, scalar
+SPI/UART/buffer/matcher compatibility, complete finite retention, bounded
+retention order, open annotation handling, and summary rebuilding.
 
 ### Step 7 Result
 
@@ -455,8 +457,8 @@ Every path now exceeds the 60 MSamples/s decoder target and the 55
 MSamples/s file-to-viewer target. The count and viewer fixtures preserve the
 exact 2,399,972-word result.
 
-A sustained 200-million-sample streamed viewer run using the production
-one-million-entry retention limit completed at 112.434 MSamples/s (2.249x
+A sustained 200-million-sample streamed viewer run using an explicitly
+configured one-million-entry retention limit completed at 112.434 MSamples/s (2.249x
 real time), retained 869,396 newest annotations after chunked trimming, and
 peaked at 205.1 MB RSS / 199.6 MB footprint. For comparison, a four-million
 entry limit reached 104.280 MSamples/s but peaked at 367.1 MB RSS. Retention
