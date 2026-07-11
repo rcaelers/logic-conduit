@@ -19,6 +19,7 @@ use crate::{
 };
 use egui::{Pos2, Sense, Ui};
 use std::collections::HashMap;
+use std::path::Path;
 
 // ── Main widget ───────────────────────────────────────────────────────────────
 
@@ -156,7 +157,7 @@ impl NodeGraphWidget {
     /// Replaces the whole graph and rebuilds every node's runtime instance
     /// from the registry — the programmatic equivalent of loading a saved
     /// file. State restore runs through the same reconcile path as
-    /// Ctrl+O (`restore_node`): sockets validated against current defs,
+    /// file loading (`restore_node`): sockets validated against current defs,
     /// `on_update` re-run, badges recomputed.
     pub fn set_graph(&mut self, graph: GraphState) {
         self.graph = graph;
@@ -164,6 +165,28 @@ impl NodeGraphWidget {
         self.node_statuses.clear();
         self.active_node = None;
         self.restore_runtime();
+    }
+
+    /// Saves the current graph as formatted JSON.
+    pub fn save_to_path(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
+        self.sync_all_node_state();
+        let json = serde_json::to_string_pretty(&self.graph)
+            .map_err(|error| format!("could not serialize graph: {error}"))?;
+        std::fs::write(path.as_ref(), json)
+            .map_err(|error| format!("could not write {}: {error}", path.as_ref().display()))
+    }
+
+    /// Loads a graph from JSON and rebuilds its runtime node instances.
+    /// The current graph is left untouched if reading or parsing fails.
+    pub fn load_from_path(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
+        let json = std::fs::read_to_string(path.as_ref())
+            .map_err(|error| format!("could not read {}: {error}", path.as_ref().display()))?;
+        let graph = serde_json::from_str(&json)
+            .map_err(|error| format!("could not parse {}: {error}", path.as_ref().display()))?;
+        self.set_graph(graph);
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        Ok(())
     }
 
     fn run_update(&mut self, id: NodeId) {

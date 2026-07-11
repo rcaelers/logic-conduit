@@ -936,6 +936,7 @@ dependencies = [
 name = "dsl-app"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "dsl-ui",
  "eframe",
  "egui",
@@ -977,6 +978,7 @@ dependencies = [
  "egui",
  "logic-analyzer-viewer",
  "node-graph",
+ "rfd",
  "serde",
  "serde_json",
  "tempfile",

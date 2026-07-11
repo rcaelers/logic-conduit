@@ -3,6 +3,15 @@ use crate::demo_signals;
 use crate::nodes;
 use logic_analyzer_viewer::LogicAnalyzerViewer;
 use node_graph::{NodeBadge, NodeGraphWidget, NodeId};
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::{Path, PathBuf};
+
+#[cfg(not(target_arch = "wasm32"))]
+enum FileCommand {
+    Load,
+    Save,
+    Quit,
+}
 
 pub struct App {
     node_graph: NodeGraphWidget,
@@ -12,6 +21,10 @@ pub struct App {
     run: Option<compiler::AppRun>,
     /// Last global compile/run message shown in the toolbar.
     run_message: Option<(String, bool /* is_error */)>,
+    /// Last document load/save message shown in the toolbar.
+    file_message: Option<(String, bool /* is_error */)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    current_file: Option<PathBuf>,
     /// Nodes badged with compile errors; cleared on the next Run.
     error_badges: Vec<NodeId>,
     /// Last time the running pipeline was diffed against the edited graph.
@@ -34,13 +47,39 @@ impl App {
         cc: &eframe::CreationContext,
         register_plugins: impl FnOnce(&mut compiler::PluginContext),
     ) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        return Self::new_with_plugins_and_file(cc, None, register_plugins);
+
+        #[cfg(target_arch = "wasm32")]
+        Self::build(cc, register_plugins)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new_with_plugins_and_file(
+        cc: &eframe::CreationContext,
+        file: Option<&Path>,
+        register_plugins: impl FnOnce(&mut compiler::PluginContext),
+    ) -> Self {
+        let mut app = Self::build(cc, register_plugins);
+        if let Some(file) = file {
+            app.load_file(file.to_owned());
+        }
+        app
+    }
+
+    fn build(
+        cc: &eframe::CreationContext,
+        register_plugins: impl FnOnce(&mut compiler::PluginContext),
+    ) -> Self {
         install_fonts(&cc.egui_ctx);
         let mut registry = nodes::build_registry();
         let mut builders = compiler::BuilderRegistry::standard();
-        register_plugins(&mut compiler::PluginContext::new(&mut registry, &mut builders));
+        register_plugins(&mut compiler::PluginContext::new(
+            &mut registry,
+            &mut builders,
+        ));
+        #[allow(unused_mut)] // mutable only for the wasm demo graph
         let mut widget = NodeGraphWidget::new(registry);
-        #[cfg(not(target_arch = "wasm32"))]
-        nodes::populate_startup(&mut widget);
         #[cfg(target_arch = "wasm32")]
         nodes::populate_uart_demo(&mut widget);
         let mut logic_analyzer = LogicAnalyzerViewer::new();
@@ -52,8 +91,111 @@ impl App {
             builders,
             run: None,
             run_message: None,
+            file_message: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            current_file: None,
             error_badges: Vec::new(),
             last_live_sync: 0.0,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_file(&mut self, path: PathBuf) {
+        match self.node_graph.load_from_path(&path) {
+            Ok(()) => {
+                if let Some(run) = &mut self.run {
+                    run.stop();
+                }
+                self.run_message = None;
+                self.error_badges.clear();
+                self.current_file = Some(path.clone());
+                self.file_message = Some((format!("Loaded {}", path.display()), false));
+            }
+            Err(error) => self.file_message = Some((error, true)),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn choose_and_load_file(&mut self) {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Load graph")
+            .add_filter("Graph JSON", &["json"]);
+        if let Some(parent) = self.current_file.as_ref().and_then(|path| path.parent()) {
+            dialog = dialog.set_directory(parent);
+        }
+        if let Some(path) = dialog.pick_file() {
+            self.load_file(path);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_file(&mut self) {
+        let path = self.current_file.clone().or_else(|| {
+            rfd::FileDialog::new()
+                .set_title("Save graph")
+                .set_file_name("pipeline.json")
+                .add_filter("Graph JSON", &["json"])
+                .save_file()
+        });
+        let Some(path) = path else {
+            return;
+        };
+        match self.node_graph.save_to_path(&path) {
+            Ok(()) => {
+                self.current_file = Some(path.clone());
+                self.file_message = Some((format!("Saved {}", path.display()), false));
+            }
+            Err(error) => self.file_message = Some((error, true)),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn show_menu_bar(&mut self, ui: &mut egui::Ui) {
+        let load_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::O);
+        let save_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
+        let mut command = if ui.input_mut(|input| input.consume_shortcut(&load_shortcut)) {
+            Some(FileCommand::Load)
+        } else if ui.input_mut(|input| input.consume_shortcut(&save_shortcut)) {
+            Some(FileCommand::Save)
+        } else {
+            None
+        };
+
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui
+                    .add(
+                        egui::Button::new("Load...")
+                            .shortcut_text(ui.ctx().format_shortcut(&load_shortcut)),
+                    )
+                    .clicked()
+                {
+                    command = Some(FileCommand::Load);
+                    ui.close();
+                }
+                if ui
+                    .add(
+                        egui::Button::new("Save")
+                            .shortcut_text(ui.ctx().format_shortcut(&save_shortcut)),
+                    )
+                    .clicked()
+                {
+                    command = Some(FileCommand::Save);
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Quit").clicked() {
+                    command = Some(FileCommand::Quit);
+                    ui.close();
+                }
+            });
+        });
+
+        match command {
+            Some(FileCommand::Load) => self.choose_and_load_file(),
+            Some(FileCommand::Save) => self.save_file(),
+            Some(FileCommand::Quit) => ui.send_viewport_cmd(egui::ViewportCommand::Close),
+            None => {}
         }
     }
 
@@ -213,6 +355,14 @@ impl App {
                 };
                 ui.colored_label(color, message);
             }
+            if let Some((message, is_error)) = &self.file_message {
+                let color = if *is_error {
+                    egui::Color32::from_rgb(230, 120, 120)
+                } else {
+                    egui::Color32::from_rgb(180, 180, 180)
+                };
+                ui.colored_label(color, message);
+            }
         });
     }
 }
@@ -322,6 +472,9 @@ mod font_tests {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.show_menu_bar(ui);
+
         let available = ui.available_size();
         let splitter_hit_height = 7.0;
         let splitter_visual_height = 2.0;

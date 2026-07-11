@@ -24,6 +24,7 @@ example-plugin = { path = "../../plugins/example-plugin", optional = true }
 example-plugin = ["dep:example-plugin"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+clap = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

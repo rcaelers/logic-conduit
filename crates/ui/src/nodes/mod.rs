@@ -476,8 +476,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn checked_in_ccd_graph_matches_builder() {
+        let saved: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../graphs/ccd_pipeline.json"))
+                .expect("checked-in CCD graph should be valid JSON");
+
+        let mut widget = NodeGraphWidget::new(build_registry());
+        populate_startup(&mut widget);
+        let generated = serde_json::to_value(widget.graph()).expect("graph should serialize");
+
+        assert_eq!(saved, generated);
+    }
+
+    #[test]
+    fn graph_file_api_round_trips_the_startup_graph() {
+        let mut original = NodeGraphWidget::new(build_registry());
+        populate_startup(&mut original);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pipeline.json");
+        original.save_to_path(&path).unwrap();
+
+        let mut loaded = NodeGraphWidget::new(build_registry());
+        loaded.load_from_path(&path).unwrap();
+
+        assert_eq!(loaded.graph().nodes.len(), 12);
+        assert_eq!(loaded.graph().connections.len(), 29);
+    }
+
     /// Save/load round-trip (§7 Phase 6): serializing the graph to JSON and
-    /// restoring it through the registry (the Ctrl+S/Ctrl+O path) must
+    /// restoring it through the registry (the File > Save/Load path) must
     /// compile to the same pipeline.
     #[test]
     fn graph_json_round_trip_compiles_identically() {

@@ -77,8 +77,6 @@ pub(super) enum GraphAction {
     },
     ToggleMinimap,
     TogglePanel,
-    Save,
-    Load,
 }
 
 pub(super) struct HotkeyRegistry {
@@ -104,8 +102,6 @@ impl HotkeyRegistry {
         );
         r.bind(Shortcut::key(egui::Key::M), GraphAction::ToggleMinimap);
         r.bind(Shortcut::key(egui::Key::N), GraphAction::TogglePanel);
-        r.bind(Shortcut::ctrl(egui::Key::S), GraphAction::Save);
-        r.bind(Shortcut::ctrl(egui::Key::O), GraphAction::Load);
         r
     }
 
@@ -224,15 +220,6 @@ impl NodeGraphWidget {
             GraphAction::TogglePanel => {
                 self.toggle_panel();
                 ActionEffect::None
-            }
-            GraphAction::Save => {
-                self.save_graph(egui_ctx);
-                ActionEffect::None
-            }
-            GraphAction::Load => {
-                self.push_undo_snapshot();
-                self.load_graph(egui_ctx);
-                ActionEffect::ResetInteraction
             }
         }
     }
@@ -687,45 +674,6 @@ impl NodeGraphWidget {
             && node.kind != crate::model::NodeKind::Reroute
         {
             node.collapsed = !node.collapsed;
-        }
-    }
-
-    fn save_graph(&mut self, egui_ctx: &egui::Context) {
-        let time = egui_ctx.input(|input| input.time);
-        for id in self.graph.sorted_node_ids() {
-            if let (Some(instance), Some(node)) =
-                (self.runtime.get(&id), self.graph.nodes.get_mut(&id))
-            {
-                node.state = instance.save_state();
-            }
-        }
-
-        match serde_json::to_string_pretty(&self.graph) {
-            Ok(json) => match std::fs::write("pipeline.json", &json) {
-                Ok(_) => self.io_status = Some(("Saved  pipeline.json".to_string(), time)),
-                Err(error) => self.io_status = Some((format!("Save failed: {error}"), time)),
-            },
-            Err(error) => self.io_status = Some((format!("Serialization error: {error}"), time)),
-        }
-    }
-
-    fn load_graph(&mut self, egui_ctx: &egui::Context) {
-        let time = egui_ctx.input(|input| input.time);
-        match std::fs::read_to_string("pipeline.json") {
-            Ok(json) => match serde_json::from_str(&json) {
-                Ok(loaded) => {
-                    self.graph = loaded;
-                    self.runtime.clear();
-                    for node in self.graph.nodes.values_mut() {
-                        if let Some(instance) = self.registry.restore_node(node) {
-                            self.runtime.insert(node.id, instance);
-                        }
-                    }
-                    self.io_status = Some(("Loaded  pipeline.json".to_string(), time));
-                }
-                Err(error) => self.io_status = Some((format!("Parse error: {error}"), time)),
-            },
-            Err(error) => self.io_status = Some((format!("Load failed: {error}"), time)),
         }
     }
 }
