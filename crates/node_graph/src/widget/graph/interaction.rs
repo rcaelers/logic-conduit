@@ -1084,16 +1084,34 @@ impl NodeGraphWidget {
             }
         }
 
+        // Shift+A opens the Add search at the pointer (Blender's Add menu);
+        // plain A/Alt+A (select-all/deselect-all) go through `self.hotkeys`
+        // below as ordinary `GraphAction`s. This one stays special-cased
+        // because positioning the popup needs the screen pointer/canvas
+        // origin the generic action dispatch doesn't carry — but it must
+        // run, and *consume* its key event, before that dispatch: egui's
+        // `consume_shortcut` matches modifiers with `matches_logically`,
+        // which ignores *extra* Shift/Alt held beyond what a binding asks
+        // for, so the registry's plain `A` (no modifiers required) would
+        // otherwise also match a Shift+A press and fire Select All first,
+        // leaving nothing here to see.
+        let placing = matches!(self.interaction_state, InteractionState::PlacingNodes { .. });
+        if no_focus
+            && !placing
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::SHIFT, egui::Key::A))
+        {
+            let screen_pos = pointer.unwrap_or(canvas_rect.center());
+            let canvas_pos = self.view.screen_to_canvas(origin, screen_pos);
+            self.menu
+                .open_add_popup(screen_pos, &self.registry, canvas_pos);
+        }
+
         for action in self.hotkeys.dispatch(ui) {
             let effect = self.execute_action(action, ui.ctx(), pointer_canvas);
             self.apply_effect(effect, pointer_canvas);
         }
 
         let cutting = matches!(self.interaction_state, InteractionState::CuttingWire { .. });
-        // A placement gesture is modal — it swallows the context menu the
-        // same way an active knife cut does, so a click meant to
-        // confirm/cancel placement doesn't also pop up a menu.
-        let placing = matches!(self.interaction_state, InteractionState::PlacingNodes { .. });
 
         if let Some(context_screen_pos) =
             self.menu.context_trigger_pos(ui, pointer, !cutting && !placing)

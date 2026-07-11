@@ -100,11 +100,6 @@ pub(super) enum GraphAction {
     SelectAll,
     /// Deselects everything (Phase 2, Blender's Alt+A).
     DeselectAll,
-    /// Connects the active node to the previously-active one via the first
-    /// compatible socket pair found, trying both directions (Phase 2,
-    /// Blender's `F` "Make Link"). A no-op if there's no previous active
-    /// node, they're the same node, or nothing compatible is found.
-    LinkActiveToPrevious,
 }
 
 pub(super) struct HotkeyRegistry {
@@ -147,7 +142,6 @@ impl HotkeyRegistry {
         // origin this registry's dispatch doesn't carry.
         r.bind(Shortcut::key(egui::Key::A), GraphAction::SelectAll);
         r.bind(Shortcut::alt(egui::Key::A), GraphAction::DeselectAll);
-        r.bind(Shortcut::key(egui::Key::F), GraphAction::LinkActiveToPrevious);
         r
     }
 
@@ -339,59 +333,7 @@ impl NodeGraphWidget {
                 }
                 ActionEffect::None
             }
-            GraphAction::LinkActiveToPrevious => {
-                if let (Some(previous), Some(active)) =
-                    (self.previous_active_node, self.active_node)
-                    && previous != active
-                    && let Some((from, to)) = self.first_compatible_link(previous, active)
-                {
-                    self.push_undo_snapshot();
-                    self.graph.add_connection(from, to);
-                    self.run_update(from.node);
-                    self.run_update(to.node);
-                }
-                ActionEffect::None
-            }
         }
-    }
-
-    /// First (output, input) socket pair — visible sockets only — that
-    /// directly connects `a` and `b`, tried in both directions (`a`→`b`
-    /// first, then `b`→`a`). Used by `LinkActiveToPrevious` (Phase 2).
-    fn first_compatible_link(&self, a: NodeId, b: NodeId) -> Option<(SocketId, SocketId)> {
-        self.first_compatible_link_directed(a, b)
-            .or_else(|| self.first_compatible_link_directed(b, a))
-    }
-
-    fn first_compatible_link_directed(
-        &self,
-        from_node: NodeId,
-        to_node: NodeId,
-    ) -> Option<(SocketId, SocketId)> {
-        let from = self.graph.nodes.get(&from_node)?;
-        let to = self.graph.nodes.get(&to_node)?;
-        for (out_idx, output) in from.outputs.iter().enumerate() {
-            if !output.visible {
-                continue;
-            }
-            for (in_idx, input) in to.inputs.iter().enumerate() {
-                if input.visible && input.accepts(output.effective_type()) {
-                    return Some((
-                        SocketId {
-                            node: from_node,
-                            index: out_idx,
-                            direction: SocketDirection::Output,
-                        },
-                        SocketId {
-                            node: to_node,
-                            index: in_idx,
-                            direction: SocketDirection::Input,
-                        },
-                    ));
-                }
-            }
-        }
-        None
     }
 
     /// `pub(super)`: also called from `interaction.rs` to cancel a placement
@@ -1185,50 +1127,6 @@ mod action_tests {
 
         assert!(!widget.graph.nodes[&a].selected);
         assert!(!widget.graph.frames[0].selected);
-    }
-
-    #[test]
-    fn link_active_to_previous_connects_compatible_sockets() {
-        let mut widget = test_widget();
-        let source = widget
-            .add_node_at("Source", Pos2::new(0.0, 0.0))
-            .expect("source node should be created");
-        let sink = widget
-            .add_node_at("Sink", Pos2::new(100.0, 0.0))
-            .expect("sink node should be created");
-        // `add_node_at` makes each new node the active one, so after adding
-        // both, `previous_active_node` is `source` and `active_node` is
-        // `sink` — exactly the "select A, then B, press F" sequence.
-        assert_eq!(widget.previous_active_node, Some(source));
-        assert_eq!(widget.active_node, Some(sink));
-
-        widget.execute_action(
-            GraphAction::LinkActiveToPrevious,
-            &egui::Context::default(),
-            None,
-        );
-
-        assert_eq!(widget.graph.connections.len(), 1);
-        let connection = &widget.graph.connections[0];
-        assert_eq!(connection.from.node, source);
-        assert_eq!(connection.to.node, sink);
-    }
-
-    #[test]
-    fn link_active_to_previous_is_a_noop_without_two_distinct_nodes() {
-        let mut widget = test_widget();
-        widget
-            .add_node_at("Source", Pos2::new(0.0, 0.0))
-            .expect("source node should be created");
-        // Only one node was ever added, so there's no previous active node.
-
-        widget.execute_action(
-            GraphAction::LinkActiveToPrevious,
-            &egui::Context::default(),
-            None,
-        );
-
-        assert!(widget.graph.connections.is_empty());
     }
 
     #[test]

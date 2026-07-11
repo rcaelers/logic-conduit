@@ -41,9 +41,6 @@ pub struct NodeGraphWidget {
     node_rename: Option<NodeRenameState>,
     /// Most recently clicked/added node; the properties panel shows it.
     active_node: Option<NodeId>,
-    /// The active node just before the current one — Blender's "F" (Make
-    /// Link, Phase 2) connects between these two.
-    previous_active_node: Option<NodeId>,
     panel: PanelState,
     /// Badges set from outside the graph (compiler errors, runtime status);
     /// they take precedence over def-driven badges.
@@ -131,7 +128,6 @@ impl NodeGraphWidget {
             frame_rename: None,
             node_rename: None,
             active_node: None,
-            previous_active_node: None,
             panel: PanelState::default(),
             external_badges: HashMap::new(),
             node_statuses: HashMap::new(),
@@ -183,13 +179,7 @@ impl NodeGraphWidget {
         }
     }
 
-    /// Sets the active node, tracking the *previous* one (unless it's
-    /// already the same node) — Blender's "F" link shortcut (Phase 2)
-    /// connects between the two.
     fn set_active_node(&mut self, id: NodeId) {
-        if self.active_node != Some(id) {
-            self.previous_active_node = self.active_node;
-        }
         self.active_node = Some(id);
     }
 
@@ -456,7 +446,7 @@ impl NodeGraphWidget {
                 let any_selected = self.graph.nodes.values().any(|node| node.selected)
                     || self.graph.frames.iter().any(|frame| frame.selected);
                 if any_selected {
-                    "Shift+D Duplicate · F2 Rename · H Collapse · X Delete · F Link · . Zoom to Selection"
+                    "Shift+D Duplicate · F2 Rename · H Collapse · X Delete · . Zoom to Selection"
                 } else {
                     "Shift+A Add · A Select All · RMB Menu · MMB Pan"
                 }
