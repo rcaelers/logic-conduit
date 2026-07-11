@@ -33,6 +33,50 @@ pub trait EdgeQuery: Send + Sync {
     /// `Ok(None)` if there isn't one before `limit`.
     fn next_edge(&self, position: u64, limit: u64) -> Result<Option<CaptureTransition>>;
 
+    /// Appends up to `max_edges` transitions strictly after `position` and
+    /// before `limit`. The output is cleared first and transitions are
+    /// ordered by sample position.
+    ///
+    /// Computed query sources get a correct scalar fallback. File-backed
+    /// sources override this to hold their index/cache state once for the
+    /// complete batch.
+    fn next_edges(
+        &self,
+        position: u64,
+        limit: u64,
+        max_edges: usize,
+        output: &mut Vec<CaptureTransition>,
+    ) -> Result<()> {
+        output.clear();
+        if max_edges == 0 {
+            return Ok(());
+        }
+
+        let mut cursor = position;
+        while output.len() < max_edges {
+            let Some(transition) = self.next_edge(cursor, limit)? else {
+                break;
+            };
+            cursor = transition.sample;
+            output.push(transition);
+        }
+        Ok(())
+    }
+
+    /// Reads this channel at every position in `positions`, preserving input
+    /// order. The output is cleared first.
+    ///
+    /// The default implementation performs scalar point reads. File-backed
+    /// sources override it to group sorted positions by packed block.
+    fn values_at(&self, positions: &[u64], output: &mut Vec<bool>) -> Result<()> {
+        output.clear();
+        output.reserve(positions.len());
+        for &position in positions {
+            output.push(self.value_at(position)?);
+        }
+        Ok(())
+    }
+
     /// `next_edge` filtered to the first transition landing on `value`.
     /// Edges alternate, so the default implementation is at most two
     /// `next_edge` calls.

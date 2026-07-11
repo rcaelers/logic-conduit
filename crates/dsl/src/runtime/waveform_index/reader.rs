@@ -185,6 +185,132 @@ where
         Ok(None)
     }
 
+    /// Appends up to `max_transitions` exact transitions after `position` and
+    /// before `limit`, descending the index once per active 64-sample group.
+    pub fn next_transitions(
+        &mut self,
+        channel: usize,
+        position: u64,
+        limit: u64,
+        max_transitions: usize,
+        output: &mut Vec<CaptureTransition>,
+    ) -> Result<()> {
+        output.clear();
+        if channel >= self.header().total_probes {
+            return Err(Error::InvalidProbe(channel));
+        }
+        if max_transitions == 0 {
+            return Ok(());
+        }
+
+        let limit = limit.min(self.header().total_samples);
+        let Some(mut search) = position.checked_add(1) else {
+            return Ok(());
+        };
+        if search >= limit {
+            return Ok(());
+        }
+
+        output.reserve(max_transitions.min(65_536));
+        let samples_per_block = self.header().samples_per_block;
+        while search < limit && output.len() < max_transitions {
+            let block = search / samples_per_block;
+            let block_start = block * samples_per_block;
+            let block_limit = block_start.saturating_add(samples_per_block).min(limit);
+            let local_limit = block_limit - block_start;
+            let root = self.storage.load_root_summary(channel, block as usize)?;
+            if !root.toggle {
+                search = block_limit;
+                continue;
+            }
+
+            // Acquire one packed block view and one leaf view for every
+            // contiguous search through this block. Both are mmap/Arc views;
+            // no sample payload is copied here.
+            let data = self.cached_packed_block(channel, block)?;
+            let leaf = self.storage.load_leaf(channel, block as usize)?;
+            let Some(levels) = leaf.levels.as_ref() else {
+                search = block_limit;
+                continue;
+            };
+            let previous_block_last = if block > 0 {
+                Some(
+                    self.storage
+                        .load_root_summary(channel, block as usize - 1)?
+                        .last,
+                )
+            } else {
+                None
+            };
+
+            let mut local_search = search - block_start;
+            while local_search < local_limit && output.len() < max_transitions {
+                let Some(l1_group) = next_indexed_l1_group(levels, local_search, local_limit)
+                else {
+                    break;
+                };
+                let group_start = l1_group as u64 * SAMPLES_PER_L1_BIT;
+                let scan_start = local_search.max(group_start);
+                let scan_end = local_limit.min(group_start + SAMPLES_PER_L1_BIT);
+                append_raw_transitions(
+                    &data,
+                    block_start,
+                    scan_start,
+                    scan_end,
+                    previous_block_last,
+                    max_transitions,
+                    output,
+                );
+                local_search = scan_end;
+            }
+            search = block_start + local_search;
+            if local_search >= local_limit
+                || next_indexed_l1_group(levels, local_search, local_limit).is_none()
+            {
+                search = block_limit;
+            }
+        }
+        Ok(())
+    }
+
+    /// Reads a sorted batch of positions with one packed block acquisition
+    /// per block instead of one acquisition per sample.
+    pub fn values_at(
+        &mut self,
+        channel: usize,
+        positions: &[u64],
+        output: &mut Vec<bool>,
+    ) -> Result<()> {
+        if channel >= self.header().total_probes {
+            return Err(Error::InvalidProbe(channel));
+        }
+        output.clear();
+        output.reserve(positions.len());
+
+        let samples_per_block = self.header().samples_per_block;
+        let mut cursor = 0;
+        while cursor < positions.len() {
+            let position = positions[cursor];
+            if position >= self.header().total_samples {
+                return Err(Error::OutOfBounds(position));
+            }
+            let block = position / samples_per_block;
+            let data = self.cached_packed_block(channel, block)?;
+            while cursor < positions.len() {
+                let position = positions[cursor];
+                if position >= self.header().total_samples {
+                    return Err(Error::OutOfBounds(position));
+                }
+                if position / samples_per_block != block {
+                    break;
+                }
+                output.push(packed_bit(&data, (position % samples_per_block) as usize));
+                cursor += 1;
+            }
+        }
+        Ok(())
+    }
+
     fn next_raw_transition(
         &mut self,
         channel: usize,
@@ -820,6 +946,45 @@ fn next_indexed_l1_group(levels: &LevelsView<'_>, start: u64, end: u64) -> Optio
 
 fn nonzero_trailing_bit(word: u64) -> Option<usize> {
     (word != 0).then(|| word.trailing_zeros() as usize)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_raw_transitions(
+    data: &[u8],
+    block_start: u64,
+    local_start: u64,
+    local_end: u64,
+    previous_block_last: Option<bool>,
+    max_transitions: usize,
+    output: &mut Vec<CaptureTransition>,
+) {
+    if local_start >= local_end || output.len() >= max_transitions {
+        return;
+    }
+
+    let word_index = local_start as usize / 64;
+    let word_start = word_index * 64;
+    let word = load_le_word(data, word_index);
+    let entering = if word_start > 0 {
+        packed_bit(data, word_start - 1)
+    } else {
+        previous_block_last.unwrap_or(word & 1 != 0)
+    };
+    let lo = local_start as usize - word_start;
+    let hi = local_end as usize - word_start;
+    let mut toggles = word ^ ((word << 1) | entering as u64);
+    toggles &= range_mask(lo, hi);
+
+    while output.len() < max_transitions {
+        let Some(bit_index) = nonzero_trailing_bit(toggles) else {
+            break;
+        };
+        toggles &= toggles - 1;
+        output.push(CaptureTransition {
+            sample: block_start + (word_start + bit_index) as u64,
+            value: bit(word, bit_index),
+        });
+    }
 }
 
 impl<R: BlockCaptureSource> CaptureIndex for IndexSampler<R> {

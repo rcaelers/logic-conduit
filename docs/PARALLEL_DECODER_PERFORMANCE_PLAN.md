@@ -198,6 +198,33 @@ both methods:
 Start with a 65,536-sample window and a 65,536-edge safety limit. Make both
 limits constants so benchmarks can tune them without changing semantics.
 
+Status: implemented. `EdgeQuery` now supplies backward-compatible scalar
+defaults for `next_edges` and `values_at`. `DslChannelEdgeIndex` overrides both
+methods, holding the shared sampler once for each batch. The indexed reader
+keeps one leaf and packed block view while collecting transitions, and groups
+point reads by file block. `ParallelDecoder` reuses batch allocations and
+processes up to 65,536 trigger positions per call. Rising/falling modes request
+twice that many raw transitions and filter by landing value.
+
+The streamed enable state machine and CS/data/enable gating are still applied
+in chronological trigger order. Existing mixed streamed/query enable tests and
+word-assembly differential tests pass unchanged.
+
+### Step 3 Result
+
+Warm-cache 10-million-sample results:
+
+| Mode | Sink | Step 2 | Step 3 | Improvement | Words |
+| --- | --- | ---: | ---: | ---: | ---: |
+| indexed | count | 12.022 MSamples/s | 22.225 MSamples/s | 1.85x | 2,399,972 |
+| indexed | viewer | 1.836 MSamples/s | 3.510 MSamples/s | 1.91x | 2,399,972 |
+
+Relative to the original indexed baseline, the counter path is now 12.46x
+faster. It is still below the 50 MSamples/s real-time requirement and slightly
+behind the scalar packed-stream counter path. The next input-side task is the
+vectorized packed/live scanner. The viewer remains dominated by scalar `Word`
+transport and permanent annotation insertion.
+
 ## Step 4: Batched Indexed Parallel Decoder
 
 Refactor `ParallelDecoder::work_indexed` to operate on batches:

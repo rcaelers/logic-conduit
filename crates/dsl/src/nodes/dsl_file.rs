@@ -298,6 +298,28 @@ impl EdgeQuery for DslChannelEdgeIndex {
         let mut sampler = self.sampler.lock().unwrap();
         sampler.next_transition(self.channel, position, limit.min(self.total_samples))
     }
+
+    fn next_edges(
+        &self,
+        position: u64,
+        limit: u64,
+        max_edges: usize,
+        output: &mut Vec<CaptureTransition>,
+    ) -> Result<()> {
+        let mut sampler = self.sampler.lock().unwrap();
+        sampler.next_transitions(
+            self.channel,
+            position,
+            limit.min(self.total_samples),
+            max_edges,
+            output,
+        )
+    }
+
+    fn values_at(&self, positions: &[u64], output: &mut Vec<bool>) -> Result<()> {
+        let mut sampler = self.sampler.lock().unwrap();
+        sampler.values_at(self.channel, positions, output)
+    }
 }
 
 /// Source node that reads from a DSLogic .dsl capture file and outputs Sample streams

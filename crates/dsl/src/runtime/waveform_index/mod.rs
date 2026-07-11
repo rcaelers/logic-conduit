@@ -427,6 +427,38 @@ mod tests {
         assert_eq!(reader.next_transition(0, 63, 64)?, None);
         assert_eq!(reader.next_transition(0, 63, 65)?.unwrap().sample, 64);
 
+        let mut batched = Vec::new();
+        let mut batch = Vec::new();
+        let mut cursor = 0;
+        loop {
+            reader.next_transitions(0, cursor, total_samples, 3, &mut batch)?;
+            if batch.is_empty() {
+                break;
+            }
+            cursor = batch.last().unwrap().sample;
+            batched.extend(batch.iter().map(|transition| transition.sample));
+        }
+        assert_eq!(batched, edges);
+
+        let positions = [
+            0,
+            1,
+            64,
+            4_096,
+            262_144,
+            samples_per_block,
+            total_samples - 1,
+        ];
+        let mut values = Vec::new();
+        reader.values_at(0, &positions, &mut values)?;
+        assert_eq!(
+            values,
+            positions
+                .iter()
+                .map(|sample| edges.partition_point(|edge| edge <= sample) % 2 == 1)
+                .collect::<Vec<_>>()
+        );
+
         source.remove_index();
         Ok(())
     }
@@ -655,6 +687,22 @@ mod tests {
                 if let Some(transition) = actual {
                     assert_eq!(transition.value, samples[transition.sample as usize]);
                 }
+
+                let mut batch = Vec::new();
+                reader.next_transitions(0, position, limit, 17, &mut batch)?;
+                let expected_batch = ((position + 1)..limit)
+                    .filter(|sample| samples[*sample as usize] != samples[*sample as usize - 1])
+                    .take(17)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    batch
+                        .iter()
+                        .map(|transition| transition.sample)
+                        .collect::<Vec<_>>(),
+                    expected_batch,
+                    "batch round={round} case={case} spb={samples_per_block} \
+                     position={position} limit={limit}"
+                );
             }
 
             source.remove_index();
