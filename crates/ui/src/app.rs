@@ -9,10 +9,63 @@ use std::path::{Path, PathBuf};
 
 #[cfg(not(target_arch = "wasm32"))]
 enum FileCommand {
+    New,
     Load,
+    LoadPath(PathBuf),
+    ClearRecent,
     Save,
     SaveAs,
     Quit,
+}
+
+/// A destructive action (quit, new, or loading over the current graph) that
+/// must not proceed silently while there are unsaved changes. Set when the
+/// action is requested over a dirty graph; `show_guarded_action_dialog`
+/// resolves it (Save/Don't Save/Cancel) and either runs the action or drops
+/// it (Phase 5.1).
+#[cfg(not(target_arch = "wasm32"))]
+enum GuardedAction {
+    Quit,
+    New,
+    LoadPath(PathBuf),
+}
+
+/// UI/session state persisted across launches via `eframe::Storage`
+/// (Phase 5.2) — the graph document itself is never part of this; only
+/// layout and recently-opened files.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistedState {
+    analyzer_split: f32,
+    graph_ui_prefs: node_graph::GraphUiPrefs,
+    recent_files: Vec<PathBuf>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_RECENT_FILES: usize = 10;
+
+/// Canonicalizes every path and drops later duplicates, keeping first
+/// occurrence (i.e. most-recent-first order survives) and capping at
+/// `MAX_RECENT_FILES`. Applied both when loading a persisted list (in case
+/// it was saved by a build before this normalization existed, or before a
+/// canonicalization edge case was fixed — old duplicate entries would
+/// otherwise never clear themselves out) and after every push, so the
+/// stored list is always self-healing rather than only preventing *new*
+/// duplicates.
+#[cfg(not(target_arch = "wasm32"))]
+fn normalize_recent_files(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    for path in paths {
+        let canonical = path.canonicalize().unwrap_or(path);
+        if seen.insert(canonical.clone()) {
+            result.push(canonical);
+        }
+        if result.len() >= MAX_RECENT_FILES {
+            break;
+        }
+    }
+    result
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
@@ -29,10 +82,13 @@ fn is_quit_shortcut(event: &egui::Event) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum NativeMenuCommand {
     About,
+    New,
     Load,
+    LoadPath(std::path::PathBuf),
+    ClearRecent,
     Save,
     SaveAs,
     Quit,
@@ -55,6 +111,29 @@ pub fn dispatch_native_menu_command(command: NativeMenuCommand) {
     }
 }
 
+/// Reverse direction of `NATIVE_MENU_BRIDGE`: app state → native menu. The
+/// only current use is keeping the native "Open Recent" submenu live as
+/// files are opened/saved during the session, instead of only reflecting
+/// what was persisted as of the last launch. `main.rs` registers this once,
+/// on startup, with a closure that rebuilds the Cocoa submenu; both the
+/// registration and every call happen on the main thread (menu mutation
+/// requires it), so no synchronization beyond `OnceLock`'s own is needed.
+#[cfg(target_os = "macos")]
+static RECENT_FILES_LISTENER: std::sync::OnceLock<Box<dyn Fn(&[PathBuf]) + Send + Sync>> =
+    std::sync::OnceLock::new();
+
+#[cfg(target_os = "macos")]
+pub fn set_recent_files_listener(listener: impl Fn(&[PathBuf]) + Send + Sync + 'static) {
+    let _ = RECENT_FILES_LISTENER.set(Box::new(listener));
+}
+
+#[cfg(target_os = "macos")]
+fn notify_recent_files_changed(paths: &[PathBuf]) {
+    if let Some(listener) = RECENT_FILES_LISTENER.get() {
+        listener(paths);
+    }
+}
+
 pub struct App {
     node_graph: NodeGraphWidget,
     logic_analyzer: LogicAnalyzerViewer,
@@ -70,9 +149,15 @@ pub struct App {
     #[cfg(not(target_arch = "wasm32"))]
     saved_graph: serde_json::Value,
     #[cfg(not(target_arch = "wasm32"))]
-    close_confirmation: bool,
+    pending_guarded_action: Option<GuardedAction>,
     #[cfg(not(target_arch = "wasm32"))]
     allow_close: bool,
+    /// MRU list, most recent first, max `MAX_RECENT_FILES`, deduped.
+    #[cfg(not(target_arch = "wasm32"))]
+    recent_files: Vec<PathBuf>,
+    /// Set while the "Clear the recent files list?" confirmation is up.
+    #[cfg(not(target_arch = "wasm32"))]
+    confirm_clear_recent: bool,
     #[cfg(target_os = "macos")]
     native_menu_commands: crossbeam_channel::Receiver<NativeMenuCommand>,
     about: AboutWindow,
@@ -85,6 +170,20 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext) -> Self {
         Self::new_with_plugins(cc, |_ctx| {})
+    }
+
+    /// The persisted MRU list, most recent first — read once at startup by
+    /// the native macOS menu to build its "Open Recent" submenu (Phase 5.1).
+    /// Empty on wasm, where there is no recent-files list at all.
+    pub fn recent_files(&self) -> &[std::path::PathBuf] {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            &self.recent_files
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            &[]
+        }
     }
 
     /// Like [`Self::new`], but first runs `register_plugins` against a
@@ -133,6 +232,24 @@ impl App {
         let mut widget = NodeGraphWidget::new(registry);
         #[cfg(target_arch = "wasm32")]
         nodes::populate_uart_demo(&mut widget);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let persisted = cc
+            .storage
+            .and_then(|storage| eframe::get_value::<PersistedState>(storage, eframe::APP_KEY));
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(persisted) = &persisted {
+            widget.set_ui_prefs(persisted.graph_ui_prefs.clone());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let analyzer_split = persisted.as_ref().map_or(0.42, |p| p.analyzer_split);
+        #[cfg(target_arch = "wasm32")]
+        let analyzer_split = 0.42;
+        #[cfg(not(target_arch = "wasm32"))]
+        let recent_files = persisted
+            .map(|p| normalize_recent_files(p.recent_files))
+            .unwrap_or_default();
+
         #[cfg(not(target_arch = "wasm32"))]
         let saved_graph = widget
             .snapshot_value()
@@ -156,7 +273,7 @@ impl App {
         Self {
             node_graph: widget,
             logic_analyzer,
-            analyzer_split: 0.42,
+            analyzer_split,
             builders,
             run: None,
             run_message: None,
@@ -166,9 +283,13 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             saved_graph,
             #[cfg(not(target_arch = "wasm32"))]
-            close_confirmation: false,
+            pending_guarded_action: None,
             #[cfg(not(target_arch = "wasm32"))]
             allow_close: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            recent_files,
+            #[cfg(not(target_arch = "wasm32"))]
+            confirm_clear_recent: false,
             #[cfg(target_os = "macos")]
             native_menu_commands,
             about: AboutWindow::new(),
@@ -188,9 +309,58 @@ impl App {
                 self.error_badges.clear();
                 self.current_file = Some(path.clone());
                 self.mark_graph_saved();
+                self.push_recent_file(path.clone());
                 self.file_message = Some((format!("Loaded {}", path.display()), false));
             }
             Err(error) => self.file_message = Some((error, true)),
+        }
+    }
+
+    /// Inserts `path` at the front of the MRU list, deduping and capping at
+    /// `MAX_RECENT_FILES` (Phase 5.1).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn push_recent_file(&mut self, path: PathBuf) {
+        let mut paths = self.recent_files.clone();
+        paths.insert(0, path);
+        self.recent_files = normalize_recent_files(paths);
+        #[cfg(target_os = "macos")]
+        notify_recent_files_changed(&self.recent_files);
+    }
+
+    /// Resets to a fresh, empty graph — File → New (Phase 5.1). Assumes the
+    /// unsaved-changes guard has already been resolved by the caller.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn do_new(&mut self) {
+        if let Some(run) = &mut self.run {
+            run.stop();
+        }
+        self.run_message = None;
+        self.error_badges.clear();
+        self.node_graph.new_graph();
+        self.current_file = None;
+        self.mark_graph_saved();
+        self.file_message = Some(("New graph".to_owned(), false));
+    }
+
+    /// Requests File → New, guarding on unsaved changes the same way
+    /// `request_quit` does.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn request_new(&mut self) {
+        if self.has_unsaved_changes() {
+            self.pending_guarded_action = Some(GuardedAction::New);
+        } else {
+            self.do_new();
+        }
+    }
+
+    /// Requests loading `path` (e.g. from Open Recent), guarding on unsaved
+    /// changes the same way `request_quit` does.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn request_load_path(&mut self, path: PathBuf) {
+        if self.has_unsaved_changes() {
+            self.pending_guarded_action = Some(GuardedAction::LoadPath(path));
+        } else {
+            self.load_file(path);
         }
     }
 
@@ -242,6 +412,7 @@ impl App {
             Ok(()) => {
                 self.current_file = Some(path.clone());
                 self.mark_graph_saved();
+                self.push_recent_file(path.clone());
                 self.file_message = Some((format!("Saved {}", path.display()), false));
                 true
             }
@@ -270,7 +441,7 @@ impl App {
     #[cfg(not(target_arch = "wasm32"))]
     fn request_quit(&mut self, ctx: &egui::Context) {
         if self.has_unsaved_changes() {
-            self.close_confirmation = true;
+            self.pending_guarded_action = Some(GuardedAction::Quit);
         } else {
             self.allow_close = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -280,7 +451,10 @@ impl App {
     #[cfg(not(target_arch = "wasm32"))]
     fn execute_file_command(&mut self, command: FileCommand, ctx: &egui::Context) {
         match command {
+            FileCommand::New => self.request_new(),
             FileCommand::Load => self.choose_and_load_file(),
+            FileCommand::LoadPath(path) => self.request_load_path(path),
+            FileCommand::ClearRecent => self.confirm_clear_recent = true,
             FileCommand::Save => {
                 self.save_file();
             }
@@ -291,56 +465,113 @@ impl App {
         }
     }
 
+    /// Resolves whatever `pending_guarded_action` (quit/new/load-over-dirty)
+    /// is outstanding — Save/Don't Save/Cancel, same dialog for all three
+    /// (Phase 5.1).
     #[cfg(not(target_arch = "wasm32"))]
-    fn show_close_confirmation(&mut self, ctx: &egui::Context) {
-        if !self.close_confirmation {
+    fn show_guarded_action_dialog(&mut self, ctx: &egui::Context) {
+        if self.pending_guarded_action.is_none() {
             return;
         }
 
-        enum CloseAction {
+        enum DialogChoice {
             Save,
             Discard,
             Cancel,
         }
 
-        let mut action = None;
+        let mut choice = None;
         egui::Window::new("Save changes?")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label("Save changes to the graph before quitting?");
+                ui.label("Save changes to the graph before continuing?");
                 ui.horizontal(|ui| {
                     if ui.button("Save").clicked() {
-                        action = Some(CloseAction::Save);
+                        choice = Some(DialogChoice::Save);
                     }
                     if ui.button("Don't Save").clicked() {
-                        action = Some(CloseAction::Discard);
+                        choice = Some(DialogChoice::Discard);
                     }
                     if ui.button("Cancel").clicked() {
-                        action = Some(CloseAction::Cancel);
+                        choice = Some(DialogChoice::Cancel);
                     }
                 });
             });
 
-        match action {
-            Some(CloseAction::Save) if self.save_file() => {
-                self.close_confirmation = false;
-                self.allow_close = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-            Some(CloseAction::Discard) => {
-                self.close_confirmation = false;
-                self.allow_close = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-            Some(CloseAction::Cancel) => self.close_confirmation = false,
+        match choice {
+            // Save can itself open a blocking Save As dialog and be
+            // cancelled — leave `pending_guarded_action` set so this dialog
+            // simply reopens next frame rather than silently dropping the
+            // action.
+            Some(DialogChoice::Save) if self.save_file() => self.complete_guarded_action(ctx),
+            Some(DialogChoice::Discard) => self.complete_guarded_action(ctx),
+            Some(DialogChoice::Cancel) => self.pending_guarded_action = None,
             _ => {}
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn complete_guarded_action(&mut self, ctx: &egui::Context) {
+        let Some(action) = self.pending_guarded_action.take() else {
+            return;
+        };
+        match action {
+            GuardedAction::Quit => {
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            GuardedAction::New => self.do_new(),
+            GuardedAction::LoadPath(path) => self.load_file(path),
+        }
+    }
+
+    /// Resolves the "Clear the recent files list?" confirmation triggered
+    /// by either the egui or native "Clear Recent" menu item.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn show_clear_recent_dialog(&mut self, ctx: &egui::Context) {
+        if !self.confirm_clear_recent {
+            return;
+        }
+
+        enum DialogChoice {
+            Clear,
+            Cancel,
+        }
+
+        let mut choice = None;
+        egui::Window::new("Clear recent files?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label("Remove all entries from the recent files list?");
+                ui.horizontal(|ui| {
+                    if ui.button("Clear").clicked() {
+                        choice = Some(DialogChoice::Clear);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        choice = Some(DialogChoice::Cancel);
+                    }
+                });
+            });
+
+        match choice {
+            Some(DialogChoice::Clear) => {
+                self.recent_files.clear();
+                #[cfg(target_os = "macos")]
+                notify_recent_files_changed(&[]);
+                self.confirm_clear_recent = false;
+            }
+            Some(DialogChoice::Cancel) => self.confirm_clear_recent = false,
+            None => {}
         }
     }
 
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
     fn show_menu_bar(&mut self, ui: &mut egui::Ui) {
+        let new_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::N);
         let load_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::O);
         let save_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
         let save_as_shortcut = egui::KeyboardShortcut::new(
@@ -348,7 +579,9 @@ impl App {
             egui::Key::S,
         );
         let quit_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Q);
-        let mut command = if ui.input_mut(|input| input.consume_shortcut(&load_shortcut)) {
+        let mut command = if ui.input_mut(|input| input.consume_shortcut(&new_shortcut)) {
+            Some(FileCommand::New)
+        } else if ui.input_mut(|input| input.consume_shortcut(&load_shortcut)) {
             Some(FileCommand::Load)
         } else if ui.input_mut(|input| input.consume_shortcut(&save_as_shortcut)) {
             Some(FileCommand::SaveAs)
@@ -364,6 +597,16 @@ impl App {
             ui.menu_button("File", |ui| {
                 if ui
                     .add(
+                        egui::Button::new("New")
+                            .shortcut_text(ui.ctx().format_shortcut(&new_shortcut)),
+                    )
+                    .clicked()
+                {
+                    command = Some(FileCommand::New);
+                    ui.close();
+                }
+                if ui
+                    .add(
                         egui::Button::new("Load...")
                             .shortcut_text(ui.ctx().format_shortcut(&load_shortcut)),
                     )
@@ -372,6 +615,36 @@ impl App {
                     command = Some(FileCommand::Load);
                     ui.close();
                 }
+                ui.menu_button("Open Recent", |ui| {
+                    let existing: Vec<PathBuf> = self
+                        .recent_files
+                        .iter()
+                        .filter(|path| path.exists())
+                        .cloned()
+                        .collect();
+                    if existing.is_empty() {
+                        ui.weak("No recent files");
+                    } else {
+                        for path in &existing {
+                            let label = path
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("?");
+                            if ui.button(label).clicked() {
+                                command = Some(FileCommand::LoadPath(path.clone()));
+                                ui.close();
+                            }
+                        }
+                    }
+                    ui.separator();
+                    if ui
+                        .add_enabled(!existing.is_empty(), egui::Button::new("Clear Recent"))
+                        .clicked()
+                    {
+                        command = Some(FileCommand::ClearRecent);
+                        ui.close();
+                    }
+                });
                 if ui
                     .add(
                         egui::Button::new("Save")
@@ -755,7 +1028,10 @@ impl eframe::App for App {
                     self.about.open();
                     continue;
                 }
+                NativeMenuCommand::New => FileCommand::New,
                 NativeMenuCommand::Load => FileCommand::Load,
+                NativeMenuCommand::LoadPath(path) => FileCommand::LoadPath(path),
+                NativeMenuCommand::ClearRecent => FileCommand::ClearRecent,
                 NativeMenuCommand::Save => FileCommand::Save,
                 NativeMenuCommand::SaveAs => FileCommand::SaveAs,
                 NativeMenuCommand::Quit => FileCommand::Quit,
@@ -768,7 +1044,7 @@ impl eframe::App for App {
             let os_close_requested = _ctx.input(|input| input.viewport().close_requested());
             if !self.allow_close && os_close_requested {
                 if self.has_unsaved_changes() {
-                    self.close_confirmation = true;
+                    self.pending_guarded_action = Some(GuardedAction::Quit);
                     _ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 } else {
                     self.allow_close = true;
@@ -776,6 +1052,16 @@ impl eframe::App for App {
                 }
             }
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        let state = PersistedState {
+            analyzer_split: self.analyzer_split,
+            graph_ui_prefs: self.node_graph.ui_prefs(),
+            recent_files: self.recent_files.clone(),
+        };
+        eframe::set_value(storage, eframe::APP_KEY, &state);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -873,6 +1159,8 @@ impl eframe::App for App {
         self.about.show(ui.ctx());
 
         #[cfg(not(target_arch = "wasm32"))]
-        self.show_close_confirmation(ui.ctx());
+        self.show_guarded_action_dialog(ui.ctx());
+        #[cfg(not(target_arch = "wasm32"))]
+        self.show_clear_recent_dialog(ui.ctx());
     }
 }

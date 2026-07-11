@@ -9,7 +9,7 @@ mod render;
 use action::HotkeyRegistry;
 use interaction::{GraphResponses, InteractionState};
 use menu::MenuController;
-use panel::PanelState;
+use panel::{PanelState, PanelTab};
 
 use crate::{
     model::{FrameId, GraphState, Node, NodeBadge, NodeId},
@@ -55,6 +55,43 @@ struct FrameRenameState {
     screen_pos: Pos2,
 }
 
+/// Public mirror of the internal `PanelTab` — kept separate so the widget's
+/// internal panel module doesn't need to be part of the crate's API surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GraphPanelTab {
+    Node,
+    View,
+}
+
+impl From<PanelTab> for GraphPanelTab {
+    fn from(tab: PanelTab) -> Self {
+        match tab {
+            PanelTab::Node => Self::Node,
+            PanelTab::View => Self::View,
+        }
+    }
+}
+
+impl From<GraphPanelTab> for PanelTab {
+    fn from(tab: GraphPanelTab) -> Self {
+        match tab {
+            GraphPanelTab::Node => Self::Node,
+            GraphPanelTab::View => Self::View,
+        }
+    }
+}
+
+/// Persistable UI state that isn't part of the graph document itself —
+/// N-panel width/tab and minimap visibility (Phase 5.2). The host app reads
+/// this via [`NodeGraphWidget::ui_prefs`] to save it and restores it via
+/// [`NodeGraphWidget::set_ui_prefs`] on the next launch.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraphUiPrefs {
+    pub panel_width: f32,
+    pub panel_tab: Option<GraphPanelTab>,
+    pub minimap_visible: bool,
+}
+
 fn graph_pointer(
     pointer: Option<Pos2>,
     panel_rect: Option<egui::Rect>,
@@ -95,6 +132,24 @@ impl NodeGraphWidget {
 
     pub fn graph_mut(&mut self) -> &mut GraphState {
         &mut self.graph
+    }
+
+    /// Current UI prefs (N-panel width/tab, minimap visibility) — for the
+    /// host app to persist across launches (Phase 5.2).
+    pub fn ui_prefs(&self) -> GraphUiPrefs {
+        GraphUiPrefs {
+            panel_width: self.panel.width,
+            panel_tab: self.panel.active_tab.map(GraphPanelTab::from),
+            minimap_visible: self.minimap_visible,
+        }
+    }
+
+    /// Restores UI prefs saved via [`Self::ui_prefs`] — call once after
+    /// construction, before the first `show`.
+    pub fn set_ui_prefs(&mut self, prefs: GraphUiPrefs) {
+        self.panel.width = prefs.panel_width;
+        self.panel.active_tab = prefs.panel_tab.map(PanelTab::from);
+        self.minimap_visible = prefs.minimap_visible;
     }
 
     pub fn add_node_at(&mut self, name: &str, pos: Pos2) -> Option<NodeId> {
@@ -194,6 +249,16 @@ impl NodeGraphWidget {
         self.node_statuses.clear();
         self.active_node = None;
         self.restore_runtime();
+    }
+
+    /// Resets to a fresh, empty graph — the programmatic equivalent of
+    /// File → New (Phase 5.1). Clears undo/redo along with graph content;
+    /// UI prefs (panel width, minimap) and the runtime registry are
+    /// untouched.
+    pub fn new_graph(&mut self) {
+        self.set_graph(GraphState::default());
+        self.undo_stack.clear();
+        self.redo_stack.clear();
     }
 
     /// Saves the current graph as formatted JSON.
