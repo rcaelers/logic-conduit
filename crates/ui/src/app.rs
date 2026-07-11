@@ -433,6 +433,11 @@ fn install_fonts(ctx: &egui::Context) {
             .push(FONT_NAME.to_owned());
     }
     ctx.set_fonts(fonts);
+
+    // egui's debug-only rectangle/ID diagnostic can flicker during dynamic
+    // submenu and node layout updates. It is not useful application feedback.
+    #[cfg(debug_assertions)]
+    ctx.all_styles_mut(|style| style.debug.warn_if_rect_changes_id = false);
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -490,6 +495,12 @@ mod font_tests {
         );
         let ctx = egui::Context::default();
         install_fonts(&ctx);
+        #[cfg(debug_assertions)]
+        assert!(
+            !ctx.style_of(egui::Theme::Dark)
+                .debug
+                .warn_if_rect_changes_id
+        );
         // `set_fonts` only takes effect at the start of the *next* pass.
         ctx.begin_pass(Default::default());
         let _ = ctx.end_pass();
