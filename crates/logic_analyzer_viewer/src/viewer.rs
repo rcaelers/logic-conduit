@@ -364,15 +364,22 @@ impl LogicAnalyzerViewer {
         }
     }
 
-    /// Returns the time viewport to its origin and default scale. When a
-    /// capture is loaded, the default scale is its complete duration.
+    /// Returns the time viewport to its origin and fits the complete
+    /// recording. Uses capture metadata when available, otherwise the latest
+    /// timestamp in the loaded channel transitions.
     pub(crate) fn reset_time_view(&mut self) {
         self.visible_start_us = 0.0;
         if let Some(capture) = self.capture_info.as_ref() {
             self.visible_span_us = capture.duration_us.max(1.0);
             self.fit_to_capture = true;
         } else {
-            self.visible_span_us = DEFAULT_VISIBLE_SPAN_US;
+            self.visible_span_us = self
+                .channels
+                .iter()
+                .filter_map(|channel| channel.transitions.last())
+                .map(|transition| transition.time_us)
+                .fold(0.0_f64, f64::max)
+                .max(1.0);
             self.fit_to_capture = false;
         }
     }
@@ -390,16 +397,22 @@ impl LogicAnalyzerViewer {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_VISIBLE_SPAN_US, LogicAnalyzerViewer};
+    use super::{ChannelSignal, LogicAnalyzerViewer};
 
     #[test]
-    fn reset_time_view_returns_to_the_default_without_a_capture() {
+    fn reset_time_view_fits_in_memory_channels_without_a_capture() {
         let mut viewer = LogicAnalyzerViewer::new();
+        viewer.set_channels(vec![ChannelSignal {
+            index: 0,
+            name: "D0".to_owned(),
+            initial: false,
+            transitions: vec![(20.0, true), (240.0, false)],
+        }]);
         viewer.visible_start_us = 120.0;
         viewer.visible_span_us = 12.0;
         viewer.reset_time_view();
 
         assert_eq!(viewer.visible_start_us, 0.0);
-        assert_eq!(viewer.visible_span_us, DEFAULT_VISIBLE_SPAN_US);
+        assert_eq!(viewer.visible_span_us, 240.0);
     }
 }
