@@ -184,6 +184,43 @@ check cancellation between bounded chunks.
 Record queue depth and fragment memory. The default configuration must not add
 more than 128 MiB of transient memory on the reference graph.
 
+Status: complete. Native packed decoding now submits independent 65,536-sample
+scan jobs to one process-wide compute pool. The pool has at most eight threads;
+each decoder uses four by default and can request 1-8 through
+`with_parallel_workers`. The benchmark exposes the same range through
+`--workers`. wasm always takes the Step 4 sequential path. A decoder keeps at
+most `2 * workers` fragments outstanding, receives completions through a
+bounded channel, and stores early completions in a sequence-keyed reorder
+buffer. End-of-input is propagated only after all queued fragments are merged.
+Each scan job is itself the cancellation chunk, and dropped decoders disconnect
+their completion channel so the bounded remainder exits without emitting.
+Worker panics are caught and reported to the coordinator rather than leaving it
+blocked on a missing completion.
+
+Metrics now report effective workers, peak outstanding windows, peak reorder
+depth, and a conservative fragment-buffer memory estimate. The final dense
+Auto/viewer run used four workers, peaked at 8 outstanding and 3 reordered
+fragments, and estimated 2.0 MiB of fragment buffers, well below the 128 MiB
+limit. Reverse-order completion and multi-window sequential/parallel
+differential tests cover reorder behavior and partial word assembly across
+window boundaries. A missing `ProcessNode for Box<dyn ProcessNode>` forwarding
+method was also fixed: without it static pipelines silently ignored the
+decoder's Auto protocol override and selected indexed queries despite the dense
+activity result.
+
+Reference 50-million-sample scaling (MSamples/s):
+
+| Sink | 1 worker | 2 workers | 4 workers | 8 workers |
+| --- | ---: | ---: | ---: | ---: |
+| Discard | 221.2 | 467.0 | 494.1 | 481.9 |
+| Count + fingerprint | 118.1 | 121.4 | 119.9 | 116.9 |
+| Unlimited viewer | 137.4 | 325.1 | 377.9 | 363.9 |
+
+Four workers are the default because the real viewer path improves materially
+through four while eight adds overhead. The final dense Auto/viewer validation
+measured 382.3 MSamples/s (7.65x real time), retained all 11,999,858
+annotations, and preserved fingerprint `7b230a5c11e0818c`.
+
 ## Step 6: Viewer Follow-Up
 
 Profile again after packed protocol selection and parallel decoding. Only if

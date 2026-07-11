@@ -122,6 +122,10 @@ mod native {
         #[arg(long, default_value_t = 1_000)]
         buffer: usize,
 
+        /// Packed fragment scans allowed concurrently (1-8).
+        #[arg(long, default_value_t = 1)]
+        workers: usize,
+
         /// Maximum retained annotations for the viewer sink.
         #[arg(long, default_value_t = 4_000_000)]
         viewer_max_entries: usize,
@@ -300,6 +304,10 @@ mod native {
         resources: Option<ResourceMetrics>,
         selected_protocol: &'static str,
         strobe_activity_ratio: Option<f64>,
+        workers: usize,
+        max_outstanding: usize,
+        max_reorder: usize,
+        estimated_fragment_bytes: usize,
     }
 
     impl BenchResult {
@@ -318,9 +326,13 @@ mod native {
                 .unwrap_or_else(|| "unavailable".to_string());
             if matches!(self.sink, SinkKind::Viewer) {
                 println!(
-                    "mode={:?} protocol={} strobe_activity_ratio={} sink={:?} samples={} words_retained={} output_hash={:016x} hash_scope={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3} {}",
+                    "mode={:?} protocol={} workers={} queue_peak={} reorder_peak={} fragment_mib={:.1} strobe_activity_ratio={} sink={:?} samples={} words_retained={} output_hash={:016x} hash_scope={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3} {}",
                     self.mode,
                     self.selected_protocol,
+                    self.workers,
+                    self.max_outstanding,
+                    self.max_reorder,
+                    self.estimated_fragment_bytes as f64 / (1024.0 * 1024.0),
                     activity,
                     self.sink,
                     self.samples,
@@ -338,9 +350,13 @@ mod native {
             } else if self.words_measured {
                 let mwords_per_second = self.words as f64 / seconds / 1_000_000.0;
                 println!(
-                    "mode={:?} protocol={} strobe_activity_ratio={} sink={:?} samples={} words={} output_hash={:016x} hash_scope={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} MWords_s={:.3} realtime_x={:.3} {}",
+                    "mode={:?} protocol={} workers={} queue_peak={} reorder_peak={} fragment_mib={:.1} strobe_activity_ratio={} sink={:?} samples={} words={} output_hash={:016x} hash_scope={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} MWords_s={:.3} realtime_x={:.3} {}",
                     self.mode,
                     self.selected_protocol,
+                    self.workers,
+                    self.max_outstanding,
+                    self.max_reorder,
+                    self.estimated_fragment_bytes as f64 / (1024.0 * 1024.0),
                     activity,
                     self.sink,
                     self.samples,
@@ -358,9 +374,13 @@ mod native {
                 );
             } else {
                 println!(
-                    "mode={:?} protocol={} strobe_activity_ratio={} sink={:?} samples={} words=unmeasured output_hash=unmeasured setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3} {}",
+                    "mode={:?} protocol={} workers={} queue_peak={} reorder_peak={} fragment_mib={:.1} strobe_activity_ratio={} sink={:?} samples={} words=unmeasured output_hash=unmeasured setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3} {}",
                     self.mode,
                     self.selected_protocol,
+                    self.workers,
+                    self.max_outstanding,
+                    self.max_reorder,
+                    self.estimated_fragment_bytes as f64 / (1024.0 * 1024.0),
                     activity,
                     self.sink,
                     self.samples,
@@ -396,7 +416,10 @@ mod native {
             BenchMode::Both => unreachable!("Both is expanded by main"),
         };
         let decoder = ParallelDecoder::new(args.data.len(), args.trigger.into(), cs_polarity)
-            .with_input_strategy(input_strategy);
+            .with_input_strategy(input_strategy)
+            .with_parallel_workers(args.workers);
+        let parallel_workers = decoder.parallel_workers();
+        let parallel_metrics = decoder.parallel_metrics();
 
         let setup_start = Instant::now();
         let strobe_activity_ratio = if matches!(mode, BenchMode::Auto) {
@@ -417,6 +440,11 @@ mod native {
                 })
                 .unwrap_or("auto-fallback"),
             BenchMode::Both => unreachable!("Both is expanded by main"),
+        };
+        let workers = if selected_protocol == "packed-stream" {
+            parallel_workers
+        } else {
+            1
         };
 
         let output_stats = Arc::new(Mutex::new(OutputStats::default()));
@@ -472,6 +500,7 @@ mod native {
         scheduler.wait();
         let elapsed = run_start.elapsed();
         let resources = resource_delta(resources_before, resource_usage());
+        let parallel_metrics = parallel_metrics.snapshot();
 
         let (stats, fingerprint_scope) = if let Some(store) = viewer_store {
             let lanes = store.read();
@@ -503,6 +532,10 @@ mod native {
             resources,
             selected_protocol,
             strobe_activity_ratio,
+            workers,
+            max_outstanding: parallel_metrics.max_outstanding,
+            max_reorder: parallel_metrics.max_reorder,
+            estimated_fragment_bytes: parallel_metrics.estimated_fragment_bytes,
         })
     }
 
@@ -516,6 +549,9 @@ mod native {
         }
         if args.data.is_empty() || args.data.len() > 64 {
             return Err("--data must contain between 1 and 64 channels".into());
+        }
+        if !(1..=8).contains(&args.workers) {
+            return Err("--workers must be between 1 and 8".into());
         }
         if args
             .data
@@ -650,6 +686,7 @@ mod native {
             assert_eq!(args.cs, Some(8));
             assert!(matches!(args.cs_polarity, BenchCsPolarity::ActiveLow));
             assert_eq!(args.viewer_max_entries, 4_000_000);
+            assert_eq!(args.workers, 1);
         }
 
         #[test]

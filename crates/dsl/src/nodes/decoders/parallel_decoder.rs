@@ -15,9 +15,58 @@ use crate::runtime::node::{
 };
 use crate::runtime::protocol::ProtocolKind;
 use crate::runtime::sample::{Sample, SampleBlock};
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tracing::debug;
+
+#[derive(Clone)]
+pub struct ParallelDecoderMetrics {
+    inner: Arc<ParallelDecoderMetricsInner>,
+}
+
+struct ParallelDecoderMetricsInner {
+    workers: AtomicUsize,
+    max_outstanding: AtomicUsize,
+    max_reorder: AtomicUsize,
+    max_fragment_bytes: AtomicUsize,
+}
+
+impl Default for ParallelDecoderMetrics {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(ParallelDecoderMetricsInner {
+                workers: AtomicUsize::new(1),
+                max_outstanding: AtomicUsize::new(0),
+                max_reorder: AtomicUsize::new(0),
+                max_fragment_bytes: AtomicUsize::new(0),
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ParallelDecoderMetricsSnapshot {
+    pub workers: usize,
+    pub max_outstanding: usize,
+    pub max_reorder: usize,
+    pub estimated_fragment_bytes: usize,
+}
+
+impl ParallelDecoderMetrics {
+    pub fn snapshot(&self) -> ParallelDecoderMetricsSnapshot {
+        let max_outstanding = self.inner.max_outstanding.load(Ordering::Relaxed);
+        let max_fragment_bytes = self.inner.max_fragment_bytes.load(Ordering::Relaxed);
+        ParallelDecoderMetricsSnapshot {
+            workers: self.inner.workers.load(Ordering::Relaxed),
+            max_outstanding,
+            max_reorder: self.inner.max_reorder.load(Ordering::Relaxed),
+            estimated_fragment_bytes: max_outstanding.saturating_mul(max_fragment_bytes),
+        }
+    }
+}
 
 /// Parallel bus decoder node (block-based)
 ///
@@ -68,9 +117,15 @@ pub struct ParallelDecoder {
     /// Next fragment expected by the ordered stream merge. Sequential in
     /// Step 4; Step 5's reorder buffer will preserve this invariant.
     next_stream_merge_sequence: u64,
+    /// Maximum number of packed scan jobs this decoder may execute at once.
+    /// A value of one keeps the Step 4 sequential path.
+    parallel_workers: usize,
+    parallel_metrics: ParallelDecoderMetrics,
 }
 
 impl ParallelDecoder {
+    pub const DEFAULT_PARALLEL_WORKERS: usize = 4;
+
     /// Above this fraction of active 64-sample strobe groups, packed scans
     /// are preferred over indexed point queries in Auto mode.
     pub const AUTO_PACKED_ACTIVITY_RATIO: f64 = 0.25;
@@ -117,6 +172,8 @@ impl ParallelDecoder {
             query_buffers: QueryBuffers::default(),
             stream_blocks: StreamBlockState::default(),
             next_stream_merge_sequence: 0,
+            parallel_workers: Self::DEFAULT_PARALLEL_WORKERS,
+            parallel_metrics: ParallelDecoderMetrics::default(),
         }
     }
 
@@ -129,6 +186,35 @@ impl ParallelDecoder {
     pub fn with_input_strategy(mut self, strategy: ParallelInputStrategy) -> Self {
         self.input_strategy = strategy;
         self
+    }
+
+    /// Run packed fragment scans concurrently on the shared native worker
+    /// pool. The wasm runtime and a value of one remain sequential.
+    pub fn with_parallel_workers(mut self, workers: usize) -> Self {
+        self.parallel_workers = workers.clamp(1, 8);
+        self
+    }
+
+    pub fn parallel_workers(&self) -> usize {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let workers = self
+                .parallel_workers
+                .min(crate::runtime::worker_pool::shared_worker_pool().workers());
+            self.parallel_metrics
+                .inner
+                .workers
+                .store(workers, Ordering::Relaxed);
+            return workers;
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            1
+        }
+    }
+
+    pub fn parallel_metrics(&self) -> ParallelDecoderMetrics {
+        self.parallel_metrics.clone()
     }
 
     /// Assemble `cycles` successive bus samples into one output word.
@@ -226,6 +312,12 @@ impl ProcessNode for ParallelDecoder {
         &self,
         candidates: &[Option<InputProtocolCandidate>],
     ) -> Vec<Option<ProtocolKind>> {
+        debug!(
+            decoder = %self.name,
+            strategy = ?self.input_strategy,
+            candidate_count = candidates.len(),
+            "selecting parallel decoder input protocols"
+        );
         let schemas = self.input_schema();
         let mut selected: Vec<Option<ProtocolKind>> = candidates
             .iter()
@@ -283,6 +375,13 @@ impl ProcessNode for ParallelDecoder {
         } else {
             None
         };
+        debug!(
+            decoder = %self.name,
+            activity_ratio,
+            ?preferred,
+            ?protocol,
+            "selected parallel decoder raw-input protocol"
+        );
         for (index, candidate) in candidates[..raw_inputs].iter().enumerate() {
             if candidate.is_some() {
                 selected[index] = protocol;
@@ -363,6 +462,18 @@ struct StreamBlockState {
     offset: usize,
     next_sequence: u64,
     fragment_buffers: DecodeFragmentBuffers,
+    #[cfg(not(target_arch = "wasm32"))]
+    completion_sender: Option<crossbeam_channel::Sender<FragmentCompletion>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    completion_receiver: Option<crossbeam_channel::Receiver<FragmentCompletion>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    in_flight: usize,
+    #[cfg(not(target_arch = "wasm32"))]
+    input_exhausted: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    reorder: BTreeMap<u64, DecodeFragment>,
+    #[cfg(not(target_arch = "wasm32"))]
+    available_buffers: Vec<DecodeFragmentBuffers>,
 }
 
 #[derive(Debug, Default)]
@@ -382,6 +493,12 @@ struct DecodeFragment {
     last_strobe_value: bool,
     buffers: DecodeFragmentBuffers,
     reset_after: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+enum FragmentCompletion {
+    Complete(DecodeFragment),
+    Panicked(u64),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -438,6 +555,21 @@ fn cs_eligible(config: StreamScanConfig, cs: Option<&SampleBlock>, local_index: 
         (CsPolarity::ActiveHigh, Some(cs)) => !packed_bit(&cs.data, local_index),
         _ => true,
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fragment_buffer_bytes(buffers: &DecodeFragmentBuffers) -> usize {
+    buffers
+        .positions
+        .capacity()
+        .saturating_mul(std::mem::size_of::<u64>())
+        .saturating_add(
+            buffers
+                .values
+                .capacity()
+                .saturating_mul(std::mem::size_of::<u64>()),
+        )
+        .saturating_add(buffers.reset_before.capacity().div_ceil(u8::BITS as usize))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -635,6 +767,110 @@ fn merge_stream_fragment(
     }
     *previous_strobe_value = fragment.last_strobe_value;
     Ok(words_emitted)
+}
+
+fn acquire_stream_block_set(
+    strobe_input: &mut Receiver<'_, SampleBlock>,
+    data_inputs: &mut [Receiver<'_, SampleBlock>],
+    cs_input: &mut Option<Receiver<'_, SampleBlock>>,
+    blocks: &mut StreamBlockState,
+) -> WorkResult<()> {
+    let strobe = strobe_input.recv()?;
+    if strobe.num_samples == 0 {
+        return Err(WorkError::NodeError(
+            "Strobe block must contain at least one sample".to_string(),
+        ));
+    }
+    let aligned = |block: &SampleBlock, input_name: &str| -> WorkResult<()> {
+        if block.start_position != strobe.start_position
+            || block.num_samples != strobe.num_samples
+            || block.timestamp_step != strobe.timestamp_step
+        {
+            return Err(WorkError::NodeError(format!(
+                "{input_name} block misaligned: start={}, samples={}, step={} vs \
+                 strobe start={}, samples={}, step={}",
+                block.start_position,
+                block.num_samples,
+                block.timestamp_step,
+                strobe.start_position,
+                strobe.num_samples,
+                strobe.timestamp_step
+            )));
+        }
+        Ok(())
+    };
+
+    let mut data = Vec::with_capacity(data_inputs.len());
+    for (index, input) in data_inputs.iter_mut().enumerate() {
+        let block = input.recv()?;
+        aligned(&block, &format!("Data {index}"))?;
+        data.push(block);
+    }
+    let cs = match cs_input {
+        Some(input) => {
+            let block = input.recv()?;
+            aligned(&block, "CS")?;
+            Some(block)
+        }
+        None => None,
+    };
+
+    blocks.strobe = Some(strobe);
+    blocks.data = data;
+    blocks.cs = cs;
+    blocks.offset = 0;
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn receive_next_parallel_fragment(
+    blocks: &mut StreamBlockState,
+    expected_sequence: u64,
+    metrics: &ParallelDecoderMetrics,
+) -> WorkResult<DecodeFragment> {
+    if let Some(fragment) = blocks.reorder.remove(&expected_sequence) {
+        return Ok(fragment);
+    }
+
+    loop {
+        if blocks.in_flight == 0 {
+            if blocks.input_exhausted {
+                return Err(WorkError::Shutdown);
+            }
+            return Err(WorkError::NodeError(
+                "Parallel decoder has no outstanding fragment".to_string(),
+            ));
+        }
+        let completion = blocks
+            .completion_receiver
+            .as_ref()
+            .ok_or_else(|| {
+                WorkError::NodeError("Fragment completion channel is missing".to_string())
+            })?
+            .recv()
+            .map_err(|_| WorkError::NodeError("Fragment completion channel closed".to_string()))?;
+        blocks.in_flight -= 1;
+        let fragment = match completion {
+            FragmentCompletion::Complete(fragment) => fragment,
+            FragmentCompletion::Panicked(sequence) => {
+                return Err(WorkError::NodeError(format!(
+                    "Fragment worker panicked while scanning sequence {sequence}"
+                )));
+            }
+        };
+        metrics
+            .inner
+            .max_fragment_bytes
+            .fetch_max(fragment_buffer_bytes(&fragment.buffers), Ordering::Relaxed);
+        if fragment.sequence == expected_sequence {
+            return Ok(fragment);
+        }
+        blocks.reorder.insert(fragment.sequence, fragment);
+        metrics
+            .inner
+            .max_reorder
+            .fetch_max(blocks.reorder.len(), Ordering::Relaxed);
+    }
 }
 
 /// Enable-signal state, threaded through `process_trigger` calls. Either a
@@ -933,6 +1169,20 @@ impl ParallelDecoder {
     /// connection that didn't negotiate `EdgeQuery`.
     fn work_streamed(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
         let mut blocks = std::mem::take(&mut self.stream_blocks);
+        #[cfg(not(target_arch = "wasm32"))]
+        let result = {
+            let workers = if self.parallel_workers > 1 {
+                self.parallel_workers()
+            } else {
+                1
+            };
+            if workers > 1 {
+                self.work_streamed_parallel_inner(inputs, outputs, &mut blocks, workers)
+            } else {
+                self.work_streamed_inner(inputs, outputs, &mut blocks)
+            }
+        };
+        #[cfg(target_arch = "wasm32")]
         let result = self.work_streamed_inner(inputs, outputs, &mut blocks);
         self.stream_blocks = blocks;
         result
@@ -1019,50 +1269,7 @@ impl ParallelDecoder {
         // this state while bounded windows advance through it, so no packed
         // bytes are copied or split for scheduler fairness.
         if blocks.strobe.is_none() {
-            let strobe = strobe_input.recv()?;
-            if strobe.num_samples == 0 {
-                return Err(WorkError::NodeError(
-                    "Strobe block must contain at least one sample".to_string(),
-                ));
-            }
-            let aligned = |block: &SampleBlock, input_name: &str| -> WorkResult<()> {
-                if block.start_position != strobe.start_position
-                    || block.num_samples != strobe.num_samples
-                    || block.timestamp_step != strobe.timestamp_step
-                {
-                    return Err(WorkError::NodeError(format!(
-                        "{input_name} block misaligned: start={}, samples={}, step={} vs \
-                         strobe start={}, samples={}, step={}",
-                        block.start_position,
-                        block.num_samples,
-                        block.timestamp_step,
-                        strobe.start_position,
-                        strobe.num_samples,
-                        strobe.timestamp_step
-                    )));
-                }
-                Ok(())
-            };
-
-            let mut data = Vec::with_capacity(self.num_data_bits);
-            for (i, input) in data_inputs.iter_mut().enumerate() {
-                let block = input.recv()?;
-                aligned(&block, &format!("Data {i}"))?;
-                data.push(block);
-            }
-            let cs = match &mut cs_input {
-                Some(input) => {
-                    let block = input.recv()?;
-                    aligned(&block, "CS")?;
-                    Some(block)
-                }
-                None => None,
-            };
-
-            blocks.strobe = Some(strobe);
-            blocks.data = data;
-            blocks.cs = cs;
-            blocks.offset = 0;
+            acquire_stream_block_set(&mut strobe_input, &mut data_inputs, &mut cs_input, blocks)?;
         }
 
         let strobe_block = blocks.strobe.as_ref().expect("block set acquired above");
@@ -1151,6 +1358,213 @@ impl ParallelDecoder {
             debug_assert!(fragment.start_position < fragment.end_position);
         }
 
+        Ok(words_emitted as usize)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn work_streamed_parallel_inner(
+        &mut self,
+        inputs: &[InputPort],
+        outputs: &[OutputPort],
+        blocks: &mut StreamBlockState,
+        workers: usize,
+    ) -> WorkResult<usize> {
+        self.work_call_count += 1;
+        let output = outputs.first().and_then(|port| port.get::<Word>());
+
+        let mut strobe_buf = VecDeque::new();
+        let mut strobe_input = inputs
+            .first()
+            .and_then(|port| port.get::<SampleBlock>(&mut strobe_buf))
+            .ok_or_else(|| WorkError::NodeError("Missing strobe block input".to_string()))?;
+        let mut data_bufs: Vec<VecDeque<SampleBlock>> =
+            (0..self.num_data_bits).map(|_| VecDeque::new()).collect();
+        let mut data_inputs: Vec<Receiver<'_, SampleBlock>> =
+            Vec::with_capacity(self.num_data_bits);
+        for (index, buffer) in data_bufs.iter_mut().enumerate() {
+            let input = inputs
+                .get(1 + index)
+                .and_then(|port| port.get::<SampleBlock>(buffer))
+                .ok_or_else(|| WorkError::NodeError(format!("Missing data block input {index}")))?;
+            data_inputs.push(input);
+        }
+
+        let mut cs_buf = VecDeque::new();
+        let mut cs_input = inputs
+            .get(1 + self.num_data_bits)
+            .and_then(|port| port.get::<SampleBlock>(&mut cs_buf));
+        if cs_input.is_none() && self.cs_polarity != CsPolarity::Disabled {
+            return Err(WorkError::NodeError(
+                "CS input unconnected but CS polarity is not Disabled".to_string(),
+            ));
+        }
+
+        let enable_port_idx = 1 + self.num_data_bits + 1;
+        let enable_query = inputs
+            .get(enable_port_idx)
+            .and_then(|port| port.edge_query());
+        let mut current_enable_value = self.current_enable_value;
+        let mut next_enable_change_position = self.next_enable_change_position;
+        let mut enable_input = if enable_query.is_some() {
+            None
+        } else {
+            inputs
+                .get(enable_port_idx)
+                .and_then(|port| port.get::<Sample>(&mut self.enable_buffer))
+        };
+        if enable_query.is_none() && enable_input.is_none() {
+            current_enable_value = true;
+            next_enable_change_position = u64::MAX;
+        }
+
+        let max_outstanding = workers * 2;
+        if blocks.completion_sender.is_none() {
+            let (sender, receiver) = crossbeam_channel::bounded(max_outstanding);
+            blocks.completion_sender = Some(sender);
+            blocks.completion_receiver = Some(receiver);
+        }
+
+        while blocks.in_flight + blocks.reorder.len() < max_outstanding && !blocks.input_exhausted {
+            if blocks.strobe.is_none() {
+                match acquire_stream_block_set(
+                    &mut strobe_input,
+                    &mut data_inputs,
+                    &mut cs_input,
+                    blocks,
+                ) {
+                    Ok(()) => {}
+                    Err(WorkError::Shutdown) => {
+                        blocks.input_exhausted = true;
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+
+            let strobe = blocks
+                .strobe
+                .as_ref()
+                .expect("parallel block set acquired above");
+            let window_start = blocks.offset;
+            let window_end = window_start
+                .saturating_add(Self::STREAM_SAMPLES_PER_CALL)
+                .min(strobe.num_samples);
+            let block_samples = strobe.num_samples;
+            let sequence = blocks.next_sequence;
+            let strobe = strobe.clone();
+            let data = blocks.data.clone();
+            let cs = blocks.cs.clone();
+            let config = StreamScanConfig {
+                mode: self.mode,
+                cs_polarity: self.cs_polarity,
+            };
+            let buffers = blocks.available_buffers.pop().unwrap_or_default();
+            let completion = blocks
+                .completion_sender
+                .as_ref()
+                .expect("completion channel initialized above")
+                .clone();
+            crate::runtime::worker_pool::shared_worker_pool()
+                .spawn(move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        scan_stream_fragment(
+                            config,
+                            sequence,
+                            &strobe,
+                            &data,
+                            cs.as_ref(),
+                            window_start,
+                            window_end,
+                            buffers,
+                        )
+                    }));
+                    let result = match result {
+                        Ok(fragment) => FragmentCompletion::Complete(fragment),
+                        Err(_) => FragmentCompletion::Panicked(sequence),
+                    };
+                    let _ = completion.send(result);
+                })
+                .map_err(|()| {
+                    WorkError::NodeError("Shared fragment worker pool stopped".to_string())
+                })?;
+
+            blocks.in_flight += 1;
+            blocks.next_sequence += 1;
+            self.parallel_metrics
+                .inner
+                .max_outstanding
+                .fetch_max(blocks.in_flight + blocks.reorder.len(), Ordering::Relaxed);
+            blocks.offset = window_end;
+            if window_end == block_samples {
+                blocks.strobe = None;
+                blocks.data.clear();
+                blocks.cs = None;
+                blocks.offset = 0;
+            }
+        }
+
+        let mut fragment = receive_next_parallel_fragment(
+            blocks,
+            self.next_stream_merge_sequence,
+            &self.parallel_metrics,
+        )?;
+
+        if fragment.sequence != self.next_stream_merge_sequence {
+            return Err(WorkError::NodeError(format!(
+                "Out-of-order decode fragment: expected sequence {}, received {}",
+                self.next_stream_merge_sequence, fragment.sequence
+            )));
+        }
+        let mut word_batch = output
+            .as_ref()
+            .map(|_| Vec::with_capacity(fragment.buffers.positions.len()));
+        let mut assembly = AssemblyState {
+            value: self.assembly_value,
+            cycles: self.assembly_cycles,
+            first_ts: self.assembly_first_ts,
+        };
+        let mut last_strobe_value = self.last_strobe_value;
+        let words_emitted = merge_stream_fragment(
+            &fragment,
+            self.mode,
+            &mut last_strobe_value,
+            self.num_data_bits,
+            self.cycles_per_word,
+            self.endianness,
+            &mut assembly,
+            enable_query.as_ref(),
+            &mut enable_input,
+            &mut current_enable_value,
+            &mut next_enable_change_position,
+            &mut word_batch,
+        )?;
+
+        self.next_stream_merge_sequence += 1;
+        self.last_strobe_value = last_strobe_value;
+        self.current_enable_value = current_enable_value;
+        self.next_enable_change_position = next_enable_change_position;
+        self.total_words_emitted += words_emitted;
+        self.assembly_value = assembly.value;
+        self.assembly_cycles = assembly.cycles;
+        self.assembly_first_ts = assembly.first_ts;
+        blocks
+            .available_buffers
+            .push(std::mem::take(&mut fragment.buffers));
+
+        if let (Some(output), Some(batch)) = (&output, word_batch)
+            && !batch.is_empty()
+        {
+            output.send_batch(batch)?;
+        }
+
+        debug!(
+            "[{}] Parallel stream fragment {} done: {} words, {} in flight, {} reordered",
+            self.name,
+            fragment.sequence,
+            words_emitted,
+            blocks.in_flight,
+            blocks.reorder.len()
+        );
         Ok(words_emitted as usize)
     }
 }
@@ -1595,6 +2009,57 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn parallel_completion_reorders_fragments_by_sequence() {
+        let strobe = block_from_bits(&[false, true, false, true, false, true, false, true]);
+        let data = [block_from_bits(&[true; 8])];
+        let config = StreamScanConfig {
+            mode: StrobeMode::RisingEdge,
+            cs_polarity: CsPolarity::Disabled,
+        };
+        let first = scan_stream_fragment(
+            config,
+            0,
+            &strobe,
+            &data,
+            None,
+            0,
+            4,
+            DecodeFragmentBuffers::default(),
+        );
+        let second = scan_stream_fragment(
+            config,
+            1,
+            &strobe,
+            &data,
+            None,
+            4,
+            8,
+            DecodeFragmentBuffers::default(),
+        );
+        let (sender, receiver) = bounded(2);
+        sender.send(FragmentCompletion::Complete(second)).unwrap();
+        sender.send(FragmentCompletion::Complete(first)).unwrap();
+        let mut blocks = StreamBlockState {
+            completion_receiver: Some(receiver),
+            in_flight: 2,
+            input_exhausted: true,
+            ..StreamBlockState::default()
+        };
+        let metrics = ParallelDecoderMetrics::default();
+
+        let first = receive_next_parallel_fragment(&mut blocks, 0, &metrics).unwrap();
+        assert_eq!(first.sequence, 0);
+        assert_eq!(blocks.reorder.len(), 1);
+        assert_eq!(metrics.snapshot().max_reorder, 1);
+
+        let second = receive_next_parallel_fragment(&mut blocks, 1, &metrics).unwrap();
+        assert_eq!(second.sequence, 1);
+        assert!(blocks.reorder.is_empty());
+        assert_eq!(blocks.in_flight, 0);
+    }
+
     #[test]
     fn streamed_block_is_retained_and_processed_in_bounded_windows() {
         let wd = Watchdog::new();
@@ -1615,7 +2080,8 @@ mod tests {
             "pd",
             "words",
         )];
-        let mut decoder = ParallelDecoder::new(1, StrobeMode::AnyEdge, CsPolarity::Disabled);
+        let mut decoder = ParallelDecoder::new(1, StrobeMode::AnyEdge, CsPolarity::Disabled)
+            .with_parallel_workers(1);
 
         assert_eq!(decoder.work(&inputs, &outputs).unwrap(), 0);
         let resident = decoder.stream_blocks.strobe.as_ref().unwrap();
@@ -1632,6 +2098,55 @@ mod tests {
             Err(WorkError::Shutdown)
         ));
         assert_eq!(out_rx.try_iter().count(), 0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn run_multi_window_stream(workers: usize) -> Vec<Word> {
+        let wd = Watchdog::new();
+        let sample_count = 2 * ParallelDecoder::STREAM_SAMPLES_PER_CALL + 17;
+        let strobe: Vec<bool> = (0..sample_count)
+            .map(|position| position % 4 == 1 || position % 4 == 2)
+            .collect();
+        let values: Vec<u64> = (0..sample_count)
+            .map(|position| ((position / 4) & 0xf) as u64)
+            .collect();
+        let mut inputs = vec![block_input(&wd, block_from_bits(&strobe), "strobe")];
+        for bit in 0..4 {
+            let data: Vec<bool> = values.iter().map(|value| value & (1 << bit) != 0).collect();
+            inputs.push(block_input(&wd, block_from_bits(&data), &format!("d{bit}")));
+        }
+        inputs.push(unconnected(&wd, "cs"));
+        inputs.push(unconnected(&wd, "enable_signal"));
+
+        let (out_tx, out_rx) = bounded::<ChannelMessage<Word>>(128);
+        let outputs = [OutputPort::new_with_watchdog(
+            Sender::new(vec![out_tx]),
+            &wd,
+            "pd",
+            "words",
+        )];
+        let mut decoder = ParallelDecoder::new(4, StrobeMode::RisingEdge, CsPolarity::Disabled)
+            .with_word_assembly(3, Endianness::Little)
+            .with_parallel_workers(workers);
+
+        loop {
+            match decoder.work(&inputs, &outputs) {
+                Ok(_) => {}
+                Err(WorkError::Shutdown) => break,
+                Err(error) => panic!("unexpected error: {error}"),
+            }
+        }
+        collect_messages(out_rx)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn parallel_stream_matches_sequential_across_window_boundaries() {
+        let sequential = run_multi_window_stream(1);
+        let parallel = run_multi_window_stream(4);
+
+        assert_eq!(parallel, sequential);
+        assert!(parallel.len() > 10_000);
     }
 
     #[test]
@@ -2024,7 +2539,13 @@ mod tests {
         let source = DslFileSource::new(path, 11)
             .expect("wipneus5.dsl should open")
             .with_max_samples(Some(max_samples));
-        let decoder = ParallelDecoder::new(8, StrobeMode::AnyEdge, CsPolarity::ActiveLow);
+        let input_strategy = if force_stream {
+            ParallelInputStrategy::PackedStream
+        } else {
+            ParallelInputStrategy::Indexed
+        };
+        let decoder = ParallelDecoder::new(8, StrobeMode::AnyEdge, CsPolarity::ActiveLow)
+            .with_input_strategy(input_strategy);
         let collected = Arc::new(std::sync::Mutex::new(Vec::new()));
 
         let mut pipeline = Pipeline::new();

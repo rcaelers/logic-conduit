@@ -11,6 +11,8 @@ pub mod uart_decoder;
 pub use types::{BitOrder, CsPolarity, Endianness, ParallelInputStrategy, SpiMode, StrobeMode};
 
 // Re-export decoders
-pub use parallel_decoder::ParallelDecoder;
+pub use parallel_decoder::{
+    ParallelDecoder, ParallelDecoderMetrics, ParallelDecoderMetricsSnapshot,
+};
 pub use spi_decoder::SpiDecoder;
 pub use uart_decoder::{UartDecoder, UartParity, UartStopBits};

@@ -23,6 +23,8 @@ pub mod type_registry;
 pub mod watchdog;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod waveform_index;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod worker_pool;
 
 pub use capture::{
     BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureIndex,

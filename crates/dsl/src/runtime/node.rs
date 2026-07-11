@@ -183,6 +183,12 @@ impl ProcessNode for Box<dyn ProcessNode> {
     fn output_schema(&self) -> Vec<crate::runtime::ports::PortSchema> {
         (**self).output_schema()
     }
+    fn select_input_protocols(
+        &self,
+        candidates: &[Option<InputProtocolCandidate>],
+    ) -> Vec<Option<ProtocolKind>> {
+        (**self).select_input_protocols(candidates)
+    }
     fn node_type(&self) -> &str {
         (**self).node_type()
     }
@@ -198,5 +204,59 @@ impl ProcessNode for Box<dyn ProcessNode> {
         input_queries: &[Option<Arc<dyn EdgeQuery>>],
     ) -> Option<Arc<dyn EdgeQuery>> {
         (**self).edge_query(port, input_queries)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::ports::{PortDirection, PortSchema};
+
+    struct StreamSelectingNode;
+
+    impl ProcessNode for StreamSelectingNode {
+        fn name(&self) -> &str {
+            "stream_selector"
+        }
+
+        fn num_inputs(&self) -> usize {
+            1
+        }
+
+        fn num_outputs(&self) -> usize {
+            0
+        }
+
+        fn input_schema(&self) -> Vec<PortSchema> {
+            vec![
+                PortSchema::new::<u8>("input", 0, PortDirection::Input)
+                    .with_protocols(vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]),
+            ]
+        }
+
+        fn select_input_protocols(
+            &self,
+            candidates: &[Option<InputProtocolCandidate>],
+        ) -> Vec<Option<ProtocolKind>> {
+            candidates
+                .iter()
+                .map(|candidate| candidate.as_ref().map(|_| ProtocolKind::Stream))
+                .collect()
+        }
+
+        fn work(&mut self, _inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn boxed_process_node_forwards_protocol_selection() {
+        let node: Box<dyn ProcessNode> = Box::new(StreamSelectingNode);
+        let selected = node.select_input_protocols(&[Some(InputProtocolCandidate {
+            offered: vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream],
+            edge_query: None,
+        })]);
+
+        assert_eq!(selected, vec![Some(ProtocolKind::Stream)]);
     }
 }
