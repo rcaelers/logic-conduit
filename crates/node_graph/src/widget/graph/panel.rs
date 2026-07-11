@@ -104,9 +104,7 @@ impl NodeGraphWidget {
     fn panel_height(&self, canvas_rect: Rect) -> f32 {
         let natural = match self.panel.active_tab {
             Some(PanelTab::Node) => self.node_panel_height(),
-            Some(PanelTab::View) => {
-                PANEL_MARGIN_Y * 2.0 + PANEL_TITLE_BLOCK_HEIGHT
-            }
+            Some(PanelTab::View) => PANEL_MARGIN_Y * 2.0 + PANEL_TITLE_BLOCK_HEIGHT,
             None => 0.0,
         };
         natural.clamp(0.0, canvas_rect.height().max(0.0))
@@ -126,9 +124,9 @@ impl NodeGraphWidget {
             for section in instance.panel_sections() {
                 height += COLLAPSING_HEADER_HEIGHT + PANEL_SECTION_GAP;
                 height += section
-                    .prop_heights
+                    .props
                     .iter()
-                    .map(|row_height| row_height.unwrap_or(DEFAULT_ROW_HEIGHT))
+                    .map(|prop| prop.height.unwrap_or(DEFAULT_ROW_HEIGHT))
                     .sum::<f32>();
             }
         }
@@ -315,27 +313,36 @@ impl NodeGraphWidget {
 
                             for (section_index, section) in sections.iter().enumerate() {
                                 egui::CollapsingHeader::new(section.title)
-                                    .id_salt(("props-panel-section", section_index))
+                                    .id_salt(("props-panel-section", section.title, section_index))
                                     .default_open(true)
                                     .show(ui, |ui| {
-                                        for (prop_index, height) in
-                                            section.prop_heights.iter().enumerate()
-                                        {
-                                            let height = height.unwrap_or(DEFAULT_ROW_HEIGHT);
-                                            let width = ui.available_width();
-                                            let (rect, _) = ui.allocate_exact_size(
-                                                Vec2::new(width, height),
-                                                Sense::hover(),
+                                        for (prop_index, prop) in section.props.iter().enumerate() {
+                                            ui.push_id(
+                                                (
+                                                    "props-panel-property",
+                                                    section.title,
+                                                    section_index,
+                                                    prop.id,
+                                                ),
+                                                |ui| {
+                                                    let height =
+                                                        prop.height.unwrap_or(DEFAULT_ROW_HEIGHT);
+                                                    let width = ui.available_width();
+                                                    let (rect, _) = ui.allocate_exact_size(
+                                                        Vec2::new(width, height),
+                                                        Sense::hover(),
+                                                    );
+                                                    if instance.draw_panel_prop(
+                                                        section_index,
+                                                        prop_index,
+                                                        ui,
+                                                        rect,
+                                                        panel_rect,
+                                                    ) {
+                                                        changed = true;
+                                                    }
+                                                },
                                             );
-                                            if instance.draw_panel_prop(
-                                                section_index,
-                                                prop_index,
-                                                ui,
-                                                rect,
-                                                panel_rect,
-                                            ) {
-                                                changed = true;
-                                            }
                                         }
                                     });
                             }

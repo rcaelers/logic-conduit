@@ -476,7 +476,7 @@ impl NodeWidget {
             // variadic groups grow, so map through the socket's def_index.
             let def_index = node.inputs[i].def_index;
             let changed = ui
-                .push_id((node_id.0, i), |ui| {
+                .push_id(("node-input-control", node_id.0, def_index), |ui| {
                     instance.draw_input_control(def_index, ui, ws, zoom, node_screen_rect)
                 })
                 .inner;
@@ -495,7 +495,7 @@ impl NodeWidget {
             }
             let def_index = node.outputs[i].def_index;
             let changed = ui
-                .push_id(("output", node_id.0, i), |ui| {
+                .push_id(("node-output-control", node_id.0, def_index), |ui| {
                     instance.draw_output_control(def_index, ui, ws, zoom, node_screen_rect)
                 })
                 .inner;
@@ -513,7 +513,7 @@ impl NodeWidget {
                 continue;
             }
             let changed = ui
-                .push_id((node_id.0, pi), |ui| {
+                .push_id(("node-property", node_id.0, pi), |ui| {
                     instance.draw_property(pi, ui, ws, zoom, node_screen_rect)
                 })
                 .inner;

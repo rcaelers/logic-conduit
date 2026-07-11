@@ -3,11 +3,16 @@ use crate::model::{Node, NodeBadge, Socket};
 use egui::{Rect, Ui};
 use serde_json::Value;
 
-/// Layout facts about one panel section: title plus the height of each prop
-/// row (the panel's default row height unless the def requested more).
+/// Layout facts about one panel section, including the stable identity and
+/// row height of each property.
 pub(crate) struct PanelSectionMeta {
     pub title: &'static str,
-    pub prop_heights: Vec<Option<f32>>,
+    pub props: Vec<PanelPropMeta>,
+}
+
+pub(crate) struct PanelPropMeta {
+    pub id: &'static str,
+    pub height: Option<f32>,
 }
 
 pub(crate) trait NodeInstance {
@@ -119,7 +124,14 @@ impl<T: NodeDef> NodeInstance for TypedNode<T> {
             .iter()
             .map(|section| PanelSectionMeta {
                 title: section.title,
-                prop_heights: section.props.iter().map(|prop| prop.panel_height).collect(),
+                props: section
+                    .props
+                    .iter()
+                    .map(|prop| PanelPropMeta {
+                        id: prop.id,
+                        height: prop.panel_height,
+                    })
+                    .collect(),
             })
             .collect()
     }

@@ -400,7 +400,12 @@ impl AddSearchPopup {
                             for item in self.items.iter().filter(|item| {
                                 query.is_empty() || item.label.to_ascii_lowercase().contains(&query)
                             }) {
-                                if Self::search_item_row(ui, &item.label).clicked() {
+                                let clicked = ui
+                                    .push_id(("add-search-result", &item.label), |ui| {
+                                        Self::search_item_row(ui, &item.label).clicked()
+                                    })
+                                    .inner;
+                                if clicked {
                                     result = Some(item.action.clone());
                                 }
                             }

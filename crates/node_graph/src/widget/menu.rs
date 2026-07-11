@@ -397,6 +397,7 @@ impl<T: Clone> Menu<T> {
         let mut sel = self.sel.clone();
         let area_id = self.area_id;
         let pos = self.pos;
+        let menu_signature = Self::entries_signature(&entries);
 
         let mut result: Option<T> = None;
 
@@ -415,6 +416,7 @@ impl<T: Clone> Menu<T> {
                     let mut depth = 0;
                     let mut column_offsets = vec![0.0_f32];
                     loop {
+                        let column_path = Self::entry_path(&entries, &sel[..depth]);
                         let depth_entries = Self::entries_at(&entries, &sel[..depth]);
                         if depth_entries.is_empty() {
                             break;
@@ -422,24 +424,27 @@ impl<T: Clone> Menu<T> {
 
                         let column_offset = column_offsets.get(depth).copied().unwrap_or(0.0);
                         let mut next_column_offset = None;
-                        ui.vertical(|ui| {
-                            ui.add_space(column_offset);
-                            egui::Frame::menu(ui.style()).show(ui, |ui| {
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(Self::MIN_WIDTH, 0.0),
-                                    egui::Layout::top_down_justified(egui::Align::Min),
-                                    |ui| {
-                                        next_column_offset = Self::render_column(
-                                            ui,
-                                            depth_entries,
-                                            &mut sel,
-                                            depth,
-                                            (depth == 0).then_some(title.as_deref()).flatten(),
-                                            &mut result,
-                                        )
-                                        .map(|offset| column_offset + offset);
-                                    },
-                                );
+                        ui.push_id(("menu-column", &menu_signature, &column_path), |ui| {
+                            ui.vertical(|ui| {
+                                ui.add_space(column_offset);
+                                egui::Frame::menu(ui.style()).show(ui, |ui| {
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(Self::MIN_WIDTH, 0.0),
+                                        egui::Layout::top_down_justified(egui::Align::Min),
+                                        |ui| {
+                                            next_column_offset = Self::render_column(
+                                                ui,
+                                                depth_entries,
+                                                &mut sel,
+                                                &column_path,
+                                                depth,
+                                                (depth == 0).then_some(title.as_deref()).flatten(),
+                                                &mut result,
+                                            )
+                                            .map(|offset| column_offset + offset);
+                                        },
+                                    );
+                                });
                             });
                         });
 
@@ -483,6 +488,52 @@ impl<T: Clone> Menu<T> {
             }
         }
         cur
+    }
+
+    /// Semantic ancestry of the column currently being rendered. A submenu
+    /// column can occupy the same screen rect as a different branch on the
+    /// next frame, so its UI scope must follow the branch rather than depth.
+    fn entry_path(root: &[MenuEntry<T>], path: &[usize]) -> Vec<String> {
+        let mut entries = root;
+        let mut labels = Vec::with_capacity(path.len());
+        for &index in path {
+            let Some(entry) = entries.get(index) else {
+                break;
+            };
+            labels.push(entry.label.clone());
+            if !entry.is_submenu() {
+                break;
+            }
+            entries = entry.children();
+        }
+        labels
+    }
+
+    /// Identifies a menu tree independently of transient hover selection.
+    /// A context menu can replace its entries while remaining at the same
+    /// screen position, so its root scope must change with its contents too.
+    fn entries_signature(entries: &[MenuEntry<T>]) -> String {
+        fn append<T>(signature: &mut String, entries: &[MenuEntry<T>]) {
+            for entry in entries {
+                match &entry.kind {
+                    MenuKind::Separator => signature.push_str("separator"),
+                    MenuKind::Action(_) => signature.push_str("action"),
+                    MenuKind::Palette(_) => signature.push_str("palette"),
+                    MenuKind::SubMenu(children) => {
+                        signature.push_str("submenu[");
+                        append(signature, children);
+                        signature.push(']');
+                    }
+                }
+                signature.push(':');
+                signature.push_str(&entry.label);
+                signature.push('|');
+            }
+        }
+
+        let mut signature = String::new();
+        append(&mut signature, entries);
+        signature
     }
 
     fn skip_sep(entries: &[MenuEntry<T>], mut i: usize, forward: bool) -> usize {
@@ -589,6 +640,7 @@ impl<T: Clone> Menu<T> {
         ui: &mut egui::Ui,
         entries: &[MenuEntry<T>],
         sel: &mut Vec<usize>,
+        column_path: &[String],
         depth: usize,
         title: Option<&str>,
         result: &mut Option<T>,
@@ -617,7 +669,7 @@ impl<T: Clone> Menu<T> {
             } else {
                 Color32::TRANSPARENT
             };
-            ui.push_id((depth, i), |ui| {
+            ui.push_id(("menu-entry", column_path, &entry.label, i), |ui| {
                 let job = Self::item_layout_job(ui, entry.icon.as_deref(), &entry.label);
 
                 match &entry.kind {
@@ -696,6 +748,42 @@ impl<T: Clone> Menu<T> {
                 }
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Menu, MenuEntry};
+
+    fn entries() -> Vec<MenuEntry<()>> {
+        vec![MenuEntry::submenu(
+            "Add",
+            vec![MenuEntry::submenu(
+                "Logic",
+                vec![MenuEntry::action("Buffer", ())],
+            )],
+        )]
+    }
+
+    #[test]
+    fn menu_column_path_uses_semantic_ancestry() {
+        let entries = entries();
+
+        assert_eq!(
+            Menu::<()>::entry_path(&entries, &[0, 0]),
+            vec!["Add".to_owned(), "Logic".to_owned()]
+        );
+    }
+
+    #[test]
+    fn menu_signature_changes_when_the_tree_changes() {
+        let first = entries();
+        let second = vec![MenuEntry::action("Delete", ())];
+
+        assert_ne!(
+            Menu::<()>::entries_signature(&first),
+            Menu::<()>::entries_signature(&second)
+        );
     }
 }
 
