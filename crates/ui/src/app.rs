@@ -539,7 +539,7 @@ impl App {
         }
     }
 
-    fn show_toolbar(&mut self, ui: &mut egui::Ui) {
+    fn show_toolbar(&mut self, ui: &mut egui::Ui, status_hint: &str) {
         self.sync_run(ui.ctx());
         ui.horizontal(|ui| {
             ui.add_space(6.0);
@@ -582,6 +582,20 @@ impl App {
                 };
                 ui.colored_label(color, message);
             }
+
+            // Right-aligned: `<hint> | <zoom%> <selection>`, reading left to
+            // right. `right_to_left` places each widget to the left of the
+            // previous one, so they're added in reverse of that order —
+            // `selection_summary` ends up flush with the right edge.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(6.0);
+                ui.weak(self.node_graph.selection_summary());
+                ui.weak(format!("{}%", self.node_graph.zoom_percent()));
+                ui.separator();
+                if !status_hint.is_empty() {
+                    ui.weak(status_hint);
+                }
+            });
         });
     }
 }
@@ -815,6 +829,23 @@ impl eframe::App for App {
         }
         let graph_height = (usable_height - analyzer_height).max(0.0);
 
+        // Which pane's status hint the toolbar shows (Phase 4.1) — computed
+        // from plain rects rather than this frame's widget hover state,
+        // since the analyzer and graph haven't rendered yet this frame.
+        let pointer_pos = ui.input(|i| i.pointer.hover_pos());
+        let analyzer_rect =
+            egui::Rect::from_min_size(origin, egui::vec2(available.x, analyzer_height));
+        let graph_top = origin.y + analyzer_height + splitter_hit_height + toolbar_height;
+        let graph_rect = egui::Rect::from_min_size(
+            egui::pos2(origin.x, graph_top),
+            egui::vec2(available.x, graph_height),
+        );
+        let status_hint = match pointer_pos {
+            Some(p) if analyzer_rect.contains(p) => self.logic_analyzer.status_hint(),
+            Some(p) if graph_rect.contains(p) => self.node_graph.status_hint(),
+            _ => "",
+        };
+
         ui.allocate_ui(egui::vec2(available.x, analyzer_height), |ui| {
             self.logic_analyzer.show(ui);
         });
@@ -832,7 +863,7 @@ impl eframe::App for App {
         ui.painter().rect_filled(visual_rect, 0.0, splitter_color);
 
         ui.allocate_ui(egui::vec2(available.x, toolbar_height), |ui| {
-            self.show_toolbar(ui);
+            self.show_toolbar(ui, status_hint);
         });
 
         ui.allocate_ui(egui::vec2(available.x, graph_height), |ui| {

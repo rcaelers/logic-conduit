@@ -40,6 +40,25 @@ pub(super) enum InteractionState {
     CuttingWire {
         path: Vec<Pos2>,
     },
+    /// Freshly added/duplicated/pasted nodes follow the pointer until a
+    /// primary-button click confirms placement (Phase 1.2), mirroring
+    /// Blender's grab-on-add. Escape/secondary-click cancels by undoing the
+    /// snapshot taken when the gesture started. `anchor_canvas` is the
+    /// pointer position as of the last processed frame — movement is a
+    /// per-frame delta from it, not a fixed offset from gesture start.
+    PlacingNodes {
+        anchor_canvas: Pos2,
+        /// True only for the first `update_placing_nodes` tick after this
+        /// state is entered — the same input frame that processed the
+        /// triggering click (e.g. clicking a node type in the Add menu).
+        /// After an idle frame, egui can deliver a mouse press *and*
+        /// release together in one input frame; without this guard, that
+        /// same fused event would immediately satisfy the primary-button
+        /// confirm check and end placement before the user ever gets to
+        /// move the node. Keyboard-triggered entries (Shift+D, Ctrl+V)
+        /// don't hit this, since no pointer button is involved at all.
+        just_entered: bool,
+    },
 }
 
 impl InteractionState {
@@ -50,7 +69,10 @@ impl InteractionState {
     pub(super) fn use_fast_rendering(&self) -> bool {
         matches!(
             self,
-            Self::Panning { .. } | Self::DraggingNode { .. } | Self::DraggingFrame { .. }
+            Self::Panning { .. }
+                | Self::DraggingNode { .. }
+                | Self::DraggingFrame { .. }
+                | Self::PlacingNodes { .. }
         )
     }
 }
@@ -94,7 +116,7 @@ impl GraphResponses {
 }
 
 impl NodeGraphWidget {
-    fn compatible_wire_target(&self, from: SocketId, to: SocketId) -> bool {
+    pub(super) fn compatible_wire_target(&self, from: SocketId, to: SocketId) -> bool {
         if from == to {
             return false;
         }
@@ -119,6 +141,44 @@ impl NodeGraphWidget {
             .get(&input.node)
             .and_then(|n| n.inputs.get(input.index));
         matches!((out_type, in_socket), (Some(ot), Some(is)) if is.accepts(ot))
+    }
+
+    /// The socket a wire drag started from, if it still exists.
+    fn socket_at(&self, id: SocketId) -> Option<&crate::model::Socket> {
+        let node = self.graph.nodes.get(&id.node)?;
+        match id.direction {
+            SocketDirection::Input => node.inputs.get(id.index),
+            SocketDirection::Output => node.outputs.get(id.index),
+        }
+    }
+
+    /// First visible socket on `node_id` compatible with `from` — used to
+    /// auto-wire a freshly added node (link-drag search, Phase 1.1).
+    pub(super) fn first_compatible_socket(&self, from: SocketId, node_id: NodeId) -> Option<SocketId> {
+        let node = self.graph.nodes.get(&node_id)?;
+        let inputs = node
+            .inputs
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.visible)
+            .map(|(index, _)| SocketId {
+                node: node_id,
+                index,
+                direction: SocketDirection::Input,
+            });
+        let outputs = node
+            .outputs
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.visible)
+            .map(|(index, _)| SocketId {
+                node: node_id,
+                index,
+                direction: SocketDirection::Output,
+            });
+        inputs
+            .chain(outputs)
+            .find(|&candidate| self.compatible_wire_target(from, candidate))
     }
 
     pub(super) fn snapped_wire_target(
@@ -435,7 +495,7 @@ impl NodeGraphWidget {
         pointer_canvas: Option<Pos2>,
         node_id: NodeId,
         offset: Vec2,
-        nodes: &HashMap<NodeId, NodeWidget>,
+        layout: &GraphWidgetLayout,
     ) -> InteractionState {
         if ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
             if let Some(pc) = pointer_canvas {
@@ -454,7 +514,15 @@ impl NodeGraphWidget {
             }
             return InteractionState::DraggingNode { node_id, offset };
         }
-        self.try_wire_insert(node_id, pointer_canvas, nodes);
+        self.try_wire_insert(node_id, pointer_canvas, &layout.nodes);
+        let selected: Vec<NodeId> = self
+            .graph
+            .nodes
+            .values()
+            .filter(|node| node.selected)
+            .map(|node| node.id)
+            .collect();
+        self.resolve_frame_membership_on_drop(&selected, layout);
         InteractionState::Idle
     }
 
@@ -480,6 +548,61 @@ impl NodeGraphWidget {
             };
         }
         InteractionState::Idle
+    }
+
+    /// Drives `InteractionState::PlacingNodes` (Phase 1.2): moves every
+    /// selected node by the pointer's per-frame delta until the primary
+    /// button confirms (with a wire-splice check when exactly one node is
+    /// being placed, matching `update_drag_node`'s drop behavior) or
+    /// Escape/secondary-click cancels by undoing the add/duplicate/paste.
+    /// The confirm/cancel checks are skipped entirely on `just_entered`'s
+    /// frame — see the field's doc comment on `InteractionState::PlacingNodes`.
+    fn update_placing_nodes(
+        &mut self,
+        ui: &egui::Ui,
+        pointer_canvas: Option<Pos2>,
+        anchor_canvas: Pos2,
+        just_entered: bool,
+        layout: &GraphWidgetLayout,
+    ) -> InteractionState {
+        if !just_entered {
+            if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
+                self.undo();
+                return InteractionState::Idle;
+            }
+            if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) {
+                let selected: Vec<NodeId> = self
+                    .graph
+                    .nodes
+                    .values()
+                    .filter(|node| node.selected)
+                    .map(|node| node.id)
+                    .collect();
+                if let [only] = selected[..] {
+                    self.try_wire_insert(only, pointer_canvas, &layout.nodes);
+                }
+                self.resolve_frame_membership_on_drop(&selected, layout);
+                return InteractionState::Idle;
+            }
+        }
+        let Some(pc) = pointer_canvas else {
+            return InteractionState::PlacingNodes {
+                anchor_canvas,
+                just_entered: false,
+            };
+        };
+        let delta = pc - anchor_canvas;
+        if delta != Vec2::ZERO {
+            for n in self.graph.nodes.values_mut() {
+                if n.selected {
+                    n.pos += delta;
+                }
+            }
+        }
+        InteractionState::PlacingNodes {
+            anchor_canvas: pc,
+            just_entered: false,
+        }
     }
 
     fn try_wire_insert(
@@ -527,6 +650,7 @@ impl NodeGraphWidget {
     fn update_drag_wire(
         &mut self,
         ui: &egui::Ui,
+        pointer: Option<Pos2>,
         pointer_canvas: Option<Pos2>,
         responses: &GraphResponses,
         layout: &GraphWidgetLayout,
@@ -536,9 +660,15 @@ impl NodeGraphWidget {
     ) -> InteractionState {
         if ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
             if let Some(pc) = pointer_canvas {
-                current_canvas = self
-                    .snapped_wire_target(from, pc, layout)
-                    .map_or(pc, |(_, pos)| pos);
+                let snapped = self.snapped_wire_target(from, pc, layout);
+                current_canvas = snapped.map_or(pc, |(_, pos)| pos);
+                // Not over a compatible socket: releasing here opens
+                // link-drag search (Phase 1.1) instead of connecting
+                // directly. Blender flags this with a "+" cursor; the
+                // closest built-in egui cursor with the same badge is Copy.
+                if snapped.is_none() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
+                }
             }
             return InteractionState::DraggingWire {
                 from,
@@ -560,6 +690,23 @@ impl NodeGraphWidget {
             .find(|(sid, response)| **sid != from && response.hovered())
         {
             self.add_wire_connection(from, target);
+            return InteractionState::Idle;
+        }
+
+        // Released on empty canvas: open the link-drag search so a new node
+        // can be added and wired in with one gesture (Blender's "link drag
+        // search"). Esc/click-outside on the popup just drops the wire.
+        if let Some(pointer_screen) = pointer
+            && let Some(from_socket) = self.socket_at(from).cloned()
+        {
+            let canvas_pos = pointer_canvas.unwrap_or(current_canvas);
+            self.menu.open_link_drag_search(
+                pointer_screen,
+                &self.registry,
+                canvas_pos,
+                from,
+                &from_socket,
+            );
         }
         InteractionState::Idle
     }
@@ -665,9 +812,20 @@ impl NodeGraphWidget {
         self.apply_knife_cut(&path, nodes);
         InteractionState::Idle
     }
-    fn apply_effect(&mut self, effect: ActionEffect) {
-        if effect == ActionEffect::ResetInteraction {
-            self.interaction_state = InteractionState::Idle;
+    fn apply_effect(&mut self, effect: ActionEffect, pointer_canvas: Option<Pos2>) {
+        match effect {
+            ActionEffect::None => {}
+            ActionEffect::ResetInteraction => self.interaction_state = InteractionState::Idle,
+            ActionEffect::EnterPlacement => {
+                // Without a live pointer there is nothing to follow; the
+                // action already fell back to fixed-position placement.
+                if let Some(anchor_canvas) = pointer_canvas {
+                    self.interaction_state = InteractionState::PlacingNodes {
+                        anchor_canvas,
+                        just_entered: true,
+                    };
+                }
+            }
         }
     }
 
@@ -891,19 +1049,24 @@ impl NodeGraphWidget {
                 self.can_redo(),
             );
             if let Some(action) = dispatch_menu_shortcut(ui, &shortcut_entries) {
-                let effect = self.execute_action(action, ui.ctx());
-                self.apply_effect(effect);
+                let effect = self.execute_action(action, ui.ctx(), pointer_canvas);
+                self.apply_effect(effect, pointer_canvas);
             }
         }
 
         for action in self.hotkeys.dispatch(ui) {
-            let effect = self.execute_action(action, ui.ctx());
-            self.apply_effect(effect);
+            let effect = self.execute_action(action, ui.ctx(), pointer_canvas);
+            self.apply_effect(effect, pointer_canvas);
         }
 
         let cutting = matches!(self.interaction_state, InteractionState::CuttingWire { .. });
+        // A placement gesture is modal — it swallows the context menu the
+        // same way an active knife cut does, so a click meant to
+        // confirm/cancel placement doesn't also pop up a menu.
+        let placing = matches!(self.interaction_state, InteractionState::PlacingNodes { .. });
 
-        if let Some(context_screen_pos) = self.menu.context_trigger_pos(ui, pointer, !cutting)
+        if let Some(context_screen_pos) =
+            self.menu.context_trigger_pos(ui, pointer, !cutting && !placing)
             && let Some(context_target) =
                 self.context_click_target_at(responses, layout, context_screen_pos)
         {
@@ -948,6 +1111,7 @@ impl NodeGraphWidget {
         }
 
         if no_focus
+            && !placing
             && ui.input(|i| i.key_pressed(egui::Key::A) && !i.modifiers.ctrl && !i.modifiers.alt)
         {
             let screen_pos = pointer.unwrap_or(canvas_rect.center());
@@ -957,8 +1121,8 @@ impl NodeGraphWidget {
         }
 
         if let Some(action) = self.menu.update(ui, response, pointer, !cutting) {
-            let effect = self.execute_action(action, ui.ctx());
-            self.apply_effect(effect);
+            let effect = self.execute_action(action, ui.ctx(), pointer_canvas);
+            self.apply_effect(effect, pointer_canvas);
         }
 
         self.update_interaction(
@@ -1062,6 +1226,68 @@ impl NodeGraphWidget {
         Some((idx, self.wire_insert_sockets(node_id, conn).is_some()))
     }
 
+    /// Frame that would join `node_id` if it were dropped right now — `None`
+    /// if it's already a member of a frame (Phase 1.3): dragging can only
+    /// ever *add* a node to a frame, never remove it. Membership only ever
+    /// changes the other direction via the explicit "Remove from Frame"
+    /// action, so a node that's already in a frame is never a candidate
+    /// here — there is nothing to leave-and-rejoin, and no frame ever steals
+    /// a node away from another one by drag alone. Run live (not against a
+    /// gesture-start snapshot) so the candidate frame can be highlighted
+    /// while dragging: a node not yet in any frame doesn't affect any
+    /// frame's live bounds, so there's no self-referential loop to guard
+    /// against here.
+    pub(super) fn compute_drop_target_frame(
+        &self,
+        node_id: NodeId,
+        layout: &GraphWidgetLayout,
+    ) -> Option<FrameId> {
+        if self
+            .graph
+            .frames
+            .iter()
+            .any(|frame| frame.node_ids.contains(&node_id))
+        {
+            return None;
+        }
+        let center = layout.nodes.get(&node_id)?.header_rect().center();
+        layout
+            .frame_rects
+            .iter()
+            .filter(|(_, rect)| rect.contains(center))
+            .min_by(|(a_id, a_rect), (b_id, b_rect)| {
+                a_rect
+                    .area()
+                    .total_cmp(&b_rect.area())
+                    .then_with(|| a_id.0.cmp(&b_id.0))
+            })
+            .map(|(&id, _)| id)
+    }
+
+    /// Frame membership follows a drag/placement drop (Phase 1.3) — see
+    /// `compute_drop_target_frame` for the rule (join-only; dragging never
+    /// removes). Only called once, on gesture confirm; the changes fold
+    /// into the undo snapshot the drag/placement already pushed at its
+    /// start.
+    fn resolve_frame_membership_on_drop(&mut self, node_ids: &[NodeId], layout: &GraphWidgetLayout) {
+        if self.graph.frames.is_empty() {
+            return;
+        }
+        let mut changed = false;
+        for &node_id in node_ids {
+            let Some(target_id) = self.compute_drop_target_frame(node_id, layout) else {
+                continue;
+            };
+            if let Some(frame) = self.graph.frames.iter_mut().find(|f| f.id == target_id) {
+                frame.node_ids.push(node_id);
+                changed = true;
+            }
+        }
+        if changed {
+            self.graph.cleanup_frames();
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn update_interaction(
         &mut self,
@@ -1075,6 +1301,12 @@ impl NodeGraphWidget {
     ) {
         let response = &responses.canvas;
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            // Cancelling a placement gesture must revert the add/duplicate/
+            // paste it started with, not just drop back to Idle and leave
+            // the new nodes stranded.
+            if matches!(self.interaction_state, InteractionState::PlacingNodes { .. }) {
+                self.undo();
+            }
             self.interaction_state = InteractionState::Idle;
         }
 
@@ -1155,7 +1387,7 @@ impl NodeGraphWidget {
                 self.update_panning(response, pointer, last_screen)
             }
             InteractionState::DraggingNode { node_id, offset } => {
-                self.update_drag_node(ui, pointer_canvas, node_id, offset, &layout.nodes)
+                self.update_drag_node(ui, pointer_canvas, node_id, offset, layout)
             }
             InteractionState::DraggingFrame {
                 frame_id,
@@ -1167,6 +1399,7 @@ impl NodeGraphWidget {
                 current_canvas,
             } => self.update_drag_wire(
                 ui,
+                pointer,
                 pointer_canvas,
                 responses,
                 layout,
@@ -1180,6 +1413,12 @@ impl NodeGraphWidget {
             } => self.update_box_select(ui, pointer_canvas, layout, start_canvas, current_canvas),
             InteractionState::CuttingWire { path } => {
                 self.update_cut_wire(ui, pointer_canvas, &layout.nodes, path)
+            }
+            InteractionState::PlacingNodes {
+                anchor_canvas,
+                just_entered,
+            } => {
+                self.update_placing_nodes(ui, pointer_canvas, anchor_canvas, just_entered, layout)
             }
         };
     }
@@ -1229,5 +1468,114 @@ mod tests {
             to: socket(2, 0, SocketDirection::Input),
         }];
         assert!(node_has_any_connection(&connections, NodeId(2)));
+    }
+
+    #[test]
+    fn resolve_frame_membership_on_drop_never_ejects_a_current_member() {
+        // Regression test: dragging can only ever *add* a node to a frame,
+        // never remove it — no matter how far it's dragged. Removing is
+        // exclusively the "Remove from Frame" action.
+        use crate::runtime::NodeTypeRegistry;
+
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        let a = widget
+            .add_node_at("Reroute", Pos2::new(0.0, 0.0))
+            .expect("reroute should always be creatable");
+        widget
+            .graph
+            .add_frame("F".to_owned(), egui::Color32::WHITE, vec![a]);
+
+        widget.graph.nodes.get_mut(&a).unwrap().pos = Pos2::new(5000.0, 5000.0);
+        let layout = widget.build_layout(Pos2::ZERO);
+        widget.resolve_frame_membership_on_drop(&[a], &layout);
+
+        assert_eq!(widget.graph.frames.len(), 1);
+        assert!(widget.graph.frames[0].node_ids.contains(&a));
+    }
+
+    #[test]
+    fn resolve_frame_membership_on_drop_never_moves_a_member_to_a_different_frame() {
+        // A node already in frame A must never switch to frame B via drag,
+        // even when dropped squarely inside B's bounds — only nodes with no
+        // current frame can join one this way.
+        use crate::runtime::NodeTypeRegistry;
+
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        let a = widget
+            .add_node_at("Reroute", Pos2::new(0.0, 0.0))
+            .expect("reroute should always be creatable");
+        let frame_a = widget
+            .graph
+            .add_frame("A".to_owned(), egui::Color32::WHITE, vec![a]);
+        let b = widget
+            .add_node_at("Reroute", Pos2::new(5000.0, 5000.0))
+            .expect("reroute should always be creatable");
+        widget
+            .graph
+            .add_frame("B".to_owned(), egui::Color32::WHITE, vec![b]);
+
+        widget.graph.nodes.get_mut(&a).unwrap().pos = Pos2::new(5000.0, 5000.0);
+        let layout = widget.build_layout(Pos2::ZERO);
+        widget.resolve_frame_membership_on_drop(&[a], &layout);
+
+        let frame_a = widget
+            .graph
+            .frames
+            .iter()
+            .find(|f| f.id == frame_a)
+            .expect("frame A should still exist");
+        assert!(frame_a.node_ids.contains(&a));
+    }
+
+    #[test]
+    fn resolve_frame_membership_on_drop_joins_node_dropped_inside_a_frame() {
+        use crate::runtime::NodeTypeRegistry;
+
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        let anchor = widget
+            .add_node_at("Reroute", Pos2::new(0.0, 0.0))
+            .expect("reroute should always be creatable");
+        let frame_id = widget
+            .graph
+            .add_frame("F".to_owned(), egui::Color32::WHITE, vec![anchor]);
+        let mover = widget
+            .add_node_at("Reroute", Pos2::new(5000.0, 5000.0))
+            .expect("reroute should always be creatable");
+
+        widget.graph.nodes.get_mut(&mover).unwrap().pos = Pos2::new(0.0, 0.0);
+        let layout = widget.build_layout(Pos2::ZERO);
+        widget.resolve_frame_membership_on_drop(&[mover], &layout);
+
+        let frame = widget
+            .graph
+            .frames
+            .iter()
+            .find(|f| f.id == frame_id)
+            .expect("frame should still exist");
+        assert!(frame.node_ids.contains(&mover));
+        assert!(frame.node_ids.contains(&anchor));
+    }
+
+    #[test]
+    fn resolve_frame_membership_on_drop_does_not_join_a_frame_from_outside_its_bounds() {
+        use crate::runtime::NodeTypeRegistry;
+
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        let anchor = widget
+            .add_node_at("Reroute", Pos2::new(0.0, 0.0))
+            .expect("reroute should always be creatable");
+        widget
+            .graph
+            .add_frame("F".to_owned(), egui::Color32::WHITE, vec![anchor]);
+        let mover = widget
+            .add_node_at("Reroute", Pos2::new(5000.0, 5000.0))
+            .expect("reroute should always be creatable");
+
+        // Left well outside F's bounds — should not join.
+        let layout = widget.build_layout(Pos2::ZERO);
+        widget.resolve_frame_membership_on_drop(&[mover], &layout);
+
+        assert_eq!(widget.graph.frames.len(), 1);
+        assert!(!widget.graph.frames[0].node_ids.contains(&mover));
     }
 }

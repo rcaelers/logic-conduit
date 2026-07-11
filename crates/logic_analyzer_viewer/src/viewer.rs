@@ -199,6 +199,11 @@ impl LogicAnalyzerViewer {
         self.worker_responses = Some(response_rx);
     }
 
+    /// One-line hint of available controls, for a status bar (Phase 4.1).
+    pub fn status_hint(&self) -> &'static str {
+        "Drag Pan · Scroll Zoom · Double-click ruler to add a cursor · Home Fit"
+    }
+
     pub fn show(&mut self, ui: &mut Ui) {
         let rect = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(rect, Sense::click_and_drag());

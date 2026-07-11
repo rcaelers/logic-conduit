@@ -1,4 +1,7 @@
-use crate::{model::FrameId, runtime::NodeTypeRegistry};
+use crate::{
+    model::{FrameId, Socket, SocketId},
+    runtime::NodeTypeRegistry,
+};
 use egui::{Color32, Pos2};
 use std::collections::HashMap;
 
@@ -42,6 +45,39 @@ fn build_add_search_items(registry: &NodeTypeRegistry, canvas_pos: Pos2) -> Vec<
         action: GraphAction::AddNode {
             name: "Reroute".to_string(),
             pos: canvas_pos,
+        },
+    });
+    items
+}
+
+/// Search items for the link-drag-search popup: only node types with a
+/// visible socket compatible with `from` (plus Reroute, which is always
+/// compatible since both its sockets are `Any`). Picking one both adds the
+/// node and wires it to `from` in a single undo step.
+fn build_link_drag_search_items(
+    registry: &NodeTypeRegistry,
+    canvas_pos: Pos2,
+    from: SocketId,
+    from_socket: &Socket,
+) -> Vec<AddSearchItem> {
+    let mut items: Vec<AddSearchItem> = registry
+        .connectable_types(from_socket, from.direction)
+        .into_iter()
+        .map(|def| AddSearchItem {
+            label: format!("{} → {}", def.category, def.name),
+            action: GraphAction::AddNodeAndConnect {
+                name: def.name.clone(),
+                pos: canvas_pos,
+                from,
+            },
+        })
+        .collect();
+    items.push(AddSearchItem {
+        label: "Reroute".to_string(),
+        action: GraphAction::AddNodeAndConnect {
+            name: "Reroute".to_string(),
+            pos: canvas_pos,
+            from,
         },
     });
     items
@@ -367,6 +403,7 @@ impl AddSearchPopup {
 
         let text_id = egui::Id::new(Self::TEXT_ID);
         let mut result = None;
+        let mut first_match: Option<GraphAction> = None;
         let area_response = egui::Area::new(egui::Id::new("node_graph_add_search_popup"))
             .fixed_pos(self.pos)
             .order(egui::Order::Foreground)
@@ -397,9 +434,14 @@ impl AddSearchPopup {
                         .min_scrolled_height(ADD_SEARCH_RESULTS_HEIGHT)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
+                            let mut any_match = false;
                             for item in self.items.iter().filter(|item| {
                                 query.is_empty() || item.label.to_ascii_lowercase().contains(&query)
                             }) {
+                                any_match = true;
+                                if first_match.is_none() {
+                                    first_match = Some(item.action.clone());
+                                }
                                 let clicked = ui
                                     .push_id(("add-search-result", &item.label), |ui| {
                                         Self::search_item_row(ui, &item.label).clicked()
@@ -409,10 +451,18 @@ impl AddSearchPopup {
                                     result = Some(item.action.clone());
                                 }
                             }
+                            if !any_match {
+                                ui.add_space(4.0);
+                                ui.label(egui::RichText::new("No compatible nodes").weak());
+                            }
                         });
                 });
             });
         self.rect = Some(area_response.response.rect);
+
+        if result.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            result = first_match;
+        }
 
         if result.is_some() {
             self.close();
@@ -540,6 +590,21 @@ impl MenuController {
             "Add",
             build_add_popup_entries(registry, canvas_pos),
         );
+    }
+
+    /// Opens the search box directly (skipping the intermediate "Add" popup)
+    /// filtered to node types compatible with `from` — the link-drag-search
+    /// gesture triggered by releasing a dragged wire over empty canvas.
+    pub fn open_link_drag_search(
+        &mut self,
+        screen_pos: Pos2,
+        registry: &NodeTypeRegistry,
+        canvas_pos: Pos2,
+        from: SocketId,
+        from_socket: &Socket,
+    ) {
+        let items = build_link_drag_search_items(registry, canvas_pos, from, from_socket);
+        self.add_search.open(screen_pos, items);
     }
 
     pub fn context_trigger_pos(

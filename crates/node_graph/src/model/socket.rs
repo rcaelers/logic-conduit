@@ -1,3 +1,4 @@
+use super::SocketDirection;
 use egui::Color32;
 use serde::{Deserialize, Serialize};
 
@@ -81,5 +82,91 @@ impl Socket {
 
     pub fn is_variadic_member(&self) -> bool {
         self.variadic.as_ref().is_some_and(|info| !info.placeholder)
+    }
+
+    /// Whether a socket in direction `from_dir` could connect to `to` in
+    /// direction `to_dir` — the same output-accepts-input check `accepts`
+    /// performs, usable before either socket has a [`super::SocketId`] (e.g.
+    /// a freshly instantiated, not-yet-added node being probed for
+    /// compatibility with a dragged wire).
+    pub fn compatible(from: &Socket, from_dir: SocketDirection, to: &Socket, to_dir: SocketDirection) -> bool {
+        if from_dir == to_dir {
+            return false;
+        }
+        let (output, input) = if from_dir == SocketDirection::Output {
+            (from, to)
+        } else {
+            (to, from)
+        };
+        input.accepts(output.effective_type())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn socket(type_name: &str) -> Socket {
+        Socket {
+            name: String::new(),
+            type_name: type_name.to_owned(),
+            color: Color32::WHITE,
+            shape: SocketShape::Circle,
+            allowed: Vec::new(),
+            resolved_type: None,
+            def_index: 0,
+            variadic: None,
+            visible: true,
+            hidden: false,
+            has_control: false,
+        }
+    }
+
+    #[test]
+    fn compatible_pairs_output_with_accepting_input() {
+        let output = socket("Float");
+        let input = socket("Float");
+        assert!(Socket::compatible(
+            &output,
+            SocketDirection::Output,
+            &input,
+            SocketDirection::Input
+        ));
+        assert!(Socket::compatible(
+            &input,
+            SocketDirection::Input,
+            &output,
+            SocketDirection::Output
+        ));
+    }
+
+    #[test]
+    fn compatible_rejects_same_direction_and_mismatched_types() {
+        let a = socket("Float");
+        let b = socket("Int");
+        assert!(!Socket::compatible(
+            &a,
+            SocketDirection::Output,
+            &b,
+            SocketDirection::Output
+        ));
+        assert!(!Socket::compatible(
+            &a,
+            SocketDirection::Output,
+            &b,
+            SocketDirection::Input
+        ));
+    }
+
+    #[test]
+    fn compatible_any_type_matches_everything() {
+        let any_output = socket("Any");
+        let typed_input = socket("Float");
+        assert!(Socket::compatible(
+            &any_output,
+            SocketDirection::Output,
+            &typed_input,
+            SocketDirection::Input
+        ));
     }
 }

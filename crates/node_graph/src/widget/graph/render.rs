@@ -42,6 +42,16 @@ impl NodeGraphWidget {
             } else {
                 None
             };
+        // Likewise, the frame a dragged node would join on release gets a
+        // brighter outline so the drop target is obvious before release
+        // (Phase 1.3). A node already in a frame is never a candidate here —
+        // dragging can only add a node to a frame, never remove it.
+        let drop_target_frame =
+            if let InteractionState::DraggingNode { node_id, .. } = self.interaction_state {
+                self.compute_drop_target_frame(node_id, layout)
+            } else {
+                None
+            };
 
         draw_grid(painter, rect, &self.view);
         draw_frames(
@@ -51,6 +61,16 @@ impl NodeGraphWidget {
             &self.view,
             origin,
         );
+        if let Some(frame_id) = drop_target_frame
+            && let Some(&screen_rect) = layout.frame_screen_rects.get(&frame_id)
+        {
+            painter.rect_stroke(
+                screen_rect,
+                egui::CornerRadius::same(6),
+                Stroke::new(2.5, Color32::WHITE),
+                egui::StrokeKind::Middle,
+            );
+        }
 
         let wire_w = (2.0 * self.view.zoom).clamp(1.0_f32, 4.0_f32);
         draw_connections(

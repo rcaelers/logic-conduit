@@ -27,6 +27,11 @@ struct ClipboardPayload {
 pub(super) enum ActionEffect {
     None,
     ResetInteraction,
+    /// Enter `InteractionState::PlacingNodes` anchored at the pointer, if a
+    /// pointer position was available when the action ran — the newly
+    /// added/duplicated/pasted nodes then follow the cursor until confirmed
+    /// (Phase 1.2).
+    EnterPlacement,
 }
 
 #[derive(Clone)]
@@ -37,6 +42,15 @@ pub(super) enum GraphAction {
     AddNode {
         name: String,
         pos: Pos2,
+    },
+    /// Adds a node and immediately wires `from` to its first compatible
+    /// visible socket — the link-drag-search gesture (Phase 1.1): drag a
+    /// wire onto empty canvas, pick a node, get it added and connected in
+    /// one step.
+    AddNodeAndConnect {
+        name: String,
+        pos: Pos2,
+        from: SocketId,
     },
     Cut {
         target: Option<NodeId>,
@@ -131,10 +145,17 @@ impl HotkeyRegistry {
 }
 
 impl NodeGraphWidget {
+    /// `pointer_canvas`: the current pointer position in canvas space, when
+    /// known. `AddNode`, `Paste` and `DuplicateSelected` use it both to spawn
+    /// their nodes under the cursor and, if present, to enter placement mode
+    /// (Phase 1.2) so the nodes follow the pointer until confirmed; without a
+    /// pointer (e.g. a touch-driven menu) they fall back to their previous
+    /// fixed-position behavior.
     pub(super) fn execute_action(
         &mut self,
         action: GraphAction,
         egui_ctx: &egui::Context,
+        pointer_canvas: Option<Pos2>,
     ) -> ActionEffect {
         match action {
             GraphAction::Undo => {
@@ -148,7 +169,35 @@ impl NodeGraphWidget {
             GraphAction::OpenAddSearch => ActionEffect::None,
             GraphAction::AddNode { name, pos } => {
                 self.push_undo_snapshot();
-                self.add_node_at(&name, pos);
+                let added = self.add_node_at(&name, pointer_canvas.unwrap_or(pos));
+                if let Some(new_id) = added {
+                    // `add_node_at` doesn't touch selection — without this,
+                    // placement mode would move whatever was selected
+                    // *before* the add (or nothing) instead of the node
+                    // that's actually following the pointer.
+                    self.select_only(new_id);
+                }
+                if added.is_some() && pointer_canvas.is_some() {
+                    ActionEffect::EnterPlacement
+                } else {
+                    ActionEffect::None
+                }
+            }
+            GraphAction::AddNodeAndConnect { name, pos, from } => {
+                self.push_undo_snapshot();
+                if let Some(new_id) = self.add_node_at(&name, pos) {
+                    self.select_only(new_id);
+                    if let Some(target) = self.first_compatible_socket(from, new_id) {
+                        let (output, input) = if from.direction == SocketDirection::Output {
+                            (from, target)
+                        } else {
+                            (target, from)
+                        };
+                        self.graph.add_connection(output, input);
+                        self.run_update(output.node);
+                        self.run_update(input.node);
+                    }
+                }
                 ActionEffect::None
             }
             GraphAction::Cut { target } => {
@@ -166,8 +215,13 @@ impl NodeGraphWidget {
                 if self.can_paste_nodes() || text.is_some() {
                     self.push_undo_snapshot();
                 }
-                self.paste_nodes(text.as_deref(), pos, egui_ctx);
-                ActionEffect::None
+                let placed_pos = pointer_canvas.unwrap_or(pos);
+                let pasted = self.paste_nodes(text.as_deref(), placed_pos, egui_ctx);
+                if pasted && pointer_canvas.is_some() {
+                    ActionEffect::EnterPlacement
+                } else {
+                    ActionEffect::None
+                }
             }
             GraphAction::Delete { target } => {
                 self.push_undo_snapshot();
@@ -181,8 +235,12 @@ impl NodeGraphWidget {
             }
             GraphAction::DuplicateSelected => {
                 self.push_undo_snapshot();
-                self.duplicate_selected();
-                ActionEffect::None
+                let duplicated = self.duplicate_selected(pointer_canvas);
+                if duplicated && pointer_canvas.is_some() {
+                    ActionEffect::EnterPlacement
+                } else {
+                    ActionEffect::None
+                }
             }
             GraphAction::AddFrame { target } => {
                 self.push_undo_snapshot();
@@ -224,7 +282,9 @@ impl NodeGraphWidget {
         }
     }
 
-    fn undo(&mut self) {
+    /// `pub(super)`: also called from `interaction.rs` to cancel a placement
+    /// gesture (Phase 1.2) by reverting the snapshot taken when it started.
+    pub(super) fn undo(&mut self) {
         let Some(previous) = self.undo_stack.pop() else {
             return;
         };
@@ -348,7 +408,23 @@ impl NodeGraphWidget {
             .is_some_and(|socket| socket.accepts(from_type))
     }
 
-    fn duplicate_selected(&mut self) {
+    /// Clears every node/frame selection and selects only `node_id` — what
+    /// clicking a node normally does, needed explicitly wherever a node is
+    /// added programmatically (`add_node_at` itself leaves selection
+    /// untouched).
+    fn select_only(&mut self, node_id: NodeId) {
+        for node in self.graph.nodes.values_mut() {
+            node.selected = node.id == node_id;
+        }
+        for frame in &mut self.graph.frames {
+            frame.selected = false;
+        }
+    }
+
+    /// Returns whether anything was duplicated. `pointer_canvas`, when
+    /// present, places the duplicates under the cursor (Phase 1.2 placement
+    /// mode then takes over); otherwise they land at the usual fixed offset.
+    fn duplicate_selected(&mut self, pointer_canvas: Option<Pos2>) -> bool {
         let selected: Vec<_> = self
             .graph
             .nodes
@@ -357,11 +433,12 @@ impl NodeGraphWidget {
             .map(|node| node.id)
             .collect();
         if selected.is_empty() {
-            return;
+            return false;
         }
 
         let payload = self.build_clipboard_payload(&selected);
-        self.paste_payload(payload, None);
+        self.paste_payload(payload, pointer_canvas);
+        true
     }
 
     fn sync_node_state(&mut self, id: NodeId) {
@@ -675,5 +752,248 @@ impl NodeGraphWidget {
         {
             node.collapsed = !node.collapsed;
         }
+    }
+}
+
+#[cfg(test)]
+mod action_tests {
+    use super::*;
+    use crate::api::{FloatSocket, InputDef, NodeDef, OutputDef};
+    use crate::model::SocketDirection;
+    use crate::runtime::NodeTypeRegistry;
+
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+    struct SourceState;
+    struct SourceNode;
+    impl NodeDef for SourceNode {
+        type State = SourceState;
+        fn name() -> &'static str {
+            "Source"
+        }
+        fn category() -> &'static str {
+            "Test"
+        }
+        fn inputs() -> Vec<InputDef<SourceState>> {
+            vec![]
+        }
+        fn outputs() -> Vec<OutputDef<SourceState>> {
+            vec![OutputDef::new::<FloatSocket>("Out")]
+        }
+        fn state() -> SourceState {
+            SourceState
+        }
+    }
+
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+    struct SinkState;
+    struct SinkNode;
+    impl NodeDef for SinkNode {
+        type State = SinkState;
+        fn name() -> &'static str {
+            "Sink"
+        }
+        fn category() -> &'static str {
+            "Test"
+        }
+        fn inputs() -> Vec<InputDef<SinkState>> {
+            vec![InputDef::new::<FloatSocket>("In")]
+        }
+        fn outputs() -> Vec<OutputDef<SinkState>> {
+            vec![]
+        }
+        fn state() -> SinkState {
+            SinkState
+        }
+    }
+
+    fn test_widget() -> NodeGraphWidget {
+        let mut registry = NodeTypeRegistry::new();
+        registry.register::<SourceNode>();
+        registry.register::<SinkNode>();
+        NodeGraphWidget::new(registry)
+    }
+
+    #[test]
+    fn add_node_and_connect_wires_first_compatible_socket() {
+        let mut widget = test_widget();
+        let source_id = widget
+            .add_node_at("Source", Pos2::new(0.0, 0.0))
+            .expect("source node should be created");
+        let from = SocketId {
+            node: source_id,
+            index: 0,
+            direction: SocketDirection::Output,
+        };
+
+        let effect = widget.execute_action(
+            GraphAction::AddNodeAndConnect {
+                name: "Sink".to_owned(),
+                pos: Pos2::new(200.0, 0.0),
+                from,
+            },
+            &egui::Context::default(),
+            None,
+        );
+
+        assert!(effect == ActionEffect::None);
+        assert_eq!(widget.graph.nodes.len(), 2);
+        assert_eq!(widget.graph.connections.len(), 1);
+        let connection = &widget.graph.connections[0];
+        assert_eq!(connection.from, from);
+        assert_eq!(connection.to.direction, SocketDirection::Input);
+        assert_ne!(connection.to.node, source_id);
+        // A single undo step covers both the add and the connect.
+        assert!(widget.can_undo());
+        assert_eq!(widget.undo_stack.len(), 1);
+    }
+
+    #[test]
+    fn add_node_and_connect_leaves_node_unconnected_when_incompatible() {
+        let mut widget = test_widget();
+        let sink_id = widget
+            .add_node_at("Sink", Pos2::new(0.0, 0.0))
+            .expect("sink node should be created");
+        // Sink has no outputs, so this is an Input socket dragged from Sink;
+        // wiring it to another Sink (also no outputs) should find nothing.
+        let from = SocketId {
+            node: sink_id,
+            index: 0,
+            direction: SocketDirection::Input,
+        };
+
+        widget.execute_action(
+            GraphAction::AddNodeAndConnect {
+                name: "Sink".to_owned(),
+                pos: Pos2::new(200.0, 0.0),
+                from,
+            },
+            &egui::Context::default(),
+            None,
+        );
+
+        assert_eq!(widget.graph.nodes.len(), 2);
+        assert!(widget.graph.connections.is_empty());
+    }
+
+    #[test]
+    fn add_node_with_pointer_spawns_there_and_enters_placement() {
+        let mut widget = test_widget();
+        let pointer = Pos2::new(120.0, 80.0);
+
+        let effect = widget.execute_action(
+            GraphAction::AddNode {
+                name: "Source".to_owned(),
+                pos: Pos2::new(0.0, 0.0),
+            },
+            &egui::Context::default(),
+            Some(pointer),
+        );
+
+        assert!(effect == ActionEffect::EnterPlacement);
+        let node = widget
+            .graph
+            .nodes
+            .values()
+            .find(|n| n.def_name() == "Source")
+            .expect("source node should exist");
+        assert_eq!(node.pos, pointer);
+    }
+
+    #[test]
+    fn add_node_selects_only_the_new_node_not_a_prior_selection() {
+        // Regression test: placement mode moves whatever is `selected`. If
+        // adding a node left an older selection in place instead of
+        // selecting the new node, placement mode would drag that old node
+        // around instead of the one that was just added.
+        let mut widget = test_widget();
+        let existing = widget
+            .add_node_at("Source", Pos2::new(0.0, 0.0))
+            .expect("source node should be created");
+        widget.graph.nodes.get_mut(&existing).unwrap().selected = true;
+
+        widget.execute_action(
+            GraphAction::AddNode {
+                name: "Sink".to_owned(),
+                pos: Pos2::new(0.0, 0.0),
+            },
+            &egui::Context::default(),
+            Some(Pos2::new(120.0, 80.0)),
+        );
+
+        let new_id = widget
+            .graph
+            .nodes
+            .values()
+            .find(|n| n.def_name() == "Sink")
+            .expect("sink node should exist")
+            .id;
+        assert!(widget.graph.nodes[&new_id].selected);
+        assert!(!widget.graph.nodes[&existing].selected);
+    }
+
+    #[test]
+    fn add_node_without_pointer_uses_given_pos_and_skips_placement() {
+        let mut widget = test_widget();
+        let pos = Pos2::new(50.0, 60.0);
+
+        let effect = widget.execute_action(
+            GraphAction::AddNode {
+                name: "Source".to_owned(),
+                pos,
+            },
+            &egui::Context::default(),
+            None,
+        );
+
+        assert!(effect == ActionEffect::None);
+        let node = widget
+            .graph
+            .nodes
+            .values()
+            .find(|n| n.def_name() == "Source")
+            .expect("source node should exist");
+        assert_eq!(node.pos, pos);
+    }
+
+    #[test]
+    fn duplicate_selected_with_pointer_enters_placement() {
+        let mut widget = test_widget();
+        let source_id = widget
+            .add_node_at("Source", Pos2::new(10.0, 10.0))
+            .expect("source node should be created");
+        widget.graph.nodes.get_mut(&source_id).unwrap().selected = true;
+        let pointer = Pos2::new(300.0, 40.0);
+
+        let effect = widget.execute_action(
+            GraphAction::DuplicateSelected,
+            &egui::Context::default(),
+            Some(pointer),
+        );
+
+        assert!(effect == ActionEffect::EnterPlacement);
+        assert_eq!(widget.graph.nodes.len(), 2);
+    }
+
+    #[test]
+    fn duplicate_selected_with_nothing_selected_does_not_enter_placement() {
+        let mut widget = test_widget();
+        widget
+            .add_node_at("Source", Pos2::new(10.0, 10.0))
+            .expect("source node should be created");
+        // Freshly added node is not selected by default in this harness path
+        // (add_node_at itself doesn't mark it selected), so nothing to
+        // duplicate.
+        for node in widget.graph.nodes.values_mut() {
+            node.selected = false;
+        }
+
+        let effect = widget.execute_action(
+            GraphAction::DuplicateSelected,
+            &egui::Context::default(),
+            Some(Pos2::new(300.0, 40.0)),
+        );
+
+        assert!(effect == ActionEffect::None);
+        assert_eq!(widget.graph.nodes.len(), 1);
     }
 }

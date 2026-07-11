@@ -1,6 +1,6 @@
 use super::{NodeInstance, NodeRuntime, TypedNode};
 use crate::api::{InputDef, NodeDef, OutputDef};
-use crate::model::{Node, NodeId, NodeKind, Socket, SocketShape, VariadicInfo};
+use crate::model::{Node, NodeId, NodeKind, Socket, SocketDirection, SocketShape, VariadicInfo};
 use egui::{Color32, Pos2};
 use std::collections::HashMap;
 
@@ -328,6 +328,38 @@ impl NodeTypeRegistry {
         }
         None
     }
+
+    /// Registered node types with at least one visible socket compatible
+    /// with `from` (a socket already being dragged from an existing node) —
+    /// used to filter the link-drag search popup (Blender's "link drag
+    /// search"). Each def is probed via a throwaway instantiation since
+    /// socket lists are only available once type-erased through `create`;
+    /// registries are small (tens of defs), so this is cheap enough to run
+    /// once per drag release rather than on every frame.
+    pub(crate) fn connectable_types(
+        &self,
+        from: &Socket,
+        from_dir: SocketDirection,
+    ) -> Vec<&RegisteredNodeType> {
+        self.types
+            .iter()
+            .filter(|def| {
+                let probe = (def.create)(NodeId(0), Pos2::ZERO);
+                probe
+                    .node
+                    .inputs
+                    .iter()
+                    .filter(|s| s.visible)
+                    .any(|s| Socket::compatible(from, from_dir, s, SocketDirection::Input))
+                    || probe
+                        .node
+                        .outputs
+                        .iter()
+                        .filter(|s| s.visible)
+                        .any(|s| Socket::compatible(from, from_dir, s, SocketDirection::Output))
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -424,5 +456,81 @@ mod tests {
         assert_eq!(node.inputs.len(), 2);
         assert_eq!(node.inputs[0].type_name, "Float");
         assert!(node.inputs[1].is_variadic_placeholder());
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    struct IntSourceState;
+
+    struct IntSourceNode;
+    impl NodeDef for IntSourceNode {
+        type State = IntSourceState;
+
+        fn name() -> &'static str {
+            "IntSource"
+        }
+        fn category() -> &'static str {
+            "Test"
+        }
+        fn inputs() -> Vec<InputDef<IntSourceState>> {
+            vec![]
+        }
+        fn outputs() -> Vec<OutputDef<IntSourceState>> {
+            vec![OutputDef::new::<IntSocket>("Out")]
+        }
+        fn state() -> IntSourceState {
+            IntSourceState
+        }
+    }
+
+    fn test_registry() -> NodeTypeRegistry {
+        let mut registry = NodeTypeRegistry::new();
+        registry.register::<MixNode>();
+        registry.register::<IntSourceNode>();
+        registry
+    }
+
+    #[test]
+    fn connectable_types_matches_via_accepts() {
+        let registry = test_registry();
+        // MixNode's own "Out" output is Float; dragging from it should only
+        // match defs with a Float- (or Any-) accepting input. MixNode's own
+        // "Gain" input accepts Int, so a dragged Int output should match it.
+        let float_output = Socket {
+            name: String::new(),
+            type_name: "Float".to_owned(),
+            color: Color32::WHITE,
+            shape: SocketShape::Circle,
+            allowed: Vec::new(),
+            resolved_type: None,
+            def_index: 0,
+            variadic: None,
+            visible: true,
+            hidden: false,
+            has_control: false,
+        };
+        let matches = registry.connectable_types(&float_output, SocketDirection::Output);
+        assert!(matches.iter().any(|def| def.name == "Mix"));
+        assert!(!matches.iter().any(|def| def.name == "IntSource"));
+    }
+
+    #[test]
+    fn connectable_types_any_type_matches_broadly() {
+        let registry = test_registry();
+        let any_output = Socket {
+            name: String::new(),
+            type_name: "Any".to_owned(),
+            color: Color32::WHITE,
+            shape: SocketShape::Circle,
+            allowed: Vec::new(),
+            resolved_type: None,
+            def_index: 0,
+            variadic: None,
+            visible: true,
+            hidden: false,
+            has_control: false,
+        };
+        let matches = registry.connectable_types(&any_output, SocketDirection::Output);
+        // "Any" satisfies every input, so both defs with an input should match.
+        assert!(matches.iter().any(|def| def.name == "Mix"));
     }
 }

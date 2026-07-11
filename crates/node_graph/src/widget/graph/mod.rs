@@ -321,6 +321,53 @@ impl NodeGraphWidget {
         self.show_panel_tab_bar(ui, tab_bar_rect);
         self.show_frame_rename(ui.ctx());
     }
+
+    /// One-line hint of available actions for the current interaction
+    /// state, for a status bar (Phase 4.1). Static strings only — cheap
+    /// enough to call every frame.
+    pub fn status_hint(&self) -> &'static str {
+        match &self.interaction_state {
+            InteractionState::DraggingWire { .. } => {
+                "Release on a socket to connect · release on canvas to search for a node"
+            }
+            InteractionState::PlacingNodes { .. } => "Click to place · Esc to cancel",
+            InteractionState::CuttingWire { .. } => "Release to cut the crossed wires",
+            InteractionState::DraggingNode { .. } => "Drop inside a frame to join it",
+            InteractionState::DraggingFrame { .. }
+            | InteractionState::BoxSelecting { .. }
+            | InteractionState::Panning { .. } => "",
+            InteractionState::Idle => {
+                let any_selected = self.graph.nodes.values().any(|node| node.selected)
+                    || self.graph.frames.iter().any(|frame| frame.selected);
+                if any_selected {
+                    "Shift+D Duplicate · X Delete · Ctrl+J Frame · N Panel"
+                } else {
+                    "A Add · RMB Menu · MMB Pan · Ctrl+RMB-drag Cut wires"
+                }
+            }
+        }
+    }
+
+    /// Current zoom level as a whole-number percentage, for a status bar.
+    pub fn zoom_percent(&self) -> i32 {
+        (self.view.zoom * 100.0).round() as i32
+    }
+
+    /// `"n nodes"` or `"m/n selected"`, for a status bar.
+    pub fn selection_summary(&self) -> String {
+        let total = self.graph.nodes.len();
+        let selected = self
+            .graph
+            .nodes
+            .values()
+            .filter(|node| node.selected)
+            .count();
+        if selected > 0 {
+            format!("{selected}/{total} selected")
+        } else {
+            format!("{total} node{}", if total == 1 { "" } else { "s" })
+        }
+    }
 }
 
 #[cfg(test)]
