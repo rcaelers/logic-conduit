@@ -5,6 +5,11 @@ use crate::{
 use egui::{Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 use std::collections::HashMap;
 
+const MINIMAP_SCALE: f32 = 0.20;
+const MINIMAP_MARGIN_FRACTION: f32 = 0.025;
+const MINIMAP_MIN_MARGIN: f32 = 6.0;
+const MINIMAP_MAX_MARGIN: f32 = 15.0;
+
 pub struct MinimapInfo {
     pub mini_rect: Rect,
     canvas_bounds: Rect,
@@ -46,10 +51,7 @@ pub fn compute_minimap(
     node_rects: impl Iterator<Item = Rect>,
     canvas_rect: Rect,
 ) -> (MinimapInfo, Rect) {
-    let mini_rect = Rect::from_min_max(
-        Pos2::new(canvas_rect.max.x - 215.0, canvas_rect.max.y - 145.0),
-        Pos2::new(canvas_rect.max.x - 15.0, canvas_rect.max.y - 15.0),
-    );
+    let mini_rect = minimap_rect(canvas_rect);
 
     let mut bounds: Option<Rect> = None;
     for nr in node_rects {
@@ -61,6 +63,30 @@ pub fn compute_minimap(
 
     let info = MinimapInfo::new(canvas_bounds, mini_rect);
     (info, mini_rect)
+}
+
+fn minimap_rect(canvas_rect: Rect) -> Rect {
+    let margin = (canvas_rect.width().min(canvas_rect.height()) * MINIMAP_MARGIN_FRACTION)
+        .clamp(MINIMAP_MIN_MARGIN, MINIMAP_MAX_MARGIN)
+        .min(canvas_rect.width() * 0.5)
+        .min(canvas_rect.height() * 0.5);
+    let available = (canvas_rect.size() - Vec2::splat(margin * 2.0)).max(Vec2::ZERO);
+    let preferred = canvas_rect.size() * MINIMAP_SCALE;
+    let fit = if preferred.x > 0.0 && preferred.y > 0.0 {
+        (available.x / preferred.x)
+            .min(available.y / preferred.y)
+            .min(1.0)
+    } else {
+        0.0
+    };
+    let size = preferred * fit;
+    Rect::from_min_size(
+        Pos2::new(
+            canvas_rect.max.x - margin - size.x,
+            canvas_rect.max.y - margin - size.y,
+        ),
+        size,
+    )
 }
 
 pub fn draw_minimap(
@@ -136,4 +162,48 @@ pub fn draw_minimap(
         FontId::proportional(9.0),
         Color32::from_rgba_unmultiplied(140, 140, 140, 180),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::minimap_rect;
+    use egui::{Pos2, Rect};
+
+    #[test]
+    fn minimap_scales_with_the_canvas() {
+        let small = minimap_rect(Rect::from_min_size(Pos2::ZERO, egui::vec2(1_000.0, 600.0)));
+        let large = minimap_rect(Rect::from_min_size(
+            Pos2::ZERO,
+            egui::vec2(2_000.0, 1_200.0),
+        ));
+
+        assert!(large.width() > small.width());
+        assert!(large.height() > small.height());
+    }
+
+    #[test]
+    fn minimap_stays_inside_a_short_canvas() {
+        let canvas = Rect::from_min_size(Pos2::ZERO, egui::vec2(1_000.0, 300.0));
+        let minimap = minimap_rect(canvas);
+
+        assert!(canvas.contains_rect(minimap));
+    }
+
+    #[test]
+    fn minimap_matches_the_canvas_aspect_ratio() {
+        let canvas = Rect::from_min_size(Pos2::ZERO, egui::vec2(1_200.0, 500.0));
+        let minimap = minimap_rect(canvas);
+
+        assert!(
+            (minimap.width() / minimap.height() - canvas.width() / canvas.height()).abs() < 0.001
+        );
+    }
+
+    #[test]
+    fn minimap_stays_inside_a_tiny_canvas() {
+        let canvas = Rect::from_min_size(Pos2::ZERO, egui::vec2(8.0, 8.0));
+        let minimap = minimap_rect(canvas);
+
+        assert!(canvas.contains_rect(minimap));
+    }
 }
