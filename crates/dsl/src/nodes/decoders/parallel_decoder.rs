@@ -65,6 +65,9 @@ pub struct ParallelDecoder {
 
     /// Current aligned packed blocks and cursor for bounded streamed work.
     stream_blocks: StreamBlockState,
+    /// Next fragment expected by the ordered stream merge. Sequential in
+    /// Step 4; Step 5's reorder buffer will preserve this invariant.
+    next_stream_merge_sequence: u64,
 }
 
 impl ParallelDecoder {
@@ -113,6 +116,7 @@ impl ParallelDecoder {
             query_strobe_position: 0,
             query_buffers: QueryBuffers::default(),
             stream_blocks: StreamBlockState::default(),
+            next_stream_merge_sequence: 0,
         }
     }
 
@@ -357,6 +361,41 @@ struct StreamBlockState {
     data: Vec<SampleBlock>,
     cs: Option<SampleBlock>,
     offset: usize,
+    next_sequence: u64,
+    fragment_buffers: DecodeFragmentBuffers,
+}
+
+#[derive(Debug, Default)]
+struct DecodeFragmentBuffers {
+    positions: Vec<u64>,
+    values: Vec<u64>,
+    reset_before: Vec<bool>,
+}
+
+#[derive(Debug)]
+struct DecodeFragment {
+    sequence: u64,
+    start_position: u64,
+    end_position: u64,
+    timestamp_step: u64,
+    boundary: Option<FragmentBoundary>,
+    last_strobe_value: bool,
+    buffers: DecodeFragmentBuffers,
+    reset_after: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FragmentBoundary {
+    position: u64,
+    strobe_value: bool,
+    data_value: u64,
+    cs_eligible: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StreamScanConfig {
+    mode: StrobeMode,
+    cs_polarity: CsPolarity,
 }
 
 #[inline]
@@ -383,6 +422,219 @@ fn bit_range_mask(start: usize, end: usize) -> u64 {
     };
     let below_start = (1u64 << start) - 1;
     below_end & !below_start
+}
+
+#[inline]
+fn packed_bus_value(data: &[SampleBlock], local_index: usize) -> u64 {
+    data.iter().enumerate().fold(0u64, |value, (bit, block)| {
+        value | (u64::from(packed_bit(&block.data, local_index)) << bit)
+    })
+}
+
+#[inline]
+fn cs_eligible(config: StreamScanConfig, cs: Option<&SampleBlock>, local_index: usize) -> bool {
+    match (config.cs_polarity, cs) {
+        (CsPolarity::ActiveLow, Some(cs)) => packed_bit(&cs.data, local_index),
+        (CsPolarity::ActiveHigh, Some(cs)) => !packed_bit(&cs.data, local_index),
+        _ => true,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn scan_stream_fragment(
+    config: StreamScanConfig,
+    sequence: u64,
+    strobe: &SampleBlock,
+    data: &[SampleBlock],
+    cs: Option<&SampleBlock>,
+    window_start: usize,
+    window_end: usize,
+    mut buffers: DecodeFragmentBuffers,
+) -> DecodeFragment {
+    buffers.positions.clear();
+    buffers.values.clear();
+    buffers.reset_before.clear();
+    let boundary = matches!(
+        config.mode,
+        StrobeMode::RisingEdge | StrobeMode::FallingEdge | StrobeMode::AnyEdge
+    )
+    .then(|| FragmentBoundary {
+        position: strobe.start_position + window_start as u64,
+        strobe_value: packed_bit(&strobe.data, window_start),
+        data_value: packed_bus_value(data, window_start),
+        cs_eligible: cs_eligible(config, cs, window_start),
+    });
+    let mut reset_before_next = false;
+    let first_word = window_start / u64::BITS as usize;
+    let last_word = (window_end - 1) / u64::BITS as usize;
+    for word_index in first_word..=last_word {
+        let word_start = word_index * u64::BITS as usize;
+        let word = packed_word(&strobe.data, word_index);
+        let previous_bit = if word_start == 0 {
+            false
+        } else {
+            packed_bit(&strobe.data, word_start - 1)
+        };
+        let toggles = word ^ ((word << 1) | u64::from(previous_bit));
+        let mut triggers = match config.mode {
+            StrobeMode::RisingEdge => toggles & word,
+            StrobeMode::FallingEdge => toggles & !word,
+            StrobeMode::AnyEdge => toggles,
+            StrobeMode::HighLevel => word,
+            StrobeMode::LowLevel => !word,
+        };
+        let range_start = window_start.saturating_sub(word_start);
+        let range_end = window_end
+            .saturating_sub(word_start)
+            .min(u64::BITS as usize);
+        triggers &= bit_range_mask(range_start, range_end);
+        if boundary.is_some() && word_start <= window_start {
+            triggers &= !(1u64 << (window_start - word_start));
+        }
+
+        while triggers != 0 {
+            let bit_in_word = triggers.trailing_zeros() as usize;
+            triggers &= triggers - 1;
+            let local_index = word_start + bit_in_word;
+            let position = strobe.start_position + local_index as u64;
+            if !cs_eligible(config, cs, local_index) {
+                reset_before_next = true;
+                continue;
+            }
+
+            buffers.positions.push(position);
+            buffers.values.push(packed_bus_value(data, local_index));
+            buffers.reset_before.push(reset_before_next);
+            reset_before_next = false;
+        }
+    }
+
+    DecodeFragment {
+        sequence,
+        start_position: strobe.start_position + window_start as u64,
+        end_position: strobe.start_position + window_end as u64,
+        timestamp_step: strobe.timestamp_step,
+        boundary,
+        last_strobe_value: packed_bit(&strobe.data, window_end - 1),
+        buffers,
+        reset_after: reset_before_next,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn merge_stream_fragment(
+    fragment: &DecodeFragment,
+    mode: StrobeMode,
+    previous_strobe_value: &mut bool,
+    num_data_bits: usize,
+    cycles_per_word: usize,
+    endianness: Endianness,
+    assembly: &mut AssemblyState,
+    enable_query: Option<&Arc<dyn EdgeQuery>>,
+    enable_input: &mut Option<Receiver<'_, Sample>>,
+    current_enable_value: &mut bool,
+    next_enable_change_position: &mut u64,
+    word_batch: &mut Option<Vec<Word>>,
+) -> WorkResult<u64> {
+    let mut words_emitted = 0u64;
+    let buffers = &fragment.buffers;
+    debug_assert_eq!(buffers.positions.len(), buffers.values.len());
+    debug_assert_eq!(buffers.positions.len(), buffers.reset_before.len());
+    let mut merge_sample = |position: u64, value: u64, reset_before: bool| -> WorkResult<()> {
+        if reset_before {
+            assembly.cycles = 0;
+            assembly.value = 0;
+        }
+        let timestamp_ns = position.saturating_mul(fragment.timestamp_step);
+
+        if let Some(query) = enable_query {
+            *current_enable_value = query
+                .value_at(position)
+                .map_err(|error| WorkError::NodeError(error.to_string()))?;
+        } else if timestamp_ns >= *next_enable_change_position
+            && let Some(enable) = enable_input
+        {
+            loop {
+                match enable.peek() {
+                    Ok(next_edge) if next_edge.start_time_ns <= timestamp_ns => {
+                        *current_enable_value = enable.recv()?.value;
+                    }
+                    Ok(next_edge) => {
+                        *next_enable_change_position = next_edge.start_time_ns;
+                        break;
+                    }
+                    Err(WorkError::Shutdown) => {
+                        *next_enable_change_position = u64::MAX;
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        if !*current_enable_value {
+            assembly.cycles = 0;
+            assembly.value = 0;
+            return Ok(());
+        }
+
+        if assembly.cycles == 0 {
+            assembly.first_ts = timestamp_ns;
+        }
+        match endianness {
+            Endianness::Little => {
+                assembly.value |= value << (assembly.cycles * num_data_bits);
+            }
+            Endianness::Big => {
+                assembly.value = (assembly.value << num_data_bits) | value;
+            }
+        }
+        assembly.cycles += 1;
+        if assembly.cycles < cycles_per_word {
+            return Ok(());
+        }
+
+        if let Some(batch) = word_batch {
+            batch.push(Word::spanning(
+                assembly.value,
+                assembly.first_ts,
+                timestamp_ns.saturating_sub(assembly.first_ts),
+            ));
+        }
+        assembly.value = 0;
+        assembly.cycles = 0;
+        words_emitted += 1;
+        Ok(())
+    };
+
+    let mut boundary_reset = false;
+    if let Some(boundary) = fragment.boundary {
+        let triggered = match mode {
+            StrobeMode::RisingEdge => !*previous_strobe_value && boundary.strobe_value,
+            StrobeMode::FallingEdge => *previous_strobe_value && !boundary.strobe_value,
+            StrobeMode::AnyEdge => *previous_strobe_value != boundary.strobe_value,
+            StrobeMode::HighLevel | StrobeMode::LowLevel => {
+                unreachable!("level-triggered fragments have no repaired boundary")
+            }
+        };
+        if triggered {
+            if boundary.cs_eligible {
+                merge_sample(boundary.position, boundary.data_value, false)?;
+            } else {
+                boundary_reset = true;
+            }
+        }
+    }
+    for (index, (&position, &value)) in buffers.positions.iter().zip(&buffers.values).enumerate() {
+        let reset_before = boundary_reset || buffers.reset_before[index];
+        boundary_reset = false;
+        merge_sample(position, value, reset_before)?;
+    }
+    if boundary_reset || fragment.reset_after {
+        assembly.cycles = 0;
+        assembly.value = 0;
+    }
+    *previous_strobe_value = fragment.last_strobe_value;
+    Ok(words_emitted)
 }
 
 /// Enable-signal state, threaded through `process_trigger` calls. Either a
@@ -817,176 +1069,66 @@ impl ParallelDecoder {
         let data_blocks = &blocks.data;
         let cs_block = &blocks.cs;
 
-        let mode = self.mode;
-        let cs_polarity = self.cs_polarity;
-        let cycles_per_word = self.cycles_per_word;
-        let endianness = self.endianness;
-        let num_data_bits = self.num_data_bits;
         let num_samples = strobe_block.num_samples;
-        let start_pos = strobe_block.start_position;
-        let timestamp_step = strobe_block.timestamp_step;
         let window_start = blocks.offset;
         let window_end = window_start
             .saturating_add(Self::STREAM_SAMPLES_PER_CALL)
             .min(num_samples);
-        let mut words_emitted = 0u64;
-        let mut word_batch = output
-            .as_ref()
-            .map(|_| Vec::with_capacity(window_end - window_start));
-        let mut last_strobe_value = self.last_strobe_value;
-        let mut assembly_value = self.assembly_value;
-        let mut assembly_cycles = self.assembly_cycles;
-        let mut assembly_first_ts = self.assembly_first_ts;
-
-        // Find all triggers directly in packed 64-bit strobe words. The
-        // trigger mask is then walked with trailing_zeros, so sparse live
-        // signals do work proportional to their edges instead of samples.
-        let first_word = window_start / u64::BITS as usize;
-        let last_word = (window_end - 1) / u64::BITS as usize;
-        for word_index in first_word..=last_word {
-            let word_start = word_index * u64::BITS as usize;
-            let word = packed_word(&strobe_block.data, word_index);
-            let previous_bit = if word_start == 0 {
-                last_strobe_value
-            } else {
-                packed_bit(&strobe_block.data, word_start - 1)
-            };
-            let toggles = word ^ ((word << 1) | u64::from(previous_bit));
-            let mut triggers = match mode {
-                StrobeMode::RisingEdge => toggles & word,
-                StrobeMode::FallingEdge => toggles & !word,
-                StrobeMode::AnyEdge => toggles,
-                StrobeMode::HighLevel => word,
-                StrobeMode::LowLevel => !word,
-            };
-            let range_start = window_start.saturating_sub(word_start);
-            let range_end = window_end
-                .saturating_sub(word_start)
-                .min(u64::BITS as usize);
-            triggers &= bit_range_mask(range_start, range_end);
-
-            while triggers != 0 {
-                let bit_in_word = triggers.trailing_zeros() as usize;
-                triggers &= triggers - 1;
-                let local_idx = word_start + bit_in_word;
-                let position = start_pos + local_idx as u64;
-
-                // Check CS: is it inactive?
-                let cs_inactive = match (cs_polarity, cs_block) {
-                    (CsPolarity::ActiveLow, Some(cs)) => packed_bit(&cs.data, local_idx), // inactive = high
-                    (CsPolarity::ActiveHigh, Some(cs)) => !packed_bit(&cs.data, local_idx), // inactive = low
-                    _ => true, // Disabled or unconnected
-                };
-
-                if !cs_inactive {
-                    // A gated-off cycle breaks any word being assembled.
-                    if assembly_cycles > 0 {
-                        debug!(
-                            "[{}] dropping incomplete word ({}/{} cycles) at CS boundary",
-                            self.name, assembly_cycles, cycles_per_word
-                        );
-                        assembly_cycles = 0;
-                        assembly_value = 0;
-                    }
-                    continue;
-                }
-
-                // Check enable signal: point-read when EdgeQuery-negotiated,
-                // else advance the streamed edge level (inline advance logic).
-                let timestamp_ns = position.saturating_mul(timestamp_step);
-                if let Some(q) = &enable_query {
-                    current_enable_value = q
-                        .value_at(position)
-                        .map_err(|e| WorkError::NodeError(e.to_string()))?;
-                } else if timestamp_ns >= next_enable_change_position
-                    && let Some(enable) = &mut enable_input
-                {
-                    loop {
-                        match enable.peek() {
-                            Ok(next_edge) => {
-                                if next_edge.start_time_ns <= timestamp_ns {
-                                    let edge = enable.recv()?;
-                                    current_enable_value = edge.value;
-                                } else {
-                                    next_enable_change_position = next_edge.start_time_ns;
-                                    break;
-                                }
-                            }
-                            Err(WorkError::Shutdown) => {
-                                next_enable_change_position = u64::MAX;
-                                break;
-                            }
-                            Err(e) => return Err(e),
-                        }
-                    }
-                }
-
-                if !current_enable_value {
-                    // A gated-off cycle breaks any word being assembled.
-                    if assembly_cycles > 0 {
-                        debug!(
-                            "[{}] dropping incomplete word ({}/{} cycles) at enable boundary",
-                            self.name, assembly_cycles, cycles_per_word
-                        );
-                        assembly_cycles = 0;
-                        assembly_value = 0;
-                    }
-                    continue;
-                }
-
-                // Sample all data bits only at selected trigger positions.
-                let mut value = 0u64;
-                for (bit_idx, db) in data_blocks.iter().enumerate() {
-                    if packed_bit(&db.data, local_idx) {
-                        value |= 1 << bit_idx;
-                    }
-                }
-
-                // Assemble cycles into a word (cycles_per_word == 1 passes
-                // each cycle straight through).
-                if assembly_cycles == 0 {
-                    assembly_first_ts = timestamp_ns;
-                }
-                match endianness {
-                    Endianness::Little => {
-                        assembly_value |= value << (assembly_cycles * num_data_bits);
-                    }
-                    Endianness::Big => {
-                        assembly_value = (assembly_value << num_data_bits) | value;
-                    }
-                }
-                assembly_cycles += 1;
-                if assembly_cycles < cycles_per_word {
-                    continue;
-                }
-
-                // First to last assembled cycle; a single-cycle word is an
-                // instant (its value stands on the bus until the next strobe).
-                let word = Word::spanning(
-                    assembly_value,
-                    assembly_first_ts,
-                    timestamp_ns.saturating_sub(assembly_first_ts),
-                );
-                assembly_value = 0;
-                assembly_cycles = 0;
-
-                if let Some(batch) = &mut word_batch {
-                    batch.push(word);
-                }
-                words_emitted += 1;
-            }
+        let mut fragment = scan_stream_fragment(
+            StreamScanConfig {
+                mode: self.mode,
+                cs_polarity: self.cs_polarity,
+            },
+            blocks.next_sequence,
+            strobe_block,
+            data_blocks,
+            cs_block.as_ref(),
+            window_start,
+            window_end,
+            std::mem::take(&mut blocks.fragment_buffers),
+        );
+        if fragment.sequence != self.next_stream_merge_sequence {
+            return Err(WorkError::NodeError(format!(
+                "Out-of-order decode fragment: expected sequence {}, received {}",
+                self.next_stream_merge_sequence, fragment.sequence
+            )));
         }
 
-        last_strobe_value = packed_bit(&strobe_block.data, window_end - 1);
+        let mut word_batch = output
+            .as_ref()
+            .map(|_| Vec::with_capacity(fragment.buffers.positions.len()));
+        let mut assembly = AssemblyState {
+            value: self.assembly_value,
+            cycles: self.assembly_cycles,
+            first_ts: self.assembly_first_ts,
+        };
+        let mut last_strobe_value = self.last_strobe_value;
+        let words_emitted = merge_stream_fragment(
+            &fragment,
+            self.mode,
+            &mut last_strobe_value,
+            self.num_data_bits,
+            self.cycles_per_word,
+            self.endianness,
+            &mut assembly,
+            enable_query.as_ref(),
+            &mut enable_input,
+            &mut current_enable_value,
+            &mut next_enable_change_position,
+            &mut word_batch,
+        )?;
+        blocks.next_sequence += 1;
+        self.next_stream_merge_sequence += 1;
 
         // Save state back
         self.last_strobe_value = last_strobe_value;
         self.current_enable_value = current_enable_value;
         self.next_enable_change_position = next_enable_change_position;
         self.total_words_emitted += words_emitted;
-        self.assembly_value = assembly_value;
-        self.assembly_cycles = assembly_cycles;
-        self.assembly_first_ts = assembly_first_ts;
+        self.assembly_value = assembly.value;
+        self.assembly_cycles = assembly.cycles;
+        self.assembly_first_ts = assembly.first_ts;
+        blocks.fragment_buffers = std::mem::take(&mut fragment.buffers);
 
         blocks.offset = window_end;
         if window_end == num_samples {
@@ -1004,8 +1146,9 @@ impl ParallelDecoder {
         if self.work_call_count.is_multiple_of(10) || words_emitted > 0 {
             debug!(
                 "[{}] Stream window {} done: {} words this window, {} total",
-                self.name, self.work_call_count, words_emitted, self.total_words_emitted
+                self.name, fragment.sequence, words_emitted, self.total_words_emitted
             );
+            debug_assert!(fragment.start_position < fragment.end_position);
         }
 
         Ok(words_emitted as usize)
@@ -1319,6 +1462,135 @@ mod tests {
             assert_eq!(actual_positions, expected_positions, "mode={mode:?}");
             for word in words {
                 assert_eq!(word.value, u64::from(word.timestamp_ns % 3 == 1));
+            }
+        }
+    }
+
+    fn merge_fragments_for_test(
+        mode: StrobeMode,
+        fragments: &[DecodeFragment],
+    ) -> (Vec<Word>, AssemblyState) {
+        let mut assembly = AssemblyState {
+            value: 0,
+            cycles: 0,
+            first_ts: 0,
+        };
+        let mut enable_input: Option<Receiver<'_, Sample>> = None;
+        let mut current_enable_value = true;
+        let mut next_enable_change_position = u64::MAX;
+        let mut words = Some(Vec::new());
+        let mut previous_strobe_value = false;
+
+        for fragment in fragments {
+            merge_stream_fragment(
+                fragment,
+                mode,
+                &mut previous_strobe_value,
+                3,
+                3,
+                Endianness::Little,
+                &mut assembly,
+                None,
+                &mut enable_input,
+                &mut current_enable_value,
+                &mut next_enable_change_position,
+                &mut words,
+            )
+            .unwrap();
+        }
+
+        (words.unwrap(), assembly)
+    }
+
+    #[test]
+    fn fragment_splits_preserve_edges_resets_and_partial_words() {
+        let sample_count = 137usize;
+        let strobe_bits: Vec<bool> = (0..sample_count)
+            .map(|position| position % 4 == 1 || position % 4 == 2)
+            .collect();
+        let bus_values: Vec<u64> = (0..sample_count)
+            .map(|position| ((position * 5 + 3) & 0b111) as u64)
+            .collect();
+        let data_blocks: Vec<SampleBlock> = (0..3)
+            .map(|bit| {
+                block_from_bits(
+                    &bus_values
+                        .iter()
+                        .map(|value| value & (1 << bit) != 0)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        // Active-low CS is eligible while high in the decoder's established
+        // polarity convention. These low spans gate triggers and reset any
+        // partial word on both sides of many possible fragment boundaries.
+        let cs_bits: Vec<bool> = (0..sample_count)
+            .map(|position| !matches!(position, 29..=38 | 84..=90 | 128..=136))
+            .collect();
+        let strobe = block_from_bits(&strobe_bits);
+        let cs = block_from_bits(&cs_bits);
+
+        for mode in [
+            StrobeMode::RisingEdge,
+            StrobeMode::FallingEdge,
+            StrobeMode::AnyEdge,
+            StrobeMode::HighLevel,
+            StrobeMode::LowLevel,
+        ] {
+            let config = StreamScanConfig {
+                mode,
+                cs_polarity: CsPolarity::ActiveLow,
+            };
+            let whole = scan_stream_fragment(
+                config,
+                0,
+                &strobe,
+                &data_blocks,
+                Some(&cs),
+                0,
+                sample_count,
+                DecodeFragmentBuffers::default(),
+            );
+            let (expected_words, expected_assembly) = merge_fragments_for_test(mode, &[whole]);
+
+            for split in 1..sample_count {
+                let first = scan_stream_fragment(
+                    config,
+                    0,
+                    &strobe,
+                    &data_blocks,
+                    Some(&cs),
+                    0,
+                    split,
+                    DecodeFragmentBuffers::default(),
+                );
+                let second = scan_stream_fragment(
+                    config,
+                    1,
+                    &strobe,
+                    &data_blocks,
+                    Some(&cs),
+                    split,
+                    sample_count,
+                    DecodeFragmentBuffers::default(),
+                );
+                let (actual_words, actual_assembly) =
+                    merge_fragments_for_test(mode, &[first, second]);
+
+                assert_eq!(actual_words, expected_words, "mode={mode:?}, split={split}");
+                assert_eq!(
+                    (
+                        actual_assembly.value,
+                        actual_assembly.cycles,
+                        actual_assembly.first_ts
+                    ),
+                    (
+                        expected_assembly.value,
+                        expected_assembly.cycles,
+                        expected_assembly.first_ts
+                    ),
+                    "mode={mode:?}, split={split}"
+                );
             }
         }
     }

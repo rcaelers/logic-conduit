@@ -147,6 +147,28 @@ stateful portion sequentially:
 Sequential and fragment paths must share assembly helpers so their semantics
 cannot drift.
 
+Status: complete. Packed decoding is now split into an independent
+`scan_stream_fragment` phase and an ordered `merge_stream_fragment` phase.
+The scanner reads only immutable aligned `SampleBlock` backing plus its owned
+reusable output buffers. For edge-triggered modes it records the first sample
+as boundary metadata instead of depending on preceding decoder state; the
+ordered merge repairs that edge from the previous fragment's final strobe
+value. CS gating is represented by reset markers, while streamed or queried
+enable state remains in the ordered phase. Word assembly, timestamps, output
+batches, and decoder state are updated only by the merge. Release builds reject
+out-of-sequence fragments instead of relying on a debug assertion.
+
+The fragment differential test covers every split of a 137-sample packed
+window for rising, falling, DDR, high-level, and low-level strobes, including
+CS-gated spans and partial three-cycle words. The 50-million-sample reference
+still produces 11,999,858 words with fingerprint `5872c3203a967271` in
+indexed, explicit packed, and Auto modes. A controlled comparison against the
+pre-Step-4 `HEAD` measured 115.6-118.9 MSamples/s before and 118.0-121.1
+MSamples/s after for the count sink. The unlimited viewer measured 138.1
+MSamples/s before and 137.0 MSamples/s after, with identical retained output
+fingerprint `7b230a5c11e0818c`. Reusing fragment buffers avoids per-window
+allocation and keeps the sequential refactor within the 5% regression gate.
+
 ## Step 5: Bounded Worker Pool
 
 Use one shared native worker pool rather than spawning threads per decoder or
