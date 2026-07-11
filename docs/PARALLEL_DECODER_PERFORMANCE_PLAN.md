@@ -240,6 +240,19 @@ Refactor `ParallelDecoder::work_indexed` to operate on batches:
 This changes the dominant cost from roughly one sampler lock per signal per
 trigger to roughly one lock per signal per processing window.
 
+Status: implemented. The decoder collects up to 65,536 trigger positions per
+call, batch-reads CS and query-backed enable values, and filters gated
+positions before reading any data channel. Eligible positions are then read
+from each data channel in one batch. A reset marker per eligible position
+preserves incomplete-word behavior when one or more gated triggers occur
+between two retained positions; a trailing gate also clears assembly state
+before the call returns.
+
+The initial batched consumer landed with Step 3 because the new batch query
+surface needed a real consumer for benchmarking. The final gating pass is
+covered by focused tests which prove that a fully gated batch performs zero
+data point reads and that a gated trigger breaks multi-cycle word assembly.
+
 ## Step 5: Vectorized Packed-Block Decoder
 
 The live path cannot depend on a prebuilt index. Keep aligned input
@@ -262,6 +275,37 @@ latency.
 The same implementation handles file-backed `SampleBlock`s and live analyzer
 blocks. Index summaries are an optional file optimization, not a requirement
 for correctness or real-time operation.
+
+Status: implemented. The streaming decoder retains one aligned strobe,
+data, and optional CS block set in node state. Each `work()` call scans at most
+65,536 samples, then persists its cursor without splitting or copying any
+packed payload. Strobe words are loaded 64 bits at a time; edge and level
+trigger masks are walked with `trailing_zeros`, and data/CS bits are read only
+at selected positions. Acquired channels are checked for identical start
+position, sample count, and timestamp step.
+
+Tests cover every strobe mode across 64-bit boundaries, yielding across three
+windows of one retained block, and `Arc::ptr_eq` identity between the source
+payload and the resident decoder block. Existing streamed/query gating and
+word-assembly comparisons remain unchanged.
+
+### Step 5 Result
+
+Warm-cache 10-million-sample results on the reference capture:
+
+| Mode | Sink | Scalar baseline | Vectorized | Improvement | Words |
+| --- | --- | ---: | ---: | ---: | ---: |
+| stream | count | 25.341 MSamples/s | 28.195 MSamples/s | 1.11x | 2,399,972 |
+| stream | viewer | 2.513 MSamples/s | 2.933 MSamples/s | 1.17x | 2,399,972 |
+
+The count result is the median of five consecutive warm runs (26.130 to
+30.787 MSamples/s); the viewer result is one warm run. The exact word count
+matches the scalar baseline and indexed path. This is a real but modest gain
+on a dense DDR capture because it still emits about 2.4 million individual
+`Word` channel messages for 10 million input samples. The current result does
+not meet the 60 MSamples/s live-path target. Step 7's batched word transport is
+now confirmed as required rather than optional; the scanner should be
+remeasured independently from scalar output before further input-side tuning.
 
 ## Step 6: Zero-Copy Backing and Bounded File Flow
 

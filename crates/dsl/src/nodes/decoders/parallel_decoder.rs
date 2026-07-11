@@ -59,6 +59,9 @@ pub struct ParallelDecoder {
 
     /// Reused allocations for the indexed batch path.
     query_buffers: QueryBuffers,
+
+    /// Current aligned packed blocks and cursor for bounded streamed work.
+    stream_blocks: StreamBlockState,
 }
 
 impl ParallelDecoder {
@@ -93,6 +96,7 @@ impl ParallelDecoder {
             assembly_first_ts: 0,
             query_strobe_position: 0,
             query_buffers: QueryBuffers::default(),
+            stream_blocks: StreamBlockState::default(),
         }
     }
 
@@ -240,9 +244,45 @@ struct AssemblyState {
 struct QueryBuffers {
     edges: Vec<CaptureTransition>,
     positions: Vec<u64>,
+    eligible_positions: Vec<u64>,
+    reset_before: Vec<bool>,
     cs_values: Vec<bool>,
     enable_values: Vec<bool>,
     data_values: Vec<Vec<bool>>,
+}
+
+#[derive(Default)]
+struct StreamBlockState {
+    strobe: Option<SampleBlock>,
+    data: Vec<SampleBlock>,
+    cs: Option<SampleBlock>,
+    offset: usize,
+}
+
+#[inline]
+fn packed_word(data: &[u8], word_index: usize) -> u64 {
+    let byte_index = word_index * size_of::<u64>();
+    let available = data.len().saturating_sub(byte_index).min(size_of::<u64>());
+    let mut bytes = [0u8; size_of::<u64>()];
+    bytes[..available].copy_from_slice(&data[byte_index..byte_index + available]);
+    u64::from_le_bytes(bytes)
+}
+
+#[inline]
+fn packed_bit(data: &[u8], local_position: usize) -> bool {
+    (data[local_position / u8::BITS as usize] >> (local_position % u8::BITS as usize)) & 1 != 0
+}
+
+#[inline]
+fn bit_range_mask(start: usize, end: usize) -> u64 {
+    debug_assert!(start < end && end <= u64::BITS as usize);
+    let below_end = if end == u64::BITS as usize {
+        u64::MAX
+    } else {
+        (1u64 << end) - 1
+    };
+    let below_start = (1u64 << start) - 1;
+    below_end & !below_start
 }
 
 /// Enable-signal state, threaded through `process_trigger` calls. Either a
@@ -262,6 +302,11 @@ impl ParallelDecoder {
     /// feel instantly stoppable, long enough that the per-call overhead is
     /// noise.
     const QUERY_TRIGGERS_PER_CALL: usize = 65_536;
+
+    /// Maximum number of packed samples scanned in one streamed-path
+    /// `work()` call. The resident blocks remain borrowed through shared
+    /// `Arc` storage; only this cursor advances between calls.
+    const STREAM_SAMPLES_PER_CALL: usize = 65_536;
 
     /// Index-driven path: strobe triggers are located by direct skip-ahead
     /// queries instead of a per-sample block scan; data/CS are point-read
@@ -402,14 +447,12 @@ impl ParallelDecoder {
             buffers.enable_values.clear();
         }
 
-        buffers.data_values.resize_with(num_data_bits, Vec::new);
-        for (query, values) in data_queries.iter().zip(&mut buffers.data_values) {
-            query
-                .values_at(&buffers.positions, values)
-                .map_err(query_err)?;
-        }
-
-        let mut words_emitted = 0u64;
+        // Apply gating before touching the data channels. reset_before
+        // preserves assembly semantics when a gated trigger separates two
+        // eligible triggers whose data values are read later as one batch.
+        buffers.eligible_positions.clear();
+        buffers.reset_before.clear();
+        let mut reset_before_next = false;
         for (trigger_index, &position) in buffers.positions.iter().enumerate() {
             let cs_inactive = match cs_polarity {
                 CsPolarity::ActiveLow => buffers.cs_values[trigger_index],
@@ -417,14 +460,7 @@ impl ParallelDecoder {
                 CsPolarity::Disabled => true,
             };
             if !cs_inactive {
-                if assembly.cycles > 0 {
-                    debug!(
-                        "[{}] dropping incomplete word ({}/{}) cycles at CS boundary",
-                        self.name, assembly.cycles, cycles_per_word
-                    );
-                    assembly.cycles = 0;
-                    assembly.value = 0;
-                }
+                reset_before_next = true;
                 continue;
             }
 
@@ -452,17 +488,29 @@ impl ParallelDecoder {
                 }
             }
             if !enable.current {
-                if assembly.cycles > 0 {
-                    debug!(
-                        "[{}] dropping incomplete word ({}/{}) cycles at enable boundary",
-                        self.name, assembly.cycles, cycles_per_word
-                    );
-                    assembly.cycles = 0;
-                    assembly.value = 0;
-                }
+                reset_before_next = true;
                 continue;
             }
 
+            buffers.eligible_positions.push(position);
+            buffers.reset_before.push(reset_before_next);
+            reset_before_next = false;
+        }
+
+        buffers.data_values.resize_with(num_data_bits, Vec::new);
+        for (query, values) in data_queries.iter().zip(&mut buffers.data_values) {
+            query
+                .values_at(&buffers.eligible_positions, values)
+                .map_err(query_err)?;
+        }
+
+        let mut words_emitted = 0u64;
+        for (trigger_index, &position) in buffers.eligible_positions.iter().enumerate() {
+            if buffers.reset_before[trigger_index] {
+                assembly.cycles = 0;
+                assembly.value = 0;
+            }
+            let timestamp_ns = position.saturating_mul(timestamp_step);
             let mut value = 0u64;
             for (bit, values) in buffers.data_values.iter().enumerate() {
                 if values[trigger_index] {
@@ -494,6 +542,10 @@ impl ParallelDecoder {
             assembly.cycles = 0;
             words_emitted += 1;
         }
+        if reset_before_next {
+            assembly.cycles = 0;
+            assembly.value = 0;
+        }
 
         self.query_strobe_position = raw_position;
         self.current_enable_value = enable.current;
@@ -518,6 +570,18 @@ impl ParallelDecoder {
     /// Streaming path: unchanged behavior for live sources or any
     /// connection that didn't negotiate `EdgeQuery`.
     fn work_streamed(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
+        let mut blocks = std::mem::take(&mut self.stream_blocks);
+        let result = self.work_streamed_inner(inputs, outputs, &mut blocks);
+        self.stream_blocks = blocks;
+        result
+    }
+
+    fn work_streamed_inner(
+        &mut self,
+        inputs: &[InputPort],
+        outputs: &[OutputPort],
+        blocks: &mut StreamBlockState,
+    ) -> WorkResult<usize> {
         self.work_call_count += 1;
 
         if self.work_call_count == 1 {
@@ -591,24 +655,60 @@ impl ParallelDecoder {
             next_enable_change_position = u64::MAX;
         }
 
-        // Receive one block from each channel
-        let strobe_block = strobe_input.recv()?;
-        let mut data_blocks: Vec<SampleBlock> = Vec::with_capacity(self.num_data_bits);
-        for (i, input) in data_inputs.iter_mut().enumerate() {
-            let block = input.recv()?;
-            // Verify alignment
-            if block.start_position != strobe_block.start_position {
-                return Err(WorkError::NodeError(format!(
-                    "Data block {} misaligned: start={} vs strobe start={}",
-                    i, block.start_position, strobe_block.start_position
-                )));
+        // Acquire the next aligned block set only after the previous set is
+        // completely consumed. SampleBlock's Arc-backed payload stays in
+        // this state while bounded windows advance through it, so no packed
+        // bytes are copied or split for scheduler fairness.
+        if blocks.strobe.is_none() {
+            let strobe = strobe_input.recv()?;
+            if strobe.num_samples == 0 {
+                return Err(WorkError::NodeError(
+                    "Strobe block must contain at least one sample".to_string(),
+                ));
             }
-            data_blocks.push(block);
+            let aligned = |block: &SampleBlock, input_name: &str| -> WorkResult<()> {
+                if block.start_position != strobe.start_position
+                    || block.num_samples != strobe.num_samples
+                    || block.timestamp_step != strobe.timestamp_step
+                {
+                    return Err(WorkError::NodeError(format!(
+                        "{input_name} block misaligned: start={}, samples={}, step={} vs \
+                         strobe start={}, samples={}, step={}",
+                        block.start_position,
+                        block.num_samples,
+                        block.timestamp_step,
+                        strobe.start_position,
+                        strobe.num_samples,
+                        strobe.timestamp_step
+                    )));
+                }
+                Ok(())
+            };
+
+            let mut data = Vec::with_capacity(self.num_data_bits);
+            for (i, input) in data_inputs.iter_mut().enumerate() {
+                let block = input.recv()?;
+                aligned(&block, &format!("Data {i}"))?;
+                data.push(block);
+            }
+            let cs = match &mut cs_input {
+                Some(input) => {
+                    let block = input.recv()?;
+                    aligned(&block, "CS")?;
+                    Some(block)
+                }
+                None => None,
+            };
+
+            blocks.strobe = Some(strobe);
+            blocks.data = data;
+            blocks.cs = cs;
+            blocks.offset = 0;
         }
-        let cs_block = match &mut cs_input {
-            Some(input) => Some(input.recv()?),
-            None => None,
-        };
+
+        let strobe_block = blocks.strobe.as_ref().expect("block set acquired above");
+        let data_blocks = &blocks.data;
+        let cs_block = &blocks.cs;
 
         let mode = self.mode;
         let cs_polarity = self.cs_polarity;
@@ -618,133 +718,154 @@ impl ParallelDecoder {
         let num_samples = strobe_block.num_samples;
         let start_pos = strobe_block.start_position;
         let timestamp_step = strobe_block.timestamp_step;
+        let window_start = blocks.offset;
+        let window_end = window_start
+            .saturating_add(Self::STREAM_SAMPLES_PER_CALL)
+            .min(num_samples);
         let mut words_emitted = 0u64;
         let mut last_strobe_value = self.last_strobe_value;
         let mut assembly_value = self.assembly_value;
         let mut assembly_cycles = self.assembly_cycles;
         let mut assembly_first_ts = self.assembly_first_ts;
 
-        // Iterate through all samples in this block
-        for local_idx in 0..num_samples {
-            let position = start_pos + local_idx as u64;
-            let strobe_val = strobe_block.get_bit(position);
-
-            // Check strobe trigger
-            let triggered = match mode {
-                StrobeMode::RisingEdge => !last_strobe_value && strobe_val,
-                StrobeMode::FallingEdge => last_strobe_value && !strobe_val,
-                StrobeMode::AnyEdge => last_strobe_value != strobe_val,
-                StrobeMode::HighLevel => strobe_val,
-                StrobeMode::LowLevel => !strobe_val,
+        // Find all triggers directly in packed 64-bit strobe words. The
+        // trigger mask is then walked with trailing_zeros, so sparse live
+        // signals do work proportional to their edges instead of samples.
+        let first_word = window_start / u64::BITS as usize;
+        let last_word = (window_end - 1) / u64::BITS as usize;
+        for word_index in first_word..=last_word {
+            let word_start = word_index * u64::BITS as usize;
+            let word = packed_word(&strobe_block.data, word_index);
+            let previous_bit = if word_start == 0 {
+                last_strobe_value
+            } else {
+                packed_bit(&strobe_block.data, word_start - 1)
             };
-            last_strobe_value = strobe_val;
-
-            if !triggered {
-                continue;
-            }
-
-            // Check CS: is it inactive?
-            let cs_inactive = match (cs_polarity, &cs_block) {
-                (CsPolarity::ActiveLow, Some(cs)) => cs.get_bit(position), // inactive = high
-                (CsPolarity::ActiveHigh, Some(cs)) => !cs.get_bit(position), // inactive = low
-                _ => true, // Disabled or unconnected
+            let toggles = word ^ ((word << 1) | u64::from(previous_bit));
+            let mut triggers = match mode {
+                StrobeMode::RisingEdge => toggles & word,
+                StrobeMode::FallingEdge => toggles & !word,
+                StrobeMode::AnyEdge => toggles,
+                StrobeMode::HighLevel => word,
+                StrobeMode::LowLevel => !word,
             };
+            let range_start = window_start.saturating_sub(word_start);
+            let range_end = window_end
+                .saturating_sub(word_start)
+                .min(u64::BITS as usize);
+            triggers &= bit_range_mask(range_start, range_end);
 
-            if !cs_inactive {
-                // A gated-off cycle breaks any word being assembled.
-                if assembly_cycles > 0 {
-                    debug!(
-                        "[{}] dropping incomplete word ({}/{} cycles) at CS boundary",
-                        self.name, assembly_cycles, cycles_per_word
-                    );
-                    assembly_cycles = 0;
-                    assembly_value = 0;
+            while triggers != 0 {
+                let bit_in_word = triggers.trailing_zeros() as usize;
+                triggers &= triggers - 1;
+                let local_idx = word_start + bit_in_word;
+                let position = start_pos + local_idx as u64;
+
+                // Check CS: is it inactive?
+                let cs_inactive = match (cs_polarity, cs_block) {
+                    (CsPolarity::ActiveLow, Some(cs)) => packed_bit(&cs.data, local_idx), // inactive = high
+                    (CsPolarity::ActiveHigh, Some(cs)) => !packed_bit(&cs.data, local_idx), // inactive = low
+                    _ => true, // Disabled or unconnected
+                };
+
+                if !cs_inactive {
+                    // A gated-off cycle breaks any word being assembled.
+                    if assembly_cycles > 0 {
+                        debug!(
+                            "[{}] dropping incomplete word ({}/{} cycles) at CS boundary",
+                            self.name, assembly_cycles, cycles_per_word
+                        );
+                        assembly_cycles = 0;
+                        assembly_value = 0;
+                    }
+                    continue;
                 }
-                continue;
-            }
 
-            // Check enable signal: point-read when EdgeQuery-negotiated,
-            // else advance the streamed edge level (inline advance logic).
-            let timestamp_ns = position * timestamp_step;
-            if let Some(q) = &enable_query {
-                current_enable_value = q
-                    .value_at(position)
-                    .map_err(|e| WorkError::NodeError(e.to_string()))?;
-            } else if timestamp_ns >= next_enable_change_position
-                && let Some(enable) = &mut enable_input
-            {
-                loop {
-                    match enable.peek() {
-                        Ok(next_edge) => {
-                            if next_edge.start_time_ns <= timestamp_ns {
-                                let edge = enable.recv()?;
-                                current_enable_value = edge.value;
-                            } else {
-                                next_enable_change_position = next_edge.start_time_ns;
+                // Check enable signal: point-read when EdgeQuery-negotiated,
+                // else advance the streamed edge level (inline advance logic).
+                let timestamp_ns = position.saturating_mul(timestamp_step);
+                if let Some(q) = &enable_query {
+                    current_enable_value = q
+                        .value_at(position)
+                        .map_err(|e| WorkError::NodeError(e.to_string()))?;
+                } else if timestamp_ns >= next_enable_change_position
+                    && let Some(enable) = &mut enable_input
+                {
+                    loop {
+                        match enable.peek() {
+                            Ok(next_edge) => {
+                                if next_edge.start_time_ns <= timestamp_ns {
+                                    let edge = enable.recv()?;
+                                    current_enable_value = edge.value;
+                                } else {
+                                    next_enable_change_position = next_edge.start_time_ns;
+                                    break;
+                                }
+                            }
+                            Err(WorkError::Shutdown) => {
+                                next_enable_change_position = u64::MAX;
                                 break;
                             }
+                            Err(e) => return Err(e),
                         }
-                        Err(WorkError::Shutdown) => {
-                            next_enable_change_position = u64::MAX;
-                            break;
-                        }
-                        Err(e) => return Err(e),
                     }
                 }
-            }
 
-            if !current_enable_value {
-                // A gated-off cycle breaks any word being assembled.
-                if assembly_cycles > 0 {
-                    debug!(
-                        "[{}] dropping incomplete word ({}/{} cycles) at enable boundary",
-                        self.name, assembly_cycles, cycles_per_word
-                    );
-                    assembly_cycles = 0;
-                    assembly_value = 0;
+                if !current_enable_value {
+                    // A gated-off cycle breaks any word being assembled.
+                    if assembly_cycles > 0 {
+                        debug!(
+                            "[{}] dropping incomplete word ({}/{} cycles) at enable boundary",
+                            self.name, assembly_cycles, cycles_per_word
+                        );
+                        assembly_cycles = 0;
+                        assembly_value = 0;
+                    }
+                    continue;
                 }
-                continue;
-            }
 
-            // Sample all data bits — O(1) per bit
-            let mut value = 0u64;
-            for (bit_idx, db) in data_blocks.iter().enumerate() {
-                if db.get_bit(position) {
-                    value |= 1 << bit_idx;
+                // Sample all data bits only at selected trigger positions.
+                let mut value = 0u64;
+                for (bit_idx, db) in data_blocks.iter().enumerate() {
+                    if packed_bit(&db.data, local_idx) {
+                        value |= 1 << bit_idx;
+                    }
                 }
-            }
 
-            // Assemble cycles into a word (cycles_per_word == 1 passes
-            // each cycle straight through).
-            if assembly_cycles == 0 {
-                assembly_first_ts = timestamp_ns;
-            }
-            match endianness {
-                Endianness::Little => {
-                    assembly_value |= value << (assembly_cycles * num_data_bits);
+                // Assemble cycles into a word (cycles_per_word == 1 passes
+                // each cycle straight through).
+                if assembly_cycles == 0 {
+                    assembly_first_ts = timestamp_ns;
                 }
-                Endianness::Big => {
-                    assembly_value = (assembly_value << num_data_bits) | value;
+                match endianness {
+                    Endianness::Little => {
+                        assembly_value |= value << (assembly_cycles * num_data_bits);
+                    }
+                    Endianness::Big => {
+                        assembly_value = (assembly_value << num_data_bits) | value;
+                    }
                 }
-            }
-            assembly_cycles += 1;
-            if assembly_cycles < cycles_per_word {
-                continue;
-            }
+                assembly_cycles += 1;
+                if assembly_cycles < cycles_per_word {
+                    continue;
+                }
 
-            // First to last assembled cycle; a single-cycle word is an
-            // instant (its value stands on the bus until the next strobe).
-            let word = Word::spanning(
-                assembly_value,
-                assembly_first_ts,
-                timestamp_ns.saturating_sub(assembly_first_ts),
-            );
-            assembly_value = 0;
-            assembly_cycles = 0;
+                // First to last assembled cycle; a single-cycle word is an
+                // instant (its value stands on the bus until the next strobe).
+                let word = Word::spanning(
+                    assembly_value,
+                    assembly_first_ts,
+                    timestamp_ns.saturating_sub(assembly_first_ts),
+                );
+                assembly_value = 0;
+                assembly_cycles = 0;
 
-            output.send(word)?;
-            words_emitted += 1;
+                output.send(word)?;
+                words_emitted += 1;
+            }
         }
+
+        last_strobe_value = packed_bit(&strobe_block.data, window_end - 1);
 
         // Save state back
         self.last_strobe_value = last_strobe_value;
@@ -755,9 +876,17 @@ impl ParallelDecoder {
         self.assembly_cycles = assembly_cycles;
         self.assembly_first_ts = assembly_first_ts;
 
+        blocks.offset = window_end;
+        if window_end == num_samples {
+            blocks.strobe = None;
+            blocks.data.clear();
+            blocks.cs = None;
+            blocks.offset = 0;
+        }
+
         if self.work_call_count.is_multiple_of(10) || words_emitted > 0 {
             debug!(
-                "[{}] Block {} done: {} words this block, {} total",
+                "[{}] Stream window {} done: {} words this window, {} total",
                 self.name, self.work_call_count, words_emitted, self.total_words_emitted
             );
         }
@@ -774,6 +903,7 @@ mod tests {
     use crate::runtime::watchdog::Watchdog;
     use crossbeam_channel::bounded;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_decoder_creation() {
@@ -886,6 +1016,117 @@ mod tests {
         ));
     }
 
+    fn run_1bit_mode(strobe: &[bool], mode: StrobeMode) -> Vec<Word> {
+        let wd = Watchdog::new();
+        let data: Vec<bool> = (0..strobe.len())
+            .map(|position| position % 3 == 1)
+            .collect();
+        let inputs = [
+            block_input(&wd, block_from_bits(strobe), "strobe"),
+            block_input(&wd, block_from_bits(&data), "d0"),
+            unconnected(&wd, "cs"),
+            unconnected(&wd, "enable_signal"),
+        ];
+        let (out_tx, out_rx) = bounded::<ChannelMessage<Word>>(strobe.len() + 1);
+        let outputs = [OutputPort::new_with_watchdog(
+            Sender::new(vec![out_tx]),
+            &wd,
+            "pd",
+            "words",
+        )];
+        let mut decoder = ParallelDecoder::new(1, mode, CsPolarity::Disabled);
+
+        loop {
+            match decoder.work(&inputs, &outputs) {
+                Ok(_) => {}
+                Err(WorkError::Shutdown) => break,
+                Err(error) => panic!("unexpected error: {error}"),
+            }
+        }
+        out_rx
+            .try_iter()
+            .filter_map(|message| match message {
+                ChannelMessage::Sample(word) => Some(word),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn packed_scan_matches_scalar_trigger_semantics() {
+        let strobe: Vec<bool> = (0..137)
+            .map(|position| matches!(position, 0..=2 | 7..=63 | 65..=66 | 128..=136))
+            .collect();
+        for mode in [
+            StrobeMode::RisingEdge,
+            StrobeMode::FallingEdge,
+            StrobeMode::AnyEdge,
+            StrobeMode::HighLevel,
+            StrobeMode::LowLevel,
+        ] {
+            let mut previous = false;
+            let expected_positions: Vec<u64> = strobe
+                .iter()
+                .enumerate()
+                .filter_map(|(position, &value)| {
+                    let triggered = match mode {
+                        StrobeMode::RisingEdge => !previous && value,
+                        StrobeMode::FallingEdge => previous && !value,
+                        StrobeMode::AnyEdge => previous != value,
+                        StrobeMode::HighLevel => value,
+                        StrobeMode::LowLevel => !value,
+                    };
+                    previous = value;
+                    triggered.then_some(position as u64)
+                })
+                .collect();
+            let words = run_1bit_mode(&strobe, mode);
+            let actual_positions: Vec<_> = words.iter().map(|word| word.timestamp_ns).collect();
+            assert_eq!(actual_positions, expected_positions, "mode={mode:?}");
+            for word in words {
+                assert_eq!(word.value, u64::from(word.timestamp_ns % 3 == 1));
+            }
+        }
+    }
+
+    #[test]
+    fn streamed_block_is_retained_and_processed_in_bounded_windows() {
+        let wd = Watchdog::new();
+        let sample_count = 2 * ParallelDecoder::STREAM_SAMPLES_PER_CALL + 10;
+        let backing: Arc<[u8]> = Arc::from(vec![0u8; sample_count.div_ceil(8)].into_boxed_slice());
+        let strobe = SampleBlock::new(backing.clone(), 0, sample_count, 1);
+        let inputs = [
+            block_input(&wd, strobe, "strobe"),
+            block_input(&wd, block_from_bits(&vec![false; sample_count]), "d0"),
+            unconnected(&wd, "cs"),
+            unconnected(&wd, "enable_signal"),
+        ];
+        let (out_tx, out_rx) = bounded::<ChannelMessage<Word>>(4);
+        let outputs = [OutputPort::new_with_watchdog(
+            Sender::new(vec![out_tx]),
+            &wd,
+            "pd",
+            "words",
+        )];
+        let mut decoder = ParallelDecoder::new(1, StrobeMode::AnyEdge, CsPolarity::Disabled);
+
+        assert_eq!(decoder.work(&inputs, &outputs).unwrap(), 0);
+        let resident = decoder.stream_blocks.strobe.as_ref().unwrap();
+        assert!(Arc::ptr_eq(&backing, &resident.data));
+        assert_eq!(
+            decoder.stream_blocks.offset,
+            ParallelDecoder::STREAM_SAMPLES_PER_CALL
+        );
+        assert_eq!(decoder.work(&inputs, &outputs).unwrap(), 0);
+        assert_eq!(decoder.work(&inputs, &outputs).unwrap(), 0);
+        assert!(decoder.stream_blocks.strobe.is_none());
+        assert!(matches!(
+            decoder.work(&inputs, &outputs),
+            Err(WorkError::Shutdown)
+        ));
+        assert_eq!(out_rx.try_iter().count(), 0);
+    }
+
     #[test]
     fn word_assembly_little_endian() {
         let mut decoder = ParallelDecoder::new(4, StrobeMode::RisingEdge, CsPolarity::Disabled)
@@ -953,12 +1194,121 @@ mod tests {
         }
     }
 
+    struct CountingChannel {
+        bits: Vec<bool>,
+        reads: Arc<AtomicUsize>,
+    }
+
+    impl EdgeQuery for CountingChannel {
+        fn sample_period(&self) -> f64 {
+            1e-9
+        }
+        fn samplerate_hz(&self) -> f64 {
+            1e9
+        }
+        fn total_samples(&self) -> u64 {
+            self.bits.len() as u64
+        }
+        fn value_at(&self, position: u64) -> crate::Result<bool> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            Ok(self.bits[position as usize])
+        }
+        fn next_edge(
+            &self,
+            _position: u64,
+            _limit: u64,
+        ) -> crate::Result<Option<CaptureTransition>> {
+            unreachable!("data-only test query must not be searched for edges")
+        }
+    }
+
     fn query_input(wd: &Watchdog, bits: &[bool], name: &str) -> InputPort {
         InputPort::from_type_erased(Box::new(()) as Box<dyn std::any::Any + Send>)
             .with_edge_query(Some(Arc::new(FakeChannel {
                 bits: bits.to_vec(),
             })))
             .with_watchdog(wd.clone(), "pd".to_string(), name.to_string())
+    }
+
+    #[test]
+    fn query_mode_does_not_read_data_at_gated_triggers() {
+        let wd = Watchdog::new();
+        let reads = Arc::new(AtomicUsize::new(0));
+        let data_query: Arc<dyn EdgeQuery> = Arc::new(CountingChannel {
+            bits: vec![true; 4],
+            reads: reads.clone(),
+        });
+        let data_input = InputPort::from_type_erased(Box::new(()) as Box<dyn std::any::Any + Send>)
+            .with_edge_query(Some(data_query))
+            .with_watchdog(wd.clone(), "pd".to_string(), "d0".to_string());
+        let inputs = [
+            query_input(&wd, &[false, true, false, true], "strobe"),
+            data_input,
+            // Active-low CS remains low, gating every rising strobe.
+            query_input(&wd, &[false; 4], "cs"),
+            unconnected(&wd, "enable_signal"),
+        ];
+        let (out_tx, out_rx) = bounded::<ChannelMessage<Word>>(4);
+        let outputs = [OutputPort::new_with_watchdog(
+            Sender::new(vec![out_tx]),
+            &wd,
+            "pd",
+            "words",
+        )];
+        let mut decoder = ParallelDecoder::new(1, StrobeMode::RisingEdge, CsPolarity::ActiveLow);
+
+        assert!(matches!(
+            decoder.work(&inputs, &outputs),
+            Err(WorkError::Shutdown)
+        ));
+        assert_eq!(reads.load(Ordering::Relaxed), 0);
+        assert_eq!(out_rx.try_iter().count(), 0);
+    }
+
+    #[test]
+    fn query_batch_preserves_word_assembly_gating_boundaries() {
+        let wd = Watchdog::new();
+        let inputs = [
+            query_input(
+                &wd,
+                &[false, true, false, true, false, true, false, true],
+                "strobe",
+            ),
+            query_input(&wd, &[true; 8], "d0"),
+            unconnected(&wd, "cs"),
+            // Gate off the second trigger at position 3. The incomplete
+            // word begun at position 1 must not combine with position 5.
+            query_input(
+                &wd,
+                &[true, true, true, false, true, true, true, true],
+                "enable_signal",
+            ),
+        ];
+        let (out_tx, out_rx) = bounded::<ChannelMessage<Word>>(4);
+        let outputs = [OutputPort::new_with_watchdog(
+            Sender::new(vec![out_tx]),
+            &wd,
+            "pd",
+            "words",
+        )];
+        let mut decoder = ParallelDecoder::new(1, StrobeMode::RisingEdge, CsPolarity::Disabled)
+            .with_word_assembly(2, Endianness::Little);
+
+        assert!(matches!(
+            decoder.work(&inputs, &outputs),
+            Err(WorkError::Shutdown)
+        ));
+        let words: Vec<_> = out_rx
+            .try_iter()
+            .filter_map(|message| match message {
+                ChannelMessage::Sample(word) => Some(word),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].value, 0b11);
+        assert_eq!(words[0].timestamp_ns, 5);
+        assert_eq!(words[0].duration_ns, 2);
     }
 
     /// The 4-bit fixture of `run_4bit`, with an enable signal that is low
