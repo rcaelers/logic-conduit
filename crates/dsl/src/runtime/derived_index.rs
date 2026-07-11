@@ -51,6 +51,7 @@ pub trait LaneFold<T> {
 /// covers exactly `FAN_OUT` raw entries but a *variable* time span, since
 /// derived-lane entries arrive at irregular timestamps.
 const FAN_OUT: usize = 64;
+const CHUNK_SIZE: usize = 4_096;
 
 /// Append-only multi-resolution index over one derived lane's raw entries.
 /// `tiers[0]` holds one leaf record per raw entry (in the same order);
@@ -195,6 +196,115 @@ impl<T, F: LaneFold<T>> AppendOnlyMipmap<T, F> {
 }
 
 impl<T, F: LaneFold<T>> Default for AppendOnlyMipmap<T, F> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SummaryRecordFold;
+
+impl LaneFold<MipmapRecord> for SummaryRecordFold {
+    fn leaf(entry: &MipmapRecord) -> MipmapRecord {
+        *entry
+    }
+
+    fn combine(records: &[MipmapRecord]) -> MipmapRecord {
+        let first = records[0];
+        let last = records[records.len() - 1];
+        MipmapRecord {
+            start_ns: first.start_ns,
+            end_ns: records.iter().map(|record| record.end_ns).max().unwrap(),
+            count: records.iter().map(|record| record.count).sum(),
+            level_hint: match (first.level_hint, last.level_hint) {
+                (Some((first, _)), Some((_, last))) => Some((first, last)),
+                _ => None,
+            },
+        }
+    }
+}
+
+/// Memory-bounded summary for raw data that already lives in a separately
+/// searchable vector. The active chunk keeps leaf records so recent entries
+/// remain exact. Once full, it folds to one immutable record and reuses the
+/// same allocation; a small mipmap over completed chunks keeps wide queries
+/// bounded without retaining a second leaf record for every raw entry.
+#[derive(Debug, Clone)]
+pub struct ChunkedMipmap<T, F> {
+    completed: AppendOnlyMipmap<MipmapRecord, SummaryRecordFold>,
+    active: Vec<MipmapRecord>,
+    len: usize,
+    _fold: std::marker::PhantomData<fn(&T) -> F>,
+}
+
+impl<T, F: LaneFold<T>> ChunkedMipmap<T, F> {
+    pub fn new() -> Self {
+        Self {
+            completed: AppendOnlyMipmap::new(),
+            active: Vec::with_capacity(CHUNK_SIZE),
+            len: 0,
+            _fold: std::marker::PhantomData,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn push(&mut self, entry: &T) {
+        self.active.push(F::leaf(entry));
+        self.len += 1;
+        if self.active.len() == CHUNK_SIZE {
+            let summary = F::combine(&self.active);
+            self.completed.push(&summary);
+            self.active.clear();
+        }
+    }
+
+    pub fn extend<'a>(&mut self, entries: impl IntoIterator<Item = &'a T>)
+    where
+        T: 'a,
+    {
+        for entry in entries {
+            self.push(entry);
+        }
+    }
+
+    pub fn sampled_window(
+        &self,
+        start_ns: u64,
+        end_ns: u64,
+        target_points: usize,
+    ) -> Vec<MipmapRecord> {
+        let mut result = self
+            .completed
+            .sampled_window(start_ns, end_ns, target_points);
+        let first = self
+            .active
+            .partition_point(|record| record.end_ns < start_ns);
+        let last = first + self.active[first..].partition_point(|record| record.start_ns <= end_ns);
+        if self.active.is_empty() {
+            return result;
+        }
+
+        let first = first.saturating_sub(1);
+        let last = (last + 1).min(self.active.len());
+        let active = &self.active[first..last];
+        let budget = target_points.max(1).saturating_mul(4);
+        if result.len().saturating_add(active.len()) <= budget {
+            result.extend_from_slice(active);
+        } else {
+            result.push(F::combine(active));
+        }
+        result
+    }
+}
+
+impl<T, F: LaneFold<T>> Default for ChunkedMipmap<T, F> {
     fn default() -> Self {
         Self::new()
     }
@@ -355,5 +465,30 @@ mod tests {
         for i in 0..(FAN_OUT as u64 * FAN_OUT as u64 + 5) {
             mipmap.push(&Event(i));
         }
+    }
+
+    #[test]
+    fn chunked_mipmap_folds_completed_chunks_and_reuses_active_storage() {
+        let mut mipmap = ChunkedMipmap::<Event, EventFold>::new();
+        let total = CHUNK_SIZE + 5;
+        for index in 0..total as u64 {
+            mipmap.push(&Event(index));
+        }
+
+        assert_eq!(mipmap.len(), total);
+        assert_eq!(mipmap.completed.len(), 1);
+        assert_eq!(mipmap.active.len(), 5);
+        assert_eq!(mipmap.active.capacity(), CHUNK_SIZE);
+
+        let window = mipmap.sampled_window(0, total as u64 - 1, 1);
+        assert_eq!(
+            window
+                .iter()
+                .map(|record| record.count as usize)
+                .sum::<usize>(),
+            total
+        );
+        assert_eq!(window.first().unwrap().start_ns, 0);
+        assert_eq!(window.last().unwrap().end_ns, total as u64 - 1);
     }
 }

@@ -236,6 +236,31 @@ mipmap with chunked indexing:
 Cursor snapping, partial-word rendering, Home-to-fit, and unlimited finite
 retention must behave identically.
 
+Status: complete. Opt-in `ViewerSinkMetrics` split channel-drain time from
+store/index append time, and the benchmark gained a raw `Retain` sink to
+isolate transport plus vector retention. On the 50-million-sample/four-worker
+reference, raw retention reached 470.4 MSamples/s at 353 MiB, while the
+pre-change viewer reached 368.8 MSamples/s at 638 MiB. Viewer channel drain
+cost only 16 ms; annotation plus mipmap append cost 109 ms of 136 ms wall
+time. The annotation mipmap was therefore both the measured throughput limit
+and roughly half of viewer memory, satisfying the implementation gate.
+
+`LaneSummary::Annotations` now uses a 4,096-entry `ChunkedMipmap`. Its active
+chunk keeps exact leaf records in one reusable allocation. A completed chunk
+folds to one immutable summary record, and an `AppendOnlyMipmap` over those
+chunk summaries provides the small top-level window index. Raw annotations
+remain one ordered `Vec`, so exact drawing, cursor snapping, partial/open word
+handling, and Home-to-fit continue to use the unchanged timeline. The newest
+instantaneous annotation still remains outside the summary until its successor
+patches its end. Digital and marker summaries are unchanged.
+
+Post-change runs reached 421-485 MSamples/s (8.4-9.7x real time), reduced
+append time to 72-80 ms, and reduced a clean single-run peak RSS to 358-362
+MiB. All modes retained 11,999,858 annotations with fingerprint
+`7b230a5c11e0818c`. Chunk rollover/accounting and all viewer sink tests pass;
+the logic-analyzer viewer's 37 rendering, cursor, sampling, and Home-to-fit
+tests also pass.
+
 ## Step 7: Validation and Tuning
 
 Correctness coverage:

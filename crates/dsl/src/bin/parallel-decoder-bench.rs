@@ -13,7 +13,8 @@ mod native {
     use dsl::{
         CsPolarity, DerivedLaneData, DerivedLanes, DslFileSource, InputPort, OutputPort,
         ParallelDecoder, ParallelInputStrategy, Pipeline, PortSchema, ProcessNode, StrobeMode,
-        ViewerLaneKind, ViewerRetention, ViewerSink, Word, WorkError, WorkResult,
+        ViewerLaneKind, ViewerRetention, ViewerSink, ViewerSinkMetrics, Word, WorkError,
+        WorkResult,
     };
     use std::collections::VecDeque;
     use std::path::PathBuf;
@@ -43,6 +44,7 @@ mod native {
     enum SinkKind {
         Discard,
         Count,
+        Retain,
         Viewer,
     }
 
@@ -184,6 +186,56 @@ mod native {
         }
     }
 
+    struct RetainWords {
+        words: Arc<Mutex<Vec<Word>>>,
+        buffer: VecDeque<Word>,
+    }
+
+    impl RetainWords {
+        fn new(words: Arc<Mutex<Vec<Word>>>) -> Self {
+            Self {
+                words,
+                buffer: VecDeque::new(),
+            }
+        }
+    }
+
+    impl ProcessNode for RetainWords {
+        fn name(&self) -> &str {
+            "retain_words"
+        }
+
+        fn num_inputs(&self) -> usize {
+            1
+        }
+
+        fn num_outputs(&self) -> usize {
+            0
+        }
+
+        fn input_schema(&self) -> Vec<PortSchema> {
+            use dsl::PortDirection;
+            vec![PortSchema::new::<Word>("words", 0, PortDirection::Input)]
+        }
+
+        fn work(&mut self, inputs: &[InputPort], _outputs: &[OutputPort]) -> WorkResult<usize> {
+            let mut input = inputs
+                .first()
+                .and_then(|port| port.get::<Word>(&mut self.buffer))
+                .ok_or_else(|| WorkError::NodeError("missing word input".to_string()))?;
+            let mut batch = Vec::with_capacity(CountWords::DRAIN_BATCH);
+            let received = match input.try_recv_many(&mut batch, CountWords::DRAIN_BATCH) {
+                Ok(received) => received,
+                Err(crossbeam_channel::TryRecvError::Empty) => return Ok(0),
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    return Err(WorkError::Shutdown);
+                }
+            };
+            self.words.lock().unwrap().extend(batch);
+            Ok(received)
+        }
+    }
+
     const FINGERPRINT_OFFSET: u64 = 0xcbf29ce484222325;
     const FINGERPRINT_PRIME: u64 = 0x100000001b3;
 
@@ -308,6 +360,9 @@ mod native {
         max_outstanding: usize,
         max_reorder: usize,
         estimated_fragment_bytes: usize,
+        viewer_drain_ns: u64,
+        viewer_append_ns: u64,
+        viewer_batches: u64,
     }
 
     impl BenchResult {
@@ -326,7 +381,7 @@ mod native {
                 .unwrap_or_else(|| "unavailable".to_string());
             if matches!(self.sink, SinkKind::Viewer) {
                 println!(
-                    "mode={:?} protocol={} workers={} queue_peak={} reorder_peak={} fragment_mib={:.1} strobe_activity_ratio={} sink={:?} samples={} words_retained={} output_hash={:016x} hash_scope={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3} {}",
+                    "mode={:?} protocol={} workers={} queue_peak={} reorder_peak={} fragment_mib={:.1} strobe_activity_ratio={} sink={:?} samples={} words_retained={} output_hash={:016x} hash_scope={} viewer_drain_s={:.3} viewer_append_s={:.3} viewer_batches={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3} {}",
                     self.mode,
                     self.selected_protocol,
                     self.workers,
@@ -340,6 +395,9 @@ mod native {
                     self.fingerprint.expect("viewer result has a fingerprint"),
                     self.fingerprint_scope
                         .expect("viewer result has a hash scope"),
+                    self.viewer_drain_ns as f64 / 1_000_000_000.0,
+                    self.viewer_append_ns as f64 / 1_000_000_000.0,
+                    self.viewer_batches,
                     self.setup.as_secs_f64(),
                     seconds,
                     capture_seconds,
@@ -448,6 +506,8 @@ mod native {
         };
 
         let output_stats = Arc::new(Mutex::new(OutputStats::default()));
+        let retained_words = Arc::new(Mutex::new(Vec::<Word>::new()));
+        let viewer_metrics = ViewerSinkMetrics::default();
         let mut viewer_store = None;
         let sink_port;
         let mut pipeline = Pipeline::new().with_default_buffer_size(args.buffer);
@@ -461,12 +521,17 @@ mod native {
                 pipeline.add_process("sink", CountWords::new(Arc::clone(&output_stats)))?;
                 sink_port = Some("words");
             }
+            SinkKind::Retain => {
+                pipeline.add_process("sink", RetainWords::new(Arc::clone(&retained_words)))?;
+                sink_port = Some("words");
+            }
             SinkKind::Viewer => {
                 let store = DerivedLanes::new();
                 pipeline.add_process(
                     "sink",
                     ViewerSink::new(store.clone())
                         .with_retention(ViewerRetention::MaxEntries(args.viewer_max_entries.max(1)))
+                        .with_metrics(viewer_metrics.clone())
                         .with_lane(ViewerLaneKind::Words, "parallel"),
                 )?;
                 viewer_store = Some(store);
@@ -501,6 +566,7 @@ mod native {
         let elapsed = run_start.elapsed();
         let resources = resource_delta(resources_before, resource_usage());
         let parallel_metrics = parallel_metrics.snapshot();
+        let viewer_metrics = viewer_metrics.snapshot();
 
         let (stats, fingerprint_scope) = if let Some(store) = viewer_store {
             let lanes = store.read();
@@ -514,6 +580,10 @@ mod native {
             }
         } else if matches!(args.sink, SinkKind::Count) {
             (*output_stats.lock().unwrap(), Some("decoded-words"))
+        } else if matches!(args.sink, SinkKind::Retain) {
+            let mut stats = OutputStats::default();
+            stats.extend_words(&retained_words.lock().unwrap());
+            (stats, Some("retained-words"))
         } else {
             (OutputStats::default(), None)
         };
@@ -536,6 +606,9 @@ mod native {
             max_outstanding: parallel_metrics.max_outstanding,
             max_reorder: parallel_metrics.max_reorder,
             estimated_fragment_bytes: parallel_metrics.estimated_fragment_bytes,
+            viewer_drain_ns: viewer_metrics.drain_ns,
+            viewer_append_ns: viewer_metrics.append_ns,
+            viewer_batches: viewer_metrics.batches,
         })
     }
 
@@ -574,7 +647,7 @@ mod native {
         for &mode in modes {
             let result = run(&args, mode)?;
             result.print();
-            if matches!(args.sink, SinkKind::Count) {
+            if matches!(args.sink, SinkKind::Count | SinkKind::Retain) {
                 let fingerprint = result
                     .fingerprint
                     .expect("count result must include a fingerprint");

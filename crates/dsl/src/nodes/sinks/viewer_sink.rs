@@ -2,13 +2,65 @@
 //! renders as extra rows under the raw channels
 //! (`docs/LOGIC_ANALYZER_VIEWER_DESIGN.md`).
 
-use crate::runtime::derived_index::{AppendOnlyMipmap, LaneFold, MipmapRecord};
+use crate::runtime::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 use crate::runtime::events::{Trigger, Word};
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
 use crate::runtime::sample::Sample;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
+use web_time::Instant;
+
+#[derive(Clone, Default)]
+pub struct ViewerSinkMetrics {
+    inner: Arc<ViewerSinkMetricsInner>,
+}
+
+#[derive(Default)]
+struct ViewerSinkMetricsInner {
+    drain_ns: AtomicU64,
+    append_ns: AtomicU64,
+    items: AtomicU64,
+    batches: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ViewerSinkMetricsSnapshot {
+    pub drain_ns: u64,
+    pub append_ns: u64,
+    pub items: u64,
+    pub batches: u64,
+}
+
+impl ViewerSinkMetrics {
+    pub fn snapshot(&self) -> ViewerSinkMetricsSnapshot {
+        ViewerSinkMetricsSnapshot {
+            drain_ns: self.inner.drain_ns.load(Ordering::Relaxed),
+            append_ns: self.inner.append_ns.load(Ordering::Relaxed),
+            items: self.inner.items.load(Ordering::Relaxed),
+            batches: self.inner.batches.load(Ordering::Relaxed),
+        }
+    }
+
+    fn record_drain(&self, started: Instant, items: usize) {
+        self.inner.drain_ns.fetch_add(
+            started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+            Ordering::Relaxed,
+        );
+        if items > 0 {
+            self.inner.items.fetch_add(items as u64, Ordering::Relaxed);
+            self.inner.batches.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn record_append(&self, started: Instant) {
+        self.inner.append_ns.fetch_add(
+            started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+            Ordering::Relaxed,
+        );
+    }
+}
 
 /// Longest estimated box for the final open instantaneous annotation when no
 /// next word exists to establish its real end. Closed instantaneous words
@@ -149,7 +201,7 @@ impl LaneFold<u64> for MarkerFold {
 #[derive(Debug, Clone)]
 pub enum LaneSummary {
     Digital(AppendOnlyMipmap<Sample, DigitalFold>),
-    Annotations(AppendOnlyMipmap<Annotation, AnnotationFold>),
+    Annotations(ChunkedMipmap<Annotation, AnnotationFold>),
     Markers(AppendOnlyMipmap<u64, MarkerFold>),
 }
 
@@ -167,7 +219,7 @@ impl LaneSummary {
                 Self::Digital(summary)
             }
             DerivedLaneData::Annotations(annotations) => {
-                let mut summary = AppendOnlyMipmap::new();
+                let mut summary = ChunkedMipmap::new();
                 // Same rule as live appends (`append_word_batch`): an entry
                 // with `end_ns == start_ns` is still "open" — not yet
                 // closed by a successor — and can't join the summary until
@@ -325,7 +377,7 @@ impl DerivedLanes {
         }
         if let Some(target) = retention.trim_target(annotations.len()) {
             annotations.drain(..annotations.len() - target);
-            *summary = AppendOnlyMipmap::new();
+            *summary = ChunkedMipmap::new();
             summary.extend(
                 annotations
                     .iter()
@@ -403,6 +455,7 @@ pub struct ViewerSink {
     store: DerivedLanes,
     lanes: Vec<Lane>,
     retention: ViewerRetention,
+    metrics: Option<ViewerSinkMetrics>,
 }
 
 impl ViewerSink {
@@ -412,6 +465,7 @@ impl ViewerSink {
             store,
             lanes: Vec::new(),
             retention: ViewerRetention::Unlimited,
+            metrics: None,
         }
     }
 
@@ -422,6 +476,11 @@ impl ViewerSink {
 
     pub fn with_retention(mut self, retention: ViewerRetention) -> Self {
         self.retention = retention;
+        self
+    }
+
+    pub fn with_metrics(mut self, metrics: ViewerSinkMetrics) -> Self {
+        self.metrics = Some(metrics);
         self
     }
 
@@ -498,6 +557,7 @@ impl ProcessNode for ViewerSink {
         use crossbeam_channel::TryRecvError;
 
         let store = self.store.clone();
+        let metrics = self.metrics.clone();
         let mut progress = 0usize;
 
         for (index, lane) in self.lanes.iter_mut().enumerate() {
@@ -515,6 +575,7 @@ impl ProcessNode for ViewerSink {
             // backpressure to the producer instead of never engaging.
             macro_rules! drain_batch {
                 ($ty:ty, $buffer:expr) => {{
+                    let drain_started = metrics.as_ref().map(|_| Instant::now());
                     let Some(mut receiver) = port.get::<$ty>($buffer) else {
                         // Unconnected input: nothing will ever arrive.
                         lane.eos = true;
@@ -525,6 +586,9 @@ impl ProcessNode for ViewerSink {
                         Ok(_) | Err(TryRecvError::Empty) => {}
                         Err(TryRecvError::Disconnected) => lane.eos = true,
                     }
+                    if let (Some(metrics), Some(started)) = (&metrics, drain_started) {
+                        metrics.record_drain(started, batch.len());
+                    }
                     batch
                 }};
             }
@@ -534,17 +598,22 @@ impl ProcessNode for ViewerSink {
                     let batch = drain_batch!(Sample, buffer);
                     progress += batch.len();
                     if !batch.is_empty() {
+                        let append_started = metrics.as_ref().map(|_| Instant::now());
                         store.append_digital_batch_retained(
                             lane.store_index,
                             batch,
                             self.retention,
                         );
+                        if let (Some(metrics), Some(started)) = (&metrics, append_started) {
+                            metrics.record_append(started);
+                        }
                     }
                 }
                 LaneBuffer::Words(buffer) => {
                     let batch = drain_batch!(Word, buffer);
                     progress += batch.len();
                     if !batch.is_empty() {
+                        let append_started = metrics.as_ref().map(|_| Instant::now());
                         store.append_word_batch_retained(
                             lane.store_index,
                             batch
@@ -552,17 +621,24 @@ impl ProcessNode for ViewerSink {
                                 .map(|w| (w.timestamp_ns, w.duration_ns, w.value)),
                             self.retention,
                         );
+                        if let (Some(metrics), Some(started)) = (&metrics, append_started) {
+                            metrics.record_append(started);
+                        }
                     }
                 }
                 LaneBuffer::Trigger(buffer) => {
                     let batch = drain_batch!(Trigger, buffer);
                     progress += batch.len();
                     if !batch.is_empty() {
+                        let append_started = metrics.as_ref().map(|_| Instant::now());
                         store.append_marker_batch_retained(
                             lane.store_index,
                             batch.into_iter().map(|item| item.timestamp_ns),
                             self.retention,
                         );
+                        if let (Some(metrics), Some(started)) = (&metrics, append_started) {
+                            metrics.record_append(started);
+                        }
                     }
                 }
             }
@@ -828,6 +904,41 @@ mod tests {
             assert_eq!(window[0].start_ns, 1_000);
             assert_eq!(window[0].end_ns, 1_500);
         }
+    }
+
+    #[test]
+    fn annotation_chunk_rollover_preserves_raw_boundaries_and_summary_count() {
+        const CHUNK_SIZE: u64 = 4_096;
+        let store = DerivedLanes::new();
+        let lane = store.register("w", DerivedLaneData::Annotations(Vec::new()));
+        store.append_word_batch(
+            lane,
+            (0..CHUNK_SIZE + 4).map(|index| (index * 10, 0, index)),
+        );
+
+        let lanes = store.read();
+        let DerivedLaneData::Annotations(annotations) = &lanes[0].data else {
+            panic!("expected annotations");
+        };
+        assert_eq!(annotations.len(), (CHUNK_SIZE + 4) as usize);
+        assert_eq!(
+            annotations[CHUNK_SIZE as usize - 1].end_ns,
+            CHUNK_SIZE * 10,
+            "the word crossing the summary chunk boundary remains exact"
+        );
+
+        let LaneSummary::Annotations(summary) = &lanes[0].summary else {
+            panic!("expected annotation summary");
+        };
+        assert_eq!(summary.len(), (CHUNK_SIZE + 3) as usize);
+        let records = summary.sampled_window(0, (CHUNK_SIZE + 4) * 10, 1);
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| u64::from(record.count))
+                .sum::<u64>(),
+            CHUNK_SIZE + 3
+        );
     }
 
     #[test]

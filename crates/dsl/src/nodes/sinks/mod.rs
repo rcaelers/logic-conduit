@@ -11,5 +11,5 @@ pub use tgck_recorder::{TgckRecord, TgckRecorder};
 pub use viewer_sink::{
     Annotation, AnnotationFold, DEFAULT_VIEWER_MAX_ENTRIES, DerivedLane, DerivedLaneData,
     DerivedLanes, DigitalFold, LaneSummary, MAX_ANNOTATION_NS, MarkerFold, ViewerLaneKind,
-    ViewerRetention, ViewerSink,
+    ViewerRetention, ViewerSink, ViewerSinkMetrics, ViewerSinkMetricsSnapshot,
 };
