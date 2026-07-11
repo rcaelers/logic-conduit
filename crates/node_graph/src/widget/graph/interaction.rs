@@ -849,6 +849,13 @@ impl NodeGraphWidget {
             .any(|node| node.selected && node.collapsed)
     }
 
+    fn menu_muted_state(&self, context_node: Option<NodeId>) -> bool {
+        if let Some(node_id) = context_node {
+            return self.graph.nodes.get(&node_id).is_some_and(|node| node.muted);
+        }
+        self.graph.nodes.values().any(|node| node.selected && node.muted)
+    }
+
     fn node_at_screen_pos(&self, responses: &GraphResponses, screen_pos: Pos2) -> Option<NodeId> {
         if let Some((&id, _)) = responses
             .collapse_toggles
@@ -1065,6 +1072,7 @@ impl NodeGraphWidget {
                 self.graph.frames.iter().any(|frame| frame.selected),
                 false,
                 self.menu_collapsed_state(None),
+                self.menu_muted_state(None),
                 any_selected,
                 self.can_paste_nodes(),
                 self.can_undo(),
@@ -1112,6 +1120,7 @@ impl NodeGraphWidget {
             let canvas_pos = self.view.screen_to_canvas(origin, context_screen_pos);
             let node_hidden = context_node.is_some_and(|id| self.node_has_hidden_sockets(id));
             let node_collapsed = self.menu_collapsed_state(context_node);
+            let node_muted = self.menu_muted_state(context_node);
             let any_selected = self.graph.nodes.values().any(|n| n.selected)
                 || self.graph.frames.iter().any(|frame| frame.selected);
             let can_paste = self.can_paste_nodes();
@@ -1124,6 +1133,7 @@ impl NodeGraphWidget {
                 self.graph.frames.iter().any(|frame| frame.selected),
                 node_hidden,
                 node_collapsed,
+                node_muted,
                 any_selected,
                 can_paste,
                 self.can_undo(),

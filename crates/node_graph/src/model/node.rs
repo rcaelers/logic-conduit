@@ -64,6 +64,12 @@ pub struct Node {
     pub outputs: Vec<Socket>,
     #[serde(default)]
     pub collapsed: bool,
+    /// Bypassed for compilation (Phase 3): the compiler splices its
+    /// compatible inputs directly to its outputs and drops the node, rather
+    /// than building it. Non-destructive — the node, its config, and its
+    /// wires all stay in the graph; toggling again restores it.
+    #[serde(default)]
+    pub muted: bool,
     #[serde(default)]
     pub state: Value,
     #[serde(skip)]
@@ -86,6 +92,7 @@ impl Clone for Node {
             inputs: self.inputs.clone(),
             outputs: self.outputs.clone(),
             collapsed: self.collapsed,
+            muted: self.muted,
             state: self.state.clone(),
             property_count: self.property_count,
             badge: self.badge.clone(),
@@ -102,6 +109,32 @@ impl Node {
         } else {
             &self.type_name
         }
+    }
+
+    /// The input↔output pairing a muted node bypasses through: for each
+    /// output (in order), the earliest not-yet-claimed input whose type is
+    /// compatible with it. Purely a function of this node's own declared
+    /// sockets — independent of whatever happens to be wired upstream or
+    /// downstream. Mirrors Blender: muting only usefully bypasses a node
+    /// whose input and output share a type (e.g. `Buffer`'s `Any`/`Any`); a
+    /// type-transforming node (Signal → Words) has no such pair, so muting
+    /// it drops its output rather than faking one.
+    pub fn mute_pass_through_pairs(&self) -> Vec<(usize, usize)> {
+        let mut used = vec![false; self.inputs.len()];
+        let mut pairs = Vec::new();
+        for (out_idx, output) in self.outputs.iter().enumerate() {
+            let Some(in_idx) = self
+                .inputs
+                .iter()
+                .enumerate()
+                .position(|(i, input)| !used[i] && input.accepts(output.effective_type()))
+            else {
+                continue;
+            };
+            used[in_idx] = true;
+            pairs.push((out_idx, in_idx));
+        }
+        pairs
     }
 }
 
@@ -131,6 +164,7 @@ impl Node {
             inputs: vec![input],
             outputs: vec![output],
             collapsed: false,
+            muted: false,
             state: Value::Null,
             property_count: 0,
             badge: None,

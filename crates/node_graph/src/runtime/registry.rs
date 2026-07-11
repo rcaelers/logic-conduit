@@ -163,6 +163,7 @@ fn build_node<T: NodeDef>(id: NodeId, pos: Pos2, state: T::State) -> NodeRuntime
         inputs: input_sockets,
         outputs: output_sockets,
         collapsed: false,
+        muted: false,
         state: state_json,
         property_count: properties.len(),
         badge: None,

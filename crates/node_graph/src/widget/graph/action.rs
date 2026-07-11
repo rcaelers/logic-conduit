@@ -89,6 +89,11 @@ pub(super) enum GraphAction {
     ToggleCollapsed {
         target: Option<NodeId>,
     },
+    /// Bypasses the node for compilation without removing it — a
+    /// non-destructive dissolve (Phase 3).
+    ToggleMuted {
+        target: Option<NodeId>,
+    },
     ToggleMinimap,
     TogglePanel,
     /// Selects every node and frame (Phase 2, Blender's `A`).
@@ -123,7 +128,14 @@ impl HotkeyRegistry {
             Shortcut::key(egui::Key::Backspace),
             GraphAction::Delete { target: None },
         );
-        r.bind(Shortcut::key(egui::Key::M), GraphAction::ToggleMinimap);
+        // `M` now mutes (Blender: `M`); minimap relocated to Ctrl+M rather
+        // than sharing the key, deferred from the Phase 2 keymap pass until
+        // mute actually existed to claim it.
+        r.bind(
+            Shortcut::key(egui::Key::M),
+            GraphAction::ToggleMuted { target: None },
+        );
+        r.bind(Shortcut::ctrl(egui::Key::M), GraphAction::ToggleMinimap);
         r.bind(Shortcut::key(egui::Key::N), GraphAction::TogglePanel);
         r.bind(
             Shortcut::key(egui::Key::H),
@@ -289,6 +301,11 @@ impl NodeGraphWidget {
             GraphAction::ToggleCollapsed { target } => {
                 self.push_undo_snapshot();
                 self.toggle_collapsed(target);
+                ActionEffect::None
+            }
+            GraphAction::ToggleMuted { target } => {
+                self.push_undo_snapshot();
+                self.toggle_muted(target);
                 ActionEffect::None
             }
             GraphAction::ToggleMinimap => {
@@ -863,6 +880,31 @@ impl NodeGraphWidget {
             node.collapsed = !node.collapsed;
         }
     }
+
+    fn toggle_muted(&mut self, target: Option<NodeId>) {
+        if let Some(node_id) = target {
+            self.toggle_muted_for_node(node_id);
+            return;
+        }
+        let selected: Vec<_> = self
+            .graph
+            .nodes
+            .values()
+            .filter(|node| node.selected)
+            .map(|node| node.id)
+            .collect();
+        for node_id in selected {
+            self.toggle_muted_for_node(node_id);
+        }
+    }
+
+    fn toggle_muted_for_node(&mut self, node_id: NodeId) {
+        if let Some(node) = self.graph.nodes.get_mut(&node_id)
+            && node.kind != crate::model::NodeKind::Reroute
+        {
+            node.muted = !node.muted;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1187,5 +1229,58 @@ mod action_tests {
         );
 
         assert!(widget.graph.connections.is_empty());
+    }
+
+    #[test]
+    fn toggle_muted_with_explicit_target_toggles_only_that_node() {
+        let mut widget = test_widget();
+        let a = widget.add_node_at("Source", Pos2::new(0.0, 0.0)).unwrap();
+        let b = widget.add_node_at("Sink", Pos2::new(0.0, 0.0)).unwrap();
+        widget.graph.nodes.get_mut(&b).unwrap().selected = true;
+
+        widget.execute_action(
+            GraphAction::ToggleMuted { target: Some(a) },
+            &egui::Context::default(),
+            None,
+        );
+
+        assert!(widget.graph.nodes[&a].muted);
+        assert!(!widget.graph.nodes[&b].muted);
+    }
+
+    #[test]
+    fn toggle_muted_without_target_toggles_the_selection() {
+        let mut widget = test_widget();
+        let a = widget.add_node_at("Source", Pos2::new(0.0, 0.0)).unwrap();
+        let b = widget.add_node_at("Sink", Pos2::new(0.0, 0.0)).unwrap();
+        widget.graph.nodes.get_mut(&a).unwrap().selected = true;
+        // `b` stays unselected: it should be untouched.
+
+        widget.execute_action(
+            GraphAction::ToggleMuted { target: None },
+            &egui::Context::default(),
+            None,
+        );
+
+        assert!(widget.graph.nodes[&a].muted);
+        assert!(!widget.graph.nodes[&b].muted);
+    }
+
+    #[test]
+    fn toggle_muted_skips_reroute_nodes() {
+        let mut widget = test_widget();
+        let reroute = widget
+            .add_node_at("Reroute", Pos2::new(0.0, 0.0))
+            .expect("reroute should always be creatable");
+
+        widget.execute_action(
+            GraphAction::ToggleMuted {
+                target: Some(reroute),
+            },
+            &egui::Context::default(),
+            None,
+        );
+
+        assert!(!widget.graph.nodes[&reroute].muted);
     }
 }

@@ -4,7 +4,10 @@ use crate::{
         SocketShape,
     },
     runtime::{NodeInstance, NodeTypeRegistry},
-    support::{ViewState, paint::to_screen_rect},
+    support::{
+        ViewState,
+        paint::{draw_wire_dashed, to_screen_rect},
+    },
 };
 use egui::{Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Ui, Vec2};
 
@@ -375,10 +378,17 @@ impl NodeWidget {
                 let (color, shape) = registry.socket_display(sock);
                 draw_socket(painter, s(pos), sz(SOCKET_RADIUS), shape, color);
             }
+            if node.muted {
+                draw_mute_pass_through(painter, node, l, &s);
+                draw_muted_overlay(painter, node_s, header_s, rounding);
+            }
             return;
         }
 
         if view.zoom < 0.35 {
+            if node.muted {
+                draw_muted_overlay(painter, node_s, header_s, rounding);
+            }
             return;
         }
 
@@ -436,6 +446,11 @@ impl NodeWidget {
                     label_color,
                 );
             }
+        }
+
+        if node.muted {
+            draw_mute_pass_through(painter, node, l, &s);
+            draw_muted_overlay(painter, node_s, header_s, rounding);
         }
     }
 
@@ -552,6 +567,44 @@ fn draw_badge(painter: &Painter, node_screen_rect: Rect, badge: &NodeBadge, zoom
     let rect = Rect::from_min_size(pos, galley.size() + pad * 2.0);
     painter.rect_filled(rect, CornerRadius::same(4), fill);
     painter.galley(pos + pad, galley, Color32::WHITE);
+}
+
+/// Blender's mute convention: external wires stay solid and untouched (drawn
+/// entirely separately, in `render.rs`); a muted node instead draws a thin
+/// dashed link *inside itself* from each output back to the input it
+/// bypasses through, per `Node::mute_pass_through_pairs`. An output with no
+/// paired input (a type-transforming node, or a source with none at all)
+/// simply gets no line — nothing passes through it while muted.
+fn draw_mute_pass_through(painter: &Painter, node: &Node, layout: &NodeLayout, s: &impl Fn(Pos2) -> Pos2) {
+    for (out_idx, in_idx) in node.mute_pass_through_pairs() {
+        let (Some(out_pos), Some(in_pos)) = (
+            layout.output_socket_pos.get(out_idx).copied().flatten(),
+            layout.input_socket_pos.get(in_idx).copied().flatten(),
+        ) else {
+            continue;
+        };
+        draw_wire_dashed(
+            painter,
+            s(in_pos),
+            s(out_pos),
+            Color32::from_rgb(190, 190, 190),
+            1.5,
+        );
+    }
+}
+
+/// Dims a muted node toward gray and strikes a diagonal line across its
+/// header, drawn last so it washes out the already-painted fills/text/sockets
+/// rather than being painted over by them.
+fn draw_muted_overlay(painter: &Painter, node_screen_rect: Rect, header_screen_rect: Rect, rounding: CornerRadius) {
+    painter.rect_filled(node_screen_rect, rounding, Color32::from_black_alpha(90));
+    painter.line_segment(
+        [
+            header_screen_rect.left_top(),
+            header_screen_rect.right_bottom(),
+        ],
+        Stroke::new(1.5_f32, Color32::from_rgb(225, 90, 90)),
+    );
 }
 
 fn draw_collapse_toggle(painter: &Painter, rect: Rect, collapsed: bool) {

@@ -168,6 +168,7 @@ pub(super) fn build_context_entries(
     any_frame_selected: bool,
     node_hidden: bool,
     node_collapsed: bool,
+    node_muted: bool,
     any_selected: bool,
     can_paste: bool,
     can_undo: bool,
@@ -176,6 +177,7 @@ pub(super) fn build_context_entries(
     if context_node.is_some() || any_selected {
         let hidden_chk = if node_hidden { "✓  " } else { "    " };
         let collapsed_chk = if node_collapsed { "✓  " } else { "    " };
+        let muted_chk = if node_muted { "✓  " } else { "    " };
         let mut entries = Vec::new();
         add_undo_redo_entries(&mut entries, can_undo, can_redo);
         entries.extend([
@@ -225,6 +227,14 @@ pub(super) fn build_context_entries(
             entries.push(MenuEntry::submenu("Frame", frame_entries));
         }
         entries.extend([
+            MenuEntry::separator(),
+            MenuEntry::action(
+                format!("{muted_chk}Mute"),
+                GraphAction::ToggleMuted {
+                    target: context_node,
+                },
+            )
+            .with_shortcut(Shortcut::key(egui::Key::M)),
             MenuEntry::separator(),
             MenuEntry::action(
                 "Delete",

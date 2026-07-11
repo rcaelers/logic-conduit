@@ -17,7 +17,7 @@ use dsl::runtime::{
     AppManager, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy, ProcessNode,
 };
 use dsl::{DerivedLanes, SampleBlock, ViewerRetention};
-use node_graph::{GraphState, Node, NodeId, NodeKind, Socket, SocketId};
+use node_graph::{GraphState, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -310,38 +310,111 @@ fn runtime_name(node: &Node) -> String {
 
 // ── Stage 1: lower ───────────────────────────────────────────────────────────
 
-/// A UI wire with reroutes collapsed away: both endpoints on regular nodes.
+/// A UI wire with reroutes and muted nodes collapsed away: both endpoints on
+/// live (non-reroute, non-muted) regular nodes.
 struct Wire {
     from: SocketId,
     to: SocketId,
 }
 
-fn resolve_reroute_edges(graph: &GraphState) -> Vec<Wire> {
-    graph
-        .connections
-        .iter()
-        .filter_map(|connection| {
-            let to_node = graph.nodes.get(&connection.to.node)?;
-            if to_node.kind == NodeKind::Reroute {
-                // Handled when the wire *leaving* the reroute is resolved.
-                return None;
-            }
-            let mut from = connection.from;
-            let mut hops = 0;
-            while graph.nodes.get(&from.node)?.kind == NodeKind::Reroute {
-                let upstream = graph.connections.iter().find(|c| c.to.node == from.node)?;
-                from = upstream.from;
-                hops += 1;
-                if hops > graph.connections.len() {
-                    return None; // reroute cycle
-                }
-            }
-            Some(Wire {
+enum WireSource {
+    Found(SocketId),
+    /// Upstream is missing entirely (e.g. an unplugged reroute) — silently
+    /// drop the wire, matching pre-existing reroute behavior.
+    Dangling,
+    /// A muted node's output has no viable pass-through: either its own
+    /// sockets have no type-compatible input at all (a type-transforming
+    /// node like a decoder, or a source with nothing to pass through in the
+    /// first place), or the one that would match isn't connected.
+    MutedBlocked { output: SocketId },
+}
+
+/// Chases `from` back through any run of Reroute and muted nodes to the
+/// effective producing socket. At a muted hop, follows
+/// `Node::mute_pass_through_pairs` — the node's own declared input/output
+/// type pairing, independent of whatever is wired downstream (mirrors
+/// Blender: a muted node only usefully bypasses through a same-typed
+/// input/output pair; a type-transforming node has none, so its output has
+/// nothing to splice to and just drops).
+fn resolve_wire_source(graph: &GraphState, from: SocketId, hops: &mut usize) -> WireSource {
+    *hops += 1;
+    if *hops > graph.connections.len() + graph.nodes.len() + 1 {
+        return WireSource::Dangling; // cycle guard
+    }
+    let Some(node) = graph.nodes.get(&from.node) else {
+        return WireSource::Dangling;
+    };
+    if node.kind == NodeKind::Reroute {
+        return match graph.connections.iter().find(|c| c.to.node == from.node) {
+            Some(upstream) => resolve_wire_source(graph, upstream.from, hops),
+            None => WireSource::Dangling,
+        };
+    }
+    if node.muted {
+        let Some(&(_, in_idx)) = node
+            .mute_pass_through_pairs()
+            .iter()
+            .find(|(out_idx, _)| *out_idx == from.index)
+        else {
+            return WireSource::MutedBlocked { output: from };
+        };
+        let paired_input = SocketId {
+            node: from.node,
+            index: in_idx,
+            direction: SocketDirection::Input,
+        };
+        return match graph.connections.iter().find(|c| c.to == paired_input) {
+            Some(upstream) => resolve_wire_source(graph, upstream.from, hops),
+            None => WireSource::MutedBlocked { output: from },
+        };
+    }
+    WireSource::Found(from)
+}
+
+fn resolve_reroute_edges(graph: &GraphState) -> (Vec<Wire>, Vec<CompileError>) {
+    let mut wires = Vec::new();
+    let mut errors = Vec::new();
+    let mut blocked: HashSet<SocketId> = HashSet::new();
+    for connection in &graph.connections {
+        let Some(to_node) = graph.nodes.get(&connection.to.node) else {
+            continue;
+        };
+        if to_node.kind == NodeKind::Reroute || to_node.muted {
+            // Handled when the wire *leaving* it is resolved.
+            continue;
+        }
+        let mut hops = 0usize;
+        match resolve_wire_source(graph, connection.from, &mut hops) {
+            WireSource::Found(from) => wires.push(Wire {
                 from,
                 to: connection.to,
-            })
-        })
-        .collect()
+            }),
+            WireSource::Dangling => {}
+            WireSource::MutedBlocked { output } => {
+                if blocked.insert(output) {
+                    let output_name = graph
+                        .nodes
+                        .get(&output.node)
+                        .and_then(|n| n.outputs.get(output.index))
+                        .map(|s| s.name.as_str())
+                        .unwrap_or("?");
+                    let to_label = graph
+                        .nodes
+                        .get(&connection.to.node)
+                        .and_then(|n| n.inputs.get(connection.to.index).map(|s| (n, s)))
+                        .map(|(n, s)| format!("{}.{}", n.title, s.name))
+                        .unwrap_or_else(|| "?".to_string());
+                    errors.push(CompileError::on(
+                        output.node,
+                        format!(
+                            "Muted: '{output_name}' has no type-matching input to pass through — '{to_label}' loses its input"
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    (wires, errors)
 }
 
 /// Position of a variadic member within its group (0-based); 0 for plain
@@ -363,8 +436,7 @@ pub fn lower(
     graph: &GraphState,
     registry: &BuilderRegistry,
 ) -> Result<CompiledGraph, Vec<CompileError>> {
-    let mut errors: Vec<CompileError> = Vec::new();
-    let wires = resolve_reroute_edges(graph);
+    let (wires, mut errors) = resolve_reroute_edges(graph);
 
     // Prune: keep only what feeds a sink.
     let sinks: Vec<NodeId> = graph
@@ -1334,6 +1406,126 @@ mod tests {
         assert!(
             errors.iter().any(|e| e.node == Some(buf)),
             "expected a compile error on the buffer node, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn muted_node_with_compatible_pass_through_lowers_to_a_direct_connection() {
+        use egui::Pos2;
+        use node_graph::{NodeDef, SocketDirection, SocketId};
+
+        let mut widget = NodeGraphWidget::new(nodes::build_registry());
+        let source = widget
+            .add_node_at(nodes::UartDemoSource::name(), Pos2::new(0.0, 0.0))
+            .unwrap();
+        let buf = widget
+            .add_node_at(nodes::Buffer::name(), Pos2::new(200.0, 0.0))
+            .unwrap();
+        let viewer = widget
+            .add_node_at(nodes::Viewer::name(), Pos2::new(400.0, 0.0))
+            .unwrap();
+
+        let connect = |widget: &mut NodeGraphWidget, from: (NodeId, &str), to: (NodeId, &str)| {
+            let from_socket = SocketId {
+                node: from.0,
+                index: output_index(widget, from.0, from.1),
+                direction: SocketDirection::Output,
+            };
+            let to_socket = SocketId {
+                node: to.0,
+                index: input_index(widget, to.0, to.1),
+                direction: SocketDirection::Input,
+            };
+            widget.graph_mut().add_connection(from_socket, to_socket);
+        };
+        connect(&mut widget, (source, "RX"), (buf, "In"));
+        connect(&mut widget, (buf, "Out"), (viewer, "In"));
+        widget.graph_mut().nodes.get_mut(&buf).unwrap().muted = true;
+
+        let compiled = lower(widget.graph(), &BuilderRegistry::standard()).unwrap_or_else(|errors| {
+            panic!("expected the muted buffer to splice through: {errors:?}")
+        });
+
+        assert!(
+            compiled.nodes.iter().all(|n| n.id != buf),
+            "muted node must be dropped from the compiled graph, got {:?}",
+            compiled.nodes
+        );
+        assert_eq!(compiled.edges.len(), 1);
+        let edge = &compiled.edges[0];
+        assert_eq!(edge.from.0, source);
+        assert_eq!(edge.to.0, viewer);
+    }
+
+    #[test]
+    fn muted_node_without_compatible_pass_through_reports_a_targeted_error() {
+        use egui::Pos2;
+        use node_graph::{SocketDirection, SocketId};
+
+        let mut widget = NodeGraphWidget::new(nodes::build_registry());
+        let source = widget
+            .add_node_at("UART Demo Source", Pos2::new(0.0, 0.0))
+            .unwrap();
+        let matcher = widget
+            .add_node_at("Word Matcher", Pos2::new(200.0, 0.0))
+            .unwrap();
+        let flip_flop = widget
+            .add_node_at("SR Flip-Flop", Pos2::new(400.0, 0.0))
+            .unwrap();
+        let viewer = widget
+            .add_node_at("Viewer", Pos2::new(600.0, 0.0))
+            .unwrap();
+
+        let connect = |widget: &mut NodeGraphWidget, from: (NodeId, &str), to: (NodeId, &str)| {
+            let from_socket = SocketId {
+                node: from.0,
+                index: output_index(widget, from.0, from.1),
+                direction: SocketDirection::Output,
+            };
+            let to_socket = SocketId {
+                node: to.0,
+                index: input_index(widget, to.0, to.1),
+                direction: SocketDirection::Input,
+            };
+            widget.graph_mut().add_connection(from_socket, to_socket);
+        };
+        // Word Matcher's only input is `Words`-typed and its outputs are
+        // `Trigger`/`Signal` — none of those pairs share a type, so it has
+        // no pass-through no matter what's wired to it. Connecting it from
+        // the Signal-typed source (bypassing the editor's own connect-time
+        // type check, as `buffer_node_kind_mismatch_is_rejected` does above)
+        // just gives it something realistic to break.
+        connect(&mut widget, (source, "RX"), (matcher, "Words"));
+        connect(&mut widget, (matcher, "Match"), (flip_flop, "Set"));
+        connect(&mut widget, (flip_flop, "Q"), (viewer, "In"));
+        widget.graph_mut().nodes.get_mut(&matcher).unwrap().muted = true;
+
+        let errors = lower(widget.graph(), &BuilderRegistry::standard()).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.node == Some(matcher) && e.message.contains("Muted")),
+            "expected a targeted error on the muted Word Matcher, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn muted_source_reports_the_break_and_prunes_its_branch() {
+        // A source has no data input at all — no config property shares
+        // its output's type either — so it can never have a pass-through
+        // pair. Muting it is a hard break, not a silent no-op: the targeted
+        // error should point at the source, and its downstream branch
+        // should vanish from the compiled graph rather than dangling.
+        let mut widget = uart_demo_widget();
+        let source = node_by_def(&widget, "UART Demo Source");
+        widget.graph_mut().nodes.get_mut(&source).unwrap().muted = true;
+
+        let errors = lower(widget.graph(), &BuilderRegistry::standard()).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.node == Some(source) && e.message.contains("Muted")),
+            "expected a targeted error on the muted source, got {errors:?}"
         );
     }
 
