@@ -828,6 +828,7 @@ impl NodeGraphWidget {
         &mut self,
         ui: &mut egui::Ui,
         responses: &GraphResponses,
+        pointer: Option<Pos2>,
         origin: Pos2,
         layout: &GraphWidgetLayout,
         canvas_rect: Rect,
@@ -844,7 +845,7 @@ impl NodeGraphWidget {
         let has_zoom = zoom_modifier && (zoom_delta - 1.0).abs() > 0.001;
         if (has_scroll || has_zoom)
             && !self.menu.blocks_canvas_scroll(ui)
-            && let Some(cursor) = ui.input(|i| i.pointer.hover_pos())
+            && let Some(cursor) = pointer
             && canvas_rect.contains(cursor)
         {
             if has_zoom {
@@ -858,9 +859,6 @@ impl NodeGraphWidget {
             }
         }
 
-        let pointer = response
-            .hover_pos()
-            .or_else(|| ui.input(|i| i.pointer.hover_pos()));
         let pointer_canvas = pointer.map(|p| self.view.screen_to_canvas(origin, p));
         let fallback_paste_pos = pointer_canvas
             .or_else(|| pointer.map(|p| self.view.screen_to_canvas(origin, p)))
@@ -1079,7 +1077,7 @@ impl NodeGraphWidget {
         // would also pan the graph. Once a pan has started, keep following
         // the drag even if the pointer leaves the canvas rect.
         let middle_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle))
-            && (response.hovered()
+            && (pointer.is_some() && response.hovered()
                 || matches!(self.interaction_state, InteractionState::Panning { .. }));
         let right_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary));
 

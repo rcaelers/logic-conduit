@@ -55,6 +55,16 @@ struct FrameRenameState {
     screen_pos: Pos2,
 }
 
+fn graph_pointer(
+    pointer: Option<Pos2>,
+    panel_rect: Option<egui::Rect>,
+    tab_bar_rect: egui::Rect,
+) -> Option<Pos2> {
+    pointer.filter(|pointer| {
+        !tab_bar_rect.contains(*pointer) && !panel_rect.is_some_and(|rect| rect.contains(*pointer))
+    })
+}
+
 impl NodeGraphWidget {
     pub fn new(registry: NodeTypeRegistry) -> Self {
         Self {
@@ -250,19 +260,23 @@ impl NodeGraphWidget {
         let panel_rect = self.panel_rect(rect);
         let content_rect =
             egui::Rect::from_min_max(rect.min, Pos2::new(tab_bar_rect.left(), rect.max.y));
-        if let Some(panel_rect) = panel_rect {
-            self.update_panel_interaction(ui, panel_rect);
-        }
-        self.update_panel_tab_bar_interaction(ui, tab_bar_rect);
-
         let layout = self.build_layout(origin);
         let responses = if self.interaction_state.use_fast_rendering() {
             GraphResponses::canvas_only(response)
         } else {
             self.allocate_responses(ui, response, &layout, content_rect)
         };
-        let hovered_socket = self.hovered_socket(&responses);
-        self.handle_input(ui, &responses, origin, &layout, content_rect);
+
+        // Register the floating UI after every graph hit target so it owns
+        // overlapping clicks and drags in egui's interaction z-order.
+        if let Some(panel_rect) = panel_rect {
+            self.update_panel_interaction(ui, panel_rect);
+        }
+        self.update_panel_tab_bar_interaction(ui, tab_bar_rect);
+
+        let graph_pointer = graph_pointer(pointer, panel_rect, tab_bar_rect);
+        let hovered_socket = graph_pointer.and_then(|_| self.hovered_socket(&responses));
+        self.handle_input(ui, &responses, graph_pointer, origin, &layout, content_rect);
 
         let layout = self.build_layout(origin);
         self.draw_graph(
@@ -280,5 +294,34 @@ impl NodeGraphWidget {
         }
         self.show_panel_tab_bar(ui, tab_bar_rect);
         self.show_frame_rename(ui.ctx());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::graph_pointer;
+    use egui::{Pos2, Rect};
+
+    #[test]
+    fn floating_panel_blocks_graph_pointer_only_inside_its_bounds() {
+        let panel = Rect::from_min_max(Pos2::new(600.0, 0.0), Pos2::new(900.0, 400.0));
+        let tabs = Rect::from_min_max(Pos2::new(900.0, 0.0), Pos2::new(924.0, 800.0));
+
+        assert_eq!(
+            graph_pointer(Some(Pos2::new(700.0, 200.0)), Some(panel), tabs),
+            None
+        );
+        assert_eq!(
+            graph_pointer(Some(Pos2::new(910.0, 200.0)), Some(panel), tabs),
+            None
+        );
+        assert_eq!(
+            graph_pointer(Some(Pos2::new(700.0, 500.0)), Some(panel), tabs),
+            Some(Pos2::new(700.0, 500.0))
+        );
+        assert_eq!(
+            graph_pointer(Some(Pos2::new(300.0, 200.0)), Some(panel), tabs),
+            Some(Pos2::new(300.0, 200.0))
+        );
     }
 }

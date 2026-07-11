@@ -136,10 +136,9 @@ impl NodeGraphWidget {
         height
     }
 
-    /// Allocates the panel's interaction surfaces. Must run before
-    /// `handle_input` in the frame so the panel background (registered after
-    /// the canvas response) swallows clicks/drags that would otherwise
-    /// box-select or deselect through the panel.
+    /// Allocates the panel's interaction surfaces. Must run after graph hit
+    /// targets and before `handle_input` so the panel background owns the
+    /// overlapping interaction z-order.
     pub(super) fn update_panel_interaction(&mut self, ui: &mut Ui, panel_rect: Rect) {
         let _background = ui.interact(
             panel_rect,
