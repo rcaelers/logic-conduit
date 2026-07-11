@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 enum FileCommand {
     Load,
     Save,
+    SaveAs,
     Quit,
 }
 
@@ -130,16 +131,36 @@ impl App {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn save_file(&mut self) {
-        let path = self.current_file.clone().or_else(|| {
-            rfd::FileDialog::new()
-                .set_title("Save graph")
-                .set_file_name("pipeline.json")
-                .add_filter("Graph JSON", &["json"])
-                .save_file()
-        });
+        let Some(path) = self.current_file.clone() else {
+            self.save_file_as();
+            return;
+        };
+        self.save_to_file(path);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_file_as(&mut self) {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Save graph as")
+            .set_file_name("pipeline.json")
+            .add_filter("Graph JSON", &["json"]);
+        if let Some(path) = &self.current_file {
+            if let Some(parent) = path.parent() {
+                dialog = dialog.set_directory(parent);
+            }
+            if let Some(file_name) = path.file_name().and_then(|name| name.to_str()) {
+                dialog = dialog.set_file_name(file_name);
+            }
+        }
+        let path = dialog.save_file();
         let Some(path) = path else {
             return;
         };
+        self.save_to_file(path);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_to_file(&mut self, path: PathBuf) {
         match self.node_graph.save_to_path(&path) {
             Ok(()) => {
                 self.current_file = Some(path.clone());
@@ -153,8 +174,14 @@ impl App {
     fn show_menu_bar(&mut self, ui: &mut egui::Ui) {
         let load_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::O);
         let save_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
+        let save_as_shortcut = egui::KeyboardShortcut::new(
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            egui::Key::S,
+        );
         let mut command = if ui.input_mut(|input| input.consume_shortcut(&load_shortcut)) {
             Some(FileCommand::Load)
+        } else if ui.input_mut(|input| input.consume_shortcut(&save_as_shortcut)) {
+            Some(FileCommand::SaveAs)
         } else if ui.input_mut(|input| input.consume_shortcut(&save_shortcut)) {
             Some(FileCommand::Save)
         } else {
@@ -183,6 +210,16 @@ impl App {
                     command = Some(FileCommand::Save);
                     ui.close();
                 }
+                if ui
+                    .add(
+                        egui::Button::new("Save As...")
+                            .shortcut_text(ui.ctx().format_shortcut(&save_as_shortcut)),
+                    )
+                    .clicked()
+                {
+                    command = Some(FileCommand::SaveAs);
+                    ui.close();
+                }
                 ui.separator();
                 if ui.button("Quit").clicked() {
                     command = Some(FileCommand::Quit);
@@ -194,6 +231,7 @@ impl App {
         match command {
             Some(FileCommand::Load) => self.choose_and_load_file(),
             Some(FileCommand::Save) => self.save_file(),
+            Some(FileCommand::SaveAs) => self.save_file_as(),
             Some(FileCommand::Quit) => ui.send_viewport_cmd(egui::ViewportCommand::Close),
             None => {}
         }
