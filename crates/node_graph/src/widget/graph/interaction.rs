@@ -865,6 +865,14 @@ impl NodeGraphWidget {
             .unwrap_or_else(|| self.view.screen_to_canvas(origin, canvas_rect.center()));
         let no_focus = ui.ctx().memory(|m| m.focused().is_none());
 
+        if no_focus
+            && pointer.is_some()
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Home))
+        {
+            self.fit_graph_to_viewport(layout, canvas_rect, origin);
+            return;
+        }
+
         if no_focus {
             let any_selected = self.graph.nodes.values().any(|node| node.selected)
                 || self.graph.frames.iter().any(|frame| frame.selected);

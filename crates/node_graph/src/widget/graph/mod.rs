@@ -164,6 +164,25 @@ impl NodeGraphWidget {
         self.node_statuses.clear();
     }
 
+    fn fit_graph_to_viewport(
+        &mut self,
+        layout: &layout::GraphWidgetLayout,
+        viewport: egui::Rect,
+        origin: Pos2,
+    ) {
+        let bounds = layout
+            .node_rects
+            .values()
+            .chain(layout.frame_rects.values())
+            .copied()
+            .reduce(|bounds, rect| bounds.union(rect));
+        if let Some(bounds) = bounds {
+            self.view.fit_to_rect(bounds, viewport, origin, 48.0);
+        } else {
+            self.view = ViewState::default();
+        }
+    }
+
     /// Replaces the whole graph and rebuilds every node's runtime instance
     /// from the registry — the programmatic equivalent of loading a saved
     /// file. State restore runs through the same reconcile path as
