@@ -30,6 +30,7 @@ mod native {
 
     #[derive(Clone, Copy, Debug, ValueEnum)]
     enum SinkKind {
+        Discard,
         Count,
         Viewer,
     }
@@ -221,6 +222,7 @@ mod native {
         samples: u64,
         samplerate_hz: f64,
         words: u64,
+        words_measured: bool,
     }
 
     impl BenchResult {
@@ -228,21 +230,35 @@ mod native {
             let seconds = self.elapsed.as_secs_f64();
             let capture_seconds = self.samples as f64 / self.samplerate_hz;
             let msamples_per_second = self.samples as f64 / seconds / 1_000_000.0;
-            let mwords_per_second = self.words as f64 / seconds / 1_000_000.0;
             let realtime = capture_seconds / seconds;
-            println!(
-                "mode={:?} sink={:?} samples={} words={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} MWords_s={:.3} realtime_x={:.3}",
-                self.mode,
-                self.sink,
-                self.samples,
-                self.words,
-                self.setup.as_secs_f64(),
-                seconds,
-                capture_seconds,
-                msamples_per_second,
-                mwords_per_second,
-                realtime,
-            );
+            if self.words_measured {
+                let mwords_per_second = self.words as f64 / seconds / 1_000_000.0;
+                println!(
+                    "mode={:?} sink={:?} samples={} words={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} MWords_s={:.3} realtime_x={:.3}",
+                    self.mode,
+                    self.sink,
+                    self.samples,
+                    self.words,
+                    self.setup.as_secs_f64(),
+                    seconds,
+                    capture_seconds,
+                    msamples_per_second,
+                    mwords_per_second,
+                    realtime,
+                );
+            } else {
+                println!(
+                    "mode={:?} sink={:?} samples={} words=unmeasured setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3}",
+                    self.mode,
+                    self.sink,
+                    self.samples,
+                    self.setup.as_secs_f64(),
+                    seconds,
+                    capture_seconds,
+                    msamples_per_second,
+                    realtime,
+                );
+            }
         }
     }
 
@@ -273,9 +289,12 @@ mod native {
         }
         pipeline.add_process("decoder", decoder)?;
         match args.sink {
+            SinkKind::Discard => {
+                sink_port = None;
+            }
             SinkKind::Count => {
                 pipeline.add_process("sink", CountWords::new(Arc::clone(&count)))?;
-                sink_port = "words";
+                sink_port = Some("words");
             }
             SinkKind::Viewer => {
                 let store = DerivedLanes::new();
@@ -284,7 +303,7 @@ mod native {
                     ViewerSink::new(store.clone()).with_lane(ViewerLaneKind::Words, "parallel"),
                 )?;
                 viewer_store = Some(store);
-                sink_port = "in0";
+                sink_port = Some("in0");
             }
         }
 
@@ -303,7 +322,9 @@ mod native {
                 .ok_or("--cs is required when chip select is enabled")?;
             pipeline.connect("source", &format!("ch{channel}"), "decoder", "cs")?;
         }
-        pipeline.connect("decoder", "words", "sink", sink_port)?;
+        if let Some(sink_port) = sink_port {
+            pipeline.connect("decoder", "words", "sink", sink_port)?;
+        }
 
         let setup_start = Instant::now();
         let scheduler = pipeline.build()?;
@@ -330,6 +351,7 @@ mod native {
             samples,
             samplerate_hz,
             words,
+            words_measured: !matches!(args.sink, SinkKind::Discard),
         })
     }
 
@@ -405,6 +427,19 @@ mod native {
         #[test]
         fn capture_path_is_required() {
             assert!(Args::try_parse_from(["parallel-decoder-bench"]).is_err());
+        }
+
+        #[test]
+        fn parses_transport_free_discard_sink() {
+            let args = Args::try_parse_from([
+                "parallel-decoder-bench",
+                "capture.dsl",
+                "--sink",
+                "discard",
+            ])
+            .unwrap();
+
+            assert!(matches!(args.sink, SinkKind::Discard));
         }
     }
 }

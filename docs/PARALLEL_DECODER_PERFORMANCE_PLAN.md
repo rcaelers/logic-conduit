@@ -111,6 +111,7 @@ Initial benchmark matrix:
 
 | Mode | Sink | Purpose |
 | --- | --- | --- |
+| stream | discard | Packed file read, scan, gating, and assembly without output transport |
 | indexed | count | Edge-query and decoder cost plus minimal transport |
 | stream | count | Packed file read, scalar scan, and minimal transport |
 | indexed | viewer | Full current user-visible indexed path |
@@ -295,17 +296,28 @@ Warm-cache 10-million-sample results on the reference capture:
 
 | Mode | Sink | Scalar baseline | Vectorized | Improvement | Words |
 | --- | --- | ---: | ---: | ---: | ---: |
+| stream | discard | not measured | 266.346 MSamples/s | n/a | unmeasured |
 | stream | count | 25.341 MSamples/s | 28.195 MSamples/s | 1.11x | 2,399,972 |
 | stream | viewer | 2.513 MSamples/s | 2.933 MSamples/s | 1.17x | 2,399,972 |
 
-The count result is the median of five consecutive warm runs (26.130 to
-30.787 MSamples/s); the viewer result is one warm run. The exact word count
-matches the scalar baseline and indexed path. This is a real but modest gain
-on a dense DDR capture because it still emits about 2.4 million individual
-`Word` channel messages for 10 million input samples. The current result does
-not meet the 60 MSamples/s live-path target. Step 7's batched word transport is
-now confirmed as required rather than optional; the scanner should be
-remeasured independently from scalar output before further input-side tuning.
+The discard result is the median of three warm 200-million-sample acceptance
+runs (259.121 to 270.020 MSamples/s, 5.18x to 5.40x real time). It leaves the
+decoder output unconnected, so it includes packed file delivery, 64-bit
+strobe scanning, CS/enable gating, data-channel reads, and word assembly but
+not `Word` channel transport. A one-data-bit comparison reached 789.420
+MSamples/s versus 257.772 MSamples/s with eight data bits, confirming the
+measurement scales with decoder data work rather than only timing source
+startup. The benchmark reports the discard word count as `unmeasured`; count
+mode and the differential tests remain the output-correctness checks.
+
+The count result is the median of five consecutive warm 10-million-sample
+runs (26.130 to 30.787 MSamples/s); the viewer result is one warm run. Their
+exact word count matches the scalar baseline and indexed path. The isolated
+packed/live decoder now exceeds its 60 MSamples/s acceptance target by more
+than 4x, but the end-to-end count path still emits about 2.4 million
+individual `Word` channel messages for 10 million input samples. Step 7's
+batched word transport is therefore confirmed as required for complete
+real-time pipeline operation rather than further Step 5 input-side tuning.
 
 ## Step 6: Zero-Copy Backing and Bounded File Flow
 

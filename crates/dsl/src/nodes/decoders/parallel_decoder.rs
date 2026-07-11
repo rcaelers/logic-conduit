@@ -332,10 +332,10 @@ impl ParallelDecoder {
     ) -> WorkResult<usize> {
         self.work_call_count += 1;
 
-        let output = outputs
-            .first()
-            .and_then(|port| port.get::<Word>())
-            .ok_or_else(|| WorkError::NodeError("Missing output".to_string()))?;
+        // An unconnected output is valid: the node still advances its
+        // decoder state, which is useful for optional viewer branches and
+        // for measuring decode cost independently from event transport.
+        let output = outputs.first().and_then(|port| port.get::<Word>());
 
         let enable_port_idx = 1 + self.num_data_bits + 1;
         let enable_query = inputs
@@ -533,11 +533,13 @@ impl ParallelDecoder {
                 continue;
             }
 
-            output.send(Word::spanning(
-                assembly.value,
-                assembly.first_ts,
-                timestamp_ns.saturating_sub(assembly.first_ts),
-            ))?;
+            if let Some(output) = &output {
+                output.send(Word::spanning(
+                    assembly.value,
+                    assembly.first_ts,
+                    timestamp_ns.saturating_sub(assembly.first_ts),
+                ))?;
+            }
             assembly.value = 0;
             assembly.cycles = 0;
             words_emitted += 1;
@@ -593,11 +595,8 @@ impl ParallelDecoder {
             );
         }
 
-        // Get output
-        let output = outputs
-            .first()
-            .and_then(|port| port.get::<Word>())
-            .ok_or_else(|| WorkError::NodeError("Missing output".to_string()))?;
+        // Keep decoding when the output is intentionally unconnected.
+        let output = outputs.first().and_then(|port| port.get::<Word>());
 
         // Get block inputs: strobe, data[0..N], cs
         let mut strobe_buf = VecDeque::new();
@@ -860,7 +859,9 @@ impl ParallelDecoder {
                 assembly_value = 0;
                 assembly_cycles = 0;
 
-                output.send(word)?;
+                if let Some(output) = &output {
+                    output.send(word)?;
+                }
                 words_emitted += 1;
             }
         }
@@ -1013,6 +1014,26 @@ mod tests {
         assert!(matches!(
             decoder.work(&inputs, &outputs),
             Err(WorkError::NodeError(_))
+        ));
+    }
+
+    #[test]
+    fn unconnected_output_still_advances_decoder() {
+        let wd = Watchdog::new();
+        let inputs = [
+            block_input(&wd, block_from_bits(&[false, true]), "strobe"),
+            block_input(&wd, block_from_bits(&[true, true]), "d0"),
+            unconnected(&wd, "cs"),
+            unconnected(&wd, "enable_signal"),
+        ];
+        let outputs: [OutputPort; 0] = [];
+        let mut decoder = ParallelDecoder::new(1, StrobeMode::RisingEdge, CsPolarity::Disabled);
+
+        assert_eq!(decoder.work(&inputs, &outputs).unwrap(), 1);
+        assert_eq!(decoder.total_words_emitted, 1);
+        assert!(matches!(
+            decoder.work(&inputs, &outputs),
+            Err(WorkError::Shutdown)
         ));
     }
 
