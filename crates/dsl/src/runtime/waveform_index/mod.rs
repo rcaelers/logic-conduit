@@ -383,6 +383,74 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn next_transition_crosses_every_index_and_block_boundary() -> Result<()> {
+        let samples_per_block = 1_u64 << 20;
+        let total_samples = 2 * samples_per_block + 123;
+        let edges = vec![
+            1,
+            63,
+            64,
+            65,
+            4_095,
+            4_096,
+            262_143,
+            262_144,
+            samples_per_block - 1,
+            samples_per_block,
+            samples_per_block + 1,
+            2 * samples_per_block,
+            total_samples - 1,
+        ];
+        let blocks = single_channel_blocks_from_fn(total_samples, samples_per_block, |sample| {
+            edges.partition_point(|edge| *edge <= sample) % 2 == 1
+        });
+        let source = MemoryCaptureDataSource::new(total_samples, samples_per_block, blocks);
+        let mut reader = IndexSampler::open_data_source(source.clone())?;
+
+        let mut position = 0;
+        for &expected in &edges {
+            let transition = reader
+                .next_transition(0, position, total_samples)?
+                .expect("expected another transition");
+            assert_eq!(transition.sample, expected);
+            assert_eq!(
+                transition.value,
+                edges.partition_point(|edge| *edge <= expected) % 2 == 1
+            );
+            position = transition.sample;
+        }
+        assert_eq!(reader.next_transition(0, position, total_samples)?, None);
+
+        // The limit is exclusive, matching the pre-existing exact-window
+        // implementation used by EdgeQuery.
+        assert_eq!(reader.next_transition(0, 63, 64)?, None);
+        assert_eq!(reader.next_transition(0, 63, 65)?.unwrap().sample, 64);
+
+        source.remove_index();
+        Ok(())
+    }
+
+    #[test]
+    fn next_transition_skips_constant_blocks_without_raw_reads() -> Result<()> {
+        let samples_per_block = 1_u64 << 20;
+        let total_samples = 3 * samples_per_block;
+        let blocks = single_channel_blocks_from_fn(total_samples, samples_per_block, |_| false);
+        let source = MemoryCaptureDataSource::new(total_samples, samples_per_block, blocks);
+        let mut reader = IndexSampler::open_data_source(source.clone())?;
+        let reads_after_build = source.raw_reads();
+
+        assert_eq!(reader.next_transition(0, 0, total_samples)?, None);
+        assert_eq!(
+            source.raw_reads(),
+            reads_after_build,
+            "constant ranges should be answered entirely from root summaries"
+        );
+
+        source.remove_index();
+        Ok(())
+    }
+
     struct XorShift(u64);
 
     impl XorShift {
@@ -559,6 +627,39 @@ mod tests {
             13,
             200,
         )
+    }
+
+    #[test]
+    fn randomized_next_transition_matches_ground_truth() -> Result<()> {
+        let mut rng = XorShift(0x0ddc_0ffe_e15e_beef);
+        for round in 0..16 {
+            let samples_per_block = [4_096, 65_536, 1 << 20][rng.below(3) as usize];
+            let total_samples = 60_000 + rng.below(300_000);
+            let samples = random_signal(&mut rng, total_samples, 18);
+            let blocks = blocks_from_samples(&samples, samples_per_block);
+            let source = MemoryCaptureDataSource::new(total_samples, samples_per_block, blocks);
+            let mut reader = IndexSampler::open_data_source(source.clone())?;
+
+            for case in 0..200 {
+                let position = rng.below(total_samples);
+                let limit = position + 1 + rng.below(total_samples - position);
+                let expected = ((position + 1)..limit)
+                    .find(|sample| samples[*sample as usize] != samples[*sample as usize - 1]);
+                let actual = reader.next_transition(0, position, limit)?;
+                assert_eq!(
+                    actual.map(|transition| transition.sample),
+                    expected,
+                    "round={round} case={case} spb={samples_per_block} \
+                     position={position} limit={limit}"
+                );
+                if let Some(transition) = actual {
+                    assert_eq!(transition.value, samples[transition.sample as usize]);
+                }
+            }
+
+            source.remove_index();
+        }
+        Ok(())
     }
 
     /// Large blocks (several L3 groups each) with runs long enough to produce

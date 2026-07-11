@@ -295,35 +295,8 @@ impl EdgeQuery for DslChannelEdgeIndex {
     }
 
     fn next_edge(&self, position: u64, limit: u64) -> Result<Option<CaptureTransition>> {
-        let limit = limit.min(self.total_samples);
-        if position >= limit {
-            return Ok(None);
-        }
-
-        // Gallop: try successively larger windows until a transition turns
-        // up or we've covered the whole [position, limit) search space.
-        // `target_points == window` always keeps `sampled_window` on its
-        // exact (no-smearing) path, so every result here is a real edge.
-        let mut window: u64 = 4096;
-        loop {
-            let end = position.saturating_add(window).min(limit);
-            let target_points = (end - position).max(1) as usize;
-            let found = {
-                let mut sampler = self.sampler.lock().unwrap();
-                sampler.sampled_window(&[self.channel], position, end, target_points)?
-            };
-            if let Some(transition) = found
-                .channels
-                .first()
-                .and_then(|channel| channel.transitions.first())
-            {
-                return Ok(Some(*transition));
-            }
-            if end >= limit {
-                return Ok(None);
-            }
-            window = window.saturating_mul(2);
-        }
+        let mut sampler = self.sampler.lock().unwrap();
+        sampler.next_transition(self.channel, position, limit.min(self.total_samples))
     }
 }
 

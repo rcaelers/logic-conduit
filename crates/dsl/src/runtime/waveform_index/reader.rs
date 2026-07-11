@@ -1,6 +1,6 @@
 use super::builder::IndexBuilder;
 use super::exact_window_sample_limit;
-use super::storage::IndexReader;
+use super::storage::{IndexReader, LevelsView};
 use super::types::{
     CaptureIndexProgress, SAMPLES_PER_L1_BIT, SAMPLES_PER_L2_BIT, SAMPLES_PER_L3_BIT, bit,
 };
@@ -115,6 +115,117 @@ where
         let block = position / samples_per_block;
         let data = self.cached_packed_block(channel, block)?;
         Ok(packed_bit(&data, (position % samples_per_block) as usize))
+    }
+
+    /// First transition strictly after `position` and before `limit`.
+    ///
+    /// The display index is descended from its block summary through L3,
+    /// L2, and L1. Only the final 64-sample candidate group touches the raw
+    /// packed data. This keeps long constant ranges index-only and avoids
+    /// constructing a complete sampled-window transition vector when the
+    /// caller needs just one edge.
+    pub fn next_transition(
+        &mut self,
+        channel: usize,
+        position: u64,
+        limit: u64,
+    ) -> Result<Option<CaptureTransition>> {
+        if channel >= self.header().total_probes {
+            return Err(Error::InvalidProbe(channel));
+        }
+
+        let limit = limit.min(self.header().total_samples);
+        let Some(mut search) = position.checked_add(1) else {
+            return Ok(None);
+        };
+        if search >= limit {
+            return Ok(None);
+        }
+
+        let samples_per_block = self.header().samples_per_block;
+        while search < limit {
+            let block = search / samples_per_block;
+            let block_start = block * samples_per_block;
+            let block_limit = block_start.saturating_add(samples_per_block).min(limit);
+            let local_limit = block_limit - block_start;
+
+            let root = self.storage.load_root_summary(channel, block as usize)?;
+            if !root.toggle {
+                search = block_limit;
+                continue;
+            }
+
+            let local_search = search - block_start;
+            let candidate = {
+                let leaf = self.storage.load_leaf(channel, block as usize)?;
+                leaf.levels
+                    .as_ref()
+                    .and_then(|levels| next_indexed_l1_group(levels, local_search, local_limit))
+            };
+            let Some(l1_group) = candidate else {
+                search = block_limit;
+                continue;
+            };
+
+            let group_start = l1_group as u64 * SAMPLES_PER_L1_BIT;
+            let scan_start = local_search.max(group_start);
+            let scan_end = local_limit.min(group_start + SAMPLES_PER_L1_BIT);
+            if let Some(transition) =
+                self.next_raw_transition(channel, block, scan_start, scan_end)?
+            {
+                return Ok(Some(transition));
+            }
+
+            // The index can mark a group because of a transition at its
+            // first sample that is at/before `position`. Once the exact scan
+            // proves there is no later edge in the group, skip it entirely.
+            search = block_start + scan_end;
+        }
+
+        Ok(None)
+    }
+
+    fn next_raw_transition(
+        &mut self,
+        channel: usize,
+        block: u64,
+        local_start: u64,
+        local_end: u64,
+    ) -> Result<Option<CaptureTransition>> {
+        if local_start >= local_end {
+            return Ok(None);
+        }
+
+        let samples_per_block = self.header().samples_per_block;
+        let block_start = block * samples_per_block;
+        let data = self.cached_packed_block(channel, block)?;
+        let word_index = local_start as usize / 64;
+        let word_start = word_index * 64;
+        let word = load_le_word(&data, word_index);
+        let entering = if word_start > 0 {
+            packed_bit(&data, word_start - 1)
+        } else if block > 0 {
+            self.storage
+                .load_root_summary(channel, block as usize - 1)?
+                .last
+        } else {
+            // Sample zero has no predecessor and therefore is not itself a
+            // transition. Treat its own value as the entering level.
+            word & 1 != 0
+        };
+
+        let lo = local_start as usize - word_start;
+        let hi = local_end as usize - word_start;
+        let mut toggles = word ^ ((word << 1) | entering as u64);
+        toggles &= range_mask(lo, hi);
+        let Some(bit_index) = nonzero_trailing_bit(toggles) else {
+            return Ok(None);
+        };
+
+        Ok(Some(CaptureTransition {
+            sample: block_start + (word_start + bit_index) as u64,
+            value: bit(word, bit_index),
+        }))
     }
 
     pub fn sampled_window(
@@ -664,6 +775,51 @@ fn bit_range_any(words: &[u64], first_bit: usize, last_bit: usize) -> bool {
         }
     }
     false
+}
+
+/// Finds the first active 64-sample L1 group in `start..end` by descending
+/// the L3 -> L2 -> L1 toggle summaries. `start` and `end` are block-local
+/// sample positions and `end` is exclusive.
+fn next_indexed_l1_group(levels: &LevelsView<'_>, start: u64, end: u64) -> Option<usize> {
+    if start >= end {
+        return None;
+    }
+
+    let first_l3 = (start / SAMPLES_PER_L3_BIT) as usize;
+    let last_l3 = ((end - 1) / SAMPLES_PER_L3_BIT).min(63) as usize;
+    for l3 in first_l3..=last_l3 {
+        if !bit(levels.l3_toggle, l3) {
+            continue;
+        }
+
+        let l3_first_l2 = l3 * 64;
+        let l3_last_l2 = l3_first_l2 + 64;
+        let first_l2 = ((start / SAMPLES_PER_L2_BIT) as usize).max(l3_first_l2);
+        let last_l2 = ((end - 1) / SAMPLES_PER_L2_BIT) as usize;
+        let l2_end = (last_l2 + 1).min(l3_last_l2);
+        let mut l2_bits = *levels.l2_toggle.get(l3)?;
+        l2_bits &= range_mask(first_l2 - l3_first_l2, l2_end - l3_first_l2);
+
+        while let Some(l2_offset) = nonzero_trailing_bit(l2_bits) {
+            l2_bits &= l2_bits - 1;
+            let l2 = l3_first_l2 + l2_offset;
+            let l2_first_l1 = l2 * 64;
+            let l2_last_l1 = l2_first_l1 + 64;
+            let first_l1 = ((start / SAMPLES_PER_L1_BIT) as usize).max(l2_first_l1);
+            let last_l1 = ((end - 1) / SAMPLES_PER_L1_BIT) as usize;
+            let l1_end = (last_l1 + 1).min(l2_last_l1);
+            let mut l1_bits = *levels.l1_toggle.get(l2)?;
+            l1_bits &= range_mask(first_l1 - l2_first_l1, l1_end - l2_first_l1);
+            if let Some(l1_offset) = nonzero_trailing_bit(l1_bits) {
+                return Some(l2_first_l1 + l1_offset);
+            }
+        }
+    }
+    None
+}
+
+fn nonzero_trailing_bit(word: u64) -> Option<usize> {
+    (word != 0).then(|| word.trailing_zeros() as usize)
 }
 
 impl<R: BlockCaptureSource> CaptureIndex for IndexSampler<R> {
