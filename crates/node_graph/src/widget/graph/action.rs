@@ -242,7 +242,7 @@ impl NodeGraphWidget {
                     self.push_undo_snapshot();
                 }
                 let placed_pos = pointer_canvas.unwrap_or(pos);
-                let pasted = self.paste_nodes(text.as_deref(), placed_pos, egui_ctx);
+                let pasted = self.paste_nodes(text.as_deref(), placed_pos);
                 if pasted && pointer_canvas.is_some() {
                     ActionEffect::EnterPlacement
                 } else {
@@ -538,19 +538,11 @@ impl NodeGraphWidget {
         };
         egui_ctx.copy_text(text.clone());
         self.clipboard_cache = Some(text);
-        self.io_status = Some((
-            format!("Copied {} node(s)", payload.nodes.len()),
-            egui_ctx.input(|i| i.time),
-        ));
+        self.io_status = Some(format!("Copied {} node(s)", payload.nodes.len()));
         true
     }
 
-    fn paste_nodes(
-        &mut self,
-        pasted_text: Option<&str>,
-        pos: Pos2,
-        egui_ctx: &egui::Context,
-    ) -> bool {
+    fn paste_nodes(&mut self, pasted_text: Option<&str>, pos: Pos2) -> bool {
         let text = pasted_text
             .map(str::to_owned)
             .or_else(|| self.clipboard_cache.clone());
@@ -566,10 +558,7 @@ impl NodeGraphWidget {
         self.clipboard_cache = Some(text);
         let pasted = self.paste_payload(payload, Some(pos));
         if pasted > 0 {
-            self.io_status = Some((
-                format!("Pasted {pasted} node(s)"),
-                egui_ctx.input(|i| i.time),
-            ));
+            self.io_status = Some(format!("Pasted {pasted} node(s)"));
             return true;
         }
         false

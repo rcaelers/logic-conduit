@@ -2,6 +2,7 @@ use crate::about::AboutWindow;
 use crate::compiler;
 use crate::demo_signals;
 use crate::nodes;
+use crate::toast::Toasts;
 use logic_analyzer_viewer::LogicAnalyzerViewer;
 use node_graph::{NodeBadge, NodeGraphWidget, NodeId};
 #[cfg(not(target_arch = "wasm32"))]
@@ -140,10 +141,14 @@ pub struct App {
     analyzer_split: f32,
     builders: compiler::BuilderRegistry,
     run: Option<compiler::AppRun>,
-    /// Last global compile/run message shown in the toolbar.
+    /// Persistent run *state* shown in the toolbar next to Run/Stop — the
+    /// current compile-error summary, or "stop & rerun to apply" while a
+    /// live edit can't be applied in place. One-off events (a live edit that
+    /// *did* apply, one that failed) go through `toasts` instead (Phase 4.2).
     run_message: Option<(String, bool /* is_error */)>,
-    /// Last document load/save message shown in the toolbar.
-    file_message: Option<(String, bool /* is_error */)>,
+    /// Transient one-off notifications (file loaded/saved, node(s)
+    /// copied/pasted, live-edit results) — bottom-right, self-clearing.
+    toasts: Toasts,
     #[cfg(not(target_arch = "wasm32"))]
     current_file: Option<PathBuf>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -277,7 +282,7 @@ impl App {
             builders,
             run: None,
             run_message: None,
-            file_message: None,
+            toasts: Toasts::default(),
             #[cfg(not(target_arch = "wasm32"))]
             current_file: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -310,9 +315,9 @@ impl App {
                 self.current_file = Some(path.clone());
                 self.mark_graph_saved();
                 self.push_recent_file(path.clone());
-                self.file_message = Some((format!("Loaded {}", path.display()), false));
+                self.toasts.info(format!("Loaded {}", path.display()));
             }
-            Err(error) => self.file_message = Some((error, true)),
+            Err(error) => self.toasts.error(error),
         }
     }
 
@@ -339,7 +344,7 @@ impl App {
         self.node_graph.new_graph();
         self.current_file = None;
         self.mark_graph_saved();
-        self.file_message = Some(("New graph".to_owned(), false));
+        self.toasts.info("New graph");
     }
 
     /// Requests File → New, guarding on unsaved changes the same way
@@ -413,11 +418,11 @@ impl App {
                 self.current_file = Some(path.clone());
                 self.mark_graph_saved();
                 self.push_recent_file(path.clone());
-                self.file_message = Some((format!("Saved {}", path.display()), false));
+                self.toasts.info(format!("Saved {}", path.display()));
                 true
             }
             Err(error) => {
-                self.file_message = Some((error, true));
+                self.toasts.error(error);
                 false
             }
         }
@@ -427,7 +432,7 @@ impl App {
     fn mark_graph_saved(&mut self) {
         match self.node_graph.snapshot_value() {
             Ok(graph) => self.saved_graph = graph,
-            Err(error) => self.file_message = Some((error, true)),
+            Err(error) => self.toasts.error(error),
         }
     }
 
@@ -778,12 +783,9 @@ impl App {
         match run.apply(self.node_graph.graph(), &self.builders) {
             Ok(summary) if summary.is_empty() => {}
             Ok(summary) => {
-                self.run_message = Some((
-                    format!(
-                        "live: +{} −{} cfg {} restart {}",
-                        summary.added, summary.removed, summary.configured, summary.restarted
-                    ),
-                    false,
+                self.toasts.info(format!(
+                    "live: +{} −{} cfg {} restart {}",
+                    summary.added, summary.removed, summary.configured, summary.restarted
                 ));
             }
             Err(compiler::ApplyError::Compile(_)) => {
@@ -794,7 +796,7 @@ impl App {
                 self.run_message = Some((format!("stop & rerun to apply: {reason}"), false));
             }
             Err(compiler::ApplyError::Apply(message)) => {
-                self.run_message = Some((format!("live edit failed: {message}"), true));
+                self.toasts.error(format!("live edit failed: {message}"));
             }
         }
 
@@ -840,14 +842,6 @@ impl App {
                 }
             }
             if let Some((message, is_error)) = &self.run_message {
-                let color = if *is_error {
-                    egui::Color32::from_rgb(230, 120, 120)
-                } else {
-                    egui::Color32::from_rgb(180, 180, 180)
-                };
-                ui.colored_label(color, message);
-            }
-            if let Some((message, is_error)) = &self.file_message {
                 let color = if *is_error {
                     egui::Color32::from_rgb(230, 120, 120)
                 } else {
@@ -1155,6 +1149,9 @@ impl eframe::App for App {
         ui.allocate_ui(egui::vec2(available.x, graph_height), |ui| {
             self.node_graph.show(ui);
         });
+        if let Some(message) = self.node_graph.take_io_status() {
+            self.toasts.info(message);
+        }
 
         self.about.show(ui.ctx());
 
@@ -1162,5 +1159,7 @@ impl eframe::App for App {
         self.show_guarded_action_dialog(ui.ctx());
         #[cfg(not(target_arch = "wasm32"))]
         self.show_clear_recent_dialog(ui.ctx());
+
+        self.toasts.show(ui.ctx());
     }
 }

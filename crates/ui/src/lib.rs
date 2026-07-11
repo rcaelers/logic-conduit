@@ -3,6 +3,7 @@ mod app;
 pub mod compiler;
 mod demo_signals;
 pub mod nodes;
+mod toast;
 
 pub use app::App;
 #[cfg(target_os = "macos")]

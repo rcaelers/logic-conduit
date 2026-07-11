@@ -32,7 +32,10 @@ pub struct NodeGraphWidget {
     minimap_visible: bool,
     top_node: Option<NodeId>,
     menu: MenuController,
-    io_status: Option<(String, f64)>,
+    /// Pending copy/paste confirmation ("Copied 3 node(s)"), taken and
+    /// cleared by the host app's `take_io_status` — the host's own toast
+    /// system (Phase 4.2) owns display and timing, not the widget.
+    io_status: Option<String>,
     hotkeys: HotkeyRegistry,
     clipboard_cache: Option<String>,
     undo_stack: Vec<GraphState>,
@@ -140,6 +143,13 @@ impl NodeGraphWidget {
 
     pub fn graph_mut(&mut self) -> &mut GraphState {
         &mut self.graph
+    }
+
+    /// Takes the pending copy/paste confirmation message, if any — call
+    /// once per frame and feed the result into the host app's toast system
+    /// (Phase 4.2). Returns `None` most frames.
+    pub fn take_io_status(&mut self) -> Option<String> {
+        self.io_status.take()
     }
 
     /// Current UI prefs (N-panel width/tab, minimap visibility) — for the

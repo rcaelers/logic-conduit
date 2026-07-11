@@ -275,30 +275,7 @@ impl NodeGraphWidget {
             );
         }
 
-        self.draw_io_status(painter, rect, ui.ctx());
         ui.set_clip_rect(previous_clip);
-    }
-
-    fn draw_io_status(&mut self, painter: &egui::Painter, rect: Rect, ctx: &egui::Context) {
-        let Some((msg, start)) = &self.io_status else {
-            return;
-        };
-        let elapsed = (ctx.input(|i| i.time) - start) as f32;
-        if elapsed >= 3.0 {
-            self.io_status = None;
-            return;
-        }
-        let alpha = ((3.0 - elapsed) / 0.6).clamp(0.0, 1.0);
-        let pos = Pos2::new(rect.center().x, rect.min.y + 12.0);
-        let msg = msg.clone();
-        painter.text(
-            pos,
-            egui::Align2::CENTER_TOP,
-            &msg,
-            egui::FontId::proportional(13.0),
-            Color32::from_rgba_premultiplied(220, 220, 220, (alpha * 230.0) as u8),
-        );
-        ctx.request_repaint();
     }
 
     pub(super) fn hovered_socket(&self, responses: &GraphResponses) -> Option<SocketId> {
