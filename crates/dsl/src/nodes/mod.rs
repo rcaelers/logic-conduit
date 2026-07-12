@@ -32,6 +32,8 @@ mod dslogic_u3pro16;
 pub mod logic;
 #[cfg(not(target_arch = "wasm32"))]
 mod logic_analyzer;
+#[cfg(not(target_arch = "wasm32"))]
+mod sigrok_file;
 pub mod sinks;
 mod uart_demo_source;
 
@@ -49,6 +51,8 @@ pub use logic_analyzer::{
     LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
     LogicEncodingRequest, LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use sigrok_file::SigrokFileSource;
 pub use uart_demo_source::UartDemoSource;
 
 /// Convenient name for the production DSLogic source node.

@@ -29,6 +29,8 @@ mod file_writer;
 mod formatter;
 mod i2c_decoder;
 mod logic_gate;
+#[cfg(not(target_arch = "wasm32"))]
+mod sigrok_file_source;
 mod spi_decoder;
 mod sr_flip_flop;
 #[cfg(not(target_arch = "wasm32"))]
@@ -54,6 +56,8 @@ pub use file_writer::FileWriterState;
 pub use formatter::{StringFormatter, StringFormatterState};
 pub use i2c_decoder::I2cDecoder;
 pub use logic_gate::{LogicGate, LogicGateState};
+#[cfg(not(target_arch = "wasm32"))]
+pub use sigrok_file_source::{SigrokFileSource, SigrokFileSourceState};
 pub use spi_decoder::{SpiDecoder, SpiDecoderState};
 pub use sr_flip_flop::{SrFlipFlop, SrFlipFlopState};
 #[cfg(not(target_arch = "wasm32"))]
@@ -189,6 +193,8 @@ pub fn build_registry() -> NodeTypeRegistry {
     // so a wasm build never lets a node be added that can't compile.
     #[cfg(not(target_arch = "wasm32"))]
     registry.register::<DslFileSource>();
+    #[cfg(not(target_arch = "wasm32"))]
+    registry.register::<SigrokFileSource>();
     registry.register::<UartDemoSource>();
     registry.register::<DsLogicU3Pro16>();
     registry.register::<SpiDecoder>();

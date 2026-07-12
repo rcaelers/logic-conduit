@@ -40,6 +40,8 @@ mod formatter;
 mod logic_gate;
 mod plugin;
 mod port_kind;
+#[cfg(not(target_arch = "wasm32"))]
+mod sigrok_file_source;
 mod spi_decoder;
 mod sr_flip_flop;
 #[cfg(not(target_arch = "wasm32"))]
@@ -201,6 +203,11 @@ impl BuilderRegistry {
         builders.insert(
             "DSL File Source".into(),
             Box::new(file_source::FileSourceBuilder),
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        builders.insert(
+            "Sigrok File Source".into(),
+            Box::new(sigrok_file_source::SigrokFileSourceBuilder),
         );
         builders.insert(
             "UART Demo Source".into(),
