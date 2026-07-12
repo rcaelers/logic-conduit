@@ -21,3 +21,49 @@ impl Default for BlockCodecConfig {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistentStoreConfig {
+    pub directory: PathBuf,
+    pub cache_key: [u8; 32],
+    pub max_cache_bytes: u64,
+}
+
+impl PersistentStoreConfig {
+    pub fn new(directory: impl Into<PathBuf>, cache_key: [u8; 32]) -> Self {
+        Self {
+            directory: directory.into(),
+            cache_key,
+            max_cache_bytes: DEFAULT_MAX_PERSISTENT_CACHE_BYTES,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LiveStoreConfig {
+    pub directory: PathBuf,
+    pub cache_key_prefix: [u8; 16],
+    pub block: BlockCodecConfig,
+    pub hot_tail_publish_words: usize,
+    pub hot_tail_publish_interval: Duration,
+    pub persistence: Option<PersistentStoreConfig>,
+}
+
+impl Default for LiveStoreConfig {
+    fn default() -> Self {
+        Self {
+            directory: super::store::default_working_directory(),
+            cache_key_prefix: [0; 16],
+            block: BlockCodecConfig::default(),
+            hot_tail_publish_words: DEFAULT_HOT_TAIL_PUBLISH_WORDS,
+            hot_tail_publish_interval: DEFAULT_HOT_TAIL_PUBLISH_INTERVAL,
+            persistence: None,
+        }
+    }
+}
+use std::path::PathBuf;
+use std::time::Duration;
+
+const DEFAULT_HOT_TAIL_PUBLISH_WORDS: usize = 16_384;
+const DEFAULT_HOT_TAIL_PUBLISH_INTERVAL: Duration = Duration::from_millis(50);
+const DEFAULT_MAX_PERSISTENT_CACHE_BYTES: u64 = 50 * 1024 * 1024 * 1024;

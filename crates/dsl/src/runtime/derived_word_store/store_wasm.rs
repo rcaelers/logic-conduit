@@ -6,66 +6,18 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
 
 use super::CodecError;
-use super::config::BlockCodecConfig;
+use super::config::{LiveStoreConfig, PersistentStoreConfig};
 use super::query::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
     ExactAnnotationWindow, WordPresenceBucket,
 };
+use super::state::{LiveStoreMetadata, LiveStoreSnapshot, StoreStatus};
 use crate::runtime::{Annotation, Word};
 
-const DEFAULT_HOT_TAIL_PUBLISH_WORDS: usize = 16_384;
-const DEFAULT_HOT_TAIL_PUBLISH_INTERVAL: Duration = Duration::from_millis(50);
-const DEFAULT_MAX_PERSISTENT_CACHE_BYTES: u64 = 50 * 1024 * 1024 * 1024;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PersistentStoreConfig {
-    pub directory: PathBuf,
-    pub cache_key: [u8; 32],
-    pub max_cache_bytes: u64,
-}
-
-impl PersistentStoreConfig {
-    pub fn new(directory: impl Into<PathBuf>, cache_key: [u8; 32]) -> Self {
-        Self {
-            directory: directory.into(),
-            cache_key,
-            max_cache_bytes: DEFAULT_MAX_PERSISTENT_CACHE_BYTES,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct LiveStoreConfig {
-    pub directory: PathBuf,
-    pub cache_key_prefix: [u8; 16],
-    pub block: BlockCodecConfig,
-    pub hot_tail_publish_words: usize,
-    pub hot_tail_publish_interval: Duration,
-    pub persistence: Option<PersistentStoreConfig>,
-}
-
-impl Default for LiveStoreConfig {
-    fn default() -> Self {
-        Self {
-            directory: PathBuf::new(),
-            cache_key_prefix: [0; 16],
-            block: BlockCodecConfig::default(),
-            hot_tail_publish_words: DEFAULT_HOT_TAIL_PUBLISH_WORDS,
-            hot_tail_publish_interval: DEFAULT_HOT_TAIL_PUBLISH_INTERVAL,
-            persistence: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StoreStatus {
-    Live,
-    Finished,
-    Cancelled,
-    Failed(String),
+pub(super) fn default_working_directory() -> PathBuf {
+    PathBuf::new()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -81,26 +33,6 @@ pub enum StoreError {
 }
 
 pub type StoreResult<T> = std::result::Result<T, StoreError>;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LiveStoreMetadata {
-    pub generation: u64,
-    pub committed_block_count: usize,
-    pub committed_word_count: u64,
-    pub committed_data_len: u64,
-    pub first_timestamp_ns: Option<u64>,
-    pub last_timestamp_ns: Option<u64>,
-    pub extent_end_ns: Option<u64>,
-    pub hot_tail_word_count: usize,
-    pub mmap_backed: bool,
-    pub status: StoreStatus,
-}
-
-#[derive(Debug, Clone)]
-pub struct LiveStoreSnapshot {
-    pub metadata: LiveStoreMetadata,
-    pub hot_tail: Arc<[Word]>,
-}
 
 struct MemoryState {
     words: Vec<Word>,

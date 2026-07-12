@@ -2,7 +2,8 @@
 //! the wasm in-memory store.
 
 use super::query::AnnotationQuery;
-use super::store::{LiveStoreSnapshot, StoreResult};
+use super::state::LiveStoreSnapshot;
+use super::store::StoreResult;
 use crate::runtime::Word;
 
 pub(crate) trait AnnotationStoreBackend:

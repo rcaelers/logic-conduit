@@ -5,6 +5,8 @@
 //! later implementation steps.
 
 mod backend;
+#[cfg(test)]
+mod contract_tests;
 #[cfg(not(target_arch = "wasm32"))]
 mod cache;
 #[cfg(not(target_arch = "wasm32"))]
@@ -19,6 +21,7 @@ mod persistent;
 #[cfg(not(target_arch = "wasm32"))]
 mod presence;
 mod query;
+mod state;
 #[cfg_attr(target_arch = "wasm32", path = "store_wasm.rs")]
 mod store;
 #[cfg(not(target_arch = "wasm32"))]
@@ -30,18 +33,16 @@ pub use cache::{
     DecodedBlockCacheStats, configure_decoded_block_cache, decoded_block_cache_stats,
     reset_decoded_block_cache_stats,
 };
-pub use config::BlockCodecConfig;
+pub use config::{BlockCodecConfig, LiveStoreConfig, PersistentStoreConfig};
 #[cfg(not(target_arch = "wasm32"))]
 pub use persistent::{cleanup_cache, clear_cache, clear_cache_entry, default_cache_directory};
 pub use query::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
     ExactAnnotationWindow, WordPresenceBucket,
 };
-pub(crate) use store::LiveStoreMetadata;
-pub use store::{
-    IndexedAnnotationStore, IndexedAnnotationWriter, LiveStoreConfig, PersistentStoreConfig,
-    StoreResult, StoreStatus,
-};
+pub(crate) use state::LiveStoreMetadata;
+pub use state::StoreStatus;
+pub use store::{IndexedAnnotationStore, IndexedAnnotationWriter, StoreResult};
 
 /// Errors caused by malformed input or a word stream that cannot be encoded.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

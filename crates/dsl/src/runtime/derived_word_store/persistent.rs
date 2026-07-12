@@ -3,9 +3,10 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::config::PersistentStoreConfig;
 use super::format::{BlockDirectoryEntry, DATA_HEADER_SIZE, DataFileHeader, FORMAT_VERSION};
 use super::presence::{WordPresenceIndex, WordSummaryRecord};
-use super::store::{PersistentStoreConfig, StoreError, StoreResult};
+use super::store::{StoreError, StoreResult};
 
 const INDEX_MAGIC: &[u8; 8] = b"DWRIDX1\0";
 const MANIFEST_MAGIC: &[u8; 8] = b"DWRMAN1\0";

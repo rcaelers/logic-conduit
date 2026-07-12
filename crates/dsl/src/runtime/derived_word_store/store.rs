@@ -12,7 +12,7 @@ use super::cache::{cache_block, cached_block};
 use super::codec::{
     DecodedWordBlock, PushResult, WordBlockBuilder, decode_word_block, decode_word_block_range,
 };
-use super::config::BlockCodecConfig;
+use super::config::{LiveStoreConfig, PersistentStoreConfig};
 use super::format::{
     BLOCK_FLAG_HAS_DURATIONS, BlockDirectoryEntry, DATA_HEADER_SIZE, DataFileHeader,
     WordBlockHeader,
@@ -22,60 +22,14 @@ use super::query::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
     ExactAnnotationWindow, WordPresenceBucket,
 };
+use super::state::{LiveStoreMetadata, LiveStoreSnapshot, StoreStatus};
 use crate::runtime::{Annotation, MAX_ANNOTATION_NS, Word, instantaneous_word_end_ns};
 
-pub const DEFAULT_HOT_TAIL_PUBLISH_WORDS: usize = 16_384;
-pub const DEFAULT_HOT_TAIL_PUBLISH_INTERVAL: Duration = Duration::from_millis(50);
-pub const DEFAULT_MAX_PERSISTENT_CACHE_BYTES: u64 = 50 * 1024 * 1024 * 1024;
 const MAX_PRESENCE_RUNS_PER_BLOCK: usize = 256;
 static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PersistentStoreConfig {
-    pub directory: PathBuf,
-    pub cache_key: [u8; 32],
-    pub max_cache_bytes: u64,
-}
-
-impl PersistentStoreConfig {
-    pub fn new(directory: impl Into<PathBuf>, cache_key: [u8; 32]) -> Self {
-        Self {
-            directory: directory.into(),
-            cache_key,
-            max_cache_bytes: DEFAULT_MAX_PERSISTENT_CACHE_BYTES,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct LiveStoreConfig {
-    pub directory: PathBuf,
-    pub cache_key_prefix: [u8; 16],
-    pub block: BlockCodecConfig,
-    pub hot_tail_publish_words: usize,
-    pub hot_tail_publish_interval: Duration,
-    pub persistence: Option<PersistentStoreConfig>,
-}
-
-impl Default for LiveStoreConfig {
-    fn default() -> Self {
-        Self {
-            directory: std::env::temp_dir(),
-            cache_key_prefix: [0; 16],
-            block: BlockCodecConfig::default(),
-            hot_tail_publish_words: DEFAULT_HOT_TAIL_PUBLISH_WORDS,
-            hot_tail_publish_interval: DEFAULT_HOT_TAIL_PUBLISH_INTERVAL,
-            persistence: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StoreStatus {
-    Live,
-    Finished,
-    Cancelled,
-    Failed(String),
+pub(super) fn default_working_directory() -> PathBuf {
+    std::env::temp_dir()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -100,26 +54,6 @@ pub enum StoreError {
 }
 
 pub type StoreResult<T> = std::result::Result<T, StoreError>;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LiveStoreMetadata {
-    pub generation: u64,
-    pub committed_block_count: usize,
-    pub committed_word_count: u64,
-    pub committed_data_len: u64,
-    pub first_timestamp_ns: Option<u64>,
-    pub last_timestamp_ns: Option<u64>,
-    pub extent_end_ns: Option<u64>,
-    pub hot_tail_word_count: usize,
-    pub mmap_backed: bool,
-    pub status: StoreStatus,
-}
-
-#[derive(Debug, Clone)]
-pub struct LiveStoreSnapshot {
-    pub metadata: LiveStoreMetadata,
-    pub hot_tail: Arc<[Word]>,
-}
 
 struct LiveState {
     directory: Vec<BlockDirectoryEntry>,
@@ -1264,6 +1198,7 @@ mod tests {
     use std::thread;
 
     use super::*;
+    use crate::runtime::derived_word_store::BlockCodecConfig;
     use crate::runtime::derived_word_store::cache::cache_contains;
 
     fn test_config(directory: &Path) -> LiveStoreConfig {
