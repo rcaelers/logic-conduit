@@ -30,6 +30,9 @@ pub enum AnnotationQueryError {
     #[error("annotation query word limit must be greater than zero")]
     ZeroWordLimit,
 
+    #[error("annotation presence bucket count must be greater than zero")]
+    ZeroBucketLimit,
+
     #[error("annotation presence queries are not implemented yet")]
     PresenceUnavailable,
 

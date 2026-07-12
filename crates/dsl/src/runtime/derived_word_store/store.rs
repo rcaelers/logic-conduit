@@ -2,8 +2,8 @@ use super::cache::{cache_block, cached_block};
 use super::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
     BlockCodecConfig, BlockDirectoryEntry, CodecError, DATA_HEADER_SIZE, DataFileHeader,
-    DecodedWordBlock, ExactAnnotationWindow, PushResult, WordBlockBuilder, decode_word_block,
-    decode_word_block_range,
+    DecodedWordBlock, ExactAnnotationWindow, PushResult, WordBlockBuilder, WordPresenceBucket,
+    WordPresenceIndex, WordSummaryRecord, decode_word_block, decode_word_block_range,
 };
 use crate::runtime::{Annotation, Word};
 use memmap2::{Mmap, MmapOptions};
@@ -87,6 +87,7 @@ pub struct LiveStoreSnapshot {
 
 struct LiveState {
     directory: Vec<BlockDirectoryEntry>,
+    presence: WordPresenceIndex,
     generation: u64,
     committed_word_count: u64,
     committed_data_len: u64,
@@ -321,6 +322,30 @@ impl AnnotationQuery for IndexedAnnotationStore {
         }
     }
 
+    fn presence_window(
+        &self,
+        start_ns: u64,
+        end_ns: u64,
+        target_buckets: usize,
+    ) -> AnnotationQueryResult<Vec<WordPresenceBucket>> {
+        if start_ns > end_ns {
+            return Err(AnnotationQueryError::InvalidWindow { start_ns, end_ns });
+        }
+        if target_buckets == 0 {
+            return Err(AnnotationQueryError::ZeroBucketLimit);
+        }
+        let mut buckets = {
+            let state = self.shared.state.read().unwrap();
+            let mut buckets = state
+                .presence
+                .presence_window_all(start_ns, end_ns, target_buckets);
+            merge_hot_tail_presence(&mut buckets, &state.hot_tail);
+            buckets
+        };
+        buckets.retain(|bucket| bucket.word_count > 0);
+        Ok(buckets)
+    }
+
     fn exact_window(
         &self,
         start_ns: u64,
@@ -440,6 +465,17 @@ impl AnnotationQuery for IndexedAnnotationStore {
 enum QueryBlockWords {
     Cached(Arc<DecodedWordBlock>),
     Partial { words: Vec<Word>, complete: bool },
+}
+
+fn merge_hot_tail_presence(buckets: &mut [WordPresenceBucket], words: &[Word]) {
+    for word in words {
+        let word_end = word.timestamp_ns.saturating_add(word.duration_ns);
+        let first = buckets.partition_point(|bucket| bucket.end_ns < word.timestamp_ns);
+        let end = buckets.partition_point(|bucket| bucket.start_ns <= word_end);
+        for bucket in &mut buckets[first.min(end)..end] {
+            bucket.word_count = bucket.word_count.saturating_add(1);
+        }
+    }
 }
 
 impl QueryBlockWords {
@@ -610,6 +646,7 @@ impl IndexedAnnotationWriter {
         let shared = Arc::new(StoreShared {
             state: RwLock::new(LiveState {
                 directory: Vec::new(),
+                presence: WordPresenceIndex::new(),
                 generation: 0,
                 committed_word_count: 0,
                 committed_data_len: DATA_HEADER_SIZE as u64,
@@ -753,6 +790,19 @@ impl IndexedAnnotationWriter {
             value_bytes: header.value_bytes,
             flags: header.flags as u8,
         };
+        let summary = WordSummaryRecord {
+            start_ns: entry.first_timestamp_ns,
+            end_ns: self
+                .builder
+                .words()
+                .iter()
+                .map(|word| word.timestamp_ns.saturating_add(word.duration_ns))
+                .max()
+                .unwrap_or(entry.last_timestamp_ns),
+            word_count: u64::from(entry.word_count),
+            first_block: entry.sequence,
+            block_count: 1,
+        };
 
         // File is unbuffered: once write_all returns, offset reads can see the
         // complete bytes. Publish the directory entry only after that point.
@@ -760,6 +810,7 @@ impl IndexedAnnotationWriter {
         {
             let mut state = self.shared.state.write().unwrap();
             state.directory.push(entry);
+            state.presence.push(summary);
             state.committed_word_count += u64::from(entry.word_count);
             state.committed_data_len = entry.data_offset + u64::from(entry.block_len);
             state
@@ -1134,6 +1185,45 @@ mod tests {
 
         store.exact_window(0, 30, 10).unwrap();
         assert!(cache_contains(store.shared.store_id, 0));
+    }
+
+    #[test]
+    fn presence_query_uses_summaries_and_hot_tail_without_decoding_blocks() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = test_config(directory.path());
+        config.block.max_words = 4;
+        config.hot_tail_publish_words = 1;
+        let (mut writer, store) = IndexedAnnotationWriter::create(config).unwrap();
+        let words: Vec<_> = (0..10).map(|index| Word::new(index, index * 100)).collect();
+        writer.append_batch(&words).unwrap();
+        assert_eq!(store.snapshot().metadata.committed_block_count, 2);
+        assert_eq!(store.snapshot().metadata.hot_tail_word_count, 2);
+        assert!(!cache_contains(store.shared.store_id, 0));
+        assert!(!cache_contains(store.shared.store_id, 1));
+
+        let buckets = store.presence_window(0, 999, 10).unwrap();
+        assert!(buckets.len() <= 10);
+        assert!(buckets.iter().any(|bucket| bucket.end_ns >= 900));
+        assert!(!cache_contains(store.shared.store_id, 0));
+        assert!(!cache_contains(store.shared.store_id, 1));
+    }
+
+    #[test]
+    fn presence_query_does_not_fill_a_large_inter_block_gap() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = test_config(directory.path());
+        config.block.max_words = 64;
+        config.block.max_inter_word_gap_ns = 100;
+        config.hot_tail_publish_words = 1;
+        let (mut writer, store) = IndexedAnnotationWriter::create(config).unwrap();
+        writer
+            .append_batch(&[Word::new(1, 0), Word::new(2, 10), Word::new(3, 10_000)])
+            .unwrap();
+
+        let buckets = store.presence_window(0, 10_009, 10).unwrap();
+        assert_eq!(buckets.len(), 2);
+        assert_eq!(buckets[0].start_ns, 0);
+        assert_eq!(buckets[1].end_ns, 10_009);
     }
 
     fn direct_annotations(words: &[Word], start_ns: u64, end_ns: u64) -> Vec<Annotation> {

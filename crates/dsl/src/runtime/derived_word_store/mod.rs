@@ -9,6 +9,7 @@ mod cache;
 mod codec;
 mod crc32c;
 mod format;
+mod presence;
 mod query;
 #[cfg(not(target_arch = "wasm32"))]
 mod store;
@@ -26,6 +27,7 @@ pub use format::{
     DEFAULT_MAX_BLOCK_PAYLOAD_BYTES, DEFAULT_MAX_INTER_WORD_GAP_NS, DEFAULT_MAX_WORDS_PER_BLOCK,
     DEFAULT_RESTART_INTERVAL, DataFileHeader, FORMAT_VERSION, RestartEntry, WordBlockHeader,
 };
+pub use presence::{WordPresenceIndex, WordSummaryRecord};
 pub use query::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
     ExactAnnotationWindow, WordPresenceBucket,
