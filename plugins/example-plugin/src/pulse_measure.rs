@@ -182,8 +182,7 @@ impl ProcessNode for PulseMeasureNode {
 #[cfg(test)]
 mod tests {
     use crossbeam_channel::bounded;
-    use dsl::sender::{ChannelMessage, Sender};
-    use dsl::watchdog::Watchdog;
+    use dsl::{ChannelMessage, Sender, Watchdog};
 
     use super::*;
 

@@ -1,29 +1,29 @@
 //! Runtime support for streaming node graphs
 
-pub mod capture;
-pub mod cooperative_manager;
-pub mod derived_index;
+pub(crate) mod capture;
+pub(crate) mod cooperative_manager;
+pub(crate) mod derived_index;
 pub mod derived_word_store;
-pub mod edge_query;
-pub mod errors;
-pub mod events;
-pub mod graph;
-pub mod manager;
-pub mod node;
-pub mod pipeline;
-pub mod ports;
-pub mod protocol;
+pub(crate) mod edge_query;
+pub(crate) mod errors;
+pub(crate) mod events;
+pub(crate) mod graph;
+pub(crate) mod manager;
+pub(crate) mod node;
+pub(crate) mod pipeline;
+pub(crate) mod ports;
+pub(crate) mod protocol;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod raw_block_cache;
-pub mod receiver;
-pub mod sample;
-pub mod sample_kind;
-pub mod scheduler;
-pub mod sender;
-pub mod type_registry;
-pub mod watchdog;
+pub(crate) mod receiver;
+pub(crate) mod sample;
+pub(crate) mod sample_kind;
+pub(crate) mod scheduler;
+pub(crate) mod sender;
+pub(crate) mod type_registry;
+pub(crate) mod watchdog;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod waveform_index;
+pub(crate) mod waveform_index;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod worker_pool;
 
@@ -53,7 +53,8 @@ pub type AppManager = PipelineManager;
 #[cfg(target_arch = "wasm32")]
 pub type AppManager = CooperativeManager;
 pub use node::{ConfigOutcome, ConfigValue, InputProtocolCandidate, NodeConfig, ProcessNode};
-pub use ports::{InputPort, OutputPort, Pipeline, PortDirection, PortSchema, register_type};
+pub use pipeline::Pipeline;
+pub use ports::{InputPort, OutputPort, PortDirection, PortSchema, register_type};
 pub use protocol::ProtocolKind;
 pub use receiver::{Receiver, ReceiverSelector};
 pub use sample::{Sample, SampleBlock};

@@ -36,15 +36,15 @@ impl WordPresenceIndex {
         }
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.levels.first().map_or(0, Vec::len)
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    pub fn total_word_count(&self) -> u64 {
+    pub(crate) fn total_word_count(&self) -> u64 {
         self.total_word_count
     }
 
@@ -111,7 +111,7 @@ impl WordPresenceIndex {
         }
     }
 
-    pub fn presence_window(
+    pub(crate) fn presence_window(
         &self,
         start_ns: u64,
         end_ns: u64,

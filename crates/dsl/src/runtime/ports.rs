@@ -5,14 +5,10 @@
 
 use std::any::TypeId;
 
-// Re-export error types for backward compatibility
-pub use super::errors::{ConnectionError, PortError};
-// Re-export from submodules
-pub use super::pipeline::Pipeline;
 use super::protocol::ProtocolKind;
-pub use super::receiver::Receiver;
+use super::receiver::Receiver;
 use super::sample_kind::SampleKind;
-pub use super::sender::Sender;
+use super::sender::Sender;
 pub use super::type_registry::register_type;
 pub use super::watchdog::{Watchdog, WatchdogHandle};
 

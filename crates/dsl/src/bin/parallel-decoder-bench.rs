@@ -15,13 +15,16 @@ mod native {
 
     use clap::{Parser, ValueEnum};
     use dsl::{
-        CsPolarity, DEFAULT_MAX_WORDS_PER_BLOCK, DEFAULT_RESTART_INTERVAL, DecodedBlockCacheStats,
-        DerivedLaneData, DerivedLanes, DslFileSource, InputPort, LiveStoreConfig, OutputPort,
-        ParallelDecoder, ParallelInputStrategy, PersistentStoreConfig, Pipeline, PortSchema,
-        ProcessNode, ProtocolKind, StrobeMode, ViewerLaneKind, ViewerRetention, ViewerSink,
-        ViewerSinkMetrics, Word, WorkError, WorkResult, configure_decoded_block_cache,
-        decoded_block_cache_stats, reset_decoded_block_cache_stats,
+        CsPolarity, DecodedBlockCacheStats, DerivedLaneData, DerivedLanes, DslFileSource,
+        InputPort, LiveStoreConfig, OutputPort, ParallelDecoder, ParallelInputStrategy,
+        PersistentStoreConfig, Pipeline, PortSchema, ProcessNode, ProtocolKind, StrobeMode,
+        ViewerLaneKind, ViewerRetention, ViewerSink, ViewerSinkMetrics, Word, WorkError,
+        WorkResult, configure_decoded_block_cache, decoded_block_cache_stats,
+        reset_decoded_block_cache_stats,
     };
+
+    const DEFAULT_MAX_WORDS_PER_BLOCK: usize = 32_768;
+    const DEFAULT_RESTART_INTERVAL: usize = 512;
 
     #[derive(Clone, Copy, Debug, ValueEnum)]
     enum BenchMode {

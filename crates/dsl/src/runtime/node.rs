@@ -11,9 +11,6 @@ pub use super::errors::{WorkError, WorkResult};
 // Re-export port types (now defined in ports module)
 pub use super::ports::{InputPort, OutputPort};
 use super::protocol::ProtocolKind;
-// Re-export channel types (now defined in sender/receiver modules)
-pub use super::receiver::Receiver;
-pub use super::sender::Sender;
 
 #[derive(Clone)]
 pub struct InputProtocolCandidate {

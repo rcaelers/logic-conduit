@@ -10,9 +10,11 @@ use web_time::Instant;
 
 use crate::runtime::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 #[cfg(not(target_arch = "wasm32"))]
+use crate::runtime::derived_word_store::codec::DecodedWordBlock;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::derived_word_store::{
-    AnnotationQuery, AnnotationStoreMetadata, DecodedWordBlock, IndexedAnnotationStore,
-    IndexedAnnotationWriter, LiveStoreConfig, LiveStoreMetadata, StoreResult, StoreStatus,
+    AnnotationQuery, AnnotationStoreMetadata, IndexedAnnotationStore, IndexedAnnotationWriter,
+    LiveStoreConfig, LiveStoreMetadata, StoreResult, StoreStatus,
 };
 use crate::runtime::events::{Annotation, Trigger, Word};
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};

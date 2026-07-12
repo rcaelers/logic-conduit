@@ -6,7 +6,7 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 mod cache;
-mod codec;
+pub(crate) mod codec;
 mod crc32c;
 mod format;
 #[cfg(not(target_arch = "wasm32"))]
@@ -19,37 +19,21 @@ mod vlq;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use cache::{
-    DEFAULT_DECODED_BLOCK_CACHE_BYTES, DecodedBlockCacheStats, configure_decoded_block_cache,
-    decoded_block_cache_stats, reset_decoded_block_cache_stats,
-};
-pub use codec::{
-    BlockCodecConfig, DecodedWordBlock, DecodedWordRange, EncodedBlockMetadata, PushResult,
-    WordBlockBuilder, decode_word_block, decode_word_block_range, encode_word_block,
-    find_restart_for_timestamp,
-};
-pub use format::{
-    BLOCK_FLAG_HAS_DURATIONS, BLOCK_HEADER_SIZE, BLOCK_MAGIC, BlockDirectoryEntry,
-    DATA_HEADER_SIZE, DATA_MAGIC, DEFAULT_MAX_BLOCK_PAYLOAD_BYTES, DEFAULT_MAX_INTER_WORD_GAP_NS,
-    DEFAULT_MAX_WORDS_PER_BLOCK, DEFAULT_RESTART_INTERVAL, DataFileHeader, FORMAT_VERSION,
-    RestartEntry, WordBlockHeader,
+    DecodedBlockCacheStats, configure_decoded_block_cache, decoded_block_cache_stats,
+    reset_decoded_block_cache_stats,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use persistent::{
-    PersistentCacheStats, cleanup_cache, clear_cache, clear_cache_entry, default_cache_directory,
-};
-pub use presence::{WordPresenceIndex, WordSummaryRecord};
+pub use persistent::{cleanup_cache, clear_cache, clear_cache_entry, default_cache_directory};
 pub use query::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
     ExactAnnotationWindow, WordPresenceBucket,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use store::{
-    DEFAULT_HOT_TAIL_PUBLISH_INTERVAL, DEFAULT_HOT_TAIL_PUBLISH_WORDS,
-    DEFAULT_MAX_PERSISTENT_CACHE_BYTES, IndexedAnnotationStore, IndexedAnnotationWriter,
-    LiveStoreConfig, LiveStoreMetadata, LiveStoreSnapshot, PersistentStoreConfig, StoreError,
-    StoreResult, StoreStatus,
+    IndexedAnnotationStore, IndexedAnnotationWriter, LiveStoreConfig, PersistentStoreConfig,
+    StoreStatus,
 };
-pub use vlq::{decode_u64 as decode_vlq_u64, encode_u64 as encode_vlq_u64, encoded_len};
+pub(crate) use store::{LiveStoreMetadata, StoreResult};
 
 /// Errors caused by malformed input or a word stream that cannot be encoded.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

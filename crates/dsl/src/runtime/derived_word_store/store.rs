@@ -7,13 +7,20 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use memmap2::{Mmap, MmapOptions};
 
+use super::CodecError;
 use super::cache::{cache_block, cached_block};
-use super::{
-    AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
-    BLOCK_FLAG_HAS_DURATIONS, BlockCodecConfig, BlockDirectoryEntry, CodecError, DATA_HEADER_SIZE,
-    DataFileHeader, DecodedWordBlock, ExactAnnotationWindow, PushResult, WordBlockBuilder,
-    WordPresenceBucket, WordPresenceIndex, WordSummaryRecord, decode_word_block,
+use super::codec::{
+    BlockCodecConfig, DecodedWordBlock, PushResult, WordBlockBuilder, decode_word_block,
     decode_word_block_range,
+};
+use super::format::{
+    BLOCK_FLAG_HAS_DURATIONS, BlockDirectoryEntry, DATA_HEADER_SIZE, DataFileHeader,
+    WordBlockHeader,
+};
+use super::presence::{WordPresenceIndex, WordSummaryRecord};
+use super::query::{
+    AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
+    ExactAnnotationWindow, WordPresenceBucket,
 };
 use crate::runtime::{Annotation, MAX_ANNOTATION_NS, Word, instantaneous_word_end_ns};
 
@@ -685,7 +692,7 @@ impl QueryBlockWords {
 }
 
 fn validate_directory_header(
-    header: super::WordBlockHeader,
+    header: WordBlockHeader,
     entry: BlockDirectoryEntry,
 ) -> StoreResult<()> {
     if header.sequence != entry.sequence
@@ -1539,7 +1546,7 @@ mod tests {
             .write(true)
             .open(store.temp_path())
             .unwrap();
-        let payload_offset = entry.data_offset + super::super::BLOCK_HEADER_SIZE as u64;
+        let payload_offset = entry.data_offset + super::super::format::BLOCK_HEADER_SIZE as u64;
         file.seek(SeekFrom::Start(payload_offset)).unwrap();
         let mut byte = [0];
         file.read_exact(&mut byte).unwrap();

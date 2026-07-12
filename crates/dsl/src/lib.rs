@@ -57,9 +57,7 @@ pub use nodes::{
 };
 // Re-export data types from runtime
 pub use runtime::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
-pub use runtime::derived_word_store::{
-    AnnotationQuery, DEFAULT_MAX_WORDS_PER_BLOCK, DEFAULT_RESTART_INTERVAL, WordPresenceBucket,
-};
+pub use runtime::derived_word_store::{AnnotationQuery, WordPresenceBucket};
 #[cfg(not(target_arch = "wasm32"))]
 pub use runtime::derived_word_store::{
     DecodedBlockCacheStats, configure_decoded_block_cache, decoded_block_cache_stats,
@@ -80,10 +78,12 @@ pub use runtime::{
 pub use runtime::{CaptureIndexProgress, IndexSampler, exact_window_sample_limit};
 // Re-export streaming runtime components
 pub use runtime::{
-    AppManager, ConfigValue, Connection, ConnectionError, DisconnectEvent, GraphBuilder, InputPort,
-    InputSub, NodeConfig, NodeId, NodeSpec, OutputPort, OverflowPolicy, Pipeline, PortDirection,
-    PortError, PortSchema, ProcessNode, ProtocolKind, Scheduler, Watchdog, WorkError, WorkResult,
-    register_type,
+    AppManager, ChannelMessage, ConfigOutcome, ConfigValue, Connection, ConnectionError,
+    CooperativeManager, DisconnectEvent, EdgeQuery, GraphBuilder, InputPort,
+    InputProtocolCandidate, InputSub, NodeConfig, NodeId, NodeSpec, OutputPort, OverflowPolicy,
+    Pipeline, PortDirection, PortError, PortSchema, ProcessNode, ProtocolKind, Receiver,
+    ReceiverSelector, SampleKind, Scheduler, Sender, SharedSenders, StopHandle, Watchdog,
+    WorkError, WorkResult, register_type,
 };
 
 #[derive(thiserror::Error, Debug)]

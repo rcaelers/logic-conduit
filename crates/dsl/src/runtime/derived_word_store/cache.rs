@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use super::DecodedWordBlock;
+use super::codec::DecodedWordBlock;
+use super::format::RestartEntry;
 
 pub const DEFAULT_DECODED_BLOCK_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
@@ -108,7 +109,7 @@ impl DecodedBlockCache {
 fn decoded_block_bytes(block: &DecodedWordBlock) -> usize {
     size_of::<DecodedWordBlock>()
         + block.words.capacity() * size_of::<crate::runtime::Word>()
-        + block.restarts.capacity() * size_of::<super::RestartEntry>()
+        + block.restarts.capacity() * size_of::<RestartEntry>()
 }
 
 fn shared_cache() -> &'static Mutex<DecodedBlockCache> {
@@ -160,7 +161,7 @@ pub(super) fn cache_contains(store_id: u64, sequence: u64) -> bool {
 mod tests {
     use super::*;
     use crate::runtime::Word;
-    use crate::runtime::derived_word_store::WordBlockHeader;
+    use crate::runtime::derived_word_store::format::WordBlockHeader;
 
     fn block(sequence: u64, words: usize) -> Arc<DecodedWordBlock> {
         Arc::new(DecodedWordBlock {

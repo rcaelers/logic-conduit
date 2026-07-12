@@ -1,11 +1,11 @@
 use super::crc32c::block_checksum;
-use super::format::{BLOCK_CHECKSUM_OFFSET, RESTART_ENTRY_SIZE};
-use super::vlq::{decode_u64, encode_u64, encoded_len};
-use super::{
-    BLOCK_HEADER_SIZE, CodecError, CodecResult, DEFAULT_MAX_BLOCK_PAYLOAD_BYTES,
-    DEFAULT_MAX_INTER_WORD_GAP_NS, DEFAULT_MAX_WORDS_PER_BLOCK, DEFAULT_RESTART_INTERVAL,
-    RestartEntry, WordBlockHeader,
+use super::format::{
+    BLOCK_CHECKSUM_OFFSET, BLOCK_FLAG_HAS_DURATIONS, BLOCK_HEADER_SIZE,
+    DEFAULT_MAX_BLOCK_PAYLOAD_BYTES, DEFAULT_MAX_INTER_WORD_GAP_NS, DEFAULT_MAX_WORDS_PER_BLOCK,
+    DEFAULT_RESTART_INTERVAL, RESTART_ENTRY_SIZE, RestartEntry, WordBlockHeader,
 };
+use super::vlq::{decode_u64, encode_u64, encoded_len};
+use super::{CodecError, CodecResult};
 use crate::runtime::Word;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,7 +215,7 @@ pub struct DecodedWordRange {
 /// When restart entries share the requested timestamp, this returns the
 /// first equal entry so decoding cannot skip earlier records at that time.
 /// Otherwise it returns the last entry before the requested timestamp.
-pub fn find_restart_for_timestamp(
+fn find_restart_for_timestamp(
     restarts: &[RestartEntry],
     timestamp_ns: u64,
 ) -> Option<RestartEntry> {
@@ -229,7 +229,7 @@ pub fn find_restart_for_timestamp(
     first_not_less.checked_sub(1).map(|index| restarts[index])
 }
 
-pub fn encode_word_block(
+fn encode_word_block(
     sequence: u64,
     words: &[Word],
     output: &mut Vec<u8>,
@@ -312,7 +312,7 @@ fn encode_word_block_with_interval(
         flags: if duration_count == 0 {
             0
         } else {
-            super::BLOCK_FLAG_HAS_DURATIONS
+            BLOCK_FLAG_HAS_DURATIONS
         },
         sequence,
         first_timestamp_ns: words[0].timestamp_ns,
