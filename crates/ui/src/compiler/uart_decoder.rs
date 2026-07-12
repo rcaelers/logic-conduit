@@ -1,8 +1,7 @@
 //! `UART Decoder` builder.
 
 use dsl::nodes::decoders::{BitOrder, UartParity, UartStopBits};
-use dsl::runtime::ProcessNode;
-use dsl::{Sample, Trigger, Word};
+use dsl::{ProcessNode, Sample, Trigger, Word};
 use node_graph::Socket;
 use serde_json::Value;
 

@@ -1,6 +1,6 @@
-use dsl::nodes::sinks::MAX_ANNOTATION_NS;
 #[cfg(not(target_arch = "wasm32"))]
-use dsl::runtime::derived_word_store::WordPresenceBucket;
+use dsl::WordPresenceBucket;
+use dsl::nodes::sinks::MAX_ANNOTATION_NS;
 use dsl::{Annotation, AnnotationFold, ChunkedMipmap, Sample};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 

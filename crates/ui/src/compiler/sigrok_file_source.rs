@@ -1,7 +1,6 @@
 //! `Sigrok File Source` builder — reads PulseView/sigrok v2 `.sr` captures.
 
-use dsl::Sample;
-use dsl::runtime::ProcessNode;
+use dsl::{ProcessNode, Sample};
 use node_graph::Socket;
 use serde_json::Value;
 

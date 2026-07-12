@@ -1,8 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use dsl::runtime::derived_word_store::{AnnotationQuery, WordPresenceBucket};
-use dsl::{Annotation, DerivedLaneData};
+use dsl::{Annotation, AnnotationQuery, DerivedLaneData, WordPresenceBucket};
 
 use crate::types::AnalyzerLayout;
 use crate::viewer::LogicAnalyzerViewer;
@@ -99,8 +98,10 @@ impl LogicAnalyzerViewer {
 
 #[cfg(test)]
 mod tests {
-    use dsl::runtime::derived_word_store::{IndexedAnnotationWriter, LiveStoreConfig};
-    use dsl::{DerivedLaneData, DerivedLanes, IndexedAnnotationLane, Word};
+    use dsl::{
+        DerivedLaneData, DerivedLanes, IndexedAnnotationLane, IndexedAnnotationWriter,
+        LiveStoreConfig, Word,
+    };
     use egui::{Pos2, Rect};
 
     use super::*;

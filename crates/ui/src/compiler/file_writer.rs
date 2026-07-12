@@ -1,8 +1,7 @@
 //! `File Writer` builder — writes decoded words to a binary file. Native-only:
 //! no filesystem in the browser.
 
-use dsl::runtime::ProcessNode;
-use dsl::{BinaryFileWriter, TextSample, Word, WriteWidth};
+use dsl::{BinaryFileWriter, ProcessNode, TextSample, Word, WriteWidth};
 use node_graph::Socket;
 use serde_json::Value;
 

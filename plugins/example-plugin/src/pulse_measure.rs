@@ -7,7 +7,7 @@
 
 use std::collections::VecDeque;
 
-use dsl::runtime::{
+use dsl::{
     InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, Sample, WorkError, WorkResult,
 };
 use dsl_ui::compiler::{CompileCtx, PortKind, PortValue, ResolvedInputs, RuntimeBuilder};
@@ -182,8 +182,8 @@ impl ProcessNode for PulseMeasureNode {
 #[cfg(test)]
 mod tests {
     use crossbeam_channel::bounded;
-    use dsl::runtime::sender::{ChannelMessage, Sender};
-    use dsl::runtime::watchdog::Watchdog;
+    use dsl::sender::{ChannelMessage, Sender};
+    use dsl::watchdog::Watchdog;
 
     use super::*;
 

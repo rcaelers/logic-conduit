@@ -2,7 +2,7 @@
 //!
 //! [`PortKind`] is how a UI socket maps onto a concrete runtime channel
 //! payload — the compiler-layer analogue of `node_graph::SocketDef` (graph
-//! layer) and `dsl::runtime::register_type::<T>()` (runtime layer). Both of
+//! layer) and `dsl::register_type::<T>()` (runtime layer). Both of
 //! those are open (implement a trait / call a generic fn, no enum to edit);
 //! this module brings `PortKind` in line with them so a new payload type —
 //! including one defined by an out-of-tree plugin crate — never requires

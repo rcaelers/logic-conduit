@@ -1,8 +1,7 @@
 //! `Buffer` builder — see `crates/ui/src/nodes/buffer.rs` and
 //! the buffer policy in `docs/APP_DESIGN.md`.
 
-use dsl::runtime::ProcessNode;
-use dsl::{BufferNode, NumberSample, Sample, SampleBlock, TextSample, Trigger, Word};
+use dsl::{BufferNode, NumberSample, ProcessNode, Sample, SampleBlock, TextSample, Trigger, Word};
 use node_graph::Socket;
 use serde_json::Value;
 

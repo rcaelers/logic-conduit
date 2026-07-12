@@ -1,8 +1,7 @@
 //! `Text File Writer` builder — writes text lines (e.g. `TGCK Recorder`'s
 //! CSV rows) to a file. Native-only: no filesystem in the browser.
 
-use dsl::runtime::ProcessNode;
-use dsl::{TextFileWriter, TextSample};
+use dsl::{ProcessNode, TextFileWriter, TextSample};
 use node_graph::Socket;
 use serde_json::Value;
 

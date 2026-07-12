@@ -1,8 +1,7 @@
 //! `CSV Writer` builder — writes decoded words to a CSV file. Native-only:
 //! no filesystem in the browser.
 
-use dsl::runtime::ProcessNode;
-use dsl::{CsvValueFormat, CsvWordWriter, TextSample, Word};
+use dsl::{CsvValueFormat, CsvWordWriter, ProcessNode, TextSample, Word};
 use node_graph::Socket;
 use serde_json::Value;
 

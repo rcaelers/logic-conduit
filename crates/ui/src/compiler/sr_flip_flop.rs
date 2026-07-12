@@ -1,7 +1,6 @@
 //! `SR Flip-Flop` builder.
 
-use dsl::runtime::ProcessNode;
-use dsl::{Sample, SrLatch, Trigger};
+use dsl::{ProcessNode, Sample, SrLatch, Trigger};
 use node_graph::Socket;
 use serde_json::Value;
 

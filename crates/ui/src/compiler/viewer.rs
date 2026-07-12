@@ -2,10 +2,9 @@
 
 use std::collections::HashMap;
 
-use dsl::runtime::ProcessNode;
 #[cfg(not(target_arch = "wasm32"))]
-use dsl::runtime::derived_word_store::LiveStoreConfig;
-use dsl::{Sample, Trigger, ViewerLaneKind, ViewerSink, Word};
+use dsl::LiveStoreConfig;
+use dsl::{ProcessNode, Sample, Trigger, ViewerLaneKind, ViewerSink, Word};
 use node_graph::Socket;
 use serde_json::Value;
 

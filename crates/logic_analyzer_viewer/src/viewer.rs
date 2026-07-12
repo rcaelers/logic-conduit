@@ -457,7 +457,7 @@ impl LogicAnalyzerViewer {
                     &lane.data,
                     dsl::DerivedLaneData::IndexedAnnotations(indexed)
                         if indexed.status()
-                            == dsl::runtime::derived_word_store::StoreStatus::Live
+                            == dsl::StoreStatus::Live
                 )
             })
         })
@@ -477,9 +477,9 @@ impl LogicAnalyzerViewer {
 #[cfg(test)]
 mod tests {
     #[cfg(not(target_arch = "wasm32"))]
-    use dsl::runtime::derived_word_store::{IndexedAnnotationWriter, LiveStoreConfig};
-    #[cfg(not(target_arch = "wasm32"))]
     use dsl::{DerivedLaneData, DerivedLanes, IndexedAnnotationLane, Word};
+    #[cfg(not(target_arch = "wasm32"))]
+    use dsl::{IndexedAnnotationWriter, LiveStoreConfig};
 
     use super::{ChannelSignal, LogicAnalyzerViewer};
 

@@ -2,8 +2,9 @@
 //! pattern/mask. Works on any decoder's `Word` output, no decoder-specific
 //! knowledge needed (kind negotiation, `docs/APP_DESIGN.md`).
 
-use dsl::runtime::{ConfigValue, NodeConfig, ProcessNode};
-use dsl::{MatchOp, Sample, Trigger, TriggerAt, Word, WordMatcher};
+use dsl::{
+    ConfigValue, MatchOp, NodeConfig, ProcessNode, Sample, Trigger, TriggerAt, Word, WordMatcher,
+};
 use node_graph::Socket;
 use serde_json::Value;
 

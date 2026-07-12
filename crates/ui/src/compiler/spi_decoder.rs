@@ -1,8 +1,7 @@
 //! `SPI Decoder` builder.
 
 use dsl::nodes::decoders::BitOrder;
-use dsl::runtime::ProcessNode;
-use dsl::{CsPolarity, Sample, SpiDecoder, SpiMode, Word};
+use dsl::{CsPolarity, ProcessNode, Sample, SpiDecoder, SpiMode, Word};
 use node_graph::Socket;
 use serde_json::Value;
 

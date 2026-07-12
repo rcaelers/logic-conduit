@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
-use dsl::runtime::derived_word_store::AnnotationQuery;
+use dsl::AnnotationQuery;
 use dsl::{Annotation, DerivedLaneData};
 use egui::{Color32, CursorIcon, FontId, PointerButton, Pos2, Rect, Response, Ui};
 
@@ -403,9 +403,9 @@ pub(crate) fn format_cursor_time(us: f64) -> String {
 mod cursor_tests {
     use dsl::DerivedLanes;
     #[cfg(not(target_arch = "wasm32"))]
-    use dsl::runtime::derived_word_store::{IndexedAnnotationWriter, LiveStoreConfig};
-    #[cfg(not(target_arch = "wasm32"))]
     use dsl::{IndexedAnnotationLane, Word};
+    #[cfg(not(target_arch = "wasm32"))]
+    use dsl::{IndexedAnnotationWriter, LiveStoreConfig};
 
     use super::*;
     use crate::sampling::pulse_measurement_from_window;

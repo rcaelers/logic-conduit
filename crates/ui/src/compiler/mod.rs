@@ -16,11 +16,11 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 #[cfg(not(target_arch = "wasm32"))]
-use dsl::runtime::derived_word_store::PersistentStoreConfig;
-use dsl::runtime::{
-    AppManager, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy, ProcessNode,
+use dsl::PersistentStoreConfig;
+use dsl::{
+    AppManager, DerivedLanes, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy, ProcessNode,
+    SampleBlock, ViewerRetention,
 };
-use dsl::{DerivedLanes, SampleBlock, ViewerRetention};
 use egui::{Color32, Pos2};
 use node_graph::{
     Connection, GraphState, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId, SocketShape,
@@ -841,7 +841,7 @@ fn compiled_node(compiled: &CompiledGraph, id: NodeId) -> &CompiledNode {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn assign_persistent_viewer_caches(compiled: &mut CompiledGraph) {
-    use dsl::runtime::derived_word_store::default_cache_directory;
+    use dsl::default_cache_directory;
 
     let viewer_ids: Vec<_> = compiled
         .nodes
@@ -1082,7 +1082,7 @@ fn hash_field(hasher: &mut blake3::Hasher, bytes: &[u8]) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn prepare_persistent_cache(compiled: &CompiledGraph) {
-    use dsl::runtime::derived_word_store::cleanup_cache;
+    use dsl::cleanup_cache;
 
     let configs: Vec<_> = compiled
         .nodes
@@ -1117,7 +1117,7 @@ fn persistent_execution_graph(
     compiled: &CompiledGraph,
     registry: &BuilderRegistry,
 ) -> (CompiledGraph, bool) {
-    use dsl::runtime::derived_word_store::IndexedAnnotationStore;
+    use dsl::IndexedAnnotationStore;
 
     let mut execution = compiled.clone();
     let mut cached_inputs = HashSet::new();
@@ -1414,7 +1414,7 @@ pub fn start_live(
         let inputs = input_subs(&execution, id, process.as_ref(), &names)
             .map_err(|message| vec![CompileError::on(id, message)])?;
         manager
-            .add_node_deferred(dsl::runtime::NodeSpec {
+            .add_node_deferred(dsl::NodeSpec {
                 name: node.runtime_name.clone(),
                 node: process,
                 inputs,
@@ -1497,7 +1497,7 @@ impl LiveRun {
                     let inputs = input_subs(&new, id, process.as_ref(), &self.names)
                         .map_err(ApplyError::Apply)?;
                     self.manager
-                        .add_node(dsl::runtime::NodeSpec {
+                        .add_node(dsl::NodeSpec {
                             name: node.runtime_name.clone(),
                             node: process,
                             inputs,
@@ -1623,8 +1623,7 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     use dsl::BinaryFileWriter;
-    use dsl::runtime::{ConfigValue, Pipeline};
-    use dsl::{Sample, Trigger, Word};
+    use dsl::{ConfigValue, Pipeline, Sample, Trigger, Word};
     use node_graph::{NodeDef, NodeGraphWidget};
 
     use super::*;
@@ -1917,7 +1916,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn persistent_cache_hit_prunes_decoder_used_only_by_cached_viewer_lane() {
-        use dsl::runtime::derived_word_store::{IndexedAnnotationWriter, LiveStoreConfig};
+        use dsl::{IndexedAnnotationWriter, LiveStoreConfig};
 
         let directory = tempfile::tempdir().unwrap();
         let registry = BuilderRegistry::standard();

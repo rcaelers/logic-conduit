@@ -1,8 +1,7 @@
 //! `UART Demo Source` builder — generates a fixed UART byte sequence
 //! in-memory. Available on every target (no file/USB access needed).
 
-use dsl::Sample;
-use dsl::runtime::ProcessNode;
+use dsl::{ProcessNode, Sample};
 use node_graph::Socket;
 use serde_json::Value;
 

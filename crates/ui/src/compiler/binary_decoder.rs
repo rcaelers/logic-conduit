@@ -1,8 +1,7 @@
 //! `Binary Decoder` builder — parallel-bus word assembly from raw blocks.
 
 use dsl::nodes::decoders::Endianness;
-use dsl::runtime::ProcessNode;
-use dsl::{CsPolarity, ParallelInputStrategy, Sample, SampleBlock, StrobeMode, Word};
+use dsl::{CsPolarity, ParallelInputStrategy, ProcessNode, Sample, SampleBlock, StrobeMode, Word};
 use node_graph::Socket;
 use serde_json::Value;
 

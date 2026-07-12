@@ -822,8 +822,7 @@ impl App {
         let mut ctx = compiler::CompileCtx::default();
         #[cfg(not(target_arch = "wasm32"))]
         {
-            ctx.persistent_cache_directory =
-                Some(dsl::runtime::derived_word_store::default_cache_directory());
+            ctx.persistent_cache_directory = Some(dsl::default_cache_directory());
         }
         self.logic_analyzer
             .set_derived_lanes(ctx.derived_lanes.clone());
@@ -932,7 +931,7 @@ impl App {
         let mut removed_entries = 0usize;
         let mut removed_bytes = 0u64;
         for config in &configs {
-            match dsl::runtime::derived_word_store::clear_cache_entry(config) {
+            match dsl::clear_cache_entry(config) {
                 Ok(stats) => {
                     removed_entries += stats.removed_entries;
                     removed_bytes = removed_bytes.saturating_add(stats.removed_bytes);
@@ -967,8 +966,8 @@ impl App {
             return;
         }
         self.release_derived_data_handles();
-        let directory = dsl::runtime::derived_word_store::default_cache_directory();
-        match dsl::runtime::derived_word_store::clear_cache(&directory) {
+        let directory = dsl::default_cache_directory();
+        match dsl::clear_cache(&directory) {
             Ok(stats) if stats.removed_entries == 0 && stats.removed_bytes == 0 => {
                 self.toasts.info("No derived data caches found");
             }

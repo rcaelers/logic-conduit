@@ -4,7 +4,7 @@
 //! hand: `NodeTypeRegistry::register::<T>()` (generic method),
 //! `BuilderRegistry::insert(name, Box<dyn RuntimeBuilder>)` (named
 //! trait-object insert), and the free function
-//! `dsl::runtime::register_type::<T>()`. [`PluginContext`] wraps all three
+//! `dsl::register_type::<T>()`. [`PluginContext`] wraps all three
 //! behind one object and one consistent, chainable `register_*` naming
 //! scheme.
 //!
@@ -69,7 +69,7 @@ impl<'a> PluginContext<'a> {
     /// module doc); `T: PortValue` here is just the same bound the runtime
     /// registry already requires.
     pub fn register_payload<T: PortValue>(&mut self) -> &mut Self {
-        dsl::runtime::register_type::<T>();
+        dsl::register_type::<T>();
         self
     }
 }

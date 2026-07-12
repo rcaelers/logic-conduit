@@ -14,17 +14,13 @@ mod native {
     use std::time::{Duration, Instant};
 
     use clap::{Parser, ValueEnum};
-    use dsl::runtime::ProtocolKind;
-    use dsl::runtime::derived_word_store::{
-        DEFAULT_MAX_WORDS_PER_BLOCK, DEFAULT_RESTART_INTERVAL, DecodedBlockCacheStats,
-        LiveStoreConfig, PersistentStoreConfig, configure_decoded_block_cache,
-        decoded_block_cache_stats, reset_decoded_block_cache_stats,
-    };
     use dsl::{
-        CsPolarity, DerivedLaneData, DerivedLanes, DslFileSource, InputPort, OutputPort,
-        ParallelDecoder, ParallelInputStrategy, Pipeline, PortSchema, ProcessNode, StrobeMode,
-        ViewerLaneKind, ViewerRetention, ViewerSink, ViewerSinkMetrics, Word, WorkError,
-        WorkResult,
+        CsPolarity, DEFAULT_MAX_WORDS_PER_BLOCK, DEFAULT_RESTART_INTERVAL, DecodedBlockCacheStats,
+        DerivedLaneData, DerivedLanes, DslFileSource, InputPort, LiveStoreConfig, OutputPort,
+        ParallelDecoder, ParallelInputStrategy, PersistentStoreConfig, Pipeline, PortSchema,
+        ProcessNode, ProtocolKind, StrobeMode, ViewerLaneKind, ViewerRetention, ViewerSink,
+        ViewerSinkMetrics, Word, WorkError, WorkResult, configure_decoded_block_cache,
+        decoded_block_cache_stats, reset_decoded_block_cache_stats,
     };
 
     #[derive(Clone, Copy, Debug, ValueEnum)]

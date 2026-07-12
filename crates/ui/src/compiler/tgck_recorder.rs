@@ -3,8 +3,7 @@
 //! `Text File Writer` downstream to actually persist anything; available on
 //! every target.
 
-use dsl::runtime::ProcessNode;
-use dsl::{Sample, TextSample, Word};
+use dsl::{ProcessNode, Sample, TextSample, Word};
 use node_graph::Socket;
 use serde_json::Value;
 
