@@ -92,7 +92,8 @@ pub struct ParallelDecoder {
 
     /// Current enable state from edge-based enable_signal
     current_enable_value: bool,
-    /// Position up to which the current enable value is known to be valid
+    /// Indexed-path timestamp up to which the current enable value is known.
+    /// Streamed enable handling peeks directly at the next queued sample.
     next_enable_change_position: u64,
 
     last_strobe_value: bool,
@@ -114,11 +115,10 @@ pub struct ParallelDecoder {
 
     /// Current aligned packed blocks and cursor for bounded streamed work.
     stream_blocks: StreamBlockState,
-    /// Next fragment expected by the ordered stream merge. Sequential in
-    /// Step 4; Step 5's reorder buffer will preserve this invariant.
+    /// Next fragment expected by the ordered stream merge.
     next_stream_merge_sequence: u64,
     /// Maximum number of packed scan jobs this decoder may execute at once.
-    /// A value of one keeps the Step 4 sequential path.
+    /// A value of one selects the sequential path.
     parallel_workers: usize,
     parallel_metrics: ParallelDecoderMetrics,
 }
@@ -486,8 +486,6 @@ struct DecodeFragmentBuffers {
 #[derive(Debug)]
 struct DecodeFragment {
     sequence: u64,
-    start_position: u64,
-    end_position: u64,
     timestamp_step: u64,
     boundary: Option<FragmentBoundary>,
     last_strobe_value: bool,
@@ -580,12 +578,10 @@ fn fragment_buffer_bytes(buffers: &DecodeFragmentBuffers) -> usize {
         .saturating_add(buffers.reset_before.capacity().div_ceil(u8::BITS as usize))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn enabled_ranges_for_window(
     enable_query: Option<&Arc<dyn EdgeQuery>>,
     enable_input: &mut Option<Receiver<'_, Sample>>,
     current_enable_value: &mut bool,
-    next_enable_change_position: &mut u64,
     block_start_position: u64,
     window_start: usize,
     window_end: usize,
@@ -637,7 +633,6 @@ fn enabled_ranges_for_window(
 
     let Some(enable) = enable_input else {
         *current_enable_value = true;
-        *next_enable_change_position = u64::MAX;
         return Ok(vec![EnabledRange {
             start: window_start,
             end: window_end,
@@ -672,8 +667,7 @@ fn enabled_ranges_for_window(
                 }
                 cursor = cursor.max(transition_position);
             }
-            Ok(next_edge) => {
-                *next_enable_change_position = next_edge.start_time_ns;
+            Ok(_) => {
                 if *current_enable_value && cursor < absolute_end {
                     ranges.push(EnabledRange {
                         start: window_start + (cursor - absolute_start) as usize,
@@ -684,7 +678,6 @@ fn enabled_ranges_for_window(
                 break;
             }
             Err(WorkError::Shutdown) => {
-                *next_enable_change_position = u64::MAX;
                 if *current_enable_value && cursor < absolute_end {
                     ranges.push(EnabledRange {
                         start: window_start + (cursor - absolute_start) as usize,
@@ -788,8 +781,6 @@ fn scan_stream_fragment(
 
     DecodeFragment {
         sequence,
-        start_position: strobe.start_position + window_start as u64,
-        end_position: strobe.start_position + window_end as u64,
         timestamp_step: strobe.timestamp_step,
         boundary,
         last_strobe_value: packed_bit(&strobe.data, window_end - 1),
@@ -1372,7 +1363,6 @@ impl ParallelDecoder {
             .get(enable_port_idx)
             .and_then(|port| port.edge_query());
         let mut current_enable_value = self.current_enable_value;
-        let mut next_enable_change_position = self.next_enable_change_position;
         let mut enable_input = if enable_query.is_some() {
             None
         } else {
@@ -1382,7 +1372,6 @@ impl ParallelDecoder {
         };
         if enable_query.is_none() && enable_input.is_none() {
             current_enable_value = true;
-            next_enable_change_position = u64::MAX;
         }
 
         // Acquire the next aligned block set only after the previous set is
@@ -1406,7 +1395,6 @@ impl ParallelDecoder {
             enable_query.as_ref(),
             &mut enable_input,
             &mut current_enable_value,
-            &mut next_enable_change_position,
             strobe_block.start_position,
             window_start,
             window_end,
@@ -1458,7 +1446,6 @@ impl ParallelDecoder {
         // Save state back
         self.last_strobe_value = last_strobe_value;
         self.current_enable_value = current_enable_value;
-        self.next_enable_change_position = next_enable_change_position;
         self.total_words_emitted += words_emitted;
         self.assembly_value = assembly.value;
         self.assembly_cycles = assembly.cycles;
@@ -1483,7 +1470,6 @@ impl ParallelDecoder {
                 "[{}] Stream window {} done: {} words this window, {} total",
                 self.name, fragment.sequence, words_emitted, self.total_words_emitted
             );
-            debug_assert!(fragment.start_position < fragment.end_position);
         }
 
         Ok(words_emitted as usize)
@@ -1532,7 +1518,6 @@ impl ParallelDecoder {
             .get(enable_port_idx)
             .and_then(|port| port.edge_query());
         let mut current_enable_value = self.current_enable_value;
-        let mut next_enable_change_position = self.next_enable_change_position;
         let mut enable_input = if enable_query.is_some() {
             None
         } else {
@@ -1542,7 +1527,6 @@ impl ParallelDecoder {
         };
         if enable_query.is_none() && enable_input.is_none() {
             current_enable_value = true;
-            next_enable_change_position = u64::MAX;
         }
 
         let max_outstanding = workers * 2;
@@ -1583,7 +1567,6 @@ impl ParallelDecoder {
                 enable_query.as_ref(),
                 &mut enable_input,
                 &mut current_enable_value,
-                &mut next_enable_change_position,
                 strobe.start_position,
                 window_start,
                 window_end,
@@ -1677,7 +1660,6 @@ impl ParallelDecoder {
         self.next_stream_merge_sequence += 1;
         self.last_strobe_value = last_strobe_value;
         self.current_enable_value = current_enable_value;
-        self.next_enable_change_position = next_enable_change_position;
         self.total_words_emitted += words_emitted;
         self.assembly_value = assembly.value;
         self.assembly_cycles = assembly.cycles;
@@ -2664,19 +2646,9 @@ mod tests {
         let mut buffer = VecDeque::new();
         let mut enable_input = input_port.get::<Sample>(&mut buffer);
         let mut current = false;
-        let mut next_change = 0;
 
-        let first = enabled_ranges_for_window(
-            None,
-            &mut enable_input,
-            &mut current,
-            &mut next_change,
-            0,
-            0,
-            8,
-            1,
-        )
-        .unwrap();
+        let first =
+            enabled_ranges_for_window(None, &mut enable_input, &mut current, 0, 0, 8, 1).unwrap();
         assert_eq!(
             first,
             vec![EnabledRange {
@@ -2685,19 +2657,9 @@ mod tests {
                 reset_before: true,
             }]
         );
-        assert_eq!(next_change, 8);
 
-        let second = enabled_ranges_for_window(
-            None,
-            &mut enable_input,
-            &mut current,
-            &mut next_change,
-            0,
-            8,
-            16,
-            1,
-        )
-        .unwrap();
+        let second =
+            enabled_ranges_for_window(None, &mut enable_input, &mut current, 0, 8, 16, 1).unwrap();
         assert_eq!(
             second,
             vec![EnabledRange {
@@ -2706,7 +2668,6 @@ mod tests {
                 reset_before: true,
             }]
         );
-        assert_eq!(next_change, u64::MAX);
     }
 
     #[test]

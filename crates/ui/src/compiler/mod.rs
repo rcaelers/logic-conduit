@@ -694,7 +694,7 @@ fn topo_order(compiled: &CompiledGraph) -> Vec<NodeId> {
     order
 }
 
-fn compiled_node<'a>(compiled: &'a CompiledGraph, id: NodeId) -> &'a CompiledNode {
+fn compiled_node(compiled: &CompiledGraph, id: NodeId) -> &CompiledNode {
     compiled
         .nodes
         .iter()
@@ -826,9 +826,10 @@ fn diff(
         }
         for edge in new.edges.iter().filter(|edge| edge.to.0 == id) {
             if edge.kind == PortKind::of::<SampleBlock>() {
-                return Err(format!(
+                return Err(
                     "new node consumes block channels; block subscriptions cannot join mid-stream"
-                ));
+                        .to_string(),
+                );
             }
             if is_source(new, edge.from.0) {
                 return Err(

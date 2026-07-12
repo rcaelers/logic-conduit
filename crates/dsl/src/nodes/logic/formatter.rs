@@ -199,7 +199,7 @@ impl ProcessNode for TextFormatter {
             .heads
             .iter()
             .enumerate()
-            .filter_map(|(index, head)| head.clone().map(|sample| (index, sample)))
+            .filter_map(|(index, head)| (*head).map(|sample| (index, sample)))
             .min_by_key(|(index, sample)| (sample.start_time_ns, *index));
         let Some((index, sample)) = next else {
             return Err(WorkError::Shutdown);

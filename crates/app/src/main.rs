@@ -87,6 +87,16 @@ mod macos_menu {
             fn quit_application(&self, _sender: &AnyObject) {
                 dispatch_native_menu_command(NativeMenuCommand::Quit);
             }
+
+            #[unsafe(method(runPipeline:))]
+            fn run_pipeline(&self, _sender: &AnyObject) {
+                dispatch_native_menu_command(NativeMenuCommand::Run);
+            }
+
+            #[unsafe(method(stopPipeline:))]
+            fn stop_pipeline(&self, _sender: &AnyObject) {
+                dispatch_native_menu_command(NativeMenuCommand::Stop);
+            }
         }
     );
 
@@ -239,6 +249,27 @@ mod macos_menu {
         }
         file_menu_item.setSubmenu(Some(&file_menu));
         menu_bar.addItem(&file_menu_item);
+
+        let pipeline_menu_item = NSMenuItem::new(mtm);
+        let pipeline_menu = NSMenu::initWithTitle(mtm.alloc(), ns_string!("Pipeline"));
+        unsafe {
+            pipeline_menu.addItem(&menu_item(
+                mtm,
+                ns_string!("Run"),
+                sel!(runPipeline:),
+                ns_string!("r"),
+                &handler,
+            ));
+            pipeline_menu.addItem(&menu_item(
+                mtm,
+                ns_string!("Stop"),
+                sel!(stopPipeline:),
+                ns_string!("."),
+                &handler,
+            ));
+        }
+        pipeline_menu_item.setSubmenu(Some(&pipeline_menu));
+        menu_bar.addItem(&pipeline_menu_item);
 
         if let Some(application_menu) = menu_bar.itemAtIndex(0).and_then(|item| item.submenu()) {
             for index in 0..application_menu.numberOfItems() {

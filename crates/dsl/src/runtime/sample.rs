@@ -110,7 +110,7 @@ impl SampleBlock {
     /// representation and therefore return `None`.
     pub fn sub_block(&self, sample_offset: usize, num_samples: usize) -> Option<Self> {
         let sample_end = sample_offset.checked_add(num_samples)?;
-        if sample_offset % 8 != 0 || sample_end > self.num_samples {
+        if !sample_offset.is_multiple_of(8) || sample_end > self.num_samples {
             return None;
         }
         let byte_offset = sample_offset / 8;

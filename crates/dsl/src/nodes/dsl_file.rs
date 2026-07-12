@@ -223,7 +223,6 @@ impl CaptureSource for DslCaptureReader {
 impl BlockCaptureSource for DslCaptureReader {
     fn read_packed_block(&mut self, channel: usize, block: u64) -> Result<BlockData> {
         self.read_block_cached((channel, block))
-            .map(BlockData::from)
     }
 }
 

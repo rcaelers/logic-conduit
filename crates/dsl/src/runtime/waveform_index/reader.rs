@@ -433,7 +433,7 @@ where
                 channel,
                 start_sample,
                 end_sample,
-                target_points as usize,
+                target_points,
                 group_samples,
             )?);
         }

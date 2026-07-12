@@ -93,6 +93,8 @@ pub enum NativeMenuCommand {
     Save,
     SaveAs,
     Quit,
+    Run,
+    Stop,
 }
 
 #[cfg(target_os = "macos")]
@@ -584,6 +586,8 @@ impl App {
             egui::Key::S,
         );
         let quit_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Q);
+        let run_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::R);
+        let stop_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Period);
         let mut command = if ui.input_mut(|input| input.consume_shortcut(&new_shortcut)) {
             Some(FileCommand::New)
         } else if ui.input_mut(|input| input.consume_shortcut(&load_shortcut)) {
@@ -597,6 +601,15 @@ impl App {
         } else {
             None
         };
+        // Not routed through `command`/`execute_file_command` like the File
+        // items above — Run/Stop are self-contained and idempotent
+        // (`run_command`/`stop_command` no-op when they don't apply), so
+        // there's nothing to defer.
+        if ui.input_mut(|input| input.consume_shortcut(&run_shortcut)) {
+            self.run_command();
+        } else if ui.input_mut(|input| input.consume_shortcut(&stop_shortcut)) {
+            self.stop_command();
+        }
 
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
@@ -682,6 +695,28 @@ impl App {
                     ui.close();
                 }
             });
+            ui.menu_button("Pipeline", |ui| {
+                if ui
+                    .add(
+                        egui::Button::new("Run")
+                            .shortcut_text(ui.ctx().format_shortcut(&run_shortcut)),
+                    )
+                    .clicked()
+                {
+                    self.run_command();
+                    ui.close();
+                }
+                if ui
+                    .add(
+                        egui::Button::new("Stop")
+                            .shortcut_text(ui.ctx().format_shortcut(&stop_shortcut)),
+                    )
+                    .clicked()
+                {
+                    self.stop_command();
+                    ui.close();
+                }
+            });
             ui.menu_button("Help", |ui| {
                 if ui.button("About DSL Pipeline Editor").clicked() {
                     self.about.open();
@@ -735,6 +770,33 @@ impl App {
                 self.run = Some(run);
             }
             Err(errors) => self.report_compile_errors(&errors),
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        self.run.as_ref().is_some_and(|run| !run.is_finished())
+    }
+
+    fn is_stopping(&self) -> bool {
+        self.run.as_ref().is_some_and(|run| run.is_stopping())
+    }
+
+    /// Run/Stop menu items and their `Cmd+R`/`Cmd+.` accelerators (Phase
+    /// 5.3) — guarded the same way the toolbar's own Run/Stop buttons
+    /// already are (only one is ever shown at a time), so triggering either
+    /// while it doesn't apply (Run while already running, Stop while not)
+    /// is a safe no-op rather than double-starting or double-stopping.
+    fn run_command(&mut self) {
+        if !self.is_running() {
+            self.start_run();
+        }
+    }
+
+    fn stop_command(&mut self) {
+        if self.is_running() && !self.is_stopping()
+            && let Some(run) = &mut self.run
+        {
+            run.stop();
         }
     }
 
@@ -818,24 +880,22 @@ impl App {
         self.sync_run(ui.ctx());
         ui.horizontal(|ui| {
             ui.add_space(6.0);
-            let running = self.run.as_ref().is_some_and(|run| !run.is_finished());
-            let stopping = self.run.as_ref().is_some_and(|run| run.is_stopping());
+            let running = self.is_running();
+            let stopping = self.is_stopping();
             if running && stopping {
                 // Wind-down signalled; threads are finishing their current
                 // work. Nothing to click — is_finished() flips shortly.
                 ui.spinner();
                 ui.label("Stopping…");
             } else if running {
-                if ui.button("⏹ Stop").clicked()
-                    && let Some(run) = &mut self.run
-                {
-                    run.stop();
+                if ui.button("⏹ Stop").clicked() {
+                    self.stop_command();
                 }
                 ui.spinner();
                 ui.label("Live");
             } else {
                 if ui.button("▶ Run").clicked() {
-                    self.start_run();
+                    self.run_command();
                 }
                 if self.run.is_some() {
                     ui.label("Finished");
@@ -1020,6 +1080,14 @@ impl eframe::App for App {
             let command = match command {
                 NativeMenuCommand::About => {
                     self.about.open();
+                    continue;
+                }
+                NativeMenuCommand::Run => {
+                    self.run_command();
+                    continue;
+                }
+                NativeMenuCommand::Stop => {
+                    self.stop_command();
                     continue;
                 }
                 NativeMenuCommand::New => FileCommand::New,

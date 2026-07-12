@@ -368,7 +368,7 @@ impl NodeGraphWidget {
         tooltip_row(
             ui,
             "Supports",
-            &self.socket_supported_types(socket_id, socket),
+            self.socket_supported_types(socket_id, socket),
         );
 
         let connections = self.connected_socket_labels(socket_id);

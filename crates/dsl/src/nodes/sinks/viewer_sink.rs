@@ -78,16 +78,11 @@ pub const DEFAULT_VIEWER_MAX_ENTRIES: usize = 1_000_000;
 /// lets its `Block` overflow policy engage and slow the producer down.
 const DRAIN_BATCH_SIZE: usize = 65_536;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ViewerRetention {
+    #[default]
     Unlimited,
     MaxEntries(usize),
-}
-
-impl Default for ViewerRetention {
-    fn default() -> Self {
-        Self::Unlimited
-    }
 }
 
 impl ViewerRetention {

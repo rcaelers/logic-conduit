@@ -261,8 +261,8 @@ impl ProcessNode for UartDecoder {
             if check_parity {
                 let ones = value.count_ones() as usize + usize::from(parity_bit);
                 let ok = match parity {
-                    UartParity::Odd => ones % 2 == 1,
-                    UartParity::Even => ones % 2 == 0,
+                    UartParity::Odd => !ones.is_multiple_of(2),
+                    UartParity::Even => ones.is_multiple_of(2),
                     UartParity::Mark => parity_bit,
                     UartParity::Space => !parity_bit,
                     UartParity::None => true,

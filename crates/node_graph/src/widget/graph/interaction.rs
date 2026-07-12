@@ -459,18 +459,18 @@ impl NodeGraphWidget {
                 self.select_node(id, ctrl);
                 return InteractionState::Idle;
             }
-            if responses.header.drag_started() || responses.body.drag_started() {
-                if let Some(node) = self.graph.nodes.get(&id) {
-                    let node_pos = node.pos.to_vec2();
-                    if !node.selected || ctrl {
-                        self.select_node(id, ctrl);
-                    }
-                    self.push_undo_snapshot();
-                    return InteractionState::DraggingNode {
-                        node_id: id,
-                        offset: pc.to_vec2() - node_pos,
-                    };
+            if (responses.header.drag_started() || responses.body.drag_started())
+                && let Some(node) = self.graph.nodes.get(&id)
+            {
+                let node_pos = node.pos.to_vec2();
+                if !node.selected || ctrl {
+                    self.select_node(id, ctrl);
                 }
+                self.push_undo_snapshot();
+                return InteractionState::DraggingNode {
+                    node_id: id,
+                    offset: pc.to_vec2() - node_pos,
+                };
             }
         }
 
@@ -1593,13 +1593,11 @@ impl NodeGraphWidget {
         if matches!(self.interaction_state, InteractionState::Idle)
             && let Some(minimap) = &responses.minimap
             && let Some(pp) = minimap.response.hover_pos()
+            && (minimap.response.drag_started() || minimap.response.dragged())
         {
-            if minimap.response.drag_started() || minimap.response.dragged() {
-                let canvas_pos = minimap.info.mini_to_canvas(pp);
-                self.view.pan =
-                    (canvas_rect.center() - origin) - canvas_pos.to_vec2() * self.view.zoom;
-                return;
-            }
+            let canvas_pos = minimap.info.mini_to_canvas(pp);
+            self.view.pan = (canvas_rect.center() - origin) - canvas_pos.to_vec2() * self.view.zoom;
+            return;
         }
 
         if let Some(pp) = pointer
