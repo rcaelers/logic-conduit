@@ -52,6 +52,21 @@ impl WordBlockBuilder {
         if config.restart_interval == 0 {
             return Err(CodecError::InvalidRestartInterval);
         }
+        if config.max_words == 0 {
+            return Err(CodecError::InvalidConfiguration(
+                "max_words must be greater than zero",
+            ));
+        }
+        if config.max_words > u32::MAX as usize {
+            return Err(CodecError::InvalidConfiguration(
+                "max_words must fit in u32",
+            ));
+        }
+        if config.max_payload_bytes == 0 {
+            return Err(CodecError::InvalidConfiguration(
+                "max_payload_bytes must be greater than zero",
+            ));
+        }
         Ok(Self {
             config,
             words: Vec::with_capacity(config.max_words.min(DEFAULT_MAX_WORDS_PER_BLOCK)),

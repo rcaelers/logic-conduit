@@ -137,6 +137,19 @@ pub struct RestartEntry {
     pub record_index: u32,
 }
 
+/// One fully written block published by the live store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockDirectoryEntry {
+    pub sequence: u64,
+    pub first_timestamp_ns: u64,
+    pub last_timestamp_ns: u64,
+    pub data_offset: u64,
+    pub block_len: u32,
+    pub word_count: u32,
+    pub value_bytes: u8,
+    pub flags: u8,
+}
+
 impl RestartEntry {
     pub(super) fn append_to(self, output: &mut Vec<u8>) {
         output.extend_from_slice(&self.timestamp_ns.to_le_bytes());
