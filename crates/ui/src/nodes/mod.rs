@@ -21,6 +21,8 @@ use node_graph::{NodeDef, NodeTypeRegistry, SocketDef, SocketShape};
 mod binary_decoder;
 mod buffer;
 mod counter;
+#[cfg(not(target_arch = "wasm32"))]
+mod csv_writer;
 mod dslogic_u3pro16;
 mod file_source;
 mod file_writer;
@@ -40,6 +42,8 @@ mod word_matcher;
 pub use binary_decoder::{BinaryDecoder, BinaryDecoderState};
 pub use buffer::{Buffer, BufferState};
 pub use counter::{Counter, CounterState};
+#[cfg(not(target_arch = "wasm32"))]
+pub use csv_writer::{CsvWriter, CsvWriterState};
 pub use dslogic_u3pro16::DsLogicU3Pro16;
 pub use file_source::DslFileSource;
 #[cfg(not(target_arch = "wasm32"))]
@@ -201,6 +205,8 @@ pub fn build_registry() -> NodeTypeRegistry {
     registry.register::<FileWriter>();
     #[cfg(not(target_arch = "wasm32"))]
     registry.register::<TextFileWriter>();
+    #[cfg(not(target_arch = "wasm32"))]
+    registry.register::<CsvWriter>();
     registry.register::<TgckRecorder>();
     registry.register::<Viewer>();
     registry
@@ -457,6 +463,44 @@ pub fn dsl_file_source_path(graph: &node_graph::GraphState) -> Option<String> {
 mod tests {
     use super::*;
     use node_graph::NodeGraphWidget;
+
+    #[test]
+    fn checked_in_spi_decode_pipeline_lowers_cleanly() {
+        use crate::compiler::{BuilderRegistry, lower};
+
+        let saved: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../graphs/spi_decode_pipeline.json"
+        ))
+        .expect("checked-in graph should be valid JSON");
+        let graph: node_graph::GraphState =
+            serde_json::from_value(saved).expect("checked-in graph should deserialize");
+
+        let mut widget = NodeGraphWidget::new(build_registry());
+        widget.set_graph(graph);
+
+        let registry = BuilderRegistry::standard();
+        let compiled = lower(widget.graph(), &registry).expect("graph should lower cleanly");
+        assert_eq!(compiled.nodes.len(), 4);
+    }
+
+    #[test]
+    fn checked_in_spi_graph_decode_pipeline_lowers_cleanly() {
+        use crate::compiler::{BuilderRegistry, lower};
+
+        let saved: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../graphs/spi_graph_decode_pipeline.json"
+        ))
+        .expect("checked-in graph should be valid JSON");
+        let graph: node_graph::GraphState =
+            serde_json::from_value(saved).expect("checked-in graph should deserialize");
+
+        let mut widget = NodeGraphWidget::new(build_registry());
+        widget.set_graph(graph);
+
+        let registry = BuilderRegistry::standard();
+        let compiled = lower(widget.graph(), &registry).expect("graph should lower cleanly");
+        assert_eq!(compiled.nodes.len(), 9);
+    }
 
     #[test]
     fn startup_graph_builds_with_compatible_wiring() {

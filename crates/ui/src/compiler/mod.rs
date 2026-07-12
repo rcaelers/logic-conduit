@@ -27,6 +27,8 @@ mod binary_decoder;
 mod buffer;
 mod counter;
 #[cfg(not(target_arch = "wasm32"))]
+mod csv_writer;
+#[cfg(not(target_arch = "wasm32"))]
 mod file_source;
 #[cfg(not(target_arch = "wasm32"))]
 mod file_writer;
@@ -237,6 +239,8 @@ impl BuilderRegistry {
             "Text File Writer".into(),
             Box::new(text_file_writer::TextFileWriterBuilder),
         );
+        #[cfg(not(target_arch = "wasm32"))]
+        builders.insert("CSV Writer".into(), Box::new(csv_writer::CsvWriterBuilder));
         builders.insert(
             "TGCK Recorder".into(),
             Box::new(tgck_recorder::TgckRecorderBuilder),
