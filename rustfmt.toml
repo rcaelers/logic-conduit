@@ -1,0 +1,7 @@
+# Keep import sections authored by developers and sort imports within each
+# section.  This lets us maintain separate groups for std/core, third-party
+# crates, workspace crates, and imports from the current crate.
+edition = "2024"
+reorder_imports = true
+group_imports = "Preserve"
+imports_granularity = "Preserve"
