@@ -1,8 +1,7 @@
 mod channels;
-mod derived;
+pub(crate) mod derived;
 mod measurement;
 
-pub(crate) use derived::annotation_box_end;
 use dsl::{DerivedLaneData, LaneSummary};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, vec2};
 
