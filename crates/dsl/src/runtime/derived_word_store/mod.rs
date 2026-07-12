@@ -7,33 +7,41 @@
 mod backend;
 #[cfg(not(target_arch = "wasm32"))]
 mod cache;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod codec;
+mod config;
+#[cfg(not(target_arch = "wasm32"))]
 mod crc32c;
+#[cfg(not(target_arch = "wasm32"))]
 mod format;
 #[cfg(not(target_arch = "wasm32"))]
 mod persistent;
+#[cfg(not(target_arch = "wasm32"))]
 mod presence;
 mod query;
 #[cfg_attr(target_arch = "wasm32", path = "store_wasm.rs")]
 mod store;
+#[cfg(not(target_arch = "wasm32"))]
 mod vlq;
 
+pub(crate) use backend::{AnnotationStoreBackend, AnnotationStoreWriterBackend};
 #[cfg(not(target_arch = "wasm32"))]
 pub use cache::{
     DecodedBlockCacheStats, configure_decoded_block_cache, decoded_block_cache_stats,
     reset_decoded_block_cache_stats,
 };
+pub use config::BlockCodecConfig;
 #[cfg(not(target_arch = "wasm32"))]
 pub use persistent::{cleanup_cache, clear_cache, clear_cache_entry, default_cache_directory};
 pub use query::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
     ExactAnnotationWindow, WordPresenceBucket,
 };
+pub(crate) use store::LiveStoreMetadata;
 pub use store::{
     IndexedAnnotationStore, IndexedAnnotationWriter, LiveStoreConfig, PersistentStoreConfig,
-    StoreStatus,
+    StoreResult, StoreStatus,
 };
-pub(crate) use store::{LiveStoreMetadata, StoreResult};
 
 /// Errors caused by malformed input or a word stream that cannot be encoded.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

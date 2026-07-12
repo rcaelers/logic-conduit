@@ -7,7 +7,6 @@ use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, StrokeKi
 
 use crate::cursor::{cursor_color, cursor_flag_geometry, cursor_flag_label};
 use crate::format::{badge_text_color, format_duration, format_time, nice_step};
-#[cfg(not(target_arch = "wasm32"))]
 use crate::indexed_annotations::IndexedAnnotationSamples;
 use crate::types::{AnalyzerLayout, RowKey};
 use crate::viewer::LogicAnalyzerViewer;
@@ -292,7 +291,6 @@ impl LogicAnalyzerViewer {
                                 lane.word_display_format.as_deref(),
                             );
                         }
-                        #[cfg(not(target_arch = "wasm32"))]
                         DerivedLaneData::IndexedAnnotations(_) => {
                             let Some(cached) = self.indexed_annotation_cache.get(name) else {
                                 continue;

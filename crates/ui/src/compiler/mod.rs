@@ -15,11 +15,9 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-#[cfg(not(target_arch = "wasm32"))]
-use dsl::PersistentStoreConfig;
 use dsl::{
-    AppManager, DerivedLanes, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy, ProcessNode,
-    SampleBlock, ViewerRetention,
+    AppManager, DerivedLanes, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy,
+    PersistentStoreConfig, ProcessNode, SampleBlock, ViewerRetention,
 };
 use egui::{Color32, Pos2};
 use node_graph::{
@@ -94,9 +92,7 @@ pub struct CompileCtx {
     /// their complete timeline; continuous sources can explicitly choose a
     /// bounded rolling window.
     pub viewer_retention: ViewerRetention,
-    #[cfg(not(target_arch = "wasm32"))]
     pub viewer_word_caches: Vec<Option<PersistentStoreConfig>>,
-    #[cfg(not(target_arch = "wasm32"))]
     pub persistent_cache_directory: Option<std::path::PathBuf>,
 }
 
@@ -318,7 +314,6 @@ pub struct CompiledNode {
     /// Pipeline node name: `n{id}_{title_slug}`.
     pub runtime_name: String,
     pub resolved: ResolvedInputs,
-    #[cfg(not(target_arch = "wasm32"))]
     viewer_word_caches: Vec<Option<PersistentStoreConfig>>,
 }
 
@@ -760,7 +755,6 @@ pub fn lower(
                 state: node.state.clone(),
                 runtime_name: runtime_name(node),
                 resolved: resolved.remove(&id).unwrap_or_default(),
-                #[cfg(not(target_arch = "wasm32"))]
                 viewer_word_caches: Vec::new(),
             }
         })
@@ -1369,7 +1363,6 @@ pub struct LiveRun {
     /// threads may still be finishing their current `work()` call.
     stop_requested: bool,
     cache_pruned: bool,
-    #[cfg(not(target_arch = "wasm32"))]
     persistent_cache_directory: Option<std::path::PathBuf>,
 }
 
@@ -1404,10 +1397,7 @@ pub fn start_live(
                 format!("unknown builder '{}'", node.builder),
             )]
         })?;
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            ctx.viewer_word_caches.clone_from(&node.viewer_word_caches);
-        }
+        ctx.viewer_word_caches.clone_from(&node.viewer_word_caches);
         let process = builder
             .build(&node.runtime_name, &node.state, &node.resolved, ctx)
             .map_err(|message| vec![CompileError::on(id, message)])?;
@@ -1435,7 +1425,6 @@ pub fn start_live(
         lanes: ctx.derived_lanes.clone(),
         stop_requested: false,
         cache_pruned,
-        #[cfg(not(target_arch = "wasm32"))]
         persistent_cache_directory: ctx.persistent_cache_directory.clone(),
     })
 }
@@ -1470,9 +1459,7 @@ impl LiveRun {
         let mut ctx = CompileCtx {
             derived_lanes: self.lanes.clone(),
             viewer_retention: new.viewer_retention,
-            #[cfg(not(target_arch = "wasm32"))]
             viewer_word_caches: Vec::new(),
-            #[cfg(not(target_arch = "wasm32"))]
             persistent_cache_directory: self.persistent_cache_directory.clone(),
         };
         let mut summary = ApplySummary::default();
@@ -1489,7 +1476,6 @@ impl LiveRun {
                     let builder = registry.get(&node.builder).ok_or_else(|| {
                         ApplyError::Apply(format!("no builder '{}'", node.builder))
                     })?;
-                    #[cfg(not(target_arch = "wasm32"))]
                     ctx.viewer_word_caches.clone_from(&node.viewer_word_caches);
                     let process = builder
                         .build(&node.runtime_name, &node.state, &node.resolved, &mut ctx)
@@ -1526,7 +1512,6 @@ impl LiveRun {
                     let builder = registry.get(&node.builder).ok_or_else(|| {
                         ApplyError::Apply(format!("no builder '{}'", node.builder))
                     })?;
-                    #[cfg(not(target_arch = "wasm32"))]
                     ctx.viewer_word_caches.clone_from(&node.viewer_word_caches);
                     let process = builder
                         .build(&name, &node.state, &node.resolved, &mut ctx)

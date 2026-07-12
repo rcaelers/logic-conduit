@@ -58,8 +58,8 @@ pub use nodes::{
 // Re-export data types from runtime
 pub use runtime::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 pub use runtime::derived_word_store::{
-    AnnotationQuery, IndexedAnnotationStore, IndexedAnnotationWriter, LiveStoreConfig,
-    PersistentStoreConfig, StoreStatus, WordPresenceBucket,
+    AnnotationQuery, BlockCodecConfig, IndexedAnnotationStore, IndexedAnnotationWriter,
+    LiveStoreConfig, PersistentStoreConfig, StoreStatus, WordPresenceBucket,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use runtime::derived_word_store::{

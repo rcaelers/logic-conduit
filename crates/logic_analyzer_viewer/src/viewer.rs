@@ -10,7 +10,6 @@ use dsl::{CaptureIndex, DerivedLanes};
 use egui::{FontId, Pos2, Rect, Sense, Ui, vec2};
 
 use crate::channel::LogicChannel;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::indexed_annotations::IndexedAnnotationCacheEntry;
 use crate::types::{
     AnalyzerLayout, CaptureInfo, ColorProfile, IndexBuildProgress, PulseMeasurement, RowDragState,
@@ -71,7 +70,6 @@ pub struct LogicAnalyzerViewer {
     /// Lanes produced by Viewer nodes of the running pipeline, rendered as
     /// extra rows under the raw channels. Swapped wholesale on each run.
     pub(crate) derived: Option<DerivedLanes>,
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) indexed_annotation_cache: HashMap<String, IndexedAnnotationCacheEntry>,
 }
 
@@ -107,7 +105,6 @@ impl LogicAnalyzerViewer {
             drag_cursor: None,
             color_profile: ColorProfile::DsView,
             derived: None,
-            #[cfg(not(target_arch = "wasm32"))]
             indexed_annotation_cache: HashMap::new(),
         }
     }
@@ -119,7 +116,6 @@ impl LogicAnalyzerViewer {
     /// previous run's lanes.
     pub fn set_derived_lanes(&mut self, lanes: DerivedLanes) {
         self.derived = Some(lanes);
-        #[cfg(not(target_arch = "wasm32"))]
         self.indexed_annotation_cache.clear();
     }
 
@@ -269,7 +265,6 @@ impl LogicAnalyzerViewer {
         );
         self.sample_visible_window(layout);
         layout = self.layout(ui, rect);
-        #[cfg(not(target_arch = "wasm32"))]
         self.sample_indexed_annotations(layout);
         let hover_pointer = if cursor_input.blocks_pan {
             None
@@ -280,12 +275,12 @@ impl LogicAnalyzerViewer {
         self.draw(&painter, layout, hover_pointer, cursor_input.active);
         self.show_profile_selector(ui, rect);
         self.show_row_rename(ui.ctx());
+        if self.has_live_indexed_annotations() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(50));
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if self.has_live_indexed_annotations() {
-                ui.ctx()
-                    .request_repaint_after(std::time::Duration::from_millis(50));
-            }
             if self.capture_path.is_some() && self.capture_info.is_none() {
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_millis(16));
@@ -438,7 +433,6 @@ impl LogicAnalyzerViewer {
                     .iter()
                     .map(|annotation| annotation.end_ns.max(annotation.start_ns))
                     .max(),
-                #[cfg(not(target_arch = "wasm32"))]
                 dsl::DerivedLaneData::IndexedAnnotations(indexed) => {
                     indexed.metadata().extent_end_ns
                 }
@@ -449,7 +443,6 @@ impl LogicAnalyzerViewer {
         end_ns as f64 / 1_000.0
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn has_live_indexed_annotations(&self) -> bool {
         self.derived.as_ref().is_some_and(|derived| {
             derived.read().iter().any(|lane| {

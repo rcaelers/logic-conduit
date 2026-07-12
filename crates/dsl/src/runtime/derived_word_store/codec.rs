@@ -1,33 +1,13 @@
+use super::config::BlockCodecConfig;
 use super::crc32c::block_checksum;
 use super::format::{
     BLOCK_CHECKSUM_OFFSET, BLOCK_FLAG_HAS_DURATIONS, BLOCK_HEADER_SIZE,
-    DEFAULT_MAX_BLOCK_PAYLOAD_BYTES, DEFAULT_MAX_INTER_WORD_GAP_NS, DEFAULT_MAX_WORDS_PER_BLOCK,
-    DEFAULT_RESTART_INTERVAL, RESTART_ENTRY_SIZE, RestartEntry, WordBlockHeader,
+    DEFAULT_MAX_WORDS_PER_BLOCK, DEFAULT_RESTART_INTERVAL, RESTART_ENTRY_SIZE, RestartEntry,
+    WordBlockHeader,
 };
 use super::vlq::{decode_u64, encode_u64, encoded_len};
 use super::{CodecError, CodecResult};
 use crate::runtime::Word;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BlockCodecConfig {
-    pub max_words: usize,
-    pub restart_interval: usize,
-    pub max_payload_bytes: usize,
-    pub max_inter_word_gap_ns: u64,
-    pub max_timestamp_span_ns: u64,
-}
-
-impl Default for BlockCodecConfig {
-    fn default() -> Self {
-        Self {
-            max_words: DEFAULT_MAX_WORDS_PER_BLOCK,
-            restart_interval: DEFAULT_RESTART_INTERVAL,
-            max_payload_bytes: DEFAULT_MAX_BLOCK_PAYLOAD_BYTES,
-            max_inter_word_gap_ns: DEFAULT_MAX_INTER_WORD_GAP_NS,
-            max_timestamp_span_ns: u64::MAX,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushResult {

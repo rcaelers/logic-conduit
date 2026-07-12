@@ -10,11 +10,13 @@ use web_time::Instant;
 
 use crate::runtime::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 #[cfg(not(target_arch = "wasm32"))]
-use crate::runtime::derived_word_store::codec::DecodedWordBlock;
+use crate::runtime::derived_word_store::StoreResult;
 #[cfg(not(target_arch = "wasm32"))]
+use crate::runtime::derived_word_store::codec::DecodedWordBlock;
 use crate::runtime::derived_word_store::{
-    AnnotationQuery, AnnotationStoreMetadata, IndexedAnnotationStore, IndexedAnnotationWriter,
-    LiveStoreConfig, LiveStoreMetadata, StoreResult, StoreStatus,
+    AnnotationQuery, AnnotationStoreBackend, AnnotationStoreMetadata, AnnotationStoreWriterBackend,
+    IndexedAnnotationStore, IndexedAnnotationWriter, LiveStoreConfig, LiveStoreMetadata,
+    StoreStatus,
 };
 use crate::runtime::events::{Annotation, Trigger, Word};
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
@@ -109,22 +111,19 @@ pub enum DerivedLaneData {
     /// its true `end_ns`; adjacent instantaneous words meet within a burst,
     /// while a cadence-bounded end leaves long decoding gaps empty.
     Annotations(Vec<Annotation>),
-    /// Native disk-backed word lane. Rendering and cursor code query this
-    /// handle without retaining every annotation in UI memory.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Indexed word lane. Rendering and cursor code query this handle without
+    /// retaining every annotation in UI-owned memory.
     IndexedAnnotations(IndexedAnnotationLane),
     /// Zero-width event markers (trigger timestamps, ns).
     Markers(Vec<u64>),
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub struct IndexedAnnotationLane {
     pub query: Arc<dyn AnnotationQuery>,
     store: IndexedAnnotationStore,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl IndexedAnnotationLane {
     pub fn from_store(store: IndexedAnnotationStore) -> Self {
         Self {
@@ -138,13 +137,16 @@ impl IndexedAnnotationLane {
     }
 
     pub fn status(&self) -> StoreStatus {
-        self.store.snapshot().metadata.status
+        AnnotationStoreBackend::snapshot(&self.store)
+            .metadata
+            .status
     }
 
     pub fn storage_metadata(&self) -> LiveStoreMetadata {
-        self.store.snapshot().metadata
+        AnnotationStoreBackend::snapshot(&self.store).metadata
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn visit_committed_blocks(
         &self,
         visitor: impl FnMut(&DecodedWordBlock),
@@ -153,7 +155,6 @@ impl IndexedAnnotationLane {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl std::fmt::Debug for IndexedAnnotationLane {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -245,7 +246,6 @@ impl LaneFold<u64> for MarkerFold {
 pub enum LaneSummary {
     Digital(AppendOnlyMipmap<Sample, DigitalFold>),
     Annotations(ChunkedMipmap<Annotation, AnnotationFold>),
-    #[cfg(not(target_arch = "wasm32"))]
     IndexedAnnotations,
     Markers(AppendOnlyMipmap<u64, MarkerFold>),
 }
@@ -277,7 +277,6 @@ impl LaneSummary {
                 );
                 Self::Annotations(summary)
             }
-            #[cfg(not(target_arch = "wasm32"))]
             DerivedLaneData::IndexedAnnotations(_) => Self::IndexedAnnotations,
             DerivedLaneData::Markers(markers) => {
                 let mut summary = AppendOnlyMipmap::new();
@@ -320,7 +319,6 @@ impl DerivedLanes {
         if let Some(index) = lanes.iter().position(|lane| lane.name == name) {
             let replace =
                 std::mem::discriminant(&lanes[index].data) != std::mem::discriminant(&data);
-            #[cfg(not(target_arch = "wasm32"))]
             let replace = replace || matches!(data, DerivedLaneData::IndexedAnnotations(_));
             if replace {
                 lanes[index].summary = LaneSummary::matching(&data);
@@ -498,9 +496,7 @@ struct Lane {
     store_index: usize,
     buffer: LaneBuffer,
     eos: bool,
-    #[cfg(not(target_arch = "wasm32"))]
     word_writer: Option<IndexedAnnotationWriter>,
-    #[cfg(not(target_arch = "wasm32"))]
     word_indexed: bool,
 }
 
@@ -517,9 +513,7 @@ pub struct ViewerSink {
     lanes: Vec<Lane>,
     retention: ViewerRetention,
     metrics: Option<ViewerSinkMetrics>,
-    #[cfg(not(target_arch = "wasm32"))]
     indexed_words: bool,
-    #[cfg(not(target_arch = "wasm32"))]
     word_store_config: LiveStoreConfig,
 }
 
@@ -531,9 +525,7 @@ impl ViewerSink {
             lanes: Vec::new(),
             retention: ViewerRetention::Unlimited,
             metrics: None,
-            #[cfg(not(target_arch = "wasm32"))]
             indexed_words: true,
-            #[cfg(not(target_arch = "wasm32"))]
             word_store_config: LiveStoreConfig::default(),
         }
     }
@@ -553,25 +545,14 @@ impl ViewerSink {
         self
     }
 
-    /// Selects native indexed storage for subsequently added word lanes.
-    /// wasm always uses the in-memory representation.
-    pub fn with_indexed_words(self, enabled: bool) -> Self {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let mut sink = self;
-            sink.indexed_words = enabled;
-            sink
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = enabled;
-            self
-        }
+    /// Selects indexed storage for subsequently added word lanes.
+    pub fn with_indexed_words(mut self, enabled: bool) -> Self {
+        self.indexed_words = enabled;
+        self
     }
 
-    /// Overrides the native indexed-store configuration for subsequently
-    /// added word lanes.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Overrides the indexed-store configuration for subsequently added word
+    /// lanes. Platform backends interpret the capabilities they support.
     pub fn with_word_store_config(mut self, config: LiveStoreConfig) -> Self {
         self.word_store_config = config;
         self
@@ -580,7 +561,6 @@ impl ViewerSink {
     /// Appends a lane; input port order follows lane order (`in0`, `in1`, …).
     pub fn with_lane(mut self, kind: ViewerLaneKind, name: impl Into<String>) -> Self {
         let name = name.into();
-        #[cfg(not(target_arch = "wasm32"))]
         let (data, word_writer, word_indexed) = match kind {
             ViewerLaneKind::Signal => (DerivedLaneData::Digital(Vec::new()), None, false),
             ViewerLaneKind::Words if self.indexed_words => {
@@ -630,12 +610,6 @@ impl ViewerSink {
             ViewerLaneKind::Words => (DerivedLaneData::Annotations(Vec::new()), None, false),
             ViewerLaneKind::Trigger => (DerivedLaneData::Markers(Vec::new()), None, false),
         };
-        #[cfg(target_arch = "wasm32")]
-        let data = match kind {
-            ViewerLaneKind::Signal => DerivedLaneData::Digital(Vec::new()),
-            ViewerLaneKind::Words => DerivedLaneData::Annotations(Vec::new()),
-            ViewerLaneKind::Trigger => DerivedLaneData::Markers(Vec::new()),
-        };
         let buffer = match kind {
             ViewerLaneKind::Signal => LaneBuffer::Signal(VecDeque::new()),
             ViewerLaneKind::Words => LaneBuffer::Words(VecDeque::new()),
@@ -647,9 +621,7 @@ impl ViewerSink {
             store_index,
             buffer,
             eos: false,
-            #[cfg(not(target_arch = "wasm32"))]
             word_writer,
-            #[cfg(not(target_arch = "wasm32"))]
             word_indexed,
         });
         self
@@ -772,13 +744,10 @@ impl ProcessNode for ViewerSink {
                     progress += batch.len();
                     if !batch.is_empty() {
                         let append_started = metrics.as_ref().map(|_| Instant::now());
-                        #[cfg(not(target_arch = "wasm32"))]
                         let indexed = lane.word_indexed;
-                        #[cfg(target_arch = "wasm32")]
-                        let indexed = false;
-                        #[cfg(not(target_arch = "wasm32"))]
                         if let Some(writer) = lane.word_writer.as_mut()
-                            && let Err(error) = writer.append_batch(&batch)
+                            && let Err(error) =
+                                AnnotationStoreWriterBackend::append_batch(writer, &batch)
                         {
                             tracing::warn!(
                                 lane = lane.store_index,
@@ -818,10 +787,9 @@ impl ProcessNode for ViewerSink {
                 }
             }
 
-            #[cfg(not(target_arch = "wasm32"))]
             if lane.eos
                 && let Some(mut writer) = lane.word_writer.take()
-                && let Err(error) = writer.finish()
+                && let Err(error) = AnnotationStoreWriterBackend::finish(&mut writer)
             {
                 tracing::warn!(
                     lane = lane.store_index,
@@ -866,15 +834,7 @@ mod tests {
     #[test]
     fn lanes_collect_signals_words_and_triggers() {
         let store = DerivedLanes::new();
-        #[cfg(not(target_arch = "wasm32"))]
-        let directory = tempfile::tempdir().unwrap();
-        let sink = ViewerSink::new(store.clone());
-        #[cfg(not(target_arch = "wasm32"))]
-        let sink = sink.with_word_store_config(LiveStoreConfig {
-            directory: directory.path().to_path_buf(),
-            ..LiveStoreConfig::default()
-        });
-        let mut sink = sink
+        let mut sink = ViewerSink::new(store.clone())
             .with_lane(ViewerLaneKind::Signal, "latch.q")
             .with_lane(ViewerLaneKind::Words, "decoder.words")
             .with_lane(ViewerLaneKind::Trigger, "start.match");
@@ -934,7 +894,6 @@ mod tests {
                 value: 0xCD,
             },
         ];
-        #[cfg(not(target_arch = "wasm32"))]
         match &lanes[1].data {
             DerivedLaneData::IndexedAnnotations(indexed) => {
                 assert_eq!(indexed.status(), StoreStatus::Finished);
@@ -949,13 +908,6 @@ mod tests {
                 );
             }
             other => panic!("expected indexed annotation lane, got {other:?}"),
-        }
-        #[cfg(target_arch = "wasm32")]
-        match &lanes[1].data {
-            DerivedLaneData::Annotations(annotations) => {
-                assert_eq!(annotations.as_slice(), expected);
-            }
-            other => panic!("expected annotation lane, got {other:?}"),
         }
         match &lanes[2].data {
             DerivedLaneData::Markers(markers) => assert_eq!(markers.as_slice(), &[42]),

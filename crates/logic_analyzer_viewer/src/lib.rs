@@ -4,7 +4,6 @@ mod channel;
 mod cursor;
 mod draw;
 mod format;
-#[cfg(not(target_arch = "wasm32"))]
 mod indexed_annotations;
 mod input;
 mod sampling;

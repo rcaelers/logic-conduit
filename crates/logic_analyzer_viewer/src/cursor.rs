@@ -1,9 +1,6 @@
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
-#[cfg(not(target_arch = "wasm32"))]
-use dsl::AnnotationQuery;
-use dsl::{Annotation, DerivedLaneData};
+use dsl::{Annotation, AnnotationQuery, DerivedLaneData};
 use egui::{Color32, CursorIcon, FontId, PointerButton, Pos2, Rect, Response, Ui};
 
 use crate::draw::derived::annotation_box_end;
@@ -12,7 +9,6 @@ use crate::viewer::LogicAnalyzerViewer;
 
 enum AnnotationBoundarySource {
     InMemory(Option<f64>),
-    #[cfg(not(target_arch = "wasm32"))]
     Indexed(Arc<dyn AnnotationQuery>),
 }
 
@@ -208,7 +204,6 @@ impl LogicAnalyzerViewer {
                                 nearest_annotation_boundary_time(annotations, time_us),
                             ))
                         }
-                        #[cfg(not(target_arch = "wasm32"))]
                         DerivedLaneData::IndexedAnnotations(indexed) => Some(
                             AnnotationBoundarySource::Indexed(Arc::clone(&indexed.query)),
                         ),
@@ -220,7 +215,6 @@ impl LogicAnalyzerViewer {
         if let Some(source) = annotation_source {
             let nearest = match source {
                 AnnotationBoundarySource::InMemory(nearest) => nearest,
-                #[cfg(not(target_arch = "wasm32"))]
                 AnnotationBoundarySource::Indexed(query) => {
                     let timestamp_ns = (time_us.max(0.0) * 1_000.0).round() as u64;
                     let max_distance_ns =

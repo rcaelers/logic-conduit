@@ -9,7 +9,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use super::CodecError;
-use super::codec::BlockCodecConfig;
+use super::config::BlockCodecConfig;
 use super::query::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
     ExactAnnotationWindow, WordPresenceBucket,
@@ -356,23 +356,11 @@ impl super::backend::AnnotationStoreBackend for IndexedAnnotationStore {
 }
 
 impl super::backend::AnnotationStoreWriterBackend for IndexedAnnotationWriter {
-    fn store(&self) -> IndexedAnnotationStore {
-        IndexedAnnotationWriter::store(self)
-    }
-
     fn append_batch(&mut self, words: &[Word]) -> StoreResult<()> {
         IndexedAnnotationWriter::append_batch(self, words)
     }
 
-    fn publish_hot_tail(&mut self) -> StoreResult<()> {
-        IndexedAnnotationWriter::publish_hot_tail(self)
-    }
-
     fn finish(&mut self) -> StoreResult<()> {
         IndexedAnnotationWriter::finish(self)
-    }
-
-    fn cancel(&mut self) -> StoreResult<()> {
-        IndexedAnnotationWriter::cancel(self)
     }
 }

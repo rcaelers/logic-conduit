@@ -2,9 +2,7 @@
 
 use std::collections::HashMap;
 
-#[cfg(not(target_arch = "wasm32"))]
-use dsl::LiveStoreConfig;
-use dsl::{ProcessNode, Sample, Trigger, ViewerLaneKind, ViewerSink, Word};
+use dsl::{LiveStoreConfig, ProcessNode, Sample, Trigger, ViewerLaneKind, ViewerSink, Word};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -61,8 +59,6 @@ impl RuntimeBuilder for ViewerBuilder {
         // their output into one row.
         let mut lane_name_counts: HashMap<String, usize> = HashMap::new();
         for (member, input) in resolved.members(0) {
-            #[cfg(target_arch = "wasm32")]
-            let _ = member;
             let lane_name = if prefix.is_empty() {
                 input.source.clone()
             } else {
@@ -85,7 +81,6 @@ impl RuntimeBuilder for ViewerBuilder {
                 if uart_track {
                     sink = sink.with_indexed_words(false);
                 }
-                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(Some(persistent)) = ctx.viewer_word_caches.get(member) {
                     sink = sink.with_word_store_config(LiveStoreConfig {
                         directory: persistent.directory.clone(),

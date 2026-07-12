@@ -1,7 +1,5 @@
-#[cfg(not(target_arch = "wasm32"))]
-use dsl::WordPresenceBucket;
 use dsl::nodes::sinks::MAX_ANNOTATION_NS;
-use dsl::{Annotation, AnnotationFold, ChunkedMipmap, Sample};
+use dsl::{Annotation, AnnotationFold, ChunkedMipmap, Sample, WordPresenceBucket};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
 use crate::viewer::LogicAnalyzerViewer;
@@ -187,7 +185,6 @@ impl LogicAnalyzerViewer {
         );
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn draw_indexed_annotation_presence(
         &self,
         painter: &Painter,
@@ -219,7 +216,6 @@ impl LogicAnalyzerViewer {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn draw_indexed_annotation_exact(
         &self,
         painter: &Painter,

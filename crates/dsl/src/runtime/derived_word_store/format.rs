@@ -11,8 +11,6 @@ pub const BLOCK_CHECKSUM_OFFSET: usize = 64;
 
 pub const DEFAULT_MAX_WORDS_PER_BLOCK: usize = 32_768;
 pub const DEFAULT_RESTART_INTERVAL: usize = 512;
-pub const DEFAULT_MAX_BLOCK_PAYLOAD_BYTES: usize = 1024 * 1024;
-pub const DEFAULT_MAX_INTER_WORD_GAP_NS: u64 = 1_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DataFileHeader {
