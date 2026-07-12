@@ -1727,6 +1727,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the developer-local scan.dsl fixture"]
     fn test_dsl_file_source_new_valid() {
         // Test with actual scan.dsl file if it exists
         let result = DslFileSource::new("scan.dsl", 8);
@@ -1769,6 +1770,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the developer-local scan.dsl fixture"]
     fn test_dsl_file_source_more_channels_than_file() {
         // scan.dsl has 11 channels, request 16
         let result = DslFileSource::new("scan.dsl", 16);
@@ -1779,6 +1781,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the developer-local scan.dsl fixture"]
     fn test_dsl_file_source_builder_methods() {
         let result = DslFileSource::new("scan.dsl", 4);
         assert!(result.is_ok());
@@ -1791,6 +1794,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the developer-local scan.dsl fixture"]
     fn test_dsl_file_source_getters() {
         let result = DslFileSource::new("scan.dsl", 8);
         assert!(result.is_ok());
@@ -1809,6 +1813,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the developer-local scan.dsl fixture"]
     fn test_dsl_file_source_worknode_methods() {
         let result = DslFileSource::new("scan.dsl", 8);
         assert!(result.is_ok());
@@ -1824,6 +1829,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the developer-local scan.dsl fixture"]
     fn test_dsl_file_source_read_bit_valid() {
         let result = DslFileSource::new("scan.dsl", 8);
         assert!(result.is_ok());
@@ -1844,6 +1850,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the developer-local scan.dsl fixture"]
     fn test_dsl_file_source_read_bit_invalid_channel() {
         let result = DslFileSource::new("scan.dsl", 8);
         assert!(result.is_ok());
@@ -1863,6 +1870,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the developer-local scan.dsl fixture"]
     fn test_dsl_file_source_read_bit_invalid_position() {
         let result = DslFileSource::new("scan.dsl", 8);
         assert!(result.is_ok());
@@ -1882,6 +1890,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the developer-local scan.dsl fixture"]
     fn test_dsl_file_source_header_fields() {
         let result = DslFileSource::new("scan.dsl", 8);
         assert!(result.is_ok());
@@ -1914,6 +1923,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the developer-local scan.dsl fixture"]
     fn test_dsl_file_source_channel_count_validation() {
         // Test minimum valid (1 channel)
         let result = DslFileSource::new("scan.dsl", 1);
@@ -1933,6 +1943,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the developer-local scan.dsl fixture"]
     fn test_dsl_file_source_block_caching() {
         let result = DslFileSource::new("scan.dsl", 8);
         assert!(result.is_ok());
@@ -1953,6 +1964,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the developer-local scan.dsl fixture"]
     fn test_dsl_file_source_multiple_channels() {
         let result = DslFileSource::new("scan.dsl", 8);
         assert!(result.is_ok());

@@ -43,15 +43,10 @@ impl RuntimeBuilder for FileSourceBuilder {
             None
         }
     }
-    fn input_required(&self, socket: &Socket, state: &Value) -> bool {
-        match socket.def_index {
-            // Unconnected File with an empty picker is a configuration
-            // error — catch it at compile time, not as a failed open.
-            0 => parse_state::<nodes::DslFileSourceState>(state)
-                .map(|state| state.file.value.trim().is_empty())
-                .unwrap_or(true),
-            _ => false,
-        }
+    fn input_required(&self, _socket: &Socket, _state: &Value) -> bool {
+        // Empty paths are valid in saved/example graphs.  Runtime start will
+        // report a missing path when the user actually runs the source.
+        false
     }
     fn build(
         &self,
