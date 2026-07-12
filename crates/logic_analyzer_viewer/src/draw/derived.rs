@@ -110,6 +110,7 @@ impl LogicAnalyzerViewer {
         row_height: f32,
         annotations: &[Annotation],
         summary: &ChunkedMipmap<Annotation, AnnotationFold>,
+        display_format: Option<&str>,
     ) {
         let band_color = Color32::from_rgb(215, 140, 60);
         let box_top = y_top + row_height * 0.12;
@@ -157,6 +158,7 @@ impl LogicAnalyzerViewer {
             annotations,
             annotations.last().map(|annotation| annotation.start_ns),
             false,
+            display_format,
         );
     }
 
@@ -180,6 +182,7 @@ impl LogicAnalyzerViewer {
             annotations,
             annotations.last().map(|annotation| annotation.start_ns),
             true,
+            None,
         );
     }
 
@@ -233,6 +236,7 @@ impl LogicAnalyzerViewer {
             annotations,
             last_timestamp_ns,
             false,
+            None,
         );
     }
 
@@ -246,6 +250,7 @@ impl LogicAnalyzerViewer {
         annotations: &[Annotation],
         lane_last_timestamp_ns: Option<u64>,
         bit_labels: bool,
+        display_format: Option<&str>,
     ) {
         let band_color = Color32::from_rgb(215, 140, 60);
         let (start_ns, end_ns) = self.visible_window_ns();
@@ -283,6 +288,7 @@ impl LogicAnalyzerViewer {
                         is_last_ever,
                         previous_duration_ns,
                         bit_labels,
+                        display_format,
                     );
                     continue;
                 }
@@ -319,6 +325,7 @@ impl LogicAnalyzerViewer {
                 is_last_ever,
                 previous_duration_ns,
                 bit_labels,
+                display_format,
             );
         }
     }
@@ -336,6 +343,7 @@ impl LogicAnalyzerViewer {
         is_last_ever: bool,
         previous_duration_ns: Option<u64>,
         bit_labels: bool,
+        display_format: Option<&str>,
     ) {
         let is_error = annotation.value == u64::MAX - 2;
         let box_color = if is_error {
@@ -361,7 +369,7 @@ impl LogicAnalyzerViewer {
                 u64::MAX => "S".to_owned(),
                 value if value == u64::MAX - 1 => "T".to_owned(),
                 value if value == u64::MAX - 2 => "Error".to_owned(),
-                value => format!("{:02X}", value),
+            value => format_value(value, display_format),
             }
         };
         let label_width = annotation_label_width(&label);
@@ -451,6 +459,24 @@ impl LogicAnalyzerViewer {
                 Stroke::NONE,
             ));
         }
+    }
+}
+
+fn format_value(value: u64, format: Option<&str>) -> String {
+    match format.unwrap_or("Hex") {
+        "Binary" => format!("{value:b}"),
+        "Octal" => format!("{value:o}"),
+        "Decimal" => value.to_string(),
+        "ASCII" => char::from_u32(value as u32)
+            .filter(|character| !character.is_control())
+            .map_or_else(|| ".".to_string(), |character| character.to_string()),
+        "Hex + ASCII" => {
+            let ascii = char::from_u32(value as u32)
+                .filter(|character| !character.is_control())
+                .unwrap_or('.');
+            format!("{value:02X} '{ascii}'")
+        }
+        _ => format!("{value:02X}"),
     }
 }
 

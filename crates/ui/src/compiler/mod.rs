@@ -106,6 +106,7 @@ pub struct CompileCtx {
 pub struct ResolvedInput {
     pub kind: PortKind,
     pub source: String,
+    pub word_display_format: Option<String>,
 }
 
 /// Per input socket, keyed `(def_index, member_index)`. Keys are
@@ -163,6 +164,11 @@ pub trait RuntimeBuilder {
         kind: PortKind,
     ) -> Option<String>;
     fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String>;
+    /// Optional display metadata for a decoded-word output. Kept generic so
+    /// the compiler never needs to identify a concrete decoder.
+    fn word_display_format(&self, _socket: &Socket, _state: &Value) -> Option<String> {
+        None
+    }
     /// Whether an unconnected input is a compile error (given the state:
     /// e.g. CS is only required while its polarity isn't Disabled).
     fn input_required(&self, _socket: &Socket, _state: &Value) -> bool {
@@ -682,6 +688,7 @@ pub fn lower(
             ResolvedInput {
                 kind,
                 source: format!("{}.{}", from_node.title, from_socket.name),
+                word_display_format: from_builder.word_display_format(from_socket, &from_node.state),
             },
         );
         edges.push(CompiledEdge {

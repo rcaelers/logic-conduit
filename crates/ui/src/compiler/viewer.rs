@@ -92,7 +92,11 @@ impl RuntimeBuilder for ViewerBuilder {
                         ..LiveStoreConfig::default()
                     });
                 }
-                sink = sink.with_lane(ViewerLaneKind::Words, lane_name);
+                sink = sink.with_lane_format(
+                    ViewerLaneKind::Words,
+                    lane_name,
+                    input.word_display_format.clone(),
+                );
                 if uart_track {
                     sink = sink.with_indexed_words(true);
                 }

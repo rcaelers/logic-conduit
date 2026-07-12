@@ -11,6 +11,15 @@ use serde_json::Value;
 pub(super) struct UartDecoderBuilder;
 
 impl RuntimeBuilder for UartDecoderBuilder {
+    fn word_display_format(&self, socket: &Socket, state: &Value) -> Option<String> {
+        if socket.def_index == 3 {
+            parse_state::<nodes::UartDecoderState>(state)
+                .ok()
+                .map(|state| state.display_format.selected().to_string())
+        } else {
+            None
+        }
+    }
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
         vec![PortKind::of::<Sample>()]
     }

@@ -289,6 +289,7 @@ pub struct DerivedLane {
     pub name: String,
     pub data: DerivedLaneData,
     pub summary: LaneSummary,
+    pub word_display_format: Option<String>,
 }
 
 /// Shared, append-only store of derived lanes. The compiler hands one clone
@@ -328,6 +329,7 @@ impl DerivedLanes {
             name,
             data,
             summary,
+            word_display_format: None,
         });
         lanes.len() - 1
     }
@@ -335,6 +337,12 @@ impl DerivedLanes {
     /// Read access for rendering.
     pub fn read(&self) -> RwLockReadGuard<'_, Vec<DerivedLane>> {
         self.inner.read().unwrap()
+    }
+
+    fn set_word_display_format(&self, index: usize, format: Option<String>) {
+        if let Some(lane) = self.inner.write().unwrap().get_mut(index) {
+            lane.word_display_format = format;
+        }
     }
 
     /// Appends a whole batch under a single write-lock acquisition — called
@@ -641,6 +649,19 @@ impl ViewerSink {
             word_indexed,
         });
         self
+    }
+
+    pub fn with_lane_format(
+        self,
+        kind: ViewerLaneKind,
+        name: impl Into<String>,
+        format: Option<String>,
+    ) -> Self {
+        let sink = self.with_lane(kind, name);
+        if let Some(last) = sink.lanes.last() {
+            sink.store.set_word_display_format(last.store_index, format);
+        }
+        sink
     }
 }
 

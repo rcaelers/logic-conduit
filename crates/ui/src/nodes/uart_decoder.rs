@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UartDecoderState {
+    #[serde(default = "default_display_format")]
+    pub display_format: EnumValue,
     /// A common baud-rate preset, or `Custom` to use `baud_rate` below.
     #[serde(default = "default_baud_preset")]
     pub baud_preset: EnumValue,
@@ -22,6 +24,9 @@ pub struct UartDecoderState {
     pub invert: BoolValue,
     pub error_output: BoolValue,
 }
+
+pub const DISPLAY_FORMATS: &[&str] = &["Hex", "Binary", "Octal", "Decimal", "ASCII", "Hex + ASCII"];
+pub fn default_display_format() -> EnumValue { EnumValue::new(0, DISPLAY_FORMATS) }
 
 const BAUD_PRESETS: &[&str] = &[
     "300",
@@ -94,6 +99,7 @@ impl NodeDef for UartDecoder {
 
     fn state() -> Self::State {
         UartDecoderState {
+            display_format: default_display_format(),
             baud_preset: EnumValue::new(12, BAUD_PRESETS),
             baud_rate: IntValue::new(1_000_000, 300, 100_000_000),
             data_bits: IntValue::new(8, 5, 9),
@@ -110,6 +116,7 @@ impl NodeDef for UartDecoder {
         vec![PanelSection::new(
             "Options",
             vec![
+                PropDef::control("display_format", "Data display", |state| &mut state.display_format),
                 PropDef::control("baud_preset", "Baud rate", |state| &mut state.baud_preset),
                 PropDef::control("baud_rate", "Custom baud rate", |state| {
                     &mut state.baud_rate

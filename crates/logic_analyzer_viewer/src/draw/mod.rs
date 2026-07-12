@@ -256,6 +256,7 @@ impl LogicAnalyzerViewer {
                             data_height,
                             data,
                             data_summary,
+                            data_lane.word_display_format.as_deref(),
                         );
                         y_top += display_height;
                         continue;
@@ -289,6 +290,7 @@ impl LogicAnalyzerViewer {
                                 display_height,
                                 annotations,
                                 summary,
+                                lane.word_display_format.as_deref(),
                             );
                         }
                         #[cfg(not(target_arch = "wasm32"))]

@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BinaryDecoderState {
+    #[serde(default = "super::uart_decoder::default_display_format")]
+    pub display_format: EnumValue,
     pub sample_on: EnumValue,
     #[serde(default = "default_input_strategy")]
     pub input_strategy: EnumValue,
@@ -48,6 +50,7 @@ impl NodeDef for BinaryDecoder {
 
     fn state() -> Self::State {
         BinaryDecoderState {
+            display_format: super::uart_decoder::default_display_format(),
             sample_on: EnumValue::new(
                 0,
                 &[
@@ -69,6 +72,7 @@ impl NodeDef for BinaryDecoder {
         vec![PanelSection::new(
             "Options",
             vec![
+                PropDef::control("display_format", "Data display", |state| &mut state.display_format),
                 PropDef::control("sample_on", "Sample on", |state| &mut state.sample_on),
                 PropDef::control("input_strategy", "Input strategy", |state| {
                     &mut state.input_strategy

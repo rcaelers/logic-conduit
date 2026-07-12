@@ -321,6 +321,7 @@ pub fn populate_startup(widget: &mut node_graph::NodeGraphWidget) {
     widget.set_node_state(start, matcher_state("0x600081"));
     widget.set_node_state(stop, matcher_state("0x600000"));
     let mut decoder_state = BinaryDecoderState {
+        display_format: uart_decoder::default_display_format(),
         sample_on: EnumValue::new(
             0,
             &[
@@ -427,6 +428,7 @@ pub fn populate_uart_demo(widget: &mut node_graph::NodeGraphWidget) {
     widget.set_node_state(
         uart,
         serde_json::to_value(UartDecoderState {
+            display_format: uart_decoder::default_display_format(),
             baud_preset: uart_decoder::default_baud_preset(),
             baud_rate: IntValue::new(115_200, 300, 100_000_000),
             data_bits: IntValue::new(8, 5, 9),
