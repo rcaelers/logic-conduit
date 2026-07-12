@@ -688,7 +688,8 @@ pub fn lower(
             ResolvedInput {
                 kind,
                 source: format!("{}.{}", from_node.title, from_socket.name),
-                word_display_format: from_builder.word_display_format(from_socket, &from_node.state),
+                word_display_format: from_builder
+                    .word_display_format(from_socket, &from_node.state),
             },
         );
         edges.push(CompiledEdge {

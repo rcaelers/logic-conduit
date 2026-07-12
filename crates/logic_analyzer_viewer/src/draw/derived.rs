@@ -369,7 +369,7 @@ impl LogicAnalyzerViewer {
                 u64::MAX => "S".to_owned(),
                 value if value == u64::MAX - 1 => "T".to_owned(),
                 value if value == u64::MAX - 2 => "Error".to_owned(),
-            value => format_value(value, display_format),
+                value => format_value(value, display_format),
             }
         };
         let label_width = annotation_label_width(&label);

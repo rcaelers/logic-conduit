@@ -172,7 +172,13 @@ pub fn draw_wire(painter: &Painter, from: Pos2, to: Pos2, color: Color32, width:
 /// link a muted node draws between one of its own input and output sockets
 /// (Blender's mute convention: external wires stay solid, an internal
 /// dashed link shows what the node passes straight through).
-pub(crate) fn draw_wire_dashed(painter: &Painter, from: Pos2, to: Pos2, color: Color32, width: f32) {
+pub(crate) fn draw_wire_dashed(
+    painter: &Painter,
+    from: Pos2,
+    to: Pos2,
+    color: Color32,
+    width: f32,
+) {
     let points: Vec<Pos2> = bezier_wire_points(from, to, 48).collect();
     painter.extend(egui::Shape::dashed_line(
         &points,
@@ -227,7 +233,15 @@ pub fn draw_connections(
             highlighted.push((idx, conn));
             continue;
         }
-        draw_connection(painter, graph, registry, socket_positions, wire_width, conn, emphasis);
+        draw_connection(
+            painter,
+            graph,
+            registry,
+            socket_positions,
+            wire_width,
+            conn,
+            emphasis,
+        );
     }
     for (idx, conn) in highlighted {
         draw_connection(

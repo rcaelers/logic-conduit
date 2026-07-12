@@ -25,7 +25,9 @@ impl BinaryDecoderBuilder {
 
 impl RuntimeBuilder for BinaryDecoderBuilder {
     fn word_display_format(&self, _socket: &Socket, state: &Value) -> Option<String> {
-        Self::parsed(state).ok().map(|state| state.display_format.selected().to_string())
+        Self::parsed(state)
+            .ok()
+            .map(|state| state.display_format.selected().to_string())
     }
     fn accepted_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
         match socket.def_index {

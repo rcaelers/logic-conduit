@@ -72,7 +72,9 @@ impl NodeDef for BinaryDecoder {
         vec![PanelSection::new(
             "Options",
             vec![
-                PropDef::control("display_format", "Data display", |state| &mut state.display_format),
+                PropDef::control("display_format", "Data display", |state| {
+                    &mut state.display_format
+                }),
                 PropDef::control("sample_on", "Sample on", |state| &mut state.sample_on),
                 PropDef::control("input_strategy", "Input strategy", |state| {
                     &mut state.input_strategy

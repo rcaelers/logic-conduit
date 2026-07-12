@@ -164,21 +164,26 @@ impl NodeGraphWidget {
             .nodes
             .values()
             .filter(|node| {
-                let inputs = node.inputs.iter().enumerate().filter(|(_, s)| s.visible).map(
-                    |(index, _)| SocketId {
+                let inputs = node
+                    .inputs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| s.visible)
+                    .map(|(index, _)| SocketId {
                         node: node.id,
                         index,
                         direction: SocketDirection::Input,
-                    },
-                );
-                let outputs =
-                    node.outputs.iter().enumerate().filter(|(_, s)| s.visible).map(
-                        |(index, _)| SocketId {
-                            node: node.id,
-                            index,
-                            direction: SocketDirection::Output,
-                        },
-                    );
+                    });
+                let outputs = node
+                    .outputs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| s.visible)
+                    .map(|(index, _)| SocketId {
+                        node: node.id,
+                        index,
+                        direction: SocketDirection::Output,
+                    });
                 inputs
                     .chain(outputs)
                     .any(|candidate| self.compatible_wire_target(from, candidate))
@@ -198,7 +203,11 @@ impl NodeGraphWidget {
 
     /// First visible socket on `node_id` compatible with `from` — used to
     /// auto-wire a freshly added node (link-drag search, Phase 1.1).
-    pub(super) fn first_compatible_socket(&self, from: SocketId, node_id: NodeId) -> Option<SocketId> {
+    pub(super) fn first_compatible_socket(
+        &self,
+        from: SocketId,
+        node_id: NodeId,
+    ) -> Option<SocketId> {
         let node = self.graph.nodes.get(&node_id)?;
         let inputs = node
             .inputs
@@ -919,9 +928,16 @@ impl NodeGraphWidget {
 
     fn menu_muted_state(&self, context_node: Option<NodeId>) -> bool {
         if let Some(node_id) = context_node {
-            return self.graph.nodes.get(&node_id).is_some_and(|node| node.muted);
+            return self
+                .graph
+                .nodes
+                .get(&node_id)
+                .is_some_and(|node| node.muted);
         }
-        self.graph.nodes.values().any(|node| node.selected && node.muted)
+        self.graph
+            .nodes
+            .values()
+            .any(|node| node.selected && node.muted)
     }
 
     fn node_at_screen_pos(&self, responses: &GraphResponses, screen_pos: Pos2) -> Option<NodeId> {
@@ -1164,7 +1180,10 @@ impl NodeGraphWidget {
         // for, so the registry's plain `A` (no modifiers required) would
         // otherwise also match a Shift+A press and fire Select All first,
         // leaving nothing here to see.
-        let placing = matches!(self.interaction_state, InteractionState::PlacingNodes { .. });
+        let placing = matches!(
+            self.interaction_state,
+            InteractionState::PlacingNodes { .. }
+        );
         if no_focus
             && !placing
             && ui.input_mut(|input| input.consume_key(egui::Modifiers::SHIFT, egui::Key::A))
@@ -1183,7 +1202,8 @@ impl NodeGraphWidget {
         let cutting = matches!(self.interaction_state, InteractionState::CuttingWire { .. });
 
         if let Some(context_screen_pos) =
-            self.menu.context_trigger_pos(ui, pointer, !cutting && !placing)
+            self.menu
+                .context_trigger_pos(ui, pointer, !cutting && !placing)
             && let Some(context_target) =
                 self.context_click_target_at(responses, layout, context_screen_pos)
         {
@@ -1464,7 +1484,11 @@ impl NodeGraphWidget {
     /// removes). Only called once, on gesture confirm; the changes fold
     /// into the undo snapshot the drag/placement already pushed at its
     /// start.
-    fn resolve_frame_membership_on_drop(&mut self, node_ids: &[NodeId], layout: &GraphWidgetLayout) {
+    fn resolve_frame_membership_on_drop(
+        &mut self,
+        node_ids: &[NodeId],
+        layout: &GraphWidgetLayout,
+    ) {
         if self.graph.frames.is_empty() {
             return;
         }
@@ -1532,7 +1556,10 @@ impl NodeGraphWidget {
             // Cancelling a placement gesture must revert the add/duplicate/
             // paste it started with, not just drop back to Idle and leave
             // the new nodes stranded.
-            if matches!(self.interaction_state, InteractionState::PlacingNodes { .. }) {
+            if matches!(
+                self.interaction_state,
+                InteractionState::PlacingNodes { .. }
+            ) {
                 self.undo();
             }
             self.interaction_state = InteractionState::Idle;
@@ -1657,9 +1684,7 @@ impl NodeGraphWidget {
             InteractionState::PlacingNodes {
                 anchor_canvas,
                 just_entered,
-            } => {
-                self.update_placing_nodes(ui, pointer_canvas, anchor_canvas, just_entered, layout)
-            }
+            } => self.update_placing_nodes(ui, pointer_canvas, anchor_canvas, just_entered, layout),
         };
     }
 }
@@ -1712,9 +1737,18 @@ mod tests {
 
     #[test]
     fn snap_to_grid_rounds_to_the_nearest_grid_point() {
-        assert_eq!(snap_to_grid(Pos2::new(24.0, 26.0), 10.0), Pos2::new(20.0, 30.0));
-        assert_eq!(snap_to_grid(Pos2::new(-3.0, 5.0), 10.0), Pos2::new(0.0, 10.0));
-        assert_eq!(snap_to_grid(Pos2::new(10.0, 10.0), 10.0), Pos2::new(10.0, 10.0));
+        assert_eq!(
+            snap_to_grid(Pos2::new(24.0, 26.0), 10.0),
+            Pos2::new(20.0, 30.0)
+        );
+        assert_eq!(
+            snap_to_grid(Pos2::new(-3.0, 5.0), 10.0),
+            Pos2::new(0.0, 10.0)
+        );
+        assert_eq!(
+            snap_to_grid(Pos2::new(10.0, 10.0), 10.0),
+            Pos2::new(10.0, 10.0)
+        );
     }
 
     #[test]

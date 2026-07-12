@@ -136,7 +136,12 @@ mod macos_menu {
     /// and updates `RECENT_FILES` to match. Used both for the initial build
     /// at `install()` time and by `refresh_recent_files` to keep the
     /// submenu live as files are opened/saved during the session.
-    fn populate_recent_menu(mtm: MainThreadMarker, menu: &NSMenu, handler: &MenuHandler, paths: &[PathBuf]) {
+    fn populate_recent_menu(
+        mtm: MainThreadMarker,
+        menu: &NSMenu,
+        handler: &MenuHandler,
+        paths: &[PathBuf],
+    ) {
         menu.removeAllItems();
         let mut any_files = false;
         for (index, path) in paths.iter().enumerate() {

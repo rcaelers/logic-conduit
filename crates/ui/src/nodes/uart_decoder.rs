@@ -26,7 +26,9 @@ pub struct UartDecoderState {
 }
 
 pub const DISPLAY_FORMATS: &[&str] = &["Hex", "Binary", "Octal", "Decimal", "ASCII", "Hex + ASCII"];
-pub fn default_display_format() -> EnumValue { EnumValue::new(0, DISPLAY_FORMATS) }
+pub fn default_display_format() -> EnumValue {
+    EnumValue::new(0, DISPLAY_FORMATS)
+}
 
 const BAUD_PRESETS: &[&str] = &[
     "300",
@@ -116,7 +118,9 @@ impl NodeDef for UartDecoder {
         vec![PanelSection::new(
             "Options",
             vec![
-                PropDef::control("display_format", "Data display", |state| &mut state.display_format),
+                PropDef::control("display_format", "Data display", |state| {
+                    &mut state.display_format
+                }),
                 PropDef::control("baud_preset", "Baud rate", |state| &mut state.baud_preset),
                 PropDef::control("baud_rate", "Custom baud rate", |state| {
                     &mut state.baud_rate

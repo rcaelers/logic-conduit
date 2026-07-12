@@ -97,9 +97,10 @@ impl Toasts {
                                     (alpha * 255.0) as u8,
                                 ),
                             ),
-                            Severity::Error => {
-                                (Color32::from_rgb(92, 38, 38), Color32::from_rgb(240, 210, 210))
-                            }
+                            Severity::Error => (
+                                Color32::from_rgb(92, 38, 38),
+                                Color32::from_rgb(240, 210, 210),
+                            ),
                         };
                         egui::Frame::new()
                             .fill(bg)

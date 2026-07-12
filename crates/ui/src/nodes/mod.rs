@@ -562,7 +562,9 @@ mod tests {
         // serialization details.
         assert_eq!(
             saved["nodes"].as_object().map_or(0, serde_json::Map::len),
-            generated["nodes"].as_object().map_or(0, serde_json::Map::len)
+            generated["nodes"]
+                .as_object()
+                .map_or(0, serde_json::Map::len)
         );
         assert_eq!(
             saved["connections"].as_array().map_or(0, Vec::len),

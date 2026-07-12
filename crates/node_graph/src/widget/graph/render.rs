@@ -222,8 +222,8 @@ impl NodeGraphWidget {
                     // so half of each socket shape draws outside it and
                     // would otherwise stay bright while the rest dims.
                     let bulge = self.view.scale(SOCKET_RADIUS * 1.3);
-                    let screen_rect =
-                        to_screen_rect(widget.node_rect(), &self.view, origin).expand2(Vec2::new(bulge, 0.0));
+                    let screen_rect = to_screen_rect(widget.node_rect(), &self.view, origin)
+                        .expand2(Vec2::new(bulge, 0.0));
                     painter.rect_filled(
                         screen_rect,
                         CornerRadius::same(5),

@@ -154,7 +154,9 @@ impl LogicAnalyzerViewer {
         if !layout.labels_rect.contains(pointer) {
             return false;
         }
-        let Some(row) = self.row_at_vertical(layout.labels_rect.top(), pointer.y, layout.row_height) else {
+        let Some(row) =
+            self.row_at_vertical(layout.labels_rect.top(), pointer.y, layout.row_height)
+        else {
             return false;
         };
         let Some(key) = self.row_order.get(row).cloned() else {

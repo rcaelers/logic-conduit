@@ -575,7 +575,12 @@ fn draw_badge(painter: &Painter, node_screen_rect: Rect, badge: &NodeBadge, zoom
 /// bypasses through, per `Node::mute_pass_through_pairs`. An output with no
 /// paired input (a type-transforming node, or a source with none at all)
 /// simply gets no line — nothing passes through it while muted.
-fn draw_mute_pass_through(painter: &Painter, node: &Node, layout: &NodeLayout, s: &impl Fn(Pos2) -> Pos2) {
+fn draw_mute_pass_through(
+    painter: &Painter,
+    node: &Node,
+    layout: &NodeLayout,
+    s: &impl Fn(Pos2) -> Pos2,
+) {
     for (out_idx, in_idx) in node.mute_pass_through_pairs() {
         let (Some(out_pos), Some(in_pos)) = (
             layout.output_socket_pos.get(out_idx).copied().flatten(),

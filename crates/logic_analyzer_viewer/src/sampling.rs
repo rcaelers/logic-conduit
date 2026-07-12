@@ -75,7 +75,8 @@ impl LogicAnalyzerViewer {
             return;
         }
 
-        let Some(channel_row) = self.row_at_vertical(wave_rect.top(), pointer.y, layout.row_height) else {
+        let Some(channel_row) = self.row_at_vertical(wave_rect.top(), pointer.y, layout.row_height)
+        else {
             return;
         };
         let Some(channel) = self.channel_at_row(channel_row) else {
