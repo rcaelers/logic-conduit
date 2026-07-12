@@ -2049,6 +2049,10 @@ mod tests {
                 .iter()
                 .find_map(|lane| match &lane.data {
                     dsl::DerivedLaneData::Annotations(a) => Some(a.len()),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    dsl::DerivedLaneData::IndexedAnnotations(indexed) => {
+                        Some(indexed.metadata().total_word_count as usize)
+                    }
                     _ => None,
                 })
                 .expect("a words lane");

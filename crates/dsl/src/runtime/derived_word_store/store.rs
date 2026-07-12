@@ -743,7 +743,8 @@ impl IndexedAnnotationWriter {
 
             if self.builder.push(word)? == PushResult::BlockFull {
                 self.commit_current_block()?;
-                debug_assert_eq!(self.builder.push(word)?, PushResult::Appended);
+                let result = self.builder.push(word)?;
+                debug_assert_eq!(result, PushResult::Appended);
             }
             self.last_timestamp_ns = Some(word.timestamp_ns);
             self.words_since_tail_publish += 1;

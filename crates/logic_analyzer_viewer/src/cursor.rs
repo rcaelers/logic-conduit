@@ -171,6 +171,8 @@ impl LogicAnalyzerViewer {
                         DerivedLaneData::Annotations(annotations) => {
                             Some(nearest_annotation_boundary_time(annotations, time_us))
                         }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        DerivedLaneData::IndexedAnnotations(_) => Some(None),
                         _ => None,
                     })
             }),

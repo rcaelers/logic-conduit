@@ -62,6 +62,10 @@ impl LogicAnalyzerViewer {
                 let (badge_color, badge_glyph) = match &lane.data {
                     DerivedLaneData::Digital(_) => (Color32::from_rgb(95, 175, 95), "S"),
                     DerivedLaneData::Annotations(_) => (Color32::from_rgb(215, 140, 60), "W"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    DerivedLaneData::IndexedAnnotations(_) => {
+                        (Color32::from_rgb(215, 140, 60), "W")
+                    }
                     DerivedLaneData::Markers(_) => (Color32::from_rgb(230, 190, 80), "T"),
                 };
                 let name = self
@@ -390,6 +394,8 @@ impl LogicAnalyzerViewer {
                     ))),
                     // No boolean level to measure or toggle to snap to.
                     LaneSummary::Annotations(_) => None,
+                    #[cfg(not(target_arch = "wasm32"))]
+                    LaneSummary::IndexedAnnotations => None,
                 }
             }
         }

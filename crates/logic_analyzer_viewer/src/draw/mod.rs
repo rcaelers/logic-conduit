@@ -237,6 +237,10 @@ impl LogicAnalyzerViewer {
                                 summary,
                             );
                         }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        DerivedLaneData::IndexedAnnotations(_) => {
+                            // Step 6 renders this lane through its bounded query handle.
+                        }
                         DerivedLaneData::Markers(markers) => {
                             self.draw_derived_markers(&clip, wave_rect, y_top, row_height, markers);
                         }

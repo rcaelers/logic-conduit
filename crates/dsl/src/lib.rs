@@ -64,6 +64,8 @@ pub use nodes::logic::{
     BufferNode, GateOp, LogicGate, MatchOp, SrLatch, TextFormatter, TriggerAt, TriggerCounter,
     WordMatcher,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use nodes::sinks::IndexedAnnotationLane;
 pub use nodes::sinks::{
     Annotation, AnnotationFold, BinaryFileWriter, DEFAULT_VIEWER_MAX_ENTRIES, DerivedLane,
     DerivedLaneData, DerivedLanes, DigitalFold, LaneSummary, MarkerFold, TextFileWriter,

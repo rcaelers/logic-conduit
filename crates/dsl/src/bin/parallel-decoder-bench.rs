@@ -381,7 +381,7 @@ mod native {
                 .unwrap_or_else(|| "unavailable".to_string());
             if matches!(self.sink, SinkKind::Viewer) {
                 println!(
-                    "mode={:?} protocol={} workers={} queue_peak={} reorder_peak={} fragment_mib={:.1} strobe_activity_ratio={} sink={:?} samples={} words_retained={} output_hash={:016x} hash_scope={} viewer_drain_s={:.3} viewer_append_s={:.3} viewer_batches={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3} {}",
+                    "mode={:?} protocol={} workers={} queue_peak={} reorder_peak={} fragment_mib={:.1} strobe_activity_ratio={} sink={:?} samples={} words_indexed={} output_hash=unmeasured viewer_drain_s={:.3} viewer_append_s={:.3} viewer_batches={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3} {}",
                     self.mode,
                     self.selected_protocol,
                     self.workers,
@@ -392,9 +392,6 @@ mod native {
                     self.sink,
                     self.samples,
                     self.words,
-                    self.fingerprint.expect("viewer result has a fingerprint"),
-                    self.fingerprint_scope
-                        .expect("viewer result has a hash scope"),
                     self.viewer_drain_ns as f64 / 1_000_000_000.0,
                     self.viewer_append_ns as f64 / 1_000_000_000.0,
                     self.viewer_batches,
@@ -575,6 +572,13 @@ mod native {
                     let mut stats = OutputStats::default();
                     stats.extend_annotations(annotations);
                     (stats, Some("retained-annotations"))
+                }
+                Some(DerivedLaneData::IndexedAnnotations(indexed)) => {
+                    let stats = OutputStats {
+                        count: indexed.metadata().total_word_count,
+                        ..OutputStats::default()
+                    };
+                    (stats, None)
                 }
                 _ => (OutputStats::default(), Some("retained-annotations")),
             }
