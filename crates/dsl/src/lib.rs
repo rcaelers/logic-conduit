@@ -37,13 +37,11 @@ pub use nodes::logic::{
     BufferNode, GateOp, LogicGate, MatchOp, SrLatch, TextFormatter, TriggerAt, TriggerCounter,
     WordMatcher,
 };
-#[cfg(not(target_arch = "wasm32"))]
-pub use nodes::sinks::IndexedAnnotationLane;
 pub use nodes::sinks::{
     Annotation, AnnotationFold, BinaryFileWriter, CsvValueFormat, CsvWordWriter,
     DEFAULT_VIEWER_MAX_ENTRIES, DerivedLane, DerivedLaneData, DerivedLanes, DigitalFold,
-    LaneSummary, MarkerFold, TextFileWriter, TgckRecorder, ViewerLaneKind, ViewerRetention,
-    ViewerSink, ViewerSinkMetrics, ViewerSinkMetricsSnapshot, WriteWidth,
+    IndexedAnnotationLane, LaneSummary, MarkerFold, TextFileWriter, TgckRecorder, ViewerLaneKind,
+    ViewerRetention, ViewerSink, ViewerSinkMetrics, ViewerSinkMetricsSnapshot, WriteWidth,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use nodes::{

@@ -463,8 +463,7 @@ mod tests {
 
     fn capture(total_samples: u64) -> CaptureInfo {
         CaptureInfo {
-            #[cfg(not(target_arch = "wasm32"))]
-            path: std::path::PathBuf::new(),
+            display_name: "capture".to_string(),
             header: CaptureMetadata {
                 total_probes: 1,
                 samplerate: "1 GHz".to_string(),

@@ -28,7 +28,7 @@ use crate::runtime::{Annotation, MAX_ANNOTATION_NS, Word, instantaneous_word_end
 const MAX_PRESENCE_RUNS_PER_BLOCK: usize = 256;
 static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(1);
 
-pub(super) fn default_working_directory() -> PathBuf {
+pub(crate) fn default_working_directory() -> PathBuf {
     std::env::temp_dir()
 }
 

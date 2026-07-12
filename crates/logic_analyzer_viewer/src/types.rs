@@ -1,6 +1,3 @@
-#[cfg(not(target_arch = "wasm32"))]
-use std::path::PathBuf;
-
 use dsl::CaptureMetadata;
 use egui::{Color32, Pos2, Rect};
 
@@ -190,8 +187,7 @@ pub(crate) struct ExactWindow {
 
 #[derive(Debug, Clone)]
 pub(crate) struct CaptureInfo {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) path: PathBuf,
+    pub(crate) display_name: String,
     pub(crate) header: CaptureMetadata,
     pub(crate) duration_us: f64,
 }

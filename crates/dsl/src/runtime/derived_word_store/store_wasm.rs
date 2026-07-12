@@ -17,7 +17,7 @@ use super::query::{
 use super::state::{LiveStoreMetadata, LiveStoreSnapshot, StoreStatus};
 use crate::runtime::{Annotation, Word};
 
-pub(super) fn default_working_directory() -> PathBuf {
+pub(crate) fn default_working_directory() -> PathBuf {
     PathBuf::new()
 }
 

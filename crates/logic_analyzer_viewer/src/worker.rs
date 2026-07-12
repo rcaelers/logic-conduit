@@ -52,7 +52,11 @@ impl LogicAnalyzerViewer {
                         continue;
                     }
                     self.capture_info = Some(CaptureInfo {
-                        path: path.clone(),
+                        display_name: path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("capture")
+                            .to_string(),
                         header: header.clone(),
                         duration_us,
                     });
@@ -198,11 +202,7 @@ pub(crate) fn spawn_capture_worker(
 pub(crate) fn capture_status(capture: &CaptureInfo) -> String {
     format!(
         "{} · {} · {:.1} MHz · {} samples",
-        capture
-            .path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("capture"),
+        capture.display_name,
         capture.header.samplerate,
         capture.header.samplerate_hz / 1_000_000.0,
         capture.header.total_samples

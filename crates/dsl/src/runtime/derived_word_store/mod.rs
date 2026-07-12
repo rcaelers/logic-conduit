@@ -18,30 +18,24 @@ mod crc32c;
 mod format;
 #[cfg(not(target_arch = "wasm32"))]
 mod persistent;
+mod platform;
 mod presence;
 mod query;
 mod state;
-#[cfg_attr(target_arch = "wasm32", path = "store_wasm.rs")]
-mod store;
 #[cfg(not(target_arch = "wasm32"))]
 mod vlq;
 
+pub(crate) use platform::store;
+
 pub(crate) use backend::{AnnotationStoreBackend, AnnotationStoreWriterBackend};
-#[cfg(not(target_arch = "wasm32"))]
-pub use cache::{
-    DecodedBlockCacheStats, configure_decoded_block_cache, decoded_block_cache_stats,
-    reset_decoded_block_cache_stats,
-};
 pub use config::{BlockCodecConfig, LiveStoreConfig, PersistentStoreConfig};
-#[cfg(not(target_arch = "wasm32"))]
-pub use persistent::{cleanup_cache, clear_cache, clear_cache_entry, default_cache_directory};
+pub use platform::*;
 pub use query::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
     ExactAnnotationWindow, WordPresenceBucket,
 };
 pub(crate) use state::LiveStoreMetadata;
 pub use state::StoreStatus;
-pub use store::{IndexedAnnotationStore, IndexedAnnotationWriter, StoreResult};
 
 /// Errors caused by malformed input or a word stream that cannot be encoded.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
