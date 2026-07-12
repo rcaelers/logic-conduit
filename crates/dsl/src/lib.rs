@@ -67,10 +67,10 @@ pub use nodes::logic::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use nodes::sinks::IndexedAnnotationLane;
 pub use nodes::sinks::{
-    Annotation, AnnotationFold, BinaryFileWriter, DEFAULT_VIEWER_MAX_ENTRIES, DerivedLane,
-    DerivedLaneData, DerivedLanes, DigitalFold, LaneSummary, MarkerFold, TextFileWriter,
-    TgckRecorder, ViewerLaneKind, ViewerRetention, ViewerSink, ViewerSinkMetrics,
-    ViewerSinkMetricsSnapshot, WriteWidth,
+    Annotation, AnnotationFold, BinaryFileWriter, CsvValueFormat, CsvWordWriter,
+    DEFAULT_VIEWER_MAX_ENTRIES, DerivedLane, DerivedLaneData, DerivedLanes, DigitalFold,
+    LaneSummary, MarkerFold, TextFileWriter, TgckRecorder, ViewerLaneKind, ViewerRetention,
+    ViewerSink, ViewerSinkMetrics, ViewerSinkMetricsSnapshot, WriteWidth,
 };
 pub use runtime::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 

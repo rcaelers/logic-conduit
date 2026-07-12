@@ -268,6 +268,20 @@ impl IndexedAnnotationStore {
         self.shared.state.read().unwrap().directory.clone()
     }
 
+    /// Visits each immutable committed block in timestamp order without
+    /// cloning its decoded word vector. Intended for validation and export.
+    pub fn visit_committed_blocks(
+        &self,
+        mut visitor: impl FnMut(&DecodedWordBlock),
+    ) -> StoreResult<()> {
+        let directory = self.shared.state.read().unwrap().directory.clone();
+        for entry in directory {
+            let block = self.read_cached_entry(entry)?;
+            visitor(&block);
+        }
+        Ok(())
+    }
+
     pub fn temp_path(&self) -> &Path {
         &self.shared.path
     }

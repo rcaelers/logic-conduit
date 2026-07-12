@@ -10,6 +10,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod native {
     use clap::{Parser, ValueEnum};
     use dsl::runtime::ProtocolKind;
+    use dsl::runtime::derived_word_store::{
+        DEFAULT_MAX_WORDS_PER_BLOCK, DEFAULT_RESTART_INTERVAL, DecodedBlockCacheStats,
+        LiveStoreConfig, PersistentStoreConfig, configure_decoded_block_cache,
+        decoded_block_cache_stats, reset_decoded_block_cache_stats,
+    };
     use dsl::{
         CsPolarity, DerivedLaneData, DerivedLanes, DslFileSource, InputPort, OutputPort,
         ParallelDecoder, ParallelInputStrategy, Pipeline, PortSchema, ProcessNode, StrobeMode,
@@ -46,6 +51,12 @@ mod native {
         Count,
         Retain,
         Viewer,
+    }
+
+    #[derive(Clone, Copy, Debug, ValueEnum)]
+    enum CacheKind {
+        Temporary,
+        Persistent,
     }
 
     #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -125,12 +136,32 @@ mod native {
         buffer: usize,
 
         /// Packed fragment scans allowed concurrently (1-8).
-        #[arg(long, default_value_t = 1)]
+        #[arg(long, default_value_t = 4)]
         workers: usize,
 
         /// Maximum retained annotations for the viewer sink.
         #[arg(long, default_value_t = 4_000_000)]
         viewer_max_entries: usize,
+
+        /// Indexed viewer cache publication mode.
+        #[arg(long, value_enum, default_value_t = CacheKind::Temporary)]
+        cache: CacheKind,
+
+        /// Shared decoded-word block cache budget used by query validation.
+        #[arg(long, default_value_t = 64)]
+        decoded_cache_mib: usize,
+
+        /// Number of exact, presence, and cursor queries in post-run validation.
+        #[arg(long, default_value_t = 200)]
+        query_samples: usize,
+
+        /// Maximum words per encoded derived-store block.
+        #[arg(long, default_value_t = DEFAULT_MAX_WORDS_PER_BLOCK)]
+        store_block_words: usize,
+
+        /// Word interval between random-access restart records.
+        #[arg(long, default_value_t = DEFAULT_RESTART_INTERVAL)]
+        store_restart_interval: usize,
     }
 
     struct CountWords {
@@ -342,6 +373,41 @@ mod native {
         })
     }
 
+    #[derive(Debug, Clone, Copy, Default)]
+    struct LatencyMetrics {
+        median_us: f64,
+        p95_us: f64,
+    }
+
+    impl LatencyMetrics {
+        fn from_durations(mut durations: Vec<Duration>) -> Self {
+            if durations.is_empty() {
+                return Self::default();
+            }
+            durations.sort_unstable();
+            let median = durations[durations.len() / 2];
+            let p95 = durations[(durations.len() * 95 / 100).min(durations.len() - 1)];
+            Self {
+                median_us: median.as_secs_f64() * 1_000_000.0,
+                p95_us: p95.as_secs_f64() * 1_000_000.0,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct IndexedStoreMetrics {
+        data_bytes: u64,
+        bytes_per_word: f64,
+        blocks: usize,
+        restarts: u64,
+        validation: Duration,
+        exact_cold: LatencyMetrics,
+        exact_warm: LatencyMetrics,
+        presence: LatencyMetrics,
+        cursor: LatencyMetrics,
+        decoded_cache: DecodedBlockCacheStats,
+    }
+
     struct BenchResult {
         mode: BenchMode,
         sink: SinkKind,
@@ -363,6 +429,7 @@ mod native {
         viewer_drain_ns: u64,
         viewer_append_ns: u64,
         viewer_batches: u64,
+        indexed_store: Option<IndexedStoreMetrics>,
     }
 
     impl BenchResult {
@@ -380,8 +447,12 @@ mod native {
                 .map(|ratio| format!("{ratio:.6}"))
                 .unwrap_or_else(|| "unavailable".to_string());
             if matches!(self.sink, SinkKind::Viewer) {
+                let output_hash = self
+                    .fingerprint
+                    .map(|fingerprint| format!("{fingerprint:016x}"))
+                    .unwrap_or_else(|| "unmeasured".to_string());
                 println!(
-                    "mode={:?} protocol={} workers={} queue_peak={} reorder_peak={} fragment_mib={:.1} strobe_activity_ratio={} sink={:?} samples={} words_indexed={} output_hash=unmeasured viewer_drain_s={:.3} viewer_append_s={:.3} viewer_batches={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3} {}",
+                    "mode={:?} protocol={} workers={} queue_peak={} reorder_peak={} fragment_mib={:.1} strobe_activity_ratio={} sink={:?} samples={} words_indexed={} output_hash={} hash_scope={} viewer_drain_s={:.3} viewer_append_s={:.3} viewer_batches={} setup_s={:.3} run_s={:.3} capture_s={:.3} MSamples_s={:.3} realtime_x={:.3} {}",
                     self.mode,
                     self.selected_protocol,
                     self.workers,
@@ -392,6 +463,8 @@ mod native {
                     self.sink,
                     self.samples,
                     self.words,
+                    output_hash,
+                    self.fingerprint_scope.unwrap_or("unmeasured"),
                     self.viewer_drain_ns as f64 / 1_000_000_000.0,
                     self.viewer_append_ns as f64 / 1_000_000_000.0,
                     self.viewer_batches,
@@ -402,6 +475,34 @@ mod native {
                     realtime,
                     resources,
                 );
+                if let Some(store) = self.indexed_store {
+                    let requests = store.decoded_cache.hits + store.decoded_cache.misses;
+                    let hit_rate = if requests == 0 {
+                        0.0
+                    } else {
+                        store.decoded_cache.hits as f64 / requests as f64
+                    };
+                    println!(
+                        "indexed_store data_bytes={} bytes_per_word={:.3} blocks={} restarts={} validation_s={:.3} exact_cold_median_us={:.1} exact_cold_p95_us={:.1} exact_warm_median_us={:.1} exact_warm_p95_us={:.1} presence_median_us={:.1} presence_p95_us={:.1} cursor_median_us={:.1} cursor_p95_us={:.1} decoded_cache_hits={} decoded_cache_misses={} decoded_cache_hit_rate={:.3} decoded_cache_mib={:.1}",
+                        store.data_bytes,
+                        store.bytes_per_word,
+                        store.blocks,
+                        store.restarts,
+                        store.validation.as_secs_f64(),
+                        store.exact_cold.median_us,
+                        store.exact_cold.p95_us,
+                        store.exact_warm.median_us,
+                        store.exact_warm.p95_us,
+                        store.presence.median_us,
+                        store.presence.p95_us,
+                        store.cursor.median_us,
+                        store.cursor.p95_us,
+                        store.decoded_cache.hits,
+                        store.decoded_cache.misses,
+                        hit_rate,
+                        store.decoded_cache.memory_bytes as f64 / (1024.0 * 1024.0),
+                    );
+                }
             } else if self.words_measured {
                 let mwords_per_second = self.words as f64 / seconds / 1_000_000.0;
                 println!(
@@ -450,7 +551,126 @@ mod native {
         }
     }
 
+    fn benchmark_indexed_store(
+        lane: &dsl::IndexedAnnotationLane,
+        query_samples: usize,
+    ) -> Result<(OutputStats, IndexedStoreMetrics), Box<dyn std::error::Error>> {
+        let storage = lane.storage_metadata();
+        let metadata = lane.metadata();
+        let first = metadata.first_timestamp_ns.unwrap_or(0);
+        let end = metadata.extent_end_ns.unwrap_or(first).max(first);
+        let span = end.saturating_sub(first);
+        let sample_count = query_samples.max(1);
+        let positions: Vec<_> = (0..sample_count)
+            .map(|index| {
+                let permuted = index.wrapping_mul(97) % sample_count;
+                first.saturating_add(
+                    (u128::from(span) * permuted as u128 / sample_count as u128) as u64,
+                )
+            })
+            .collect();
+
+        reset_decoded_block_cache_stats();
+        let mut exact_cold = Vec::with_capacity(sample_count);
+        let mut exact_warm = Vec::with_capacity(sample_count);
+        for &position in &positions {
+            let query_end = position.saturating_add(100_000).min(end);
+            let started = Instant::now();
+            let cold = lane.query.exact_window(position, query_end, 4_096)?;
+            exact_cold.push(started.elapsed());
+            if !cold.complete {
+                return Err("exact validation window exceeded 4,096 words".into());
+            }
+            let started = Instant::now();
+            let warm = lane.query.exact_window(position, query_end, 4_096)?;
+            exact_warm.push(started.elapsed());
+            if cold.annotations != warm.annotations {
+                return Err("cold and warm exact queries returned different words".into());
+            }
+        }
+
+        let mut presence = Vec::with_capacity(sample_count);
+        for _ in 0..sample_count {
+            let started = Instant::now();
+            let buckets = lane.query.presence_window(first, end, 1_920)?;
+            presence.push(started.elapsed());
+            if metadata.total_word_count > 0 && buckets.is_empty() {
+                return Err("full-extent presence query returned no buckets".into());
+            }
+        }
+
+        let mut cursor = Vec::with_capacity(sample_count);
+        for &position in &positions {
+            let started = Instant::now();
+            let _ = lane.query.nearest_boundary(position, 1_000_000)?;
+            cursor.push(started.elapsed());
+        }
+        let decoded_cache = decoded_block_cache_stats();
+
+        let validation_started = Instant::now();
+        let mut stats = OutputStats::default();
+        let mut blocks = 0usize;
+        let mut restarts = 0u64;
+        lane.visit_committed_blocks(|block| {
+            blocks += 1;
+            restarts += u64::from(block.header.restart_count);
+            stats.extend_words(&block.words);
+        })?;
+        let validation = validation_started.elapsed();
+        if stats.count != metadata.total_word_count {
+            return Err(format!(
+                "indexed store contains {} words but metadata reports {}",
+                stats.count, metadata.total_word_count
+            )
+            .into());
+        }
+
+        Ok((
+            stats,
+            IndexedStoreMetrics {
+                data_bytes: storage.committed_data_len,
+                bytes_per_word: if stats.count == 0 {
+                    0.0
+                } else {
+                    storage.committed_data_len as f64 / stats.count as f64
+                },
+                blocks,
+                restarts,
+                validation,
+                exact_cold: LatencyMetrics::from_durations(exact_cold),
+                exact_warm: LatencyMetrics::from_durations(exact_warm),
+                presence: LatencyMetrics::from_durations(presence),
+                cursor: LatencyMetrics::from_durations(cursor),
+                decoded_cache,
+            },
+        ))
+    }
+
+    fn benchmark_cache_key(mode: BenchMode, samples: u64) -> [u8; 32] {
+        let mut key = [0u8; 32];
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+            .to_le_bytes();
+        key[..16].copy_from_slice(&now);
+        key[16..24].copy_from_slice(&samples.to_le_bytes());
+        key[24..28].copy_from_slice(&std::process::id().to_le_bytes());
+        key[28] = match mode {
+            BenchMode::Indexed => 1,
+            BenchMode::Stream => 2,
+            BenchMode::Auto => 3,
+            BenchMode::Both => 4,
+        };
+        key
+    }
+
     fn run(args: &Args, mode: BenchMode) -> Result<BenchResult, Box<dyn std::error::Error>> {
+        let decoded_cache_bytes = args
+            .decoded_cache_mib
+            .checked_mul(1024 * 1024)
+            .ok_or("--decoded-cache-mib is too large")?;
+        configure_decoded_block_cache(decoded_cache_bytes);
         let required_channels = args
             .data
             .iter()
@@ -506,6 +726,7 @@ mod native {
         let retained_words = Arc::new(Mutex::new(Vec::<Word>::new()));
         let viewer_metrics = ViewerSinkMetrics::default();
         let mut viewer_store = None;
+        let word_store_directory = tempfile::tempdir()?;
         let sink_port;
         let mut pipeline = Pipeline::new().with_default_buffer_size(args.buffer);
         pipeline.add_process("source", source)?;
@@ -524,11 +745,24 @@ mod native {
             }
             SinkKind::Viewer => {
                 let store = DerivedLanes::new();
+                let mut store_config = LiveStoreConfig {
+                    directory: word_store_directory.path().to_path_buf(),
+                    ..LiveStoreConfig::default()
+                };
+                store_config.block.max_words = args.store_block_words.max(1);
+                store_config.block.restart_interval = args.store_restart_interval.max(1);
+                if matches!(args.cache, CacheKind::Persistent) {
+                    store_config.persistence = Some(PersistentStoreConfig::new(
+                        word_store_directory.path(),
+                        benchmark_cache_key(mode, samples),
+                    ));
+                }
                 pipeline.add_process(
                     "sink",
                     ViewerSink::new(store.clone())
                         .with_retention(ViewerRetention::MaxEntries(args.viewer_max_entries.max(1)))
                         .with_metrics(viewer_metrics.clone())
+                        .with_word_store_config(store_config)
                         .with_lane(ViewerLaneKind::Words, "parallel"),
                 )?;
                 viewer_store = Some(store);
@@ -565,6 +799,7 @@ mod native {
         let parallel_metrics = parallel_metrics.snapshot();
         let viewer_metrics = viewer_metrics.snapshot();
 
+        let mut indexed_store = None;
         let (stats, fingerprint_scope) = if let Some(store) = viewer_store {
             let lanes = store.read();
             match lanes.first().map(|lane| &lane.data) {
@@ -574,11 +809,9 @@ mod native {
                     (stats, Some("retained-annotations"))
                 }
                 Some(DerivedLaneData::IndexedAnnotations(indexed)) => {
-                    let stats = OutputStats {
-                        count: indexed.metadata().total_word_count,
-                        ..OutputStats::default()
-                    };
-                    (stats, None)
+                    let (stats, metrics) = benchmark_indexed_store(indexed, args.query_samples)?;
+                    indexed_store = Some(metrics);
+                    (stats, Some("indexed-store"))
                 }
                 _ => (OutputStats::default(), Some("retained-annotations")),
             }
@@ -613,6 +846,7 @@ mod native {
             viewer_drain_ns: viewer_metrics.drain_ns,
             viewer_append_ns: viewer_metrics.append_ns,
             viewer_batches: viewer_metrics.batches,
+            indexed_store,
         })
     }
 
@@ -792,7 +1026,7 @@ mod native {
             assert_eq!(args.cs, Some(8));
             assert!(matches!(args.cs_polarity, BenchCsPolarity::ActiveLow));
             assert_eq!(args.viewer_max_entries, 4_000_000);
-            assert_eq!(args.workers, 1);
+            assert_eq!(args.workers, 4);
         }
 
         #[test]

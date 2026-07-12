@@ -4,6 +4,15 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 pub const DEFAULT_DECODED_BLOCK_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DecodedBlockCacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub entries: usize,
+    pub memory_bytes: usize,
+    pub budget_bytes: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct CacheKey {
     store_id: u64,
@@ -21,6 +30,8 @@ struct DecodedBlockCache {
     memory_bytes: usize,
     budget_bytes: usize,
     access_clock: u64,
+    hits: u64,
+    misses: u64,
 }
 
 impl DecodedBlockCache {
@@ -30,12 +41,18 @@ impl DecodedBlockCache {
             memory_bytes: 0,
             budget_bytes: DEFAULT_DECODED_BLOCK_CACHE_BYTES,
             access_clock: 0,
+            hits: 0,
+            misses: 0,
         }
     }
 
     fn get(&mut self, key: CacheKey) -> Option<Arc<DecodedWordBlock>> {
         self.access_clock = self.access_clock.wrapping_add(1);
-        let entry = self.entries.get_mut(&key)?;
+        let Some(entry) = self.entries.get_mut(&key) else {
+            self.misses += 1;
+            return None;
+        };
+        self.hits += 1;
         entry.last_access = self.access_clock;
         Some(Arc::clone(&entry.block))
     }
@@ -58,6 +75,10 @@ impl DecodedBlockCache {
                 last_access: self.access_clock,
             },
         );
+        self.evict_to_budget();
+    }
+
+    fn evict_to_budget(&mut self) {
         while self.memory_bytes > self.budget_bytes {
             let Some((&oldest_key, _)) = self
                 .entries
@@ -69,6 +90,16 @@ impl DecodedBlockCache {
             if let Some(removed) = self.entries.remove(&oldest_key) {
                 self.memory_bytes -= removed.memory_bytes;
             }
+        }
+    }
+
+    fn stats(&self) -> DecodedBlockCacheStats {
+        DecodedBlockCacheStats {
+            hits: self.hits,
+            misses: self.misses,
+            entries: self.entries.len(),
+            memory_bytes: self.memory_bytes,
+            budget_bytes: self.budget_bytes,
         }
     }
 }
@@ -97,6 +128,22 @@ pub(super) fn cache_block(store_id: u64, block: Arc<DecodedWordBlock>) {
         .lock()
         .unwrap()
         .insert(CacheKey { store_id, sequence }, block);
+}
+
+pub fn configure_decoded_block_cache(budget_bytes: usize) {
+    let mut cache = shared_cache().lock().unwrap();
+    cache.budget_bytes = budget_bytes;
+    cache.evict_to_budget();
+}
+
+pub fn decoded_block_cache_stats() -> DecodedBlockCacheStats {
+    shared_cache().lock().unwrap().stats()
+}
+
+pub fn reset_decoded_block_cache_stats() {
+    let mut cache = shared_cache().lock().unwrap();
+    cache.hits = 0;
+    cache.misses = 0;
 }
 
 #[cfg(test)]

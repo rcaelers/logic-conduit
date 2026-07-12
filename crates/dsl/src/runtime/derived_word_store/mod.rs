@@ -18,7 +18,10 @@ mod store;
 mod vlq;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use cache::DEFAULT_DECODED_BLOCK_CACHE_BYTES;
+pub use cache::{
+    DEFAULT_DECODED_BLOCK_CACHE_BYTES, DecodedBlockCacheStats, configure_decoded_block_cache,
+    decoded_block_cache_stats, reset_decoded_block_cache_stats,
+};
 pub use codec::{
     BlockCodecConfig, DecodedWordBlock, DecodedWordRange, EncodedBlockMetadata, PushResult,
     WordBlockBuilder, decode_word_block, decode_word_block_range, encode_word_block,

@@ -748,9 +748,14 @@ mod tests {
             .map(|index| Word::new(index as u64, index as u64 * 10))
             .collect();
         let (metadata, _) = round_trip(&words);
-        assert_eq!(metadata.restarts.len(), 4);
-        assert_eq!(metadata.restarts[1].record_index, 256);
-        assert_eq!(metadata.restarts[3].record_index, 768);
+        assert_eq!(
+            metadata.restarts.len(),
+            words.len().div_ceil(DEFAULT_RESTART_INTERVAL)
+        );
+        assert_eq!(
+            metadata.restarts[1].record_index as usize,
+            DEFAULT_RESTART_INTERVAL
+        );
     }
 
     #[test]
@@ -870,7 +875,7 @@ mod tests {
 
     #[test]
     fn decoder_validates_restart_structure_after_checksum() {
-        let words: Vec<_> = (0..300)
+        let words: Vec<_> = (0..DEFAULT_RESTART_INTERVAL + 44)
             .map(|index| Word::new(index as u64, index as u64 * 10))
             .collect();
         let (metadata, mut bytes) = round_trip(&words);

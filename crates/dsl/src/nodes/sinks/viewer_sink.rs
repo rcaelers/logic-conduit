@@ -5,8 +5,8 @@
 use crate::runtime::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::derived_word_store::{
-    AnnotationQuery, AnnotationStoreMetadata, IndexedAnnotationStore, IndexedAnnotationWriter,
-    LiveStoreConfig, StoreStatus,
+    AnnotationQuery, AnnotationStoreMetadata, DecodedWordBlock, IndexedAnnotationStore,
+    IndexedAnnotationWriter, LiveStoreConfig, LiveStoreMetadata, StoreResult, StoreStatus,
 };
 use crate::runtime::events::{Annotation, Trigger, Word};
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
@@ -138,6 +138,17 @@ impl IndexedAnnotationLane {
 
     pub fn status(&self) -> StoreStatus {
         self.store.snapshot().metadata.status
+    }
+
+    pub fn storage_metadata(&self) -> LiveStoreMetadata {
+        self.store.snapshot().metadata
+    }
+
+    pub fn visit_committed_blocks(
+        &self,
+        visitor: impl FnMut(&DecodedWordBlock),
+    ) -> StoreResult<()> {
+        self.store.visit_committed_blocks(visitor)
     }
 }
 

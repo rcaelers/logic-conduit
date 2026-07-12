@@ -22,7 +22,7 @@
 
 use crate::Result;
 use crate::runtime::{BlockData, CaptureMetadata};
-use memmap2::Mmap;
+use memmap2::{Mmap, MmapOptions};
 use std::fs::{File, OpenOptions};
 use std::path::Path;
 use std::sync::Arc;
@@ -34,7 +34,6 @@ const SLOT_REGION_ALIGN: usize = 4096;
 
 pub(crate) struct RawBlockCache {
     file: File,
-    map: Arc<Mmap>,
     /// One validity bit per slot; kept in memory and written back on drop.
     bitmap: Vec<u8>,
     bitmap_dirty: bool,
@@ -91,7 +90,6 @@ impl RawBlockCache {
 
         Ok(Self {
             file,
-            map: Arc::new(map),
             bitmap,
             bitmap_dirty: false,
             slots_offset,
@@ -108,11 +106,21 @@ impl RawBlockCache {
         if self.bitmap[slot / 8] & (1 << (slot % 8)) == 0 {
             return None;
         }
-        Some(BlockData::mapped(
-            Arc::clone(&self.map),
-            self.slots_offset + slot * self.slot_bytes,
-            self.block_bytes(block),
-        ))
+        let offset = self.slots_offset + slot * self.slot_bytes;
+        let len = self.block_bytes(block);
+        // SAFETY: raw-cache slots are immutable after their validity bit is
+        // published, the cache file is never truncated while open, and every
+        // slot begins at the page-aligned fixed slot size. A per-slot mapping
+        // is released when its final SampleBlock view drops, bounding RSS for
+        // sequential multi-gigabyte captures without copying the payload.
+        let map = unsafe {
+            MmapOptions::new()
+                .offset(offset as u64)
+                .len(len)
+                .map(&self.file)
+                .ok()?
+        };
+        Some(BlockData::mapped(Arc::new(map), 0, len))
     }
 
     /// Stores freshly decompressed block bytes. Failures are ignored: the
