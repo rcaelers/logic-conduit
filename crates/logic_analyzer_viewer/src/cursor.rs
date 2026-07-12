@@ -1,8 +1,18 @@
 use crate::draw::annotation_box_end;
 use crate::types::{AnalyzerLayout, CursorInput, RowKey, TimeCursor, Transition};
 use crate::viewer::LogicAnalyzerViewer;
+#[cfg(not(target_arch = "wasm32"))]
+use dsl::runtime::derived_word_store::AnnotationQuery;
 use dsl::{Annotation, DerivedLaneData};
 use egui::{Color32, CursorIcon, FontId, PointerButton, Pos2, Rect, Response, Ui};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
+
+enum AnnotationBoundarySource {
+    InMemory(Option<f64>),
+    #[cfg(not(target_arch = "wasm32"))]
+    Indexed(Arc<dyn AnnotationQuery>),
+}
 
 impl LogicAnalyzerViewer {
     /// Drives cursor add / hover / drag / delete for one frame.
@@ -161,7 +171,7 @@ impl LogicAnalyzerViewer {
             return time_us;
         }
         let channel_row = ((pointer.y - wave_rect.top()) / row_height).floor() as usize;
-        let annotation_nearest = match self.row_order.get(channel_row) {
+        let annotation_source = match self.row_order.get(channel_row) {
             Some(RowKey::Derived(name)) => self.derived.as_ref().and_then(|store| {
                 let lanes = store.read();
                 lanes
@@ -169,16 +179,37 @@ impl LogicAnalyzerViewer {
                     .find(|lane| &lane.name == name)
                     .and_then(|lane| match &lane.data {
                         DerivedLaneData::Annotations(annotations) => {
-                            Some(nearest_annotation_boundary_time(annotations, time_us))
+                            Some(AnnotationBoundarySource::InMemory(
+                                nearest_annotation_boundary_time(annotations, time_us),
+                            ))
                         }
                         #[cfg(not(target_arch = "wasm32"))]
-                        DerivedLaneData::IndexedAnnotations(_) => Some(None),
+                        DerivedLaneData::IndexedAnnotations(indexed) => Some(
+                            AnnotationBoundarySource::Indexed(Arc::clone(&indexed.query)),
+                        ),
                         _ => None,
                     })
             }),
             _ => None,
         };
-        if let Some(nearest) = annotation_nearest {
+        if let Some(source) = annotation_source {
+            let nearest = match source {
+                AnnotationBoundarySource::InMemory(nearest) => nearest,
+                #[cfg(not(target_arch = "wasm32"))]
+                AnnotationBoundarySource::Indexed(query) => {
+                    let timestamp_ns = (time_us.max(0.0) * 1_000.0).round() as u64;
+                    let max_distance_ns =
+                        (self.visible_span_us * 1_000.0 * f64::from(SNAP_DISTANCE_PX)
+                            / f64::from(wave_rect.width().max(1.0)))
+                        .ceil()
+                        .max(1.0) as u64;
+                    query
+                        .nearest_boundary(timestamp_ns, max_distance_ns)
+                        .ok()
+                        .flatten()
+                        .map(|boundary_ns| boundary_ns as f64 / 1_000.0)
+                }
+            };
             let Some(nearest) = nearest else {
                 return time_us;
             };
@@ -348,6 +379,10 @@ mod cursor_tests {
     use super::*;
     use crate::sampling::pulse_measurement_from_window;
     use dsl::DerivedLanes;
+    #[cfg(not(target_arch = "wasm32"))]
+    use dsl::runtime::derived_word_store::{IndexedAnnotationWriter, LiveStoreConfig};
+    #[cfg(not(target_arch = "wasm32"))]
+    use dsl::{IndexedAnnotationLane, Word};
 
     fn transition(time_us: f64) -> Transition {
         Transition {
@@ -445,6 +480,36 @@ mod cursor_tests {
             viewer.snap_cursor_time(wave_rect, Pos2::new(210.0, 115.0), 21.0),
             21.0,
             "a boundary more than eight pixels away must not capture the cursor"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cursor_snaps_to_indexed_word_starts_and_explicit_ends() {
+        let (mut writer, store) =
+            IndexedAnnotationWriter::create(LiveStoreConfig::default()).unwrap();
+        writer
+            .append_batch(&[Word::spanning(0x27, 10_000, 10_000)])
+            .unwrap();
+        writer.finish().unwrap();
+        let lanes = DerivedLanes::new();
+        lanes.register(
+            "decoded.words",
+            DerivedLaneData::IndexedAnnotations(IndexedAnnotationLane::from_store(store)),
+        );
+        let mut viewer = LogicAnalyzerViewer::new();
+        viewer.visible_span_us = 100.0;
+        viewer.set_derived_lanes(lanes);
+        viewer.ensure_row_order();
+        let wave_rect = Rect::from_min_max(Pos2::new(0.0, 100.0), Pos2::new(1_000.0, 130.0));
+
+        assert_eq!(
+            viewer.snap_cursor_time(wave_rect, Pos2::new(105.0, 115.0), 10.5),
+            10.0
+        );
+        assert_eq!(
+            viewer.snap_cursor_time(wave_rect, Pos2::new(195.0, 115.0), 19.5),
+            20.0
         );
     }
 

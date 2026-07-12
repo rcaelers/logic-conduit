@@ -1,4 +1,6 @@
 use crate::channel::LogicChannel;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::indexed_annotations::IndexedAnnotationCacheEntry;
 use crate::types::{
     AnalyzerLayout, CaptureInfo, ColorProfile, IndexBuildProgress, PulseMeasurement, RowDragState,
     RowKey, RowRenameState, TimeCursor, Transition,
@@ -67,6 +69,8 @@ pub struct LogicAnalyzerViewer {
     /// Lanes produced by Viewer nodes of the running pipeline, rendered as
     /// extra rows under the raw channels. Swapped wholesale on each run.
     pub(crate) derived: Option<DerivedLanes>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) indexed_annotation_cache: HashMap<String, IndexedAnnotationCacheEntry>,
 }
 
 impl Default for LogicAnalyzerViewer {
@@ -101,6 +105,8 @@ impl LogicAnalyzerViewer {
             drag_cursor: None,
             color_profile: ColorProfile::DsView,
             derived: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            indexed_annotation_cache: HashMap::new(),
         }
     }
 
@@ -111,6 +117,8 @@ impl LogicAnalyzerViewer {
     /// previous run's lanes.
     pub fn set_derived_lanes(&mut self, lanes: DerivedLanes) {
         self.derived = Some(lanes);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.indexed_annotation_cache.clear();
     }
 
     /// Replaces the raw channel rows with `signals` — the generic way for a
@@ -242,6 +250,8 @@ impl LogicAnalyzerViewer {
         );
         self.sample_visible_window(layout);
         layout = self.layout(ui, rect);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.sample_indexed_annotations(layout);
         let hover_pointer = if cursor_input.blocks_pan {
             None
         } else {
@@ -253,6 +263,10 @@ impl LogicAnalyzerViewer {
         self.show_row_rename(ui.ctx());
         #[cfg(not(target_arch = "wasm32"))]
         {
+            if self.has_live_indexed_annotations() {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(50));
+            }
             if self.capture_path.is_some() && self.capture_info.is_none() {
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_millis(16));
@@ -371,7 +385,7 @@ impl LogicAnalyzerViewer {
 
     /// Returns the time viewport to its origin and fits the complete
     /// recording. Uses capture metadata when available, otherwise the latest
-    /// timestamp in the loaded channel transitions.
+    /// timestamp in loaded channel transitions or derived lanes.
     pub(crate) fn reset_time_view(&mut self) {
         self.visible_start_us = 0.0;
         if let Some(capture) = self.capture_info.as_ref() {
@@ -383,10 +397,51 @@ impl LogicAnalyzerViewer {
                 .iter()
                 .filter_map(|channel| channel.transitions.last())
                 .map(|transition| transition.time_us)
+                .chain(std::iter::once(self.derived_timeline_end_us()))
                 .fold(0.0_f64, f64::max)
                 .max(1.0);
             self.fit_to_capture = false;
         }
+    }
+
+    fn derived_timeline_end_us(&self) -> f64 {
+        let Some(derived) = self.derived.as_ref() else {
+            return 0.0;
+        };
+        let lanes = derived.read();
+        let end_ns = lanes
+            .iter()
+            .filter_map(|lane| match &lane.data {
+                dsl::DerivedLaneData::Digital(samples) => {
+                    samples.last().map(|sample| sample.start_time_ns)
+                }
+                dsl::DerivedLaneData::Annotations(annotations) => annotations
+                    .iter()
+                    .map(|annotation| annotation.end_ns.max(annotation.start_ns))
+                    .max(),
+                #[cfg(not(target_arch = "wasm32"))]
+                dsl::DerivedLaneData::IndexedAnnotations(indexed) => {
+                    indexed.metadata().extent_end_ns
+                }
+                dsl::DerivedLaneData::Markers(markers) => markers.last().copied(),
+            })
+            .max()
+            .unwrap_or(0);
+        end_ns as f64 / 1_000.0
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn has_live_indexed_annotations(&self) -> bool {
+        self.derived.as_ref().is_some_and(|derived| {
+            derived.read().iter().any(|lane| {
+                matches!(
+                    &lane.data,
+                    dsl::DerivedLaneData::IndexedAnnotations(indexed)
+                        if indexed.status()
+                            == dsl::runtime::derived_word_store::StoreStatus::Live
+                )
+            })
+        })
     }
 
     pub(crate) fn clamp_to_capture_duration(&mut self) {
@@ -403,6 +458,10 @@ impl LogicAnalyzerViewer {
 #[cfg(test)]
 mod tests {
     use super::{ChannelSignal, LogicAnalyzerViewer};
+    #[cfg(not(target_arch = "wasm32"))]
+    use dsl::runtime::derived_word_store::{IndexedAnnotationWriter, LiveStoreConfig};
+    #[cfg(not(target_arch = "wasm32"))]
+    use dsl::{DerivedLaneData, DerivedLanes, IndexedAnnotationLane, Word};
 
     #[test]
     fn reset_time_view_fits_in_memory_channels_without_a_capture() {
@@ -419,5 +478,30 @@ mod tests {
 
         assert_eq!(viewer.visible_start_us, 0.0);
         assert_eq!(viewer.visible_span_us, 240.0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn reset_time_view_fits_indexed_annotations_without_a_capture() {
+        let (mut writer, store) =
+            IndexedAnnotationWriter::create(LiveStoreConfig::default()).unwrap();
+        writer
+            .append_batch(&[Word::spanning(0x27, 250_000, 50_000)])
+            .unwrap();
+        writer.finish().unwrap();
+        let lanes = DerivedLanes::new();
+        lanes.register(
+            "words",
+            DerivedLaneData::IndexedAnnotations(IndexedAnnotationLane::from_store(store)),
+        );
+        let mut viewer = LogicAnalyzerViewer::new();
+        viewer.set_derived_lanes(lanes);
+        viewer.visible_start_us = 120.0;
+        viewer.visible_span_us = 12.0;
+
+        viewer.reset_time_view();
+
+        assert_eq!(viewer.visible_start_us, 0.0);
+        assert_eq!(viewer.visible_span_us, 300.0);
     }
 }

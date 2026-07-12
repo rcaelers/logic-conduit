@@ -6,6 +6,8 @@ pub(crate) use derived::annotation_box_end;
 
 use crate::cursor::{cursor_color, cursor_flag_geometry, cursor_flag_label};
 use crate::format::{badge_text_color, format_duration, format_time, nice_step};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::indexed_annotations::IndexedAnnotationSamples;
 use crate::types::{AnalyzerLayout, RowKey};
 use crate::viewer::LogicAnalyzerViewer;
 use dsl::{DerivedLaneData, LaneSummary};
@@ -239,7 +241,27 @@ impl LogicAnalyzerViewer {
                         }
                         #[cfg(not(target_arch = "wasm32"))]
                         DerivedLaneData::IndexedAnnotations(_) => {
-                            // Step 6 renders this lane through its bounded query handle.
+                            let Some(cached) = self.indexed_annotation_cache.get(name) else {
+                                continue;
+                            };
+                            match &cached.samples {
+                                IndexedAnnotationSamples::Exact {
+                                    annotations,
+                                    last_timestamp_ns,
+                                } => self.draw_indexed_annotation_exact(
+                                    &clip,
+                                    wave_rect,
+                                    y_top,
+                                    row_height,
+                                    annotations,
+                                    *last_timestamp_ns,
+                                ),
+                                IndexedAnnotationSamples::Presence(buckets) => self
+                                    .draw_indexed_annotation_presence(
+                                        &clip, wave_rect, y_top, row_height, buckets,
+                                    ),
+                                IndexedAnnotationSamples::Error => {}
+                            }
                         }
                         DerivedLaneData::Markers(markers) => {
                             self.draw_derived_markers(&clip, wave_rect, y_top, row_height, markers);

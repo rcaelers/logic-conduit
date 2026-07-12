@@ -23,9 +23,10 @@ pub use codec::{
     find_restart_for_timestamp,
 };
 pub use format::{
-    BLOCK_HEADER_SIZE, BLOCK_MAGIC, BlockDirectoryEntry, DATA_HEADER_SIZE, DATA_MAGIC,
-    DEFAULT_MAX_BLOCK_PAYLOAD_BYTES, DEFAULT_MAX_INTER_WORD_GAP_NS, DEFAULT_MAX_WORDS_PER_BLOCK,
-    DEFAULT_RESTART_INTERVAL, DataFileHeader, FORMAT_VERSION, RestartEntry, WordBlockHeader,
+    BLOCK_FLAG_HAS_DURATIONS, BLOCK_HEADER_SIZE, BLOCK_MAGIC, BlockDirectoryEntry,
+    DATA_HEADER_SIZE, DATA_MAGIC, DEFAULT_MAX_BLOCK_PAYLOAD_BYTES, DEFAULT_MAX_INTER_WORD_GAP_NS,
+    DEFAULT_MAX_WORDS_PER_BLOCK, DEFAULT_RESTART_INTERVAL, DataFileHeader, FORMAT_VERSION,
+    RestartEntry, WordBlockHeader,
 };
 pub use presence::{WordPresenceIndex, WordSummaryRecord};
 pub use query::{

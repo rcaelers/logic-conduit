@@ -6,6 +6,8 @@ pub struct AnnotationStoreMetadata {
     pub total_word_count: u64,
     pub first_timestamp_ns: Option<u64>,
     pub last_timestamp_ns: Option<u64>,
+    /// Greatest explicit word end, or word start for instantaneous words.
+    pub extent_end_ns: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

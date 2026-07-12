@@ -1,5 +1,7 @@
 use crate::viewer::LogicAnalyzerViewer;
 use dsl::nodes::sinks::MAX_ANNOTATION_NS;
+#[cfg(not(target_arch = "wasm32"))]
+use dsl::runtime::derived_word_store::WordPresenceBucket;
 use dsl::{Annotation, AnnotationFold, ChunkedMipmap, Sample};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
@@ -147,6 +149,80 @@ impl LogicAnalyzerViewer {
             }
         }
 
+        self.draw_annotation_slice(
+            painter,
+            wave_rect,
+            box_top,
+            box_bottom,
+            annotations,
+            annotations.last().map(|annotation| annotation.start_ns),
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn draw_indexed_annotation_presence(
+        &self,
+        painter: &Painter,
+        wave_rect: Rect,
+        y_top: f32,
+        row_height: f32,
+        buckets: &[WordPresenceBucket],
+    ) {
+        let color = Color32::from_rgb(215, 140, 60);
+        let top = y_top + row_height * 0.18;
+        let bottom = y_top + row_height * 0.82;
+        let (visible_start, visible_end) = self.visible_window_ns();
+        for bucket in buckets {
+            let start_ns = bucket.start_ns.max(visible_start);
+            let end_ns = bucket.end_ns.min(visible_end);
+            if start_ns > end_ns || bucket.word_count == 0 {
+                continue;
+            }
+            let x0 = self.ns_to_x(wave_rect, start_ns);
+            let x1 = self
+                .ns_to_x(wave_rect, end_ns)
+                .max(x0 + 1.0)
+                .min(wave_rect.right());
+            painter.rect_filled(
+                Rect::from_min_max(Pos2::new(x0, top), Pos2::new(x1, bottom)),
+                0.0,
+                color,
+            );
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn draw_indexed_annotation_exact(
+        &self,
+        painter: &Painter,
+        wave_rect: Rect,
+        y_top: f32,
+        row_height: f32,
+        annotations: &[Annotation],
+        last_timestamp_ns: Option<u64>,
+    ) {
+        self.draw_annotation_slice(
+            painter,
+            wave_rect,
+            y_top + row_height * 0.18,
+            y_top + row_height * 0.82,
+            annotations,
+            last_timestamp_ns,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_annotation_slice(
+        &self,
+        painter: &Painter,
+        wave_rect: Rect,
+        box_top: f32,
+        box_bottom: f32,
+        annotations: &[Annotation],
+        lane_last_timestamp_ns: Option<u64>,
+    ) {
+        let band_color = Color32::from_rgb(215, 140, 60);
+        let (start_ns, end_ns) = self.visible_window_ns();
         let (first, last) = visible_annotation_range(annotations, start_ns, end_ns);
         let visible = &annotations[first..last];
 
@@ -166,7 +242,8 @@ impl LogicAnalyzerViewer {
                 if run.count == 1 {
                     let global = first + run.first_index;
                     let annotation = &visible[run.first_index];
-                    let is_last_ever = global == annotations.len() - 1;
+                    let is_last_ever = global == annotations.len() - 1
+                        && lane_last_timestamp_ns == Some(annotation.start_ns);
                     let previous_duration_ns = (global > 0).then(|| {
                         let previous = &annotations[global - 1];
                         previous.end_ns.saturating_sub(previous.start_ns)
@@ -202,7 +279,8 @@ impl LogicAnalyzerViewer {
             if annotation.end_ns < start_ns {
                 continue;
             }
-            let is_last_ever = first + offset == annotations.len() - 1;
+            let is_last_ever = first + offset == annotations.len() - 1
+                && lane_last_timestamp_ns == Some(annotation.start_ns);
             // Every earlier annotation is already closed (only the very
             // last one can still have `end_ns == start_ns`), so its width
             // is a fair estimate of how long this open-ended one likely is.

@@ -1,9 +1,10 @@
 use super::cache::{cache_block, cached_block};
 use super::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
-    BlockCodecConfig, BlockDirectoryEntry, CodecError, DATA_HEADER_SIZE, DataFileHeader,
-    DecodedWordBlock, ExactAnnotationWindow, PushResult, WordBlockBuilder, WordPresenceBucket,
-    WordPresenceIndex, WordSummaryRecord, decode_word_block, decode_word_block_range,
+    BLOCK_FLAG_HAS_DURATIONS, BlockCodecConfig, BlockDirectoryEntry, CodecError, DATA_HEADER_SIZE,
+    DataFileHeader, DecodedWordBlock, ExactAnnotationWindow, PushResult, WordBlockBuilder,
+    WordPresenceBucket, WordPresenceIndex, WordSummaryRecord, decode_word_block,
+    decode_word_block_range,
 };
 use crate::runtime::{Annotation, Word};
 use memmap2::{Mmap, MmapOptions};
@@ -74,6 +75,7 @@ pub struct LiveStoreMetadata {
     pub committed_data_len: u64,
     pub first_timestamp_ns: Option<u64>,
     pub last_timestamp_ns: Option<u64>,
+    pub extent_end_ns: Option<u64>,
     pub hot_tail_word_count: usize,
     pub mmap_backed: bool,
     pub status: StoreStatus,
@@ -167,6 +169,14 @@ impl IndexedAnnotationStore {
             .last()
             .map(|word| word.timestamp_ns)
             .or(state.committed_last_timestamp_ns);
+        let extent_end_ns = state
+            .hot_tail
+            .iter()
+            .map(|word| word.timestamp_ns.saturating_add(word.duration_ns))
+            .max()
+            .into_iter()
+            .chain(state.presence.extent_end_ns())
+            .max();
         LiveStoreSnapshot {
             metadata: LiveStoreMetadata {
                 generation: state.generation,
@@ -175,6 +185,7 @@ impl IndexedAnnotationStore {
                 committed_data_len: state.committed_data_len,
                 first_timestamp_ns,
                 last_timestamp_ns,
+                extent_end_ns,
                 hot_tail_word_count: state.hot_tail.len(),
                 mmap_backed,
                 status: state.status.clone(),
@@ -245,7 +256,9 @@ impl IndexedAnnotationStore {
         if let Some(block) = cached_block(self.shared.store_id, entry.sequence) {
             return Ok(QueryBlockWords::Cached(block));
         }
-        if start_ns <= entry.first_timestamp_ns && end_ns >= entry.last_timestamp_ns {
+        if entry.flags & BLOCK_FLAG_HAS_DURATIONS as u8 != 0
+            || start_ns <= entry.first_timestamp_ns && end_ns >= entry.last_timestamp_ns
+        {
             return self.read_cached_entry(entry).map(QueryBlockWords::Cached);
         }
 
@@ -262,27 +275,26 @@ impl IndexedAnnotationStore {
         &self,
         start_ns: u64,
         end_ns: u64,
-    ) -> (u64, u64, Vec<BlockDirectoryEntry>, Arc<[Word]>) {
+    ) -> (u64, Vec<BlockDirectoryEntry>, Arc<[Word]>) {
         let state = self.shared.state.read().unwrap();
-        let first_intersecting = state
+        let first_by_start = state
             .directory
             .partition_point(|entry| entry.last_timestamp_ns < start_ns);
-        let first = first_intersecting.saturating_sub(1);
+        let predecessor = first_by_start.checked_sub(1);
         let after_end = state
             .directory
             .partition_point(|entry| entry.first_timestamp_ns <= end_ns);
-        let end = after_end.saturating_add(1).min(state.directory.len());
-        let entries = if first < end {
-            state.directory[first..end].to_vec()
-        } else {
-            Vec::new()
-        };
-        (
-            state.generation,
-            state.committed_word_count + state.hot_tail.len() as u64,
-            entries,
-            Arc::clone(&state.hot_tail),
-        )
+        let successor = (after_end < state.directory.len()).then_some(after_end);
+        let mut indices = state.presence.intersecting_leaf_indices(start_ns, end_ns);
+        indices.extend(predecessor);
+        indices.extend(successor);
+        indices.sort_unstable();
+        indices.dedup();
+        let entries = indices
+            .into_iter()
+            .map(|index| state.directory[index])
+            .collect();
+        (state.generation, entries, Arc::clone(&state.hot_tail))
     }
 
     fn boundary_context(
@@ -293,19 +305,23 @@ impl IndexedAnnotationStore {
         let lower = timestamp_ns.saturating_sub(max_distance_ns);
         let upper = timestamp_ns.saturating_add(max_distance_ns);
         let state = self.shared.state.read().unwrap();
-        let first_intersecting = state
+        let first_by_start = state
             .directory
             .partition_point(|entry| entry.last_timestamp_ns < lower);
-        let first = first_intersecting.saturating_sub(1);
+        let predecessor = first_by_start.checked_sub(1);
         let after_upper = state
             .directory
             .partition_point(|entry| entry.first_timestamp_ns <= upper);
-        let end = after_upper.saturating_add(1).min(state.directory.len());
-        let entries = if first < end {
-            state.directory[first..end].to_vec()
-        } else {
-            Vec::new()
-        };
+        let successor = (after_upper < state.directory.len()).then_some(after_upper);
+        let mut indices = state.presence.intersecting_leaf_indices(lower, upper);
+        indices.extend(predecessor);
+        indices.extend(successor);
+        indices.sort_unstable();
+        indices.dedup();
+        let entries = indices
+            .into_iter()
+            .map(|index| state.directory[index])
+            .collect();
         (entries, Arc::clone(&state.hot_tail))
     }
 }
@@ -319,6 +335,7 @@ impl AnnotationQuery for IndexedAnnotationStore {
                 + snapshot.metadata.hot_tail_word_count as u64,
             first_timestamp_ns: snapshot.metadata.first_timestamp_ns,
             last_timestamp_ns: snapshot.metadata.last_timestamp_ns,
+            extent_end_ns: snapshot.metadata.extent_end_ns,
         }
     }
 
@@ -358,44 +375,36 @@ impl AnnotationQuery for IndexedAnnotationStore {
         if max_words == 0 {
             return Err(AnnotationQueryError::ZeroWordLimit);
         }
-        let (generation, _total_words, entries, hot_tail) = self.exact_context(start_ns, end_ns);
-        let mut context = Vec::with_capacity(max_words.saturating_add(2));
-        let context_limit = max_words.saturating_add(2);
-        let mut context_truncated = false;
-        let mut found_successor = false;
+        let (generation, entries, hot_tail) = self.exact_context(start_ns, end_ns);
+        let mut candidates = ExactQueryCandidates::new(max_words);
 
         for entry in entries {
-            let remaining = context_limit.saturating_sub(context.len()).max(1);
+            let remaining = max_words.saturating_sub(candidates.words.len()).max(1);
             let block = self
                 .query_entry_words(entry, start_ns, end_ns, remaining)
                 .map_err(query_store_error)?;
-            append_query_context(
-                block.words(),
-                start_ns,
-                end_ns,
-                context_limit,
-                &mut context,
-                &mut context_truncated,
-                &mut found_successor,
-            );
+            candidates.collect(block.words(), start_ns, end_ns);
             if !block.complete() {
-                context_truncated = true;
+                candidates.truncated = true;
             }
-            if context_truncated || found_successor {
+            if candidates.truncated || candidates.successor.is_some() {
                 break;
             }
         }
-        if !context_truncated && !found_successor {
-            append_query_context(
-                &hot_tail,
-                start_ns,
-                end_ns,
-                context_limit,
-                &mut context,
-                &mut context_truncated,
-                &mut found_successor,
-            );
+        if !candidates.truncated && candidates.successor.is_none() {
+            candidates.collect(&hot_tail, start_ns, end_ns);
         }
+
+        let mut context = candidates.words;
+        if let Some(predecessor) = candidates.predecessor
+            && !context.contains(&predecessor)
+        {
+            context.push(predecessor);
+        }
+        if let Some(successor) = candidates.successor {
+            context.push(successor);
+        }
+        context.sort_by_key(|word| word.timestamp_ns);
 
         let mut annotations = Vec::with_capacity(context.len().min(max_words));
         for (index, word) in context.iter().enumerate() {
@@ -414,7 +423,7 @@ impl AnnotationQuery for IndexedAnnotationStore {
                 });
                 if annotations.len() > max_words {
                     annotations.truncate(max_words);
-                    context_truncated = true;
+                    candidates.truncated = true;
                     break;
                 }
             }
@@ -422,7 +431,7 @@ impl AnnotationQuery for IndexedAnnotationStore {
 
         Ok(ExactAnnotationWindow {
             annotations,
-            complete: !context_truncated,
+            complete: !candidates.truncated,
             generation,
         })
     }
@@ -511,33 +520,52 @@ fn validate_directory_header(
     Ok(())
 }
 
-fn append_query_context(
-    words: &[Word],
-    start_ns: u64,
-    end_ns: u64,
-    context_limit: usize,
-    context: &mut Vec<Word>,
-    truncated: &mut bool,
-    found_successor: &mut bool,
-) {
-    if words.is_empty() || *truncated || *found_successor {
-        return;
+struct ExactQueryCandidates {
+    words: Vec<Word>,
+    predecessor: Option<Word>,
+    successor: Option<Word>,
+    truncated: bool,
+    limit: usize,
+}
+
+impl ExactQueryCandidates {
+    fn new(limit: usize) -> Self {
+        Self {
+            words: Vec::with_capacity(limit),
+            predecessor: None,
+            successor: None,
+            truncated: false,
+            limit,
+        }
     }
-    let first_not_before = words.partition_point(|word| word.timestamp_ns < start_ns);
-    let start = if context.is_empty() {
-        first_not_before.saturating_sub(1)
-    } else {
-        0
-    };
-    for &word in &words[start..] {
-        if context.len() >= context_limit {
-            *truncated = true;
+
+    fn collect(&mut self, words: &[Word], start_ns: u64, end_ns: u64) {
+        if words.is_empty() || self.truncated || self.successor.is_some() {
             return;
         }
-        context.push(word);
-        if word.timestamp_ns > end_ns {
-            *found_successor = true;
-            return;
+        for &word in words {
+            if word.timestamp_ns < start_ns {
+                if self
+                    .predecessor
+                    .is_none_or(|current| current.timestamp_ns <= word.timestamp_ns)
+                {
+                    self.predecessor = Some(word);
+                }
+                if word.duration_ns == 0
+                    || word.timestamp_ns.saturating_add(word.duration_ns) < start_ns
+                {
+                    continue;
+                }
+            } else if word.timestamp_ns > end_ns {
+                self.successor = Some(word);
+                break;
+            }
+
+            if self.words.len() == self.limit {
+                self.truncated = true;
+                return;
+            }
+            self.words.push(word);
         }
     }
 }
@@ -551,6 +579,20 @@ fn consider_word_boundaries(
     nearest: &mut Option<(u64, u64)>,
 ) {
     if words.is_empty() {
+        return;
+    }
+    if words.iter().any(|word| word.duration_ns != 0) {
+        for word in words {
+            consider_boundary(word.timestamp_ns, target, max_distance, nearest);
+            if word.duration_ns != 0 {
+                consider_boundary(
+                    word.timestamp_ns.saturating_add(word.duration_ns),
+                    target,
+                    max_distance,
+                    nearest,
+                );
+            }
+        }
         return;
     }
     let first = words
@@ -1128,6 +1170,30 @@ mod tests {
         assert_eq!(store.nearest_boundary(33, 10).unwrap(), Some(35));
         assert_eq!(store.nearest_boundary(20, 10).unwrap(), Some(10));
         assert_eq!(store.nearest_boundary(100, 20).unwrap(), None);
+    }
+
+    #[test]
+    fn exact_and_boundary_queries_find_a_partial_word_spanning_later_blocks() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = test_config(directory.path());
+        config.block.max_words = 2;
+        let (mut writer, store) = IndexedAnnotationWriter::create(config).unwrap();
+        let mut words = vec![Word::spanning(0x27, 10, 9_990)];
+        words.extend((1..=9).map(|index| Word::new(index, index * 100)));
+        writer.append_batch(&words).unwrap();
+        writer.finish().unwrap();
+
+        let window = store.exact_window(9_000, 9_500, 10).unwrap();
+        assert!(window.complete);
+        assert_eq!(
+            window.annotations,
+            vec![Annotation {
+                start_ns: 10,
+                end_ns: 10_000,
+                value: 0x27,
+            }]
+        );
+        assert_eq!(store.nearest_boundary(9_998, 10).unwrap(), Some(10_000));
     }
 
     #[test]

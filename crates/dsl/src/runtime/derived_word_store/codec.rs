@@ -309,7 +309,11 @@ fn encode_word_block_with_interval(
         .ok_or_else(|| invalid("word-block size overflow"))?;
 
     let mut header = WordBlockHeader {
-        flags: 0,
+        flags: if duration_count == 0 {
+            0
+        } else {
+            super::BLOCK_FLAG_HAS_DURATIONS
+        },
         sequence,
         first_timestamp_ns: words[0].timestamp_ns,
         last_timestamp_ns: words.last().unwrap().timestamp_ns,

@@ -125,7 +125,7 @@ pub struct IndexedAnnotationLane {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl IndexedAnnotationLane {
-    fn new(store: IndexedAnnotationStore) -> Self {
+    pub fn from_store(store: IndexedAnnotationStore) -> Self {
         Self {
             query: Arc::new(store.clone()),
             store,
@@ -556,7 +556,9 @@ impl ViewerSink {
             ViewerLaneKind::Words if self.indexed_words => {
                 match IndexedAnnotationWriter::create(self.word_store_config.clone()) {
                     Ok((writer, store)) => (
-                        DerivedLaneData::IndexedAnnotations(IndexedAnnotationLane::new(store)),
+                        DerivedLaneData::IndexedAnnotations(IndexedAnnotationLane::from_store(
+                            store,
+                        )),
                         Some(writer),
                     ),
                     Err(error) => {

@@ -16,6 +16,8 @@ pub struct WordSummaryRecord {
 pub struct WordPresenceIndex {
     levels: Vec<Vec<WordSummaryRecord>>,
     total_word_count: u64,
+    extent_end_ns: Option<u64>,
+    prefix_max_end_ns: Vec<u64>,
 }
 
 impl Default for WordPresenceIndex {
@@ -29,6 +31,8 @@ impl WordPresenceIndex {
         Self {
             levels: vec![Vec::new()],
             total_word_count: 0,
+            extent_end_ns: None,
+            prefix_max_end_ns: Vec::new(),
         }
     }
 
@@ -44,10 +48,39 @@ impl WordPresenceIndex {
         self.total_word_count
     }
 
+    pub fn extent_end_ns(&self) -> Option<u64> {
+        self.extent_end_ns
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn intersecting_leaf_indices(&self, start_ns: u64, end_ns: u64) -> Vec<usize> {
+        if start_ns > end_ns {
+            return Vec::new();
+        }
+        let leaves = &self.levels[0];
+        let first = self
+            .prefix_max_end_ns
+            .partition_point(|&prefix_end_ns| prefix_end_ns < start_ns);
+        let end = leaves.partition_point(|record| record.start_ns <= end_ns);
+        (first.min(end)..end)
+            .filter(|&index| leaves[index].end_ns >= start_ns)
+            .collect()
+    }
+
     pub fn push(&mut self, record: WordSummaryRecord) {
         debug_assert!(record.word_count > 0);
         debug_assert!(record.start_ns <= record.end_ns);
         self.total_word_count = self.total_word_count.saturating_add(record.word_count);
+        self.extent_end_ns = Some(
+            self.extent_end_ns
+                .map_or(record.end_ns, |end_ns| end_ns.max(record.end_ns)),
+        );
+        self.prefix_max_end_ns.push(
+            self.prefix_max_end_ns
+                .last()
+                .copied()
+                .map_or(record.end_ns, |end_ns| end_ns.max(record.end_ns)),
+        );
         self.levels[0].push(record);
 
         let mut level = 0;
@@ -254,6 +287,21 @@ mod tests {
         assert_eq!(buckets.len(), 2);
         assert_eq!(buckets[0].start_ns, 0);
         assert_eq!(buckets[1].end_ns, 10_009);
+    }
+
+    #[test]
+    fn extent_keeps_a_long_word_that_ends_after_later_blocks() {
+        let mut index = WordPresenceIndex::new();
+        index.push(WordSummaryRecord {
+            start_ns: 10,
+            end_ns: 10_000,
+            word_count: 1,
+            first_block: 0,
+            block_count: 1,
+        });
+        index.push(point(1, 100, 1));
+        assert_eq!(index.extent_end_ns(), Some(10_000));
+        assert_eq!(index.intersecting_leaf_indices(9_000, 9_500), vec![0]);
     }
 
     #[test]
