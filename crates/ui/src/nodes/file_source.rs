@@ -1,9 +1,10 @@
 //! `DSL File Source` node — reads channels from a `.dsl` capture file.
 
-use super::{COLOR_SOURCES, Signal, TextOpenPath};
 use egui::Color32;
 use node_graph::{FileValue, InputDef, IntValue, NodeDef, OutputDef, Socket};
 use serde::{Deserialize, Serialize};
+
+use super::{COLOR_SOURCES, Signal, TextOpenPath};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DslFileSourceState {

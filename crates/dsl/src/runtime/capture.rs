@@ -1,6 +1,7 @@
-use crate::Result;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+use crate::Result;
 
 #[derive(Debug, Clone)]
 pub struct CaptureMetadata {

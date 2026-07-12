@@ -9,6 +9,8 @@
 //! Add `--fpga-image /path/to/DSLogicU3Pro16.bin` when the FPGA is not
 //! already configured. The image must be the exact U3Pro16 image.
 
+use std::collections::VecDeque;
+
 use clap::Parser;
 use dsl::nodes::decoders::{SpiDecoder, SpiMode};
 use dsl::{
@@ -16,7 +18,6 @@ use dsl::{
     LogicTrigger, OutputPort, Pipeline, PortDirection, PortSchema, ProcessNode, Word, WorkError,
     WorkResult,
 };
-use std::collections::VecDeque;
 
 #[derive(Parser, Debug)]
 #[command(about = "Capture SPI from a DSLogic U3Pro16")]

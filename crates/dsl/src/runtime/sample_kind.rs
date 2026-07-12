@@ -8,8 +8,9 @@
 //! `restart_node`) shares [`negotiate`] so there is exactly one place
 //! this logic lives.
 
-use crate::runtime::sample::{Sample, SampleBlock};
 use std::any::TypeId;
+
+use crate::runtime::sample::{Sample, SampleBlock};
 
 /// Which concrete payload a binary-signal port can carry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

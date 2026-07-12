@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use super::builder::IndexBuilder;
 use super::exact_window_sample_limit;
 use super::storage::{IndexReader, LevelsView};
@@ -11,7 +13,6 @@ use crate::runtime::{
     packed_bit,
 };
 use crate::{Error, Result};
-use std::path::Path;
 
 #[derive(Clone, Copy)]
 struct GroupSummary {

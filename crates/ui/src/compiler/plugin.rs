@@ -28,9 +28,10 @@
 //!   registry and does need the call, `T: PortValue` is just a convenient
 //!   bound (identical to what the runtime registry itself requires).
 
+use node_graph::{NodeDef, NodeTypeRegistry};
+
 use super::port_kind::PortValue;
 use super::{BuilderRegistry, RuntimeBuilder};
-use node_graph::{NodeDef, NodeTypeRegistry};
 
 /// Everything a plugin's `register(ctx: &mut PluginContext)` needs, in one
 /// place.

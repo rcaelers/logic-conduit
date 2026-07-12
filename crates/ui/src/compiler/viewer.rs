@@ -1,14 +1,16 @@
 //! `Viewer` builder — the sink that feeds the logic analyzer's derived lanes.
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
-use crate::nodes;
+use std::collections::HashMap;
+
 use dsl::runtime::ProcessNode;
 #[cfg(not(target_arch = "wasm32"))]
 use dsl::runtime::derived_word_store::LiveStoreConfig;
 use dsl::{Sample, Trigger, ViewerLaneKind, ViewerSink, Word};
 use node_graph::Socket;
 use serde_json::Value;
-use std::collections::HashMap;
+
+use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::nodes;
 
 pub(super) struct ViewerBuilder;
 

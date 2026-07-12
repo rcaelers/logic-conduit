@@ -1,8 +1,9 @@
+use egui::{Align, Align2, Color32, CornerRadius, FontId, Layout, Pos2, Rect, Sense, Ui, Vec2};
+use serde::{Deserialize, Serialize};
+
 use super::control::InlineControl;
 use super::socket::{SocketDef, SocketWithControlDef};
 use crate::model::SocketShape;
-use egui::{Align, Align2, Color32, CornerRadius, FontId, Layout, Pos2, Rect, Sense, Ui, Vec2};
-use serde::{Deserialize, Serialize};
 
 // ── Built-in socket types ─────────────────────────────────────────────────────
 

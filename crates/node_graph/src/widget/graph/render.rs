@@ -1,3 +1,5 @@
+use egui::{Color32, CornerRadius, Painter, Pos2, Rect, RichText, Stroke, Vec2};
+
 use super::{
     NodeGraphWidget,
     interaction::{GraphResponses, InteractionState},
@@ -11,7 +13,6 @@ use crate::{
         draw_knife_line, draw_wire, to_screen_rect,
     },
 };
-use egui::{Color32, CornerRadius, Painter, Pos2, Rect, RichText, Stroke, Vec2};
 
 impl NodeGraphWidget {
     pub(super) fn draw_graph(

@@ -1,9 +1,11 @@
+use std::path::PathBuf;
+use std::sync::mpsc::Sender;
+
+use dsl::{CaptureDataSource, CaptureIndex, CaptureIndexProgress, CaptureMetadata, IndexSampler};
+
 use crate::channel::placeholder_channels;
 use crate::types::{CaptureInfo, IndexBuildProgress};
 use crate::viewer::LogicAnalyzerViewer;
-use dsl::{CaptureDataSource, CaptureIndex, CaptureIndexProgress, CaptureMetadata, IndexSampler};
-use std::path::PathBuf;
-use std::sync::mpsc::Sender;
 
 pub(crate) enum WorkerResponse {
     Opened {

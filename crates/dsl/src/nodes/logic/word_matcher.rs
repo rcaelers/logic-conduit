@@ -1,11 +1,13 @@
 //! Word matcher — emits a trigger whenever a decoded word matches a pattern
 
+use std::collections::VecDeque;
+
+use tracing::debug;
+
 use crate::runtime::events::{Trigger, Word};
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
 use crate::runtime::sample::Sample;
-use std::collections::VecDeque;
-use tracing::debug;
 
 /// Comparison applied between the masked word and the masked pattern.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -231,10 +233,11 @@ impl ProcessNode for WordMatcher {
 
 #[cfg(test)]
 mod tests {
+    use crossbeam_channel::bounded;
+
     use super::*;
     use crate::runtime::sender::{ChannelMessage, Sender};
     use crate::runtime::watchdog::Watchdog;
-    use crossbeam_channel::bounded;
 
     fn run_to_shutdown(node: &mut dyn ProcessNode, inputs: &[InputPort], outputs: &[OutputPort]) {
         loop {

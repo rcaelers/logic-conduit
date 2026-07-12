@@ -1,12 +1,13 @@
 //! `UART Demo Source` builder — generates a fixed UART byte sequence
 //! in-memory. Available on every target (no file/USB access needed).
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
-use crate::nodes;
 use dsl::Sample;
 use dsl::runtime::ProcessNode;
 use node_graph::Socket;
 use serde_json::Value;
+
+use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::nodes;
 
 pub(super) struct UartDemoSourceBuilder;
 

@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
+use egui::{Color32, Pos2};
+
 use super::{NodeInstance, NodeRuntime, TypedNode};
 use crate::api::{InputDef, NodeDef, OutputDef};
 use crate::model::{Node, NodeId, NodeKind, Socket, SocketDirection, SocketShape, VariadicInfo};
-use egui::{Color32, Pos2};
-use std::collections::HashMap;
 
 // ── Low-level node construction ───────────────────────────────────────────────
 
@@ -367,9 +369,10 @@ impl NodeTypeRegistry {
 
 #[cfg(test)]
 mod tests {
+    use serde::{Deserialize, Serialize};
+
     use super::*;
     use crate::api::{AnySocket, FloatSocket, InputDef, IntSocket, NodeDef, OutputDef};
-    use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     struct MixState;

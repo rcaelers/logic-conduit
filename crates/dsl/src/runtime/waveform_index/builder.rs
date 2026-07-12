@@ -1,14 +1,15 @@
+use std::collections::{HashMap, VecDeque};
+use std::env;
+use std::path::Path;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+
 use super::storage::IndexWriter;
 use super::types::{
     BlockIndex, BlockLevels, CaptureIndexProgress, SAMPLES_PER_L1_BIT, bit, set_bit,
 };
 use crate::runtime::{BlockCaptureSource, CaptureDataSource, CaptureMetadata, packed_bit};
 use crate::{Error, Result};
-use std::collections::{HashMap, VecDeque};
-use std::env;
-use std::path::Path;
-use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
 
 #[derive(Debug, Clone, Copy)]
 struct BuildJob {

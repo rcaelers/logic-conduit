@@ -5,16 +5,18 @@
 //! connected to the same decoders as a `.dsl` replay.  A future libsigrok
 //! adapter only needs to implement [`LogicAnalyzer`].
 
+use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::thread::JoinHandle;
+
+use thiserror::Error;
+
 use crate::runtime::Sender;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
 use crate::runtime::sample::{Sample, SampleBlock};
 use crate::runtime::sample_kind::SampleKind;
-use std::fmt;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::thread::JoinHandle;
-use thiserror::Error;
 
 /// Static capabilities exposed by a logic-analyzer driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -551,9 +553,10 @@ impl fmt::Display for LogicChunk {
 
 #[cfg(test)]
 mod tests {
+    use crossbeam_channel::bounded;
+
     use super::*;
     use crate::runtime::sender::ChannelMessage;
-    use crossbeam_channel::bounded;
 
     #[test]
     fn demux_emits_aligned_owned_channel_blocks() {

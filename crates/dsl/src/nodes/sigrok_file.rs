@@ -4,13 +4,6 @@
 //! more interleaved `logic-*` sample files.  This source decodes the logic
 //! samples into level changes for each selected probe.
 
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
-use crate::runtime::ports::{PortDirection, PortSchema};
-use crate::runtime::sample::Sample;
-use crate::runtime::{
-    BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureSource, Sender,
-};
-use crate::{DslHeader, Error, Result};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Read;
@@ -18,7 +11,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
+
 use zip::ZipArchive;
+
+use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
+use crate::runtime::ports::{PortDirection, PortSchema};
+use crate::runtime::sample::Sample;
+use crate::runtime::{
+    BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureSource, Sender,
+};
+use crate::{DslHeader, Error, Result};
 
 /// A PulseView/sigrok v2 session source.  Sigrok stores complete sample words
 /// (unlike DSLogic's per-channel bit blocks), so this reader keeps the
@@ -447,8 +449,9 @@ fn parse_sample_rate(rate: &str) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write;
+
+    use super::*;
 
     fn fixture() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();

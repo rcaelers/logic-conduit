@@ -7,6 +7,18 @@
 //! on one destination never blocks other destinations. All threads share a single ZipArchive
 //! and block cache via `Arc<Mutex<..>>`.
 
+use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::fs::{self, File};
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+
+use tracing::{debug, info, warn};
+use zip::ZipArchive;
+
 use crate::runtime::events::TextSample;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkResult};
 use crate::runtime::sample::{Sample, SampleBlock};
@@ -16,16 +28,6 @@ use crate::runtime::{
 };
 use crate::runtime::{CaptureIndexProgress, IndexSampler};
 use crate::{Error, Result};
-use std::collections::HashMap;
-use std::collections::VecDeque;
-use std::fs::{self, File};
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
-use tracing::{debug, info, warn};
-use zip::ZipArchive;
 
 const DEFAULT_BLOCK_CACHE_WINDOWS: usize = 2;
 
@@ -1373,11 +1375,12 @@ mod tests {
     /// reported with the offending path.
     #[test]
     fn deferred_source_reports_unopenable_file() {
+        use crossbeam_channel::bounded;
+
         use crate::runtime::TextSample;
         use crate::runtime::node::WorkError;
         use crate::runtime::sender::ChannelMessage;
         use crate::runtime::watchdog::Watchdog;
-        use crossbeam_channel::bounded;
 
         let wd = Watchdog::new();
         let (name_tx, name_rx) = bounded::<ChannelMessage<TextSample>>(4);
@@ -1405,11 +1408,12 @@ mod tests {
     /// shuts the source down instead of hanging or opening anything.
     #[test]
     fn deferred_source_shuts_down_on_closed_filename_channel() {
+        use crossbeam_channel::bounded;
+
         use crate::runtime::TextSample;
         use crate::runtime::node::WorkError;
         use crate::runtime::sender::ChannelMessage;
         use crate::runtime::watchdog::Watchdog;
-        use crossbeam_channel::bounded;
 
         let wd = Watchdog::new();
         let (name_tx, name_rx) = bounded::<ChannelMessage<TextSample>>(4);
@@ -1430,8 +1434,9 @@ mod tests {
     /// was known at build time.
     #[test]
     fn deferred_source_streams_the_named_file() {
-        use crate::runtime::{Pipeline, TextSample};
         use std::sync::{Arc, Mutex};
+
+        use crate::runtime::{Pipeline, TextSample};
 
         let path = std::path::Path::new("_captures/wipneus5.dsl");
         if !path.exists() {

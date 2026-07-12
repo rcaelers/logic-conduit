@@ -1,12 +1,13 @@
 //! `Word Matcher` node.
 
-use super::{COLOR_LOGIC, Signal, Trigger, Words};
 use egui::Color32;
 use node_graph::{
     BoolValue, EnumValue, InputDef, NodeBadge, NodeDef, OutputDef, PanelSection, PropDef, Socket,
     StringValue,
 };
 use serde::{Deserialize, Serialize};
+
+use super::{COLOR_LOGIC, Signal, Trigger, Words};
 
 pub const MATCH_OPS: &[&str] = &["==", "≠", "<", "≤", ">", "≥"];
 

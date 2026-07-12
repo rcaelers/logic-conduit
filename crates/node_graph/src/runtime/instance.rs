@@ -1,7 +1,8 @@
-use crate::api::{InputDef, NodeDef, OutputDef, PanelSection, PropDef};
-use crate::model::{Node, NodeBadge, Socket};
 use egui::{Rect, Ui};
 use serde_json::Value;
+
+use crate::api::{InputDef, NodeDef, OutputDef, PanelSection, PropDef};
+use crate::model::{Node, NodeBadge, Socket};
 
 /// Layout facts about one panel section, including the stable identity and
 /// row height of each property.

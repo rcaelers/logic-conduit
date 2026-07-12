@@ -2,9 +2,10 @@
 //! exists (nothing implements the decode), so the node is editable but not
 //! runnable.
 
-use super::{COLOR_DECODERS, Signal, Words};
 use egui::Color32;
 use node_graph::{InputDef, NodeDef, OutputDef};
+
+use super::{COLOR_DECODERS, Signal, Words};
 
 pub struct I2cDecoder;
 impl NodeDef for I2cDecoder {

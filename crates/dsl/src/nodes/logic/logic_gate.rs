@@ -1,13 +1,15 @@
 //! Configurable boolean gate over signal levels
 
+use std::collections::VecDeque;
+use std::sync::Arc;
+
+use tracing::{debug, warn};
+
 use crate::runtime::edge_query::EdgeQuery;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
 use crate::runtime::protocol::ProtocolKind;
 use crate::runtime::sample::Sample;
-use std::collections::VecDeque;
-use std::sync::Arc;
-use tracing::{debug, warn};
 
 /// Boolean operation of a [`LogicGate`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -251,10 +253,11 @@ impl ProcessNode for LogicGate {
 
 #[cfg(test)]
 mod tests {
+    use crossbeam_channel::bounded;
+
     use super::*;
     use crate::runtime::sender::{ChannelMessage, Sender};
     use crate::runtime::watchdog::Watchdog;
-    use crossbeam_channel::bounded;
 
     fn run_gate(gate: &mut LogicGate, input_edges: Vec<Vec<Sample>>) -> Vec<Sample> {
         let wd = Watchdog::new();

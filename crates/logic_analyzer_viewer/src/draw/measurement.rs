@@ -1,7 +1,8 @@
+use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, vec2};
+
 use crate::format::{format_delta, format_frequency};
 use crate::types::PulseMeasurement;
 use crate::viewer::LogicAnalyzerViewer;
-use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, vec2};
 
 impl LogicAnalyzerViewer {
     pub(crate) fn draw_pulse_measurement(

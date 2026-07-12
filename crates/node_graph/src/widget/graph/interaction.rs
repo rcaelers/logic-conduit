@@ -1,3 +1,8 @@
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+
+use egui::{Pos2, Rect, Vec2};
+
 use super::{
     NodeGraphWidget, action::ActionEffect, layout::GraphWidgetLayout, menu::build_context_entries,
     minimap,
@@ -7,9 +12,6 @@ use crate::{
     support::paint::{bezier_wire_distance, bezier_wire_intersects_rect, wire_intersects_knife},
     widget::{menu::dispatch_menu_shortcut, node::NodeWidget},
 };
-use egui::{Pos2, Rect, Vec2};
-use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 
 const WIRE_SNAP_DISTANCE: f32 = 18.0;
 /// Ctrl-held grid size while dragging a node (Phase 6.3), in canvas units.

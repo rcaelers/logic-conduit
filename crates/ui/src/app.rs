@@ -1,12 +1,14 @@
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::{Path, PathBuf};
+
+use logic_analyzer_viewer::LogicAnalyzerViewer;
+use node_graph::{NodeBadge, NodeGraphWidget, NodeId};
+
 use crate::about::AboutWindow;
 use crate::compiler;
 use crate::demo_signals;
 use crate::nodes;
 use crate::toast::Toasts;
-use logic_analyzer_viewer::LogicAnalyzerViewer;
-use node_graph::{NodeBadge, NodeGraphWidget, NodeId};
-#[cfg(not(target_arch = "wasm32"))]
-use std::path::{Path, PathBuf};
 
 #[cfg(not(target_arch = "wasm32"))]
 enum FileCommand {

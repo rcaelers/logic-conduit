@@ -8,9 +8,10 @@
 //! - [`ReceiverSelector`] performs a multiplexed `select()` across
 //!   a slice of `Receiver`s, checking buffers before blocking.
 
-use crossbeam_channel::Receiver as CrossbeamReceiver;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use crossbeam_channel::Receiver as CrossbeamReceiver;
 
 use super::errors::{WorkError, WorkResult};
 use super::sender::ChannelMessage;
@@ -480,9 +481,10 @@ impl<'b, 'a, T> ReceiverSelector<'b, 'a, T> {
 
 #[cfg(test)]
 mod tests {
+    use crossbeam_channel::bounded;
+
     use super::super::sender::ChannelMessage;
     use super::*;
-    use crossbeam_channel::bounded;
 
     // Helper to create a test watchdog
     fn test_watchdog() -> crate::runtime::Watchdog {

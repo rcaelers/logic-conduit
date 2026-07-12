@@ -1,6 +1,7 @@
-use crossbeam_channel::{Sender, bounded};
 use std::sync::OnceLock;
 use std::thread;
+
+use crossbeam_channel::{Sender, bounded};
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 

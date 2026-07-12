@@ -4,6 +4,14 @@
 //! and Sample inputs for low-bandwidth control signals (enable_signal).
 //! Outputs Word events.
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::BTreeMap;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use tracing::debug;
+
 use super::types::{CsPolarity, Endianness, ParallelInputStrategy, StrobeMode};
 use crate::runtime::Receiver;
 use crate::runtime::WorkError;
@@ -15,12 +23,6 @@ use crate::runtime::node::{
 };
 use crate::runtime::protocol::ProtocolKind;
 use crate::runtime::sample::{Sample, SampleBlock};
-#[cfg(not(target_arch = "wasm32"))]
-use std::collections::BTreeMap;
-use std::collections::VecDeque;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use tracing::debug;
 
 #[derive(Clone)]
 pub struct ParallelDecoderMetrics {
@@ -1688,13 +1690,15 @@ impl ParallelDecoder {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crossbeam_channel::bounded;
+
     use super::*;
     use crate::runtime::node::ProcessNode;
     use crate::runtime::sender::{ChannelMessage, Sender};
     use crate::runtime::watchdog::Watchdog;
-    use crossbeam_channel::bounded;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_decoder_creation() {
@@ -2287,8 +2291,9 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn queued_parallel_scan_stops_within_latency_budget() {
-        use crate::runtime::Scheduler;
         use std::time::{Duration, Instant};
+
+        use crate::runtime::Scheduler;
 
         let sample_count = ParallelDecoder::STREAM_SAMPLES_PER_CALL * 1_024;
         let byte_count = sample_count.div_ceil(u8::BITS as usize);

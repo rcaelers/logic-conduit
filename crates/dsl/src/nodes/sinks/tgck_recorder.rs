@@ -17,12 +17,14 @@
 //! the same lazy-open-on-first-line file-rolling `TextFileWriter` already
 //! provides.
 
+use std::collections::VecDeque;
+use std::path::PathBuf;
+
+use tracing::{debug, warn};
+
 use crate::runtime::events::{TextSample, Word};
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
-use std::collections::VecDeque;
-use std::path::PathBuf;
-use tracing::{debug, warn};
 
 /// One complete TGCK cycle, positioned within the current capture window.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -336,11 +338,12 @@ impl ProcessNode for TgckRecorder {
 
 #[cfg(test)]
 mod tests {
+    use crossbeam_channel::bounded;
+
     use super::*;
     use crate::runtime::sample::Sample;
     use crate::runtime::sender::ChannelMessage;
     use crate::runtime::watchdog::Watchdog;
-    use crossbeam_channel::bounded;
 
     fn word(ts: u64) -> Word {
         Word::new(0xAB, ts)

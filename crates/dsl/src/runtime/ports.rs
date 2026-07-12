@@ -7,16 +7,14 @@ use std::any::TypeId;
 
 // Re-export error types for backward compatibility
 pub use super::errors::{ConnectionError, PortError};
-
 // Re-export from submodules
 pub use super::pipeline::Pipeline;
+use super::protocol::ProtocolKind;
 pub use super::receiver::Receiver;
+use super::sample_kind::SampleKind;
 pub use super::sender::Sender;
 pub use super::type_registry::register_type;
 pub use super::watchdog::{Watchdog, WatchdogHandle};
-
-use super::protocol::ProtocolKind;
-use super::sample_kind::SampleKind;
 
 /// Direction of a port
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,10 +82,11 @@ impl PortSchema {
 // Type-erased port wrappers
 // ────────────────────────────────────────────────────────────────────────────
 
-use crossbeam_channel::Receiver as CrossbeamReceiver;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+
+use crossbeam_channel::Receiver as CrossbeamReceiver;
 
 use super::edge_query::EdgeQuery;
 use super::sender::ChannelMessage;

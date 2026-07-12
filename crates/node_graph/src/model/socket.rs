@@ -1,6 +1,7 @@
-use super::SocketDirection;
 use egui::Color32;
 use serde::{Deserialize, Serialize};
+
+use super::SocketDirection;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SocketShape {

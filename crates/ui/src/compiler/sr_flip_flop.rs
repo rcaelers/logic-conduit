@@ -1,12 +1,13 @@
 //! `SR Flip-Flop` builder.
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
-use crate::nodes;
 use dsl::SrLatch;
 use dsl::runtime::ProcessNode;
 use dsl::{Sample, Trigger};
 use node_graph::Socket;
 use serde_json::Value;
+
+use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::nodes;
 
 pub(super) struct SrFlipFlopBuilder;
 

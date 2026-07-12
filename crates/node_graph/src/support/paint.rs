@@ -1,10 +1,12 @@
+use std::collections::HashMap;
+
+use egui::epaint::CubicBezierShape;
+use egui::{Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Vec2};
+
 use crate::{
     model::{Connection, GraphState, SocketId},
     support::ViewState,
 };
-use egui::epaint::CubicBezierShape;
-use egui::{Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Vec2};
-use std::collections::HashMap;
 
 pub const SOCKET_RADIUS: f32 = 5.5;
 

@@ -17,6 +17,11 @@
 //! Because each data value is obtained by blocking recv (not try_recv),
 //! the race condition from the old batch-decode approach is eliminated.
 
+use std::collections::VecDeque;
+use std::sync::Arc;
+
+use tracing::{debug, trace};
+
 use super::types::{BitOrder, CsPolarity, SpiMode};
 use crate::runtime::Receiver;
 use crate::runtime::edge_query::EdgeQuery;
@@ -24,9 +29,6 @@ use crate::runtime::events::Word;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::protocol::ProtocolKind;
 use crate::runtime::sample::Sample;
-use std::collections::VecDeque;
-use std::sync::Arc;
-use tracing::{debug, trace};
 
 /// SPI decoder node
 ///
@@ -734,9 +736,10 @@ mod tests {
     /// sampled on CLK's rising edge (Mode0).
     #[test]
     fn work_streamed_emits_independent_mosi_and_miso_word_streams() {
+        use crossbeam_channel::bounded;
+
         use crate::runtime::sender::{ChannelMessage, Sender};
         use crate::runtime::watchdog::Watchdog;
-        use crossbeam_channel::bounded;
 
         let wd = Watchdog::new();
 

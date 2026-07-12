@@ -4,18 +4,16 @@
 //! Nodes actively process data when work() is called by the scheduler.
 
 // Re-export error types for backward compatibility
-pub use super::errors::{WorkError, WorkResult};
+use std::sync::Arc;
 
+use super::edge_query::EdgeQuery;
+pub use super::errors::{WorkError, WorkResult};
 // Re-export port types (now defined in ports module)
 pub use super::ports::{InputPort, OutputPort};
-
+use super::protocol::ProtocolKind;
 // Re-export channel types (now defined in sender/receiver modules)
 pub use super::receiver::Receiver;
 pub use super::sender::Sender;
-
-use super::edge_query::EdgeQuery;
-use super::protocol::ProtocolKind;
-use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct InputProtocolCandidate {

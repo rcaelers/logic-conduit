@@ -1,6 +1,7 @@
+use egui::Ui;
+
 use crate::types::AnalyzerLayout;
 use crate::viewer::LogicAnalyzerViewer;
-use egui::Ui;
 
 const SCROLL_INPUT_EPSILON: f32 = 0.5;
 

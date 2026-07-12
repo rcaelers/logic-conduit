@@ -1,10 +1,12 @@
-use super::control::InlineControl;
-use super::socket::{SocketDef, SocketWithControlDef};
-use crate::model::{NodeBadge, Socket, SocketShape};
+use std::fmt;
+
 use egui::{Color32, Rect, Ui};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use std::fmt;
+
+use super::control::InlineControl;
+use super::socket::{SocketDef, SocketWithControlDef};
+use crate::model::{NodeBadge, Socket, SocketShape};
 
 /// Identity of a socket type as it should appear graph-wide: used to re-skin
 /// sockets that resolved to this type, regardless of any per-def idle styling.

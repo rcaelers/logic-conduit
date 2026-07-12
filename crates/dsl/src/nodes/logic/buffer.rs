@@ -6,9 +6,10 @@
 //! sharing the same producer, a `Buffer` node makes that capacity choice
 //! visible and user-configured instead of an invisible framework default.
 
+use std::collections::VecDeque;
+
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
-use std::collections::VecDeque;
 
 /// Relays every item it receives, unchanged, from `in` to `out`. Generic
 /// over any payload type flowing through a compiled pipeline edge — the
@@ -73,10 +74,11 @@ impl<T: Send + Sync + Clone + 'static> ProcessNode for BufferNode<T> {
 
 #[cfg(test)]
 mod tests {
+    use crossbeam_channel::bounded;
+
     use super::*;
     use crate::runtime::sender::{ChannelMessage, Sender};
     use crate::runtime::watchdog::Watchdog;
-    use crossbeam_channel::bounded;
 
     fn run_buffer(buffer: &mut BufferNode<u64>, items: &[u64]) -> Vec<u64> {
         let wd = Watchdog::new();

@@ -1,3 +1,13 @@
+use std::fs::File;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use memmap2::{Mmap, MmapOptions};
+
 use super::cache::{cache_block, cached_block};
 use super::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
@@ -7,14 +17,6 @@ use super::{
     decode_word_block_range,
 };
 use crate::runtime::{Annotation, MAX_ANNOTATION_NS, Word, instantaneous_word_end_ns};
-use memmap2::{Mmap, MmapOptions};
-use std::fs::File;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_HOT_TAIL_PUBLISH_WORDS: usize = 16_384;
 pub const DEFAULT_HOT_TAIL_PUBLISH_INTERVAL: Duration = Duration::from_millis(50);
@@ -1235,11 +1237,12 @@ fn read_exact_at(_file: &File, _buffer: &mut [u8], _offset: u64) -> io::Result<(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::runtime::derived_word_store::cache::cache_contains;
     use std::io::{Read, Seek, SeekFrom};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
+
+    use super::*;
+    use crate::runtime::derived_word_store::cache::cache_contains;
 
     fn test_config(directory: &Path) -> LiveStoreConfig {
         LiveStoreConfig {

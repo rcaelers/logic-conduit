@@ -20,12 +20,14 @@
 //! file descriptor — coherent on unix targets, which share a unified page
 //! cache between `write()` and `MAP_SHARED` mappings.
 
-use crate::Result;
-use crate::runtime::{BlockData, CaptureMetadata};
-use memmap2::{Mmap, MmapOptions};
 use std::fs::{File, OpenOptions};
 use std::path::Path;
 use std::sync::Arc;
+
+use memmap2::{Mmap, MmapOptions};
+
+use crate::Result;
+use crate::runtime::{BlockData, CaptureMetadata};
 
 const MAGIC: &[u8; 8] = b"CAPRAW01";
 const VERSION: u32 = 1;

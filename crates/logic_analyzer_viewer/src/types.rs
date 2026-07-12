@@ -1,7 +1,8 @@
-use dsl::CaptureMetadata;
-use egui::{Color32, Pos2, Rect};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
+
+use dsl::CaptureMetadata;
+use egui::{Color32, Pos2, Rect};
 
 /// Color profile for the viewer. DSView (Tango-based channel colors, bright
 /// traces) is the default; Classic is the viewer's original muted look.

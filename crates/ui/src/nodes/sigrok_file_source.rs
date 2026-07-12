@@ -1,9 +1,10 @@
 //! `Sigrok File Source` node — reads PulseView/sigrok v2 `.sr` captures.
 
-use super::{COLOR_SOURCES, Signal, TextOpenPath};
 use egui::Color32;
 use node_graph::{FileValue, InputDef, IntValue, NodeDef, OutputDef, Socket};
 use serde::{Deserialize, Serialize};
+
+use super::{COLOR_SOURCES, Signal, TextOpenPath};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SigrokFileSourceState {

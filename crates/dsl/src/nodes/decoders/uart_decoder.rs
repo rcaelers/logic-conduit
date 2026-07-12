@@ -5,14 +5,16 @@
 //! bit centers are exact nanosecond math on the start edge, so decode
 //! quality depends only on edges being captured faithfully.
 
+use std::collections::VecDeque;
+
+use tracing::{debug, trace};
+
 use super::types::BitOrder;
 use crate::runtime::Receiver;
 use crate::runtime::events::{Trigger, Word};
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
 use crate::runtime::sample::Sample;
-use std::collections::VecDeque;
-use tracing::{debug, trace};
 
 /// UART parity mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -352,10 +354,11 @@ impl ProcessNode for UartDecoder {
 
 #[cfg(test)]
 mod tests {
+    use crossbeam_channel::bounded;
+
     use super::*;
     use crate::runtime::sender::{ChannelMessage, Sender};
     use crate::runtime::watchdog::Watchdog;
-    use crossbeam_channel::bounded;
 
     const BIT: u64 = 1_000; // 1 Mbaud → 1000 ns/bit
 

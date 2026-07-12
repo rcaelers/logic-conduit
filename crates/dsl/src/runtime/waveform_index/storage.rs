@@ -58,15 +58,17 @@
 //! └─────────────────────────────────────────────────────┘
 //! ```
 
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+
+use memmap2::Mmap;
+
 use super::types::{
     BlockIndex, DIR_ENTRY_SIZE, HEADER_SIZE, IndexHeader, L1_WORDS, L2_WORDS, MAGIC, RootDirEntry,
 };
 use crate::runtime::CaptureMetadata;
 use crate::{Error, Result};
-use memmap2::Mmap;
-use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
 
 // Leaf chunks are read zero-copy as native u64 words from the mapped file.
 #[cfg(target_endian = "big")]

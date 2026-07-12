@@ -8,6 +8,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
+    use std::collections::VecDeque;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
     use clap::{Parser, ValueEnum};
     use dsl::runtime::ProtocolKind;
     use dsl::runtime::derived_word_store::{
@@ -21,10 +26,6 @@ mod native {
         ViewerLaneKind, ViewerRetention, ViewerSink, ViewerSinkMetrics, Word, WorkError,
         WorkResult,
     };
-    use std::collections::VecDeque;
-    use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
-    use std::time::{Duration, Instant};
 
     #[derive(Clone, Copy, Debug, ValueEnum)]
     enum BenchMode {
@@ -918,10 +919,12 @@ mod native {
 
     #[cfg(test)]
     mod tests {
-        use super::*;
         use std::fs::File;
         use std::io::Write;
+
         use zip::write::SimpleFileOptions;
+
+        use super::*;
 
         fn set_packed_bit(data: &mut [u8], sample: usize, value: bool) {
             if value {

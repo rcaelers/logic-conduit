@@ -1,9 +1,10 @@
 //! `Viewer` node.
 
-use super::{COLOR_OUTPUT, Signal, Trigger, Words};
 use egui::Color32;
 use node_graph::{InputDef, NodeDef, OutputDef, PanelSection, PropDef, StringValue};
 use serde::{Deserialize, Serialize};
+
+use super::{COLOR_OUTPUT, Signal, Trigger, Words};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ViewerState {

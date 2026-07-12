@@ -1,12 +1,14 @@
 //! SR flip-flop — set/reset triggers → boolean level
 
+use std::collections::VecDeque;
+
+use tracing::{debug, warn};
+
 use crate::runtime::events::Trigger;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
 use crate::runtime::receiver::ReceiverSelector;
 use crate::runtime::sample::Sample;
-use std::collections::VecDeque;
-use tracing::{debug, warn};
 
 /// Set/reset latch over [`Trigger`] streams.
 ///
@@ -133,10 +135,11 @@ impl ProcessNode for SrLatch {
 
 #[cfg(test)]
 mod tests {
+    use crossbeam_channel::bounded;
+
     use super::*;
     use crate::runtime::sender::{ChannelMessage, Sender};
     use crate::runtime::watchdog::Watchdog;
-    use crossbeam_channel::bounded;
 
     struct Rig {
         set_tx: crossbeam_channel::Sender<ChannelMessage<Trigger>>,

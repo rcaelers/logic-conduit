@@ -1,12 +1,13 @@
 //! `String Formatter` builder.
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
-use crate::nodes;
 use dsl::TextFormatter;
 use dsl::runtime::{ConfigValue, NodeConfig, ProcessNode};
 use dsl::{NumberSample, TextSample};
 use node_graph::Socket;
 use serde_json::Value;
+
+use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::nodes;
 
 pub(super) struct FormatterBuilder;
 

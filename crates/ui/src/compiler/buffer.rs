@@ -1,12 +1,13 @@
 //! `Buffer` builder — see `crates/ui/src/nodes/buffer.rs` and
 //! the buffer policy in `docs/APP_DESIGN.md`.
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
-use crate::nodes;
 use dsl::runtime::ProcessNode;
 use dsl::{BufferNode, NumberSample, Sample, SampleBlock, TextSample, Trigger, Word};
 use node_graph::Socket;
 use serde_json::Value;
+
+use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::nodes;
 
 /// Maps a `BufferState.kind` selection (see `nodes::buffer::KIND_LABELS`) to
 /// the concrete `PortKind` it names. Falls back to `Signal` for state that

@@ -1,12 +1,13 @@
 //! `UART Decoder` builder.
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
-use crate::nodes;
 use dsl::nodes::decoders::{BitOrder, UartParity, UartStopBits};
 use dsl::runtime::ProcessNode;
 use dsl::{Sample, Trigger, Word};
 use node_graph::Socket;
 use serde_json::Value;
+
+use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::nodes;
 
 pub(super) struct UartDecoderBuilder;
 

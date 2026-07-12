@@ -1,7 +1,8 @@
 //! Core data types for signal processing
 
-use super::capture::BlockData;
 use std::fmt;
+
+use super::capture::BlockData;
 
 /// Sample representing a signal value at a specific time
 ///

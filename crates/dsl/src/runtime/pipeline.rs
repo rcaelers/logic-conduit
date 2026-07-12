@@ -1,5 +1,11 @@
 //! Pipeline builder for constructing node graphs
 
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use tracing::{debug, info};
+
 use super::edge_query::EdgeQuery;
 use super::errors::ConnectionError;
 use super::node::{InputPort, InputProtocolCandidate, OutputPort, ProcessNode};
@@ -9,10 +15,6 @@ use super::sample::SampleBlock;
 use super::sample_kind;
 use super::scheduler::Scheduler;
 use super::type_registry::{LabeledSenderBox, TYPE_REGISTRY};
-use std::any::{Any, TypeId};
-use std::collections::HashMap;
-use std::sync::Arc;
-use tracing::{debug, info};
 
 const DEFAULT_SAMPLE_BLOCK_BUFFER_SIZE: usize = 2;
 const DEFAULT_WORD_BUFFER_SIZE: usize = 8;
@@ -793,8 +795,9 @@ mod tests {
 
     // ── SampleKind negotiation ──────────────────────────────────────────
 
-    use crate::runtime::sample::SampleBlock;
     use std::sync::Mutex;
+
+    use crate::runtime::sample::SampleBlock;
 
     /// One output port that can serve `Sample` and `SampleBlock`
     /// destinations simultaneously — sends exactly one of each, then

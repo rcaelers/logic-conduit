@@ -15,14 +15,16 @@
 //! the line stream. Files open lazily on the first line written to them, so
 //! name windows without lines produce no file at all.
 
-use crate::runtime::events::TextSample;
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
-use crate::runtime::ports::{PortDirection, PortSchema};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
+
 use tracing::{debug, info, warn};
+
+use crate::runtime::events::TextSample;
+use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
+use crate::runtime::ports::{PortDirection, PortSchema};
 
 /// Sink appending [`TextSample`] lines to files named by another
 /// [`TextSample`] level.
@@ -223,10 +225,11 @@ impl ProcessNode for TextFileWriter {
 
 #[cfg(test)]
 mod tests {
+    use crossbeam_channel::bounded;
+
     use super::*;
     use crate::runtime::sender::ChannelMessage;
     use crate::runtime::watchdog::Watchdog;
-    use crossbeam_channel::bounded;
 
     struct Rig {
         lines_tx: crossbeam_channel::Sender<ChannelMessage<TextSample>>,

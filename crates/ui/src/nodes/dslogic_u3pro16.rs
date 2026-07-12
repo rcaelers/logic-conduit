@@ -2,13 +2,14 @@
 //! `compiler` builder exists yet (there is no runtime driver wired up); the
 //! node is editable but not runnable.
 
-use super::{COLOR_SOURCES, Signal};
 use egui::Color32;
 use node_graph::{
     BoolValue, EnumValue, FloatValue, InlineControl, InputDef, IntValue, NodeBadge, NodeDef,
     OutputDef, PanelSection, PropDef, Socket,
 };
 use serde::{Deserialize, Serialize};
+
+use super::{COLOR_SOURCES, Signal};
 
 /// Selectable sample rates; the stream-mode channel-count constraint limits
 /// which are reachable.

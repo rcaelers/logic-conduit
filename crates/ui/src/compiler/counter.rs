@@ -1,12 +1,13 @@
 //! `Counter` builder.
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
-use crate::nodes;
 use dsl::TriggerCounter;
 use dsl::runtime::ProcessNode;
 use dsl::{NumberSample, Trigger};
 use node_graph::Socket;
 use serde_json::Value;
+
+use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::nodes;
 
 pub(super) struct CounterBuilder;
 

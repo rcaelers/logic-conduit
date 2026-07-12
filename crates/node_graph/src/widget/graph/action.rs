@@ -1,9 +1,11 @@
+use std::collections::{HashMap, HashSet};
+
+use egui::{Color32, Pos2, Vec2};
+use serde::{Deserialize, Serialize};
+
 pub(super) use super::super::menu::Shortcut;
 use super::{FrameRenameState, NodeGraphWidget, NodeRenameState};
 use crate::model::{Connection, FrameId, Node, NodeId, SocketDirection, SocketId};
-use egui::{Color32, Pos2, Vec2};
-use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 
 static FRAME_COLORS: [Color32; 5] = [
     Color32::from_rgb(50, 90, 160),

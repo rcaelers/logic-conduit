@@ -1,12 +1,13 @@
 //! `Binary Decoder` builder — parallel-bus word assembly from raw blocks.
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
-use crate::nodes;
 use dsl::nodes::decoders::Endianness;
 use dsl::runtime::ProcessNode;
 use dsl::{CsPolarity, ParallelInputStrategy, Sample, SampleBlock, StrobeMode, Word};
 use node_graph::Socket;
 use serde_json::Value;
+
+use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::nodes;
 
 pub(super) struct BinaryDecoderBuilder;
 

@@ -1,11 +1,12 @@
-use super::{
-    BlockDirectoryEntry, DATA_HEADER_SIZE, DataFileHeader, FORMAT_VERSION, PersistentStoreConfig,
-    StoreError, StoreResult, WordPresenceIndex, WordSummaryRecord,
-};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use super::{
+    BlockDirectoryEntry, DATA_HEADER_SIZE, DataFileHeader, FORMAT_VERSION, PersistentStoreConfig,
+    StoreError, StoreResult, WordPresenceIndex, WordSummaryRecord,
+};
 
 const INDEX_MAGIC: &[u8; 8] = b"DWRIDX1\0";
 const MANIFEST_MAGIC: &[u8; 8] = b"DWRMAN1\0";

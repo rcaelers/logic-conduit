@@ -1,5 +1,6 @@
-use super::SocketId;
 use serde::{Deserialize, Serialize};
+
+use super::SocketId;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Connection {

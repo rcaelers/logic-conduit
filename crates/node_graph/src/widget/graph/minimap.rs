@@ -1,9 +1,11 @@
+use std::collections::HashMap;
+
+use egui::{Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Vec2};
+
 use crate::{
     model::{GraphState, NodeId},
     support::ViewState,
 };
-use egui::{Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Vec2};
-use std::collections::HashMap;
 
 const MINIMAP_SCALE: f32 = 0.20;
 const MINIMAP_MARGIN_FRACTION: f32 = 0.025;
@@ -166,8 +168,9 @@ pub fn draw_minimap(
 
 #[cfg(test)]
 mod tests {
-    use super::minimap_rect;
     use egui::{Pos2, Rect};
+
+    use super::minimap_rect;
 
     #[test]
     fn minimap_scales_with_the_canvas() {

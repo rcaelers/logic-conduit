@@ -1,16 +1,18 @@
+use std::borrow::Cow;
+use std::collections::HashSet;
+
+use dsl::{
+    AppendOnlyMipmap, CaptureMetadata, CaptureSampledWindow, CaptureWaveformSegment,
+    DerivedLaneData, DigitalFold, LaneSummary, MarkerFold, MipmapRecord, Sample,
+};
+use egui::{Color32, CursorIcon, PointerButton, Pos2, Rect, Response, Ui, vec2};
+
 use crate::sampling::sample_to_us;
 use crate::types::{
     AnalyzerLayout, RowDragState, RowKey, RowLabel, RowRenameState, Transition, WaveformSegment,
     WaveformSegmentKind,
 };
 use crate::viewer::LogicAnalyzerViewer;
-use dsl::{
-    AppendOnlyMipmap, CaptureMetadata, CaptureSampledWindow, CaptureWaveformSegment,
-    DerivedLaneData, DigitalFold, LaneSummary, MarkerFold, MipmapRecord, Sample,
-};
-use egui::{Color32, CursorIcon, PointerButton, Pos2, Rect, Response, Ui, vec2};
-use std::borrow::Cow;
-use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub(crate) struct LogicChannel {
@@ -662,9 +664,10 @@ pub(crate) fn placeholder_channels(header: &CaptureMetadata) -> Vec<LogicChannel
 
 #[cfg(test)]
 mod tests {
+    use dsl::{DerivedLanes, Sample};
+
     use super::*;
     use crate::viewer::LogicAnalyzerViewer;
-    use dsl::{DerivedLanes, Sample};
 
     /// A viewer with `count` bare channels (no transitions) — enough for the
     /// row-order/labeling tests below, which only care about channel

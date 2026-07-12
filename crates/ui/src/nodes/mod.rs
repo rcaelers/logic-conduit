@@ -479,8 +479,9 @@ pub fn capture_file_source(graph: &node_graph::GraphState) -> Option<CaptureFile
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use node_graph::NodeGraphWidget;
+
+    use super::*;
 
     #[test]
     fn checked_in_spi_decode_pipeline_lowers_cleanly() {

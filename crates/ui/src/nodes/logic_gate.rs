@@ -1,9 +1,10 @@
 //! `Logic Gate` node.
 
-use super::{COLOR_LOGIC, Signal};
 use egui::Color32;
 use node_graph::{EnumValue, InputDef, NodeBadge, NodeDef, OutputDef, PropDef, Socket};
 use serde::{Deserialize, Serialize};
+
+use super::{COLOR_LOGIC, Signal};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogicGateState {

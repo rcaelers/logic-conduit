@@ -1,10 +1,12 @@
 //! Trigger counter — counts trigger events into an integer level
 
+use std::collections::VecDeque;
+
+use tracing::debug;
+
 use crate::runtime::events::{NumberSample, Trigger};
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
-use std::collections::VecDeque;
-use tracing::debug;
 
 /// Counts triggers into a [`NumberSample`] level: `start` at t=0, then
 /// `start + n*step` after the n-th trigger.
@@ -96,10 +98,11 @@ impl ProcessNode for TriggerCounter {
 
 #[cfg(test)]
 mod tests {
+    use crossbeam_channel::bounded;
+
     use super::*;
     use crate::runtime::sender::{ChannelMessage, Sender};
     use crate::runtime::watchdog::Watchdog;
-    use crossbeam_channel::bounded;
 
     fn run_counter(counter: &mut TriggerCounter, triggers: &[u64]) -> Vec<NumberSample> {
         let wd = Watchdog::new();

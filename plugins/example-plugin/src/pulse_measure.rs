@@ -5,6 +5,8 @@
 //! a new graph `SocketDef`, a `NodeDef` reusing a host-crate socket type
 //! (`dsl_ui::nodes::Signal`), and a matching `RuntimeBuilder`.
 
+use std::collections::VecDeque;
+
 use dsl::runtime::{
     InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, Sample, WorkError, WorkResult,
 };
@@ -14,7 +16,6 @@ use egui::Color32;
 use node_graph::{InputDef, NodeDef, OutputDef, Socket, SocketDef, SocketShape};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::VecDeque;
 
 // ── Runtime payload ──────────────────────────────────────────────────────────
 
@@ -180,10 +181,11 @@ impl ProcessNode for PulseMeasureNode {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crossbeam_channel::bounded;
     use dsl::runtime::sender::{ChannelMessage, Sender};
     use dsl::runtime::watchdog::Watchdog;
+
+    use super::*;
 
     #[test]
     fn register_populates_both_registries() {

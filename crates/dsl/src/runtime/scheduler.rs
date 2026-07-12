@@ -15,15 +15,17 @@
 //!
 //! Example self-threading node: `DslFileSource` spawns per-channel reader threads internally.
 
-use super::node::ProcessNode;
-use super::ports::{InputPort, OutputPort};
-use super::watchdog::Watchdog;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver as StdReceiver, Sender as StdSender, channel};
 use std::thread::{self, JoinHandle};
+
 use tracing::{debug, error, info};
+
+use super::node::ProcessNode;
+use super::ports::{InputPort, OutputPort};
+use super::watchdog::Watchdog;
 
 /// Runtime scheduler that executes a streaming graph
 pub struct Scheduler {
@@ -237,12 +239,14 @@ impl StopHandle {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use crossbeam_channel::bounded;
+
     use super::*;
     use crate::runtime::node::{ProcessNode, WorkError, WorkResult};
     use crate::runtime::sender::ChannelMessage;
-    use crossbeam_channel::bounded;
-    use std::sync::Mutex;
-    use std::time::Duration;
 
     struct TestSource {
         count: usize,

@@ -20,6 +20,14 @@
 //! output lists on the way out, so end-of-run propagates exactly like the
 //! offline drop-cascade — supervisor-driven, same semantics.
 
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::thread::JoinHandle;
+
+use tracing::{debug, error, info};
+
 use super::edge_query::EdgeQuery;
 use super::node::{
     ConfigOutcome, InputPort, InputProtocolCandidate, NodeConfig, OutputPort, ProcessNode,
@@ -31,12 +39,6 @@ use super::sender::OverflowPolicy;
 use super::type_registry::{ErasedSharedSenders, TYPE_REGISTRY};
 use super::watchdog::Watchdog;
 use crate::runtime::errors::WorkError;
-use std::any::{Any, TypeId};
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::thread::JoinHandle;
-use tracing::{debug, error, info};
 
 /// One input wire of a node being added: which producer list to join.
 #[derive(Debug, Clone)]
@@ -860,13 +862,14 @@ impl Drop for PipelineManager {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
     use super::*;
     use crate::runtime::events::NumberSample;
     use crate::runtime::node::{ConfigValue, WorkResult};
     use crate::runtime::ports::{PortDirection, PortSchema};
-    use std::collections::VecDeque;
-    use std::sync::Mutex;
-    use std::time::Duration;
 
     /// Emits `NumberSample { value: i, start_time_ns: i }` for i in 0..max,
     /// paced so tests can attach taps mid-stream.

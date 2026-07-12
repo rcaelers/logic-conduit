@@ -1,7 +1,8 @@
 //! Error types for the runtime system
 
-use crossbeam_channel::{RecvError, SendError};
 use std::any::TypeId;
+
+use crossbeam_channel::{RecvError, SendError};
 
 /// Error type for port operations
 #[derive(Debug, thiserror::Error)]

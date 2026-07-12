@@ -1,12 +1,13 @@
 //! `CSV Writer` builder — writes decoded words to a CSV file. Native-only:
 //! no filesystem in the browser.
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
-use crate::nodes;
 use dsl::runtime::ProcessNode;
 use dsl::{CsvValueFormat, CsvWordWriter, TextSample, Word};
 use node_graph::Socket;
 use serde_json::Value;
+
+use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::nodes;
 
 pub(super) struct CsvWriterBuilder;
 

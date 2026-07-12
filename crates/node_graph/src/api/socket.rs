@@ -1,6 +1,7 @@
+use egui::Color32;
+
 use super::control::InlineControl;
 use crate::model::SocketShape;
-use egui::Color32;
 
 pub trait SocketDef: 'static + Send + Sync {
     type Value: 'static + Send + Sync;

@@ -1,5 +1,6 @@
-use egui::{Rect, Ui};
 use std::fmt;
+
+use egui::{Rect, Ui};
 
 /// Editable inline UI state bound to a node-state field.
 pub trait InlineControl: Send + Sync + fmt::Debug {

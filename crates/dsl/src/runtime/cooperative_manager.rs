@@ -44,6 +44,13 @@
 //! that fans out many sends from one `work()` call would reopen the
 //! deadlock this check exists to close.
 
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use crossbeam_channel::Receiver as CrossbeamReceiver;
+
 use super::errors::WorkError;
 use super::events::{NumberSample, TextSample, Trigger, Word};
 use super::manager::{DisconnectEvent, InputSub, NodeSpec};
@@ -52,11 +59,6 @@ use super::sample::{Sample, SampleBlock};
 use super::sender::ChannelMessage;
 use super::type_registry::{ErasedSharedSenders, TYPE_REGISTRY};
 use super::watchdog::Watchdog;
-use crossbeam_channel::Receiver as CrossbeamReceiver;
-use std::any::{Any, TypeId};
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Level streams get sticky lists; kept in sync with
 /// [`manager::is_level_type`](super::manager) by hand — both are tiny and
@@ -577,12 +579,13 @@ fn close_outputs(node: &CooperativeNode) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
     use super::*;
     use crate::runtime::events::NumberSample;
     use crate::runtime::node::{ConfigValue, WorkResult};
     use crate::runtime::ports::{PortDirection, PortSchema};
-    use std::collections::VecDeque;
-    use std::sync::Mutex;
 
     /// Emits `NumberSample { value: i, start_time_ns: i }` for i in 0..max, one
     /// per `work()` call — no pacing needed since the cooperative pump loop

@@ -5,12 +5,13 @@
 //! "whatever kind my input resolved to" for a genuinely generic passthrough
 //! (see `crates/ui/src/compiler/buffer.rs`).
 
-use super::COLOR_LOGIC;
 use egui::Color32;
 use node_graph::{
     AnySocket, EnumValue, InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef,
 };
 use serde::{Deserialize, Serialize};
+
+use super::COLOR_LOGIC;
 
 /// Which built-in payload kind flows through a given `Buffer` instance —
 /// order matches the dropdown and `crates/ui/src/compiler/buffer.rs`'s

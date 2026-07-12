@@ -6,7 +6,11 @@ mod minimap;
 mod panel;
 mod render;
 
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
 use action::HotkeyRegistry;
+use egui::{Pos2, Sense, Ui};
 use interaction::{GraphResponses, InteractionState};
 use menu::MenuController;
 use panel::{PanelState, PanelTab};
@@ -17,9 +21,6 @@ use crate::{
     runtime::{NodeInstance, NodeRuntime},
     support::ViewState,
 };
-use egui::{Pos2, Sense, Ui};
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 // ── Main widget ───────────────────────────────────────────────────────────────
 
@@ -503,8 +504,9 @@ impl NodeGraphWidget {
 
 #[cfg(test)]
 mod tests {
-    use super::graph_pointer;
     use egui::{Pos2, Rect};
+
+    use super::graph_pointer;
 
     #[test]
     fn floating_panel_blocks_graph_pointer_only_inside_its_bounds() {

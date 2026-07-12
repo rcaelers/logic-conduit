@@ -2,13 +2,14 @@
 //! ad hoc "dump this decoder to CSV" sinks; pairs with `Viewer` for the
 //! console-printer role a one-off example sink used to fill.
 
-use super::{COLOR_OUTPUT, TextSavePath, Words};
 use egui::Color32;
 use node_graph::{
     EnumValue, FileValue, InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef,
     StringValue,
 };
 use serde::{Deserialize, Serialize};
+
+use super::{COLOR_OUTPUT, TextSavePath, Words};
 
 /// Empty save-dialog picker, shown inline on the `Filename` socket while it
 /// is unconnected; a connected filename stream always wins.

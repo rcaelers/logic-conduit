@@ -4,12 +4,13 @@
 //! size, unaffected by graph zoom; edits mutate the same node state as
 //! inline controls and run `on_update` through the same path.
 
-use super::NodeGraphWidget;
-use crate::model::{NodeId, NodeKind};
 use egui::{
     Align, Align2, Color32, CursorIcon, FontId, Layout, Pos2, Rect, RichText, Sense, Stroke, Ui,
     UiBuilder, Vec2,
 };
+
+use super::NodeGraphWidget;
+use crate::model::{NodeId, NodeKind};
 
 const PANEL_MIN_WIDTH: f32 = 220.0;
 const PANEL_MAX_WIDTH: f32 = 520.0;

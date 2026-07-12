@@ -1,7 +1,8 @@
+use egui::{Color32, Painter, Pos2, Rect, Stroke};
+
 use crate::channel::LogicChannel;
 use crate::types::WaveformSegmentKind;
 use crate::viewer::LogicAnalyzerViewer;
-use egui::{Color32, Painter, Pos2, Rect, Stroke};
 
 impl LogicAnalyzerViewer {
     /// The waveform content for one channel row — the label (name, badge)

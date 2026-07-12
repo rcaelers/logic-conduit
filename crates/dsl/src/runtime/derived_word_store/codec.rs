@@ -678,8 +678,9 @@ fn invalid(message: &str) -> CodecError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::Instant;
+
+    use super::*;
 
     fn round_trip(words: &[Word]) -> (EncodedBlockMetadata, Vec<u8>) {
         let mut bytes = Vec::new();

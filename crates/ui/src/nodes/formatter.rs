@@ -1,9 +1,10 @@
 //! `String Formatter` node.
 
-use super::{COLOR_LOGIC, Number, Text};
 use egui::Color32;
 use node_graph::{InputDef, NodeDef, OutputDef, PropDef, StringValue};
 use serde::{Deserialize, Serialize};
+
+use super::{COLOR_LOGIC, Number, Text};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StringFormatterState {

@@ -1,10 +1,11 @@
+use dsl::CaptureWaveformSegment;
+use egui::Pos2;
+
 use crate::channel::channels_from_window;
 use crate::types::{
     AnalyzerLayout, CaptureInfo, ExactWindow, PulseMeasurement, RowKey, Transition,
 };
 use crate::viewer::LogicAnalyzerViewer;
-use dsl::CaptureWaveformSegment;
-use egui::Pos2;
 
 impl LogicAnalyzerViewer {
     /// Samples the visible window from the index synchronously, so the drawn
@@ -456,8 +457,9 @@ fn sampled_visible_range(capture: &CaptureInfo, start_us: f64, span_us: f64) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use dsl::CaptureMetadata;
+
+    use super::*;
 
     fn capture(total_samples: u64) -> CaptureInfo {
         CaptureInfo {

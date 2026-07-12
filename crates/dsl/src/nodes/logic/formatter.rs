@@ -1,9 +1,10 @@
 //! Text formatter — maps integer levels to a text level via a template
 
+use std::collections::VecDeque;
+
 use crate::runtime::events::{NumberSample, TextSample};
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
-use std::collections::VecDeque;
 
 /// Substitutes value placeholders in `template`:
 ///
@@ -219,10 +220,11 @@ impl ProcessNode for TextFormatter {
 
 #[cfg(test)]
 mod tests {
+    use crossbeam_channel::bounded;
+
     use super::*;
     use crate::runtime::sender::{ChannelMessage, Sender};
     use crate::runtime::watchdog::Watchdog;
-    use crossbeam_channel::bounded;
 
     #[test]
     fn template_substitution() {

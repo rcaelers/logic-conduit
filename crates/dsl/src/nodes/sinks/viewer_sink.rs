@@ -2,6 +2,12 @@
 //! renders as extra rows under the raw channels
 //! (`docs/LOGIC_ANALYZER_VIEWER_DESIGN.md`).
 
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock, RwLockReadGuard};
+
+use web_time::Instant;
+
 use crate::runtime::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::derived_word_store::{
@@ -12,10 +18,6 @@ use crate::runtime::events::{Annotation, Trigger, Word};
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
 use crate::runtime::sample::Sample;
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock, RwLockReadGuard};
-use web_time::Instant;
 
 #[derive(Clone, Default)]
 pub struct ViewerSinkMetrics {
@@ -841,11 +843,12 @@ impl ProcessNode for ViewerSink {
 
 #[cfg(test)]
 mod tests {
+    use crossbeam_channel::bounded;
+
     use super::*;
     use crate::runtime::OutputPort as OutPort;
     use crate::runtime::sender::ChannelMessage;
     use crate::runtime::watchdog::Watchdog;
-    use crossbeam_channel::bounded;
 
     fn run_sink(sink: &mut ViewerSink, inputs: Vec<InputPort>) {
         let outputs: Vec<OutPort> = vec![];

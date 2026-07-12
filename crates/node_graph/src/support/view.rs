@@ -50,8 +50,9 @@ impl ViewState {
 
 #[cfg(test)]
 mod tests {
-    use super::ViewState;
     use egui::{Pos2, Rect, Vec2};
+
+    use super::ViewState;
 
     #[test]
     fn fit_to_rect_centers_and_contains_bounds() {

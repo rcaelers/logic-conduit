@@ -5,7 +5,6 @@ mod types;
 
 pub use reader::IndexSampler;
 pub use types::CaptureIndexProgress;
-
 use types::SAMPLES_PER_L1_BIT;
 
 const EXACT_SCAN_BASE_MAX_SAMPLES: u64 = 4_096;
@@ -25,16 +24,17 @@ pub fn exact_window_sample_limit(target_points: usize) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::*;
     use crate::runtime::{
         BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureMetadata,
         CaptureSource, CaptureWaveformSegment, packed_bit,
     };
     use crate::{Error, Result};
-    use std::fs;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_TEST_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
 

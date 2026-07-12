@@ -1,11 +1,12 @@
 //! `File Writer` node.
 
-use super::{COLOR_OUTPUT, TextSavePath, Words};
 use egui::Color32;
 use node_graph::{
     BoolValue, EnumValue, FileValue, InputDef, NodeDef, OutputDef, PanelSection, PropDef,
 };
 use serde::{Deserialize, Serialize};
+
+use super::{COLOR_OUTPUT, TextSavePath, Words};
 
 /// Empty save-dialog picker, shown inline on the `Filename` socket while it
 /// is unconnected; a connected filename stream always wins.

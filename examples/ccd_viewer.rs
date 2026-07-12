@@ -34,11 +34,12 @@
 //!       --file _captures/red/capture_0020.bin \
 //!       --width 10600
 
+use std::fs::File;
+use std::path::{Path, PathBuf};
+
 use clap::Parser;
 use memmap2::Mmap;
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
-use std::fs::File;
-use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "CCD capture data viewer")]

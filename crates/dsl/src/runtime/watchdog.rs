@@ -7,6 +7,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
+
 use tracing::{info, warn};
 // `std::time::SystemTime::now()` panics on `wasm32-unknown-unknown` (no clock
 // syscall); `web_time` provides the same API backed by `Date.now()` in the

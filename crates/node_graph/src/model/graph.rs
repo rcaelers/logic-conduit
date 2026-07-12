@@ -1,10 +1,12 @@
+use std::collections::{HashMap, HashSet};
+
+use egui::Color32;
+use serde::{Deserialize, Serialize};
+
 use super::{
     Connection, Frame, FrameId, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId,
     VariadicInfo,
 };
-use egui::Color32;
-use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct GraphState {
@@ -388,9 +390,10 @@ impl GraphState {
 
 #[cfg(test)]
 mod tests {
+    use egui::{Color32, Pos2};
+
     use super::*;
     use crate::model::{NodeKind, Socket, SocketDirection, SocketShape};
-    use egui::{Color32, Pos2};
 
     fn socket(type_name: &str, allowed: &[&str]) -> Socket {
         Socket {

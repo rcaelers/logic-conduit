@@ -1,12 +1,13 @@
 //! Capture the matching Pi 5 GPIO SPI test waveform with a DSLogic U3Pro16.
 
+use std::collections::VecDeque;
+
 use dsl::nodes::decoders::{SpiDecoder, SpiMode};
 use dsl::{
     CaptureMode, ClockSource, DsLogicU3Pro16, InputPort, LogicCaptureConfig, LogicEncodingRequest,
     LogicTrigger, LogicTriggerStage, OutputPort, Pipeline, PortDirection, PortSchema, ProcessNode,
     Sample, TriggerCondition, Word, WorkError, WorkResult,
 };
-use std::collections::VecDeque;
 
 const SAMPLE_RATE_HZ: u64 = 1_000_000;
 const CAPTURE_SAMPLES: u64 = 5_000_000;

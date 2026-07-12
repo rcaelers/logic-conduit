@@ -7,14 +7,16 @@
 //! the data stream. Files open lazily on the first word written to them, so
 //! name windows without data produce no file at all.
 
-use crate::runtime::events::{TextSample, Word};
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
-use crate::runtime::ports::{PortDirection, PortSchema};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+
 use tracing::{debug, info, warn};
+
+use crate::runtime::events::{TextSample, Word};
+use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
+use crate::runtime::ports::{PortDirection, PortSchema};
 
 /// How a word's value is written to the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -375,10 +377,11 @@ impl ProcessNode for BinaryFileWriter {
 
 #[cfg(test)]
 mod tests {
+    use crossbeam_channel::bounded;
+
     use super::*;
     use crate::runtime::sender::ChannelMessage;
     use crate::runtime::watchdog::Watchdog;
-    use crossbeam_channel::bounded;
 
     fn word(value: u64, ts: u64) -> Word {
         Word::new(value, ts)

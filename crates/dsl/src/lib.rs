@@ -25,41 +25,14 @@ pub mod nodes;
 pub mod runtime;
 
 // Re-export decoder data types
-pub use nodes::decoders::{CsPolarity, SpiMode, StrobeMode};
-
-// Re-export data types from runtime
-pub use runtime::Sample;
-pub use runtime::SampleBlock;
-pub use runtime::{NumberSample, TextSample, Trigger, Word};
-
 // Re-export streaming nodes - DslFileSource only (SpiCommandController is application-specific)
 pub use nodes::UartDemoSource;
-#[cfg(not(target_arch = "wasm32"))]
-pub use nodes::{
-    CaptureMode, ClockEdge, ClockSource, DeferredDslFileSource, DsLogicU3Pro16,
-    DsLogicU3Pro16Source, DslCaptureReader, DslChunkedCaptureReader, DslFileCaptureDataSource,
-    DslFileSource, LinkSpeed, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
-    LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
-    LogicEncodingRequest, LogicTrigger, LogicTriggerStage, RusbTransport, SigrokCaptureReader,
-    SigrokChunkedCaptureReader, SigrokFileCaptureDataSource, SigrokFileSource, TriggerCondition,
-    TriggerLogic, UsbTransport,
-};
-
-pub use runtime::{
-    BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureIndex, CaptureMetadata,
-    CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,
-    CaptureWaveformSegment, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
-    DslWaveformSegment,
-};
-#[cfg(not(target_arch = "wasm32"))]
-pub use runtime::{CaptureIndexProgress, IndexSampler, exact_window_sample_limit};
-
 // Re-export streaming decoders
 pub use nodes::decoders::SpiDecoder;
+pub use nodes::decoders::{CsPolarity, SpiMode, StrobeMode};
 pub use nodes::decoders::{
     ParallelDecoder, ParallelDecoderMetrics, ParallelDecoderMetricsSnapshot, ParallelInputStrategy,
 };
-
 // Re-export control-path logic nodes and sinks
 pub use nodes::logic::{
     BufferNode, GateOp, LogicGate, MatchOp, SrLatch, TextFormatter, TriggerAt, TriggerCounter,
@@ -73,14 +46,35 @@ pub use nodes::sinks::{
     LaneSummary, MarkerFold, TextFileWriter, TgckRecorder, ViewerLaneKind, ViewerRetention,
     ViewerSink, ViewerSinkMetrics, ViewerSinkMetricsSnapshot, WriteWidth,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use nodes::{
+    CaptureMode, ClockEdge, ClockSource, DeferredDslFileSource, DsLogicU3Pro16,
+    DsLogicU3Pro16Source, DslCaptureReader, DslChunkedCaptureReader, DslFileCaptureDataSource,
+    DslFileSource, LinkSpeed, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
+    LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
+    LogicEncodingRequest, LogicTrigger, LogicTriggerStage, RusbTransport, SigrokCaptureReader,
+    SigrokChunkedCaptureReader, SigrokFileCaptureDataSource, SigrokFileSource, TriggerCondition,
+    TriggerLogic, UsbTransport,
+};
+// Re-export data types from runtime
+pub use runtime::Sample;
+pub use runtime::SampleBlock;
 pub use runtime::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
-
+pub use runtime::{
+    BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureIndex, CaptureMetadata,
+    CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,
+    CaptureWaveformSegment, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
+    DslWaveformSegment,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub use runtime::{CaptureIndexProgress, IndexSampler, exact_window_sample_limit};
 // Re-export streaming runtime components
 pub use runtime::{
     Connection, ConnectionError, GraphBuilder, InputPort, NodeId, OutputPort, Pipeline,
     PortDirection, PortError, PortSchema, ProcessNode, Scheduler, WorkError, WorkResult,
     register_type,
 };
+pub use runtime::{NumberSample, TextSample, Trigger, Word};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {

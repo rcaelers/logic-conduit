@@ -1,5 +1,6 @@
-use egui::{Color32, Pos2};
 use std::fmt;
+
+use egui::{Color32, Pos2};
 
 // ── Shortcut ──────────────────────────────────────────────────────────────────
 

@@ -1,3 +1,14 @@
+use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc::{self, Receiver};
+
+#[cfg(not(target_arch = "wasm32"))]
+use dsl::CaptureDataSource;
+use dsl::{CaptureIndex, DerivedLanes};
+use egui::{FontId, Pos2, Rect, Sense, Ui, vec2};
+
 use crate::channel::LogicChannel;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::indexed_annotations::IndexedAnnotationCacheEntry;
@@ -5,15 +16,6 @@ use crate::types::{
     AnalyzerLayout, CaptureInfo, ColorProfile, IndexBuildProgress, PulseMeasurement, RowDragState,
     RowKey, RowRenameState, TimeCursor, Transition,
 };
-#[cfg(not(target_arch = "wasm32"))]
-use dsl::CaptureDataSource;
-use dsl::{CaptureIndex, DerivedLanes};
-use egui::{FontId, Pos2, Rect, Sense, Ui, vec2};
-use std::collections::HashMap;
-#[cfg(not(target_arch = "wasm32"))]
-use std::path::{Path, PathBuf};
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::mpsc::{self, Receiver};
 
 const DEFAULT_VISIBLE_SPAN_US: f64 = 900.0;
 
@@ -474,11 +476,12 @@ impl LogicAnalyzerViewer {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelSignal, LogicAnalyzerViewer};
     #[cfg(not(target_arch = "wasm32"))]
     use dsl::runtime::derived_word_store::{IndexedAnnotationWriter, LiveStoreConfig};
     #[cfg(not(target_arch = "wasm32"))]
     use dsl::{DerivedLaneData, DerivedLanes, IndexedAnnotationLane, Word};
+
+    use super::{ChannelSignal, LogicAnalyzerViewer};
 
     #[test]
     fn reset_time_view_fits_in_memory_channels_without_a_capture() {

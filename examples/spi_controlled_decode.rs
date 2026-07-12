@@ -37,6 +37,11 @@
 //!       -n 100 \
 //!       --output-dir captures
 
+use std::collections::VecDeque;
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::path::PathBuf;
+
 use clap::Parser;
 use crossbeam_channel::TryRecvError;
 use dsl::DslFileSource;
@@ -47,10 +52,6 @@ use dsl::runtime::{
     InputPort, OutputPort, Pipeline, PortDirection, PortSchema, ProcessNode, Sample, WorkError,
     WorkResult,
 };
-use std::collections::VecDeque;
-use std::fs::File;
-use std::io::{BufWriter, Write};
-use std::path::PathBuf;
 use tracing::{debug, info};
 
 /// One complete TGCK cycle record for the CSV output.

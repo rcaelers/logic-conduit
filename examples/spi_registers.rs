@@ -19,10 +19,11 @@
 //!       --file _captures/vuescan-1600dpi.csv \
 //!       --enable-cmd 0x600081 --disable-cmd 0x600000
 
-use clap::Parser;
 use std::collections::BTreeMap;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
+
+use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(

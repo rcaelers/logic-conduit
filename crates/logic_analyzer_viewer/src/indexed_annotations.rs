@@ -1,9 +1,11 @@
-use crate::types::AnalyzerLayout;
-use crate::viewer::LogicAnalyzerViewer;
-use dsl::runtime::derived_word_store::{AnnotationQuery, WordPresenceBucket};
-use dsl::{Annotation, DerivedLaneData};
 use std::collections::HashSet;
 use std::sync::Arc;
+
+use dsl::runtime::derived_word_store::{AnnotationQuery, WordPresenceBucket};
+use dsl::{Annotation, DerivedLaneData};
+
+use crate::types::AnalyzerLayout;
+use crate::viewer::LogicAnalyzerViewer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct IndexedAnnotationCacheKey {
@@ -97,11 +99,12 @@ impl LogicAnalyzerViewer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::types::AnalyzerLayout;
     use dsl::runtime::derived_word_store::{IndexedAnnotationWriter, LiveStoreConfig};
     use dsl::{DerivedLaneData, DerivedLanes, IndexedAnnotationLane, Word};
     use egui::{Pos2, Rect};
+
+    use super::*;
+    use crate::types::AnalyzerLayout;
 
     fn layout(width: f32) -> AnalyzerLayout {
         let empty = Rect::NOTHING;

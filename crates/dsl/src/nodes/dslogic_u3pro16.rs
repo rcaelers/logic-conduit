@@ -4,15 +4,17 @@
 //! `RusbTransport` is deliberately small so a libsigrok-backed transport can be
 //! added without changing capture packet construction or graph integration.
 
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+use rusb::{Context, DeviceHandle, UsbContext};
+
 use super::logic_analyzer::{
     CaptureMode, ClockEdge, ClockSource, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
     LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
     LogicEncodingRequest, LogicTrigger, LogicTriggerStage, TriggerCondition,
 };
-use rusb::{Context, DeviceHandle, UsbContext};
-use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, Instant};
 
 const VID: u16 = 0x2a0e;
 const PID: u16 = 0x002a;

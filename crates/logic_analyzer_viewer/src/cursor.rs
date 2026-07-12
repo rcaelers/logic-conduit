@@ -1,12 +1,14 @@
-use crate::draw::annotation_box_end;
-use crate::types::{AnalyzerLayout, CursorInput, RowKey, TimeCursor, Transition};
-use crate::viewer::LogicAnalyzerViewer;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
+
 #[cfg(not(target_arch = "wasm32"))]
 use dsl::runtime::derived_word_store::AnnotationQuery;
 use dsl::{Annotation, DerivedLaneData};
 use egui::{Color32, CursorIcon, FontId, PointerButton, Pos2, Rect, Response, Ui};
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc;
+
+use crate::draw::annotation_box_end;
+use crate::types::{AnalyzerLayout, CursorInput, RowKey, TimeCursor, Transition};
+use crate::viewer::LogicAnalyzerViewer;
 
 enum AnnotationBoundarySource {
     InMemory(Option<f64>),
@@ -399,13 +401,14 @@ pub(crate) fn format_cursor_time(us: f64) -> String {
 
 #[cfg(test)]
 mod cursor_tests {
-    use super::*;
-    use crate::sampling::pulse_measurement_from_window;
     use dsl::DerivedLanes;
     #[cfg(not(target_arch = "wasm32"))]
     use dsl::runtime::derived_word_store::{IndexedAnnotationWriter, LiveStoreConfig};
     #[cfg(not(target_arch = "wasm32"))]
     use dsl::{IndexedAnnotationLane, Word};
+
+    use super::*;
+    use crate::sampling::pulse_measurement_from_window;
 
     fn transition(time_us: f64) -> Transition {
         Transition {

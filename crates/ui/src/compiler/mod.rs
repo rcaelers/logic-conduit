@@ -13,6 +13,8 @@
 //! the source's dual `d{i}`/`b{i}` ports; every `Words` socket carries the
 //! same `Word` runtime type regardless of which decoder produced it.
 
+use std::collections::{BTreeSet, HashMap, HashSet};
+
 #[cfg(not(target_arch = "wasm32"))]
 use dsl::runtime::derived_word_store::PersistentStoreConfig;
 use dsl::runtime::{
@@ -25,7 +27,6 @@ use node_graph::{
     VariadicInfo,
 };
 use serde_json::Value;
-use std::collections::{BTreeSet, HashMap, HashSet};
 
 mod binary_decoder;
 mod buffer;
@@ -1618,14 +1619,16 @@ pub fn start_app_run(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::nodes;
+    use std::path::{Path, PathBuf};
+
     #[cfg(not(target_arch = "wasm32"))]
     use dsl::BinaryFileWriter;
     use dsl::runtime::{ConfigValue, Pipeline};
     use dsl::{Sample, Trigger, Word};
     use node_graph::{NodeDef, NodeGraphWidget};
-    use std::path::{Path, PathBuf};
+
+    use super::*;
+    use crate::nodes;
 
     fn startup_widget() -> NodeGraphWidget {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
@@ -2071,8 +2074,9 @@ mod tests {
     /// required (a compile error).
     #[test]
     fn file_source_with_wired_filename_builds_deferred_source() {
-        use crate::compiler::file_source::FileSourceBuilder;
         use dsl::TextSample;
+
+        use crate::compiler::file_source::FileSourceBuilder;
 
         let builder = FileSourceBuilder;
         let state = serde_json::to_value(nodes::DslFileSourceState {

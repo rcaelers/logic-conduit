@@ -1,7 +1,7 @@
-# Keep import sections authored by developers and sort imports within each
-# section.  This lets us maintain separate groups for std/core, third-party
-# crates, workspace crates, and imports from the current crate.
+# Group standard-library, external, and current-crate imports automatically.
+# Rustfmt cannot distinguish workspace dependencies from third-party crates;
+# those are both classified as external imports.
 edition = "2024"
 reorder_imports = true
-group_imports = "Preserve"
+group_imports = "StdExternalCrate"
 imports_granularity = "Preserve"

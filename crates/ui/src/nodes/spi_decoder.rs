@@ -1,11 +1,12 @@
 //! `SPI Decoder` node.
 
-use super::{COLOR_DECODERS, Signal, Words};
 use egui::Color32;
 use node_graph::{
     BoolValue, EnumValue, InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef, Socket,
 };
 use serde::{Deserialize, Serialize};
+
+use super::{COLOR_DECODERS, Signal, Words};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpiDecoderState {

@@ -1,12 +1,13 @@
+use std::collections::HashMap;
+
+use egui::{Color32, Pos2};
+
+use super::super::menu::{MenuEntry, PopupMenu, Shortcut};
+use super::action::GraphAction;
 use crate::{
     model::{FrameId, Socket, SocketId},
     runtime::NodeTypeRegistry,
 };
-use egui::{Color32, Pos2};
-use std::collections::HashMap;
-
-use super::super::menu::{MenuEntry, PopupMenu, Shortcut};
-use super::action::GraphAction;
 
 // ── Entry builders ────────────────────────────────────────────────────────────
 

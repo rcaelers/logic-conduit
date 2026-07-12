@@ -11,10 +11,11 @@
 //!   added/removed mid-stream, and level channels prime late joiners with
 //!   the last value (the level-stream contract extended to join time).
 
-use crossbeam_channel::{SendError, Sender as CrossbeamSender, TrySendError, bounded};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use crossbeam_channel::{SendError, Sender as CrossbeamSender, TrySendError, bounded};
 
 use super::watchdog::{OperationGuard, WatchdogHandle};
 

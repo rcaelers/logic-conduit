@@ -1,3 +1,5 @@
+use egui::{Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Ui, Vec2};
+
 use crate::{
     model::{
         BadgeSeverity, GraphState, Node, NodeBadge, NodeId, NodeKind, SocketDirection, SocketId,
@@ -9,7 +11,6 @@ use crate::{
         paint::{draw_wire_dashed, to_screen_rect},
     },
 };
-use egui::{Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Ui, Vec2};
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 

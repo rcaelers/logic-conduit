@@ -1,10 +1,12 @@
 //! Type registry for dynamic channel creation
 
-use super::sender::{ChannelMessage, OverflowPolicy, Sender, SharedSenders};
-use crossbeam_channel::{Sender as CrossbeamSender, bounded};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+
+use crossbeam_channel::{Sender as CrossbeamSender, bounded};
+
+use super::sender::{ChannelMessage, OverflowPolicy, Sender, SharedSenders};
 
 /// Type-erased view of a [`SharedSenders<T>`] so the `PipelineManager` can
 /// own and rewire subscriber lists without knowing `T`.

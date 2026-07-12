@@ -1,9 +1,10 @@
 //! `Text File Writer` node — generic text-line sink, e.g. for `TGCK
 //! Recorder`'s CSV output. Native-only: no filesystem in the browser.
 
-use super::{COLOR_OUTPUT, Text};
 use egui::Color32;
 use node_graph::{InputDef, NodeDef, OutputDef};
+
+use super::{COLOR_OUTPUT, Text};
 
 pub struct TextFileWriter;
 impl NodeDef for TextFileWriter {

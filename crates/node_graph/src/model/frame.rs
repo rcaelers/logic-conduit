@@ -1,6 +1,7 @@
-use super::NodeId;
 use egui::Color32;
 use serde::{Deserialize, Serialize};
+
+use super::NodeId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FrameId(pub u32);
