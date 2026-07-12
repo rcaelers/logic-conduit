@@ -18,7 +18,7 @@ use crate::{
     support::ViewState,
 };
 use egui::{Pos2, Sense, Ui};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 // ── Main widget ───────────────────────────────────────────────────────────────
@@ -51,6 +51,10 @@ pub struct NodeGraphWidget {
     /// Short live-status texts (e.g. items-produced counters) drawn small
     /// in the node header.
     node_statuses: HashMap<NodeId, String>,
+    /// Nodes whose host-owned derived data can be cleared from the context
+    /// menu. The widget only queues a request; the host performs the I/O.
+    derived_cache_nodes: HashSet<NodeId>,
+    clear_derived_cache_request: Option<NodeId>,
 }
 
 struct FrameRenameState {
@@ -134,6 +138,8 @@ impl NodeGraphWidget {
             panel: PanelState::default(),
             external_badges: HashMap::new(),
             node_statuses: HashMap::new(),
+            derived_cache_nodes: HashSet::new(),
+            clear_derived_cache_request: None,
         }
     }
 
@@ -150,6 +156,14 @@ impl NodeGraphWidget {
     /// (Phase 4.2). Returns `None` most frames.
     pub fn take_io_status(&mut self) -> Option<String> {
         self.io_status.take()
+    }
+
+    pub fn set_derived_cache_nodes(&mut self, nodes: impl IntoIterator<Item = NodeId>) {
+        self.derived_cache_nodes = nodes.into_iter().collect();
+    }
+
+    pub fn take_clear_derived_cache_request(&mut self) -> Option<NodeId> {
+        self.clear_derived_cache_request.take()
     }
 
     /// Current UI prefs (N-panel width/tab, minimap visibility) — for the

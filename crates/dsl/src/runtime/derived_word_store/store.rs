@@ -1393,6 +1393,33 @@ mod tests {
     }
 
     #[test]
+    fn clearing_one_persistent_entry_keeps_other_cache_keys() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = PersistentStoreConfig::new(directory.path(), [0x31; 32]);
+        let second = PersistentStoreConfig::new(directory.path(), [0x32; 32]);
+        for persistent in [&first, &second] {
+            let mut config = test_config(directory.path());
+            config.persistence = Some(persistent.clone());
+            let (mut writer, store) = IndexedAnnotationWriter::create(config).unwrap();
+            writer.append(Word::new(1, 10)).unwrap();
+            writer.finish().unwrap();
+            drop((writer, store));
+        }
+
+        let stats = super::super::persistent::clear_cache_entry(&first).unwrap();
+        assert_eq!(stats.removed_entries, 1);
+        assert!(stats.removed_bytes > 0);
+        assert!(!super::super::persistent::cache_directory(&first).exists());
+        assert!(super::super::persistent::cache_directory(&second).exists());
+        assert_eq!(
+            super::super::persistent::clear_cache_entry(&first)
+                .unwrap()
+                .removed_entries,
+            0
+        );
+    }
+
+    #[test]
     fn finish_commits_partial_block_and_reads_it_by_directory_offset() {
         let directory = tempfile::tempdir().unwrap();
         let (mut writer, store) =

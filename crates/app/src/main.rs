@@ -97,6 +97,11 @@ mod macos_menu {
             fn stop_pipeline(&self, _sender: &AnyObject) {
                 dispatch_native_menu_command(NativeMenuCommand::Stop);
             }
+
+            #[unsafe(method(clearDerivedCaches:))]
+            fn clear_derived_caches(&self, _sender: &AnyObject) {
+                dispatch_native_menu_command(NativeMenuCommand::ClearDerivedCaches);
+            }
         }
     );
 
@@ -265,6 +270,14 @@ mod macos_menu {
                 ns_string!("Stop"),
                 sel!(stopPipeline:),
                 ns_string!("."),
+                &handler,
+            ));
+            pipeline_menu.addItem(&NSMenuItem::separatorItem(mtm));
+            pipeline_menu.addItem(&menu_item(
+                mtm,
+                ns_string!("Clear All Derived Data Caches..."),
+                sel!(clearDerivedCaches:),
+                ns_string!(""),
                 &handler,
             ));
         }

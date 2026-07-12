@@ -34,7 +34,9 @@ pub use format::{
     RestartEntry, WordBlockHeader,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use persistent::{PersistentCacheStats, cleanup_cache, clear_cache, default_cache_directory};
+pub use persistent::{
+    PersistentCacheStats, cleanup_cache, clear_cache, clear_cache_entry, default_cache_directory,
+};
 pub use presence::{WordPresenceIndex, WordSummaryRecord};
 pub use query::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,

@@ -860,6 +860,57 @@ fn assign_persistent_viewer_caches(compiled: &mut CompiledGraph) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub fn derived_cache_configs_by_node(
+    graph: &GraphState,
+    registry: &BuilderRegistry,
+) -> Result<HashMap<NodeId, Vec<PersistentStoreConfig>>, Vec<CompileError>> {
+    let compiled = lower(graph, registry)?;
+    let mut result: HashMap<NodeId, Vec<PersistentStoreConfig>> = HashMap::new();
+    for viewer in compiled
+        .nodes
+        .iter()
+        .filter(|node| node.builder == "Viewer")
+    {
+        for (member, config) in viewer.viewer_word_caches.iter().enumerate() {
+            let Some(config) = config else {
+                continue;
+            };
+            let input_name = format!("in{member}");
+            let Some(edge) = compiled.edges.iter().find(|edge| {
+                edge.to.0 == viewer.id
+                    && edge.to.1 == input_name
+                    && edge.kind == PortKind::of::<dsl::Word>()
+            }) else {
+                continue;
+            };
+
+            let mut stack = vec![viewer.id, edge.from.0];
+            let mut visited = HashSet::new();
+            while let Some(node_id) = stack.pop() {
+                if !visited.insert(node_id) {
+                    continue;
+                }
+                let configs = result.entry(node_id).or_default();
+                if !configs
+                    .iter()
+                    .any(|existing| existing.cache_key == config.cache_key)
+                {
+                    configs.push(config.clone());
+                }
+                stack.extend(
+                    compiled
+                        .edges
+                        .iter()
+                        .filter(|incoming| incoming.to.0 == node_id)
+                        .map(|incoming| incoming.from.0),
+                );
+            }
+        }
+    }
+    Ok(result)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn persistent_lane_key(
     compiled: &CompiledGraph,
     viewer_id: NodeId,
@@ -1759,6 +1810,46 @@ mod tests {
         widget.set_node_state(decoder, serde_json::to_value(state).unwrap());
         let changed = lower(widget.graph(), &registry).unwrap();
         assert_ne!(first_keys, persistent_word_keys(&changed));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cache_inventory_maps_a_lane_to_its_viewer_and_upstream_nodes() {
+        let widget = uart_demo_widget();
+        let registry = BuilderRegistry::standard();
+        let compiled = lower(widget.graph(), &registry).unwrap();
+        let viewer = compiled
+            .nodes
+            .iter()
+            .find(|node| node.builder == "Viewer")
+            .unwrap();
+        let expected: Vec<_> = viewer
+            .viewer_word_caches
+            .iter()
+            .flatten()
+            .map(|config| config.cache_key)
+            .collect();
+
+        let inventory = derived_cache_configs_by_node(widget.graph(), &registry).unwrap();
+        let actual = inventory[&viewer.id]
+            .iter()
+            .map(|config| config.cache_key)
+            .collect::<Vec<_>>();
+        let decoder = compiled
+            .nodes
+            .iter()
+            .find(|node| node.builder == "UART Decoder")
+            .unwrap();
+
+        assert!(!expected.is_empty());
+        assert_eq!(actual, expected);
+        assert_eq!(
+            inventory[&decoder.id]
+                .iter()
+                .map(|config| config.cache_key)
+                .collect::<Vec<_>>(),
+            expected
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]

@@ -159,6 +159,20 @@ pub fn clear_cache(directory: &Path) -> StoreResult<PersistentCacheStats> {
     Ok(stats)
 }
 
+pub fn clear_cache_entry(config: &PersistentStoreConfig) -> StoreResult<PersistentCacheStats> {
+    let path = cache_directory(config);
+    if !path.exists() {
+        return Ok(PersistentCacheStats::default());
+    }
+    let bytes = directory_size(&path);
+    fs::remove_dir_all(path)?;
+    Ok(PersistentCacheStats {
+        removed_entries: 1,
+        removed_bytes: bytes,
+        ..PersistentCacheStats::default()
+    })
+}
+
 pub(super) fn cache_directory(config: &PersistentStoreConfig) -> PathBuf {
     config.directory.join(hex_key(&config.cache_key))
 }

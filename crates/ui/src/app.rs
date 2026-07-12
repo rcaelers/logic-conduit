@@ -95,6 +95,7 @@ pub enum NativeMenuCommand {
     Quit,
     Run,
     Stop,
+    ClearDerivedCaches,
 }
 
 #[cfg(target_os = "macos")]
@@ -165,6 +166,11 @@ pub struct App {
     /// Set while the "Clear the recent files list?" confirmation is up.
     #[cfg(not(target_arch = "wasm32"))]
     confirm_clear_recent: bool,
+    /// Set while the destructive all-derived-caches confirmation is open.
+    #[cfg(not(target_arch = "wasm32"))]
+    confirm_clear_derived_caches: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    derived_cache_nodes: std::collections::HashSet<NodeId>,
     #[cfg(target_os = "macos")]
     native_menu_commands: crossbeam_channel::Receiver<NativeMenuCommand>,
     about: AboutWindow,
@@ -297,6 +303,10 @@ impl App {
             recent_files,
             #[cfg(not(target_arch = "wasm32"))]
             confirm_clear_recent: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            confirm_clear_derived_caches: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            derived_cache_nodes: std::collections::HashSet::new(),
             #[cfg(target_os = "macos")]
             native_menu_commands,
             about: AboutWindow::new(),
@@ -317,6 +327,7 @@ impl App {
                 self.current_file = Some(path.clone());
                 self.mark_graph_saved();
                 self.push_recent_file(path.clone());
+                self.refresh_derived_cache_nodes();
                 self.toasts.info(format!("Loaded {}", path.display()));
             }
             Err(error) => self.toasts.error(error),
@@ -344,6 +355,7 @@ impl App {
         self.run_message = None;
         self.error_badges.clear();
         self.node_graph.new_graph();
+        self.derived_cache_nodes.clear();
         self.current_file = None;
         self.mark_graph_saved();
         self.toasts.info("New graph");
@@ -576,6 +588,38 @@ impl App {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn show_clear_derived_caches_dialog(&mut self, ctx: &egui::Context) {
+        if !self.confirm_clear_derived_caches {
+            return;
+        }
+
+        let mut clear = false;
+        let mut cancel = false;
+        egui::Window::new("Clear all derived data caches?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label("Cached decoded data for every pipeline will be removed.");
+                ui.horizontal(|ui| {
+                    if ui.button("Clear All").clicked() {
+                        clear = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if clear {
+            self.confirm_clear_derived_caches = false;
+            self.clear_all_derived_caches();
+        } else if cancel {
+            self.confirm_clear_derived_caches = false;
+        }
+    }
+
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
     fn show_menu_bar(&mut self, ui: &mut egui::Ui) {
         let new_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::N);
@@ -717,6 +761,17 @@ impl App {
                     self.stop_command();
                     ui.close();
                 }
+                ui.separator();
+                if ui
+                    .add_enabled(
+                        !self.is_running(),
+                        egui::Button::new("Clear All Derived Data Caches..."),
+                    )
+                    .clicked()
+                {
+                    self.request_clear_all_derived_caches();
+                    ui.close();
+                }
             });
             ui.menu_button("Help", |ui| {
                 if ui.button("About DSL Pipeline Editor").clicked() {
@@ -755,6 +810,8 @@ impl App {
     }
 
     fn start_run(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.refresh_derived_cache_nodes();
         for id in self.error_badges.drain(..) {
             self.node_graph.set_node_badge(id, None);
         }
@@ -804,6 +861,130 @@ impl App {
             && let Some(run) = &mut self.run
         {
             run.stop();
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn can_clear_derived_caches(&mut self) -> bool {
+        if self.is_running() {
+            self.toasts
+                .error("Stop the pipeline before clearing derived data caches");
+            false
+        } else {
+            true
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn release_derived_data_handles(&mut self) {
+        self.run = None;
+        self.logic_analyzer
+            .set_derived_lanes(dsl::DerivedLanes::new());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn refresh_derived_cache_nodes(&mut self) {
+        self.derived_cache_nodes =
+            compiler::derived_cache_configs_by_node(self.node_graph.graph(), &self.builders)
+                .map(|inventory| {
+                    inventory
+                        .into_keys()
+                        .filter(|id| self.node_graph.graph().nodes.contains_key(id))
+                        .collect()
+                })
+                .unwrap_or_default();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn clear_node_derived_cache(&mut self, node_id: NodeId) {
+        if !self.can_clear_derived_caches() {
+            return;
+        }
+        let node_name = self
+            .node_graph
+            .graph()
+            .nodes
+            .get(&node_id)
+            .map(|node| node.title.clone())
+            .unwrap_or_else(|| "node".to_owned());
+        let configs = match compiler::derived_cache_configs_by_node(
+            self.node_graph.graph(),
+            &self.builders,
+        ) {
+            Ok(mut inventory) => inventory.remove(&node_id).unwrap_or_default(),
+            Err(errors) => {
+                let message = errors
+                    .first()
+                    .map(|error| error.message.as_str())
+                    .unwrap_or("graph could not be compiled");
+                self.toasts
+                    .error(format!("Cannot determine cache: {message}"));
+                return;
+            }
+        };
+        if configs.is_empty() {
+            self.toasts
+                .info(format!("No derived data cache found for {node_name}"));
+            return;
+        }
+
+        self.release_derived_data_handles();
+        let mut removed_entries = 0usize;
+        let mut removed_bytes = 0u64;
+        for config in &configs {
+            match dsl::runtime::derived_word_store::clear_cache_entry(config) {
+                Ok(stats) => {
+                    removed_entries += stats.removed_entries;
+                    removed_bytes = removed_bytes.saturating_add(stats.removed_bytes);
+                }
+                Err(error) => {
+                    self.toasts.error(format!("Failed to clear cache: {error}"));
+                    return;
+                }
+            }
+        }
+        if removed_entries == 0 {
+            self.toasts
+                .info(format!("No derived data cache found for {node_name}"));
+        } else {
+            self.toasts.info(format!(
+                "Cleared {removed_entries} derived cache entr{} for {node_name} ({removed_bytes} bytes)",
+                if removed_entries == 1 { "y" } else { "ies" }
+            ));
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn request_clear_all_derived_caches(&mut self) {
+        if self.can_clear_derived_caches() {
+            self.confirm_clear_derived_caches = true;
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn clear_all_derived_caches(&mut self) {
+        if !self.can_clear_derived_caches() {
+            return;
+        }
+        self.release_derived_data_handles();
+        let directory = dsl::runtime::derived_word_store::default_cache_directory();
+        match dsl::runtime::derived_word_store::clear_cache(&directory) {
+            Ok(stats) if stats.removed_entries == 0 && stats.removed_bytes == 0 => {
+                self.toasts.info("No derived data caches found");
+            }
+            Ok(stats) => self.toasts.info(format!(
+                "Cleared {} derived cache entr{} ({} bytes)",
+                stats.removed_entries,
+                if stats.removed_entries == 1 {
+                    "y"
+                } else {
+                    "ies"
+                },
+                stats.removed_bytes
+            )),
+            Err(error) => self
+                .toasts
+                .error(format!("Failed to clear caches: {error}")),
         }
     }
 
@@ -1097,6 +1278,10 @@ impl eframe::App for App {
                     self.stop_command();
                     continue;
                 }
+                NativeMenuCommand::ClearDerivedCaches => {
+                    self.request_clear_all_derived_caches();
+                    continue;
+                }
                 NativeMenuCommand::New => FileCommand::New,
                 NativeMenuCommand::Load => FileCommand::Load,
                 NativeMenuCommand::LoadPath(path) => FileCommand::LoadPath(path),
@@ -1221,11 +1406,18 @@ impl eframe::App for App {
             self.show_toolbar(ui, status_hint);
         });
 
+        #[cfg(not(target_arch = "wasm32"))]
+        self.node_graph
+            .set_derived_cache_nodes(self.derived_cache_nodes.iter().copied());
         ui.allocate_ui(egui::vec2(available.x, graph_height), |ui| {
             self.node_graph.show(ui);
         });
         if let Some(message) = self.node_graph.take_io_status() {
             self.toasts.info(message);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(node_id) = self.node_graph.take_clear_derived_cache_request() {
+            self.clear_node_derived_cache(node_id);
         }
 
         self.about.show(ui.ctx());
@@ -1234,6 +1426,8 @@ impl eframe::App for App {
         self.show_guarded_action_dialog(ui.ctx());
         #[cfg(not(target_arch = "wasm32"))]
         self.show_clear_recent_dialog(ui.ctx());
+        #[cfg(not(target_arch = "wasm32"))]
+        self.show_clear_derived_caches_dialog(ui.ctx());
 
         self.toasts.show(ui.ctx());
     }

@@ -94,6 +94,9 @@ pub(super) enum GraphAction {
     ToggleMuted {
         target: Option<NodeId>,
     },
+    ClearDerivedCache {
+        target: NodeId,
+    },
     ToggleMinimap,
     TogglePanel,
     /// Selects every node and frame (Phase 2, Blender's `A`).
@@ -300,6 +303,10 @@ impl NodeGraphWidget {
             GraphAction::ToggleMuted { target } => {
                 self.push_undo_snapshot();
                 self.toggle_muted(target);
+                ActionEffect::None
+            }
+            GraphAction::ClearDerivedCache { target } => {
+                self.clear_derived_cache_request = Some(target);
                 ActionEffect::None
             }
             GraphAction::ToggleMinimap => {
@@ -1169,5 +1176,20 @@ mod action_tests {
         );
 
         assert!(!widget.graph.nodes[&reroute].muted);
+    }
+
+    #[test]
+    fn clear_derived_cache_action_is_forwarded_to_the_host() {
+        let mut widget = test_widget();
+        let node = widget.add_node_at("Source", Pos2::ZERO).unwrap();
+
+        widget.execute_action(
+            GraphAction::ClearDerivedCache { target: node },
+            &egui::Context::default(),
+            None,
+        );
+
+        assert_eq!(widget.take_clear_derived_cache_request(), Some(node));
+        assert_eq!(widget.take_clear_derived_cache_request(), None);
     }
 }

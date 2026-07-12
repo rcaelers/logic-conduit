@@ -1141,6 +1141,7 @@ impl NodeGraphWidget {
                 false,
                 self.menu_collapsed_state(None),
                 self.menu_muted_state(None),
+                false,
                 any_selected,
                 self.can_paste_nodes(),
                 self.can_undo(),
@@ -1207,6 +1208,8 @@ impl NodeGraphWidget {
             let node_hidden = context_node.is_some_and(|id| self.node_has_hidden_sockets(id));
             let node_collapsed = self.menu_collapsed_state(context_node);
             let node_muted = self.menu_muted_state(context_node);
+            let node_has_derived_cache =
+                context_node.is_some_and(|id| self.derived_cache_nodes.contains(&id));
             let any_selected = self.graph.nodes.values().any(|n| n.selected)
                 || self.graph.frames.iter().any(|frame| frame.selected);
             let can_paste = self.can_paste_nodes();
@@ -1220,6 +1223,7 @@ impl NodeGraphWidget {
                 node_hidden,
                 node_collapsed,
                 node_muted,
+                node_has_derived_cache,
                 any_selected,
                 can_paste,
                 self.can_undo(),

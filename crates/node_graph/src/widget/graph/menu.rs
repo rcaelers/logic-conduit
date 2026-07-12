@@ -169,6 +169,7 @@ pub(super) fn build_context_entries(
     node_hidden: bool,
     node_collapsed: bool,
     node_muted: bool,
+    node_has_derived_cache: bool,
     any_selected: bool,
     can_paste: bool,
     can_undo: bool,
@@ -235,6 +236,17 @@ pub(super) fn build_context_entries(
                 },
             )
             .with_shortcut(Shortcut::key(egui::Key::M)),
+        ]);
+        if node_has_derived_cache && let Some(target) = context_node {
+            entries.extend([
+                MenuEntry::separator(),
+                MenuEntry::action(
+                    "Clear Derived Data Cache",
+                    GraphAction::ClearDerivedCache { target },
+                ),
+            ]);
+        }
+        entries.extend([
             MenuEntry::separator(),
             MenuEntry::action(
                 "Delete",
