@@ -26,3 +26,6 @@ Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN
 
 - Define how several source clocks and trigger positions map onto the shared viewer timeline.
 - Add graph-level source grouping/alignment metadata and preserve it in saved graphs.
+- Replace scattered derived-word-store wasm conditionals with a common storage
+  facade, native file/mmap backend, and wasm in-memory backend; see
+  [WASM Storage Platform Design](docs/WASM_STORAGE_PLATFORM_DESIGN.md).

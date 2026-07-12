@@ -4,6 +4,7 @@
 //! File lifecycle, live publication, and viewer queries are layered on top in
 //! later implementation steps.
 
+mod backend;
 #[cfg(not(target_arch = "wasm32"))]
 mod cache;
 pub(crate) mod codec;
@@ -13,7 +14,7 @@ mod format;
 mod persistent;
 mod presence;
 mod query;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", path = "store_wasm.rs")]
 mod store;
 mod vlq;
 
@@ -28,7 +29,6 @@ pub use query::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
     ExactAnnotationWindow, WordPresenceBucket,
 };
-#[cfg(not(target_arch = "wasm32"))]
 pub use store::{
     IndexedAnnotationStore, IndexedAnnotationWriter, LiveStoreConfig, PersistentStoreConfig,
     StoreStatus,

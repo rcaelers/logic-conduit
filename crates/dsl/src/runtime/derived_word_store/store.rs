@@ -1121,6 +1121,34 @@ impl IndexedAnnotationWriter {
     }
 }
 
+impl super::backend::AnnotationStoreBackend for IndexedAnnotationStore {
+    fn snapshot(&self) -> LiveStoreSnapshot {
+        IndexedAnnotationStore::snapshot(self)
+    }
+}
+
+impl super::backend::AnnotationStoreWriterBackend for IndexedAnnotationWriter {
+    fn store(&self) -> IndexedAnnotationStore {
+        IndexedAnnotationWriter::store(self)
+    }
+
+    fn append_batch(&mut self, words: &[Word]) -> StoreResult<()> {
+        IndexedAnnotationWriter::append_batch(self, words)
+    }
+
+    fn publish_hot_tail(&mut self) -> StoreResult<()> {
+        IndexedAnnotationWriter::publish_hot_tail(self)
+    }
+
+    fn finish(&mut self) -> StoreResult<()> {
+        IndexedAnnotationWriter::finish(self)
+    }
+
+    fn cancel(&mut self) -> StoreResult<()> {
+        IndexedAnnotationWriter::cancel(self)
+    }
+}
+
 fn word_presence_summaries(block: u64, words: &[Word]) -> Vec<WordSummaryRecord> {
     let mut summaries: Vec<WordSummaryRecord> = Vec::new();
     for (index, word) in words.iter().enumerate() {

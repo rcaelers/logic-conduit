@@ -57,7 +57,10 @@ pub use nodes::{
 };
 // Re-export data types from runtime
 pub use runtime::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
-pub use runtime::derived_word_store::{AnnotationQuery, WordPresenceBucket};
+pub use runtime::derived_word_store::{
+    AnnotationQuery, IndexedAnnotationStore, IndexedAnnotationWriter, LiveStoreConfig,
+    PersistentStoreConfig, StoreStatus, WordPresenceBucket,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use runtime::derived_word_store::{
     DecodedBlockCacheStats, configure_decoded_block_cache, decoded_block_cache_stats,
@@ -65,8 +68,7 @@ pub use runtime::derived_word_store::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use runtime::derived_word_store::{
-    IndexedAnnotationStore, IndexedAnnotationWriter, LiveStoreConfig, PersistentStoreConfig,
-    StoreStatus, cleanup_cache, clear_cache, clear_cache_entry, default_cache_directory,
+    cleanup_cache, clear_cache, clear_cache_entry, default_cache_directory,
 };
 pub use runtime::{
     BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureIndex, CaptureMetadata,
