@@ -5,13 +5,13 @@ use super::{
     minimap,
 };
 use crate::{
-    model::{Socket, SocketDirection, SocketId},
+    model::{NodeId, Socket, SocketDirection, SocketId},
     support::paint::{
         WireEmphasis, draw_box_select, draw_connections, draw_frames, draw_grid, draw_knife_line,
-        draw_wire,
+        draw_wire, to_screen_rect,
     },
 };
-use egui::{Color32, Painter, Pos2, Rect, RichText, Stroke};
+use egui::{Color32, CornerRadius, Painter, Pos2, Rect, RichText, Stroke};
 
 impl NodeGraphWidget {
     pub(super) fn draw_graph(
@@ -113,12 +113,19 @@ impl NodeGraphWidget {
             }
         }
 
+        // Owns a clone of the `Rc` (cheap) rather than borrowing
+        // `self.interaction_state` — the dim-drawing loop below also calls
+        // `self.run_update`, which needs `&mut self`.
+        let mut wire_drag_dim: Option<(NodeId, std::rc::Rc<std::collections::HashSet<NodeId>>)> =
+            None;
         if let InteractionState::DraggingWire {
             from,
             from_canvas,
             current_canvas,
+            connectable,
         } = &self.interaction_state
         {
+            wire_drag_dim = Some((from.node, connectable.clone()));
             let snap = self.snapped_wire_target(*from, *current_canvas, layout);
             let preview_end_canvas = snap.map_or(*current_canvas, |(_, pos)| pos);
             let color = self
@@ -205,6 +212,17 @@ impl NodeGraphWidget {
                     &self.view,
                     origin,
                 );
+                if let Some((source_id, connectable)) = &wire_drag_dim
+                    && id != *source_id
+                    && !connectable.contains(&id)
+                {
+                    let screen_rect = to_screen_rect(widget.node_rect(), &self.view, origin);
+                    painter.rect_filled(
+                        screen_rect,
+                        CornerRadius::same(5),
+                        Color32::from_rgba_unmultiplied(28, 28, 28, 153),
+                    );
+                }
             }
             if self.view.zoom >= 0.6 {
                 let changed = if let (Some(widget), Some(node), Some(instance)) = (

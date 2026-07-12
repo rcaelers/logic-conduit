@@ -8,7 +8,8 @@ use crate::{
     widget::{menu::dispatch_menu_shortcut, node::NodeWidget},
 };
 use egui::{Pos2, Rect, Vec2};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 const WIRE_SNAP_DISTANCE: f32 = 18.0;
 
@@ -28,6 +29,11 @@ pub(super) enum InteractionState {
         from: SocketId,
         from_canvas: Pos2,
         current_canvas: Pos2,
+        /// Every node with at least one socket compatible with `from` —
+        /// computed once when the drag starts (`connectable_nodes`), not
+        /// per frame. `render.rs` dims everything else during the drag
+        /// (Phase 4.3) so viable targets pop at any zoom.
+        connectable: Rc<HashSet<NodeId>>,
     },
     Panning {
         last_screen: Pos2,
@@ -141,6 +147,37 @@ impl NodeGraphWidget {
             .get(&input.node)
             .and_then(|n| n.inputs.get(input.index));
         matches!((out_type, in_socket), (Some(ot), Some(is)) if is.accepts(ot))
+    }
+
+    /// Every node with at least one visible socket compatible with `from` —
+    /// cached once into `InteractionState::DraggingWire::connectable` when a
+    /// wire drag starts (Phase 4.3).
+    pub(super) fn connectable_nodes(&self, from: SocketId) -> HashSet<NodeId> {
+        self.graph
+            .nodes
+            .values()
+            .filter(|node| {
+                let inputs = node.inputs.iter().enumerate().filter(|(_, s)| s.visible).map(
+                    |(index, _)| SocketId {
+                        node: node.id,
+                        index,
+                        direction: SocketDirection::Input,
+                    },
+                );
+                let outputs =
+                    node.outputs.iter().enumerate().filter(|(_, s)| s.visible).map(
+                        |(index, _)| SocketId {
+                            node: node.id,
+                            index,
+                            direction: SocketDirection::Output,
+                        },
+                    );
+                inputs
+                    .chain(outputs)
+                    .any(|candidate| self.compatible_wire_target(from, candidate))
+            })
+            .map(|node| node.id)
+            .collect()
     }
 
     /// The socket a wire drag started from, if it still exists.
@@ -391,12 +428,14 @@ impl NodeGraphWidget {
                     from: src,
                     from_canvas: self.view.screen_to_canvas(origin, src_spos),
                     current_canvas: pc,
+                    connectable: Rc::new(self.connectable_nodes(src)),
                 };
             }
             return InteractionState::DraggingWire {
                 from: sid,
                 from_canvas: self.view.screen_to_canvas(origin, spos),
                 current_canvas: pc,
+                connectable: Rc::new(self.connectable_nodes(sid)),
             };
         }
 
@@ -657,6 +696,7 @@ impl NodeGraphWidget {
         from: SocketId,
         from_canvas: Pos2,
         mut current_canvas: Pos2,
+        connectable: Rc<HashSet<NodeId>>,
     ) -> InteractionState {
         if ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
             if let Some(pc) = pointer_canvas {
@@ -674,6 +714,7 @@ impl NodeGraphWidget {
                 from,
                 from_canvas,
                 current_canvas,
+                connectable,
             };
         }
 
@@ -1458,6 +1499,7 @@ impl NodeGraphWidget {
                 from,
                 from_canvas,
                 current_canvas,
+                connectable,
             } => self.update_drag_wire(
                 ui,
                 pointer,
@@ -1467,6 +1509,7 @@ impl NodeGraphWidget {
                 from,
                 from_canvas,
                 current_canvas,
+                connectable,
             ),
             InteractionState::BoxSelecting {
                 start_canvas,
@@ -1529,6 +1572,30 @@ mod tests {
             to: socket(2, 0, SocketDirection::Input),
         }];
         assert!(node_has_any_connection(&connections, NodeId(2)));
+    }
+
+    #[test]
+    fn connectable_nodes_includes_a_node_with_a_compatible_socket() {
+        // Reroute sockets are `Any`/`Any`, so B's input is trivially
+        // compatible with A's output — the smallest fixture that exercises
+        // `connectable_nodes` without needing typed node defs (Phase 4.3).
+        use crate::runtime::NodeTypeRegistry;
+
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        let a = widget
+            .add_node_at("Reroute", Pos2::new(0.0, 0.0))
+            .expect("reroute should always be creatable");
+        let b = widget
+            .add_node_at("Reroute", Pos2::new(200.0, 0.0))
+            .expect("reroute should always be creatable");
+
+        let connectable = widget.connectable_nodes(SocketId {
+            node: a,
+            index: 0,
+            direction: SocketDirection::Output,
+        });
+
+        assert!(connectable.contains(&b));
     }
 
     #[test]
