@@ -70,6 +70,16 @@ impl Word {
     }
 }
 
+/// A decoded word prepared for timeline rendering. Instantaneous words use
+/// the next word's timestamp as `end_ns`; explicitly-spanning words retain
+/// their encoded duration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Annotation {
+    pub start_ns: u64,
+    pub end_ns: u64,
+    pub value: u64,
+}
+
 /// Change of an integer level (e.g. counter output). Mirrors `Sample`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NumberSample {

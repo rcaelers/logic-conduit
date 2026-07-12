@@ -3,7 +3,7 @@
 //! (`docs/LOGIC_ANALYZER_VIEWER_DESIGN.md`).
 
 use crate::runtime::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
-use crate::runtime::events::{Trigger, Word};
+use crate::runtime::events::{Annotation, Trigger, Word};
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
 use crate::runtime::sample::Sample;
@@ -93,16 +93,6 @@ impl ViewerRetention {
         let max = max.max(1);
         (len > max).then_some((max - max / 4).max(1))
     }
-}
-
-/// A decoded word drawn as a labeled box. The label is formatted at render
-/// time from `value` — storing strings per word would multiply the memory
-/// cost of large captures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Annotation {
-    pub start_ns: u64,
-    pub end_ns: u64,
-    pub value: u64,
 }
 
 #[derive(Debug, Clone)]

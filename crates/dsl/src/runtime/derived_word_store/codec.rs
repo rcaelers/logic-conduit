@@ -202,6 +202,14 @@ pub struct DecodedWordBlock {
     pub words: Vec<Word>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedWordRange {
+    pub header: WordBlockHeader,
+    pub words: Vec<Word>,
+    pub complete: bool,
+    pub decoded_records: usize,
+}
+
 /// Finds the best restart entry for a query beginning at `timestamp_ns`.
 ///
 /// When restart entries share the requested timestamp, this returns the
@@ -332,6 +340,150 @@ fn encode_word_block_with_interval(
 }
 
 pub fn decode_word_block(bytes: &[u8]) -> CodecResult<DecodedWordBlock> {
+    let parsed = parse_word_block(bytes)?;
+    let header = parsed.header;
+    let value_bytes = parsed.value_bytes;
+    let record_end = parsed.record_end;
+
+    let mut cursor = BLOCK_HEADER_SIZE;
+    let mut words = Vec::with_capacity(header.word_count as usize);
+    let mut timestamp = header.first_timestamp_ns;
+    let mut restart_index = 0usize;
+    for record_index in 0..header.word_count as usize {
+        let payload_offset = (cursor - BLOCK_HEADER_SIZE) as u32;
+        let delta = decode_u64(&bytes[..record_end], &mut cursor)?;
+        if record_index == 0 {
+            if delta != 0 {
+                return Err(invalid("first timestamp delta is not zero"));
+            }
+        } else {
+            timestamp = timestamp
+                .checked_add(delta)
+                .ok_or_else(|| invalid("timestamp delta overflow"))?;
+        }
+        let value = read_value(bytes, &mut cursor, record_end, value_bytes)?;
+        words.push(Word::new(value, timestamp));
+
+        if parsed
+            .restarts
+            .get(restart_index)
+            .is_some_and(|restart| restart.record_index as usize == record_index)
+        {
+            let restart = parsed.restarts[restart_index];
+            if restart.timestamp_ns != timestamp || restart.payload_offset != payload_offset {
+                return Err(invalid("restart entry does not match record payload"));
+            }
+            restart_index += 1;
+        }
+    }
+    if cursor != record_end || restart_index != parsed.restarts.len() {
+        return Err(invalid("record payload length is inconsistent"));
+    }
+    if timestamp != header.last_timestamp_ns {
+        return Err(invalid("last timestamp does not match block header"));
+    }
+
+    apply_durations(bytes, &parsed, 0, &mut words)?;
+    let restarts = parsed.restarts;
+
+    Ok(DecodedWordBlock {
+        header,
+        restarts,
+        words,
+    })
+}
+
+/// Decodes only the records needed around a time window, beginning at the
+/// nearest restart entry rather than at the start of the block. The result
+/// includes one predecessor and one successor when available.
+pub fn decode_word_block_range(
+    bytes: &[u8],
+    start_ns: u64,
+    end_ns: u64,
+    max_context_words: usize,
+) -> CodecResult<DecodedWordRange> {
+    if start_ns > end_ns {
+        return Err(invalid("range start is after range end"));
+    }
+    if max_context_words == 0 {
+        return Err(CodecError::InvalidConfiguration(
+            "max_context_words must be greater than zero",
+        ));
+    }
+    let parsed = parse_word_block(bytes)?;
+    // Start one restart before an exact match so the predecessor that closes
+    // at the query boundary is available to the renderer.
+    let restart_index = parsed
+        .restarts
+        .partition_point(|restart| restart.timestamp_ns < start_ns)
+        .saturating_sub(1);
+    let restart = parsed.restarts[restart_index];
+    let mut cursor = BLOCK_HEADER_SIZE + restart.payload_offset as usize;
+    let mut timestamp = restart.timestamp_ns;
+    let mut predecessor = None;
+    let mut selected: Vec<(usize, Word)> = Vec::new();
+    let mut decoded_records = 0usize;
+    let mut complete = true;
+
+    for record_index in restart.record_index as usize..parsed.header.word_count as usize {
+        let delta = decode_u64(&bytes[..parsed.record_end], &mut cursor)?;
+        if record_index == restart.record_index as usize {
+            if record_index == 0 && delta != 0 {
+                return Err(invalid("first timestamp delta is not zero"));
+            }
+        } else {
+            timestamp = timestamp
+                .checked_add(delta)
+                .ok_or_else(|| invalid("timestamp delta overflow"))?;
+        }
+        let value = read_value(bytes, &mut cursor, parsed.record_end, parsed.value_bytes)?;
+        decoded_records += 1;
+        let word = Word::new(value, timestamp);
+        if timestamp < start_ns {
+            predecessor = Some((record_index, word));
+            continue;
+        }
+        if selected.is_empty()
+            && let Some(previous) = predecessor.take()
+        {
+            selected.push(previous);
+        }
+        if selected.len() >= max_context_words {
+            complete = false;
+            break;
+        }
+        selected.push((record_index, word));
+        if timestamp > end_ns {
+            break;
+        }
+    }
+    if selected.is_empty()
+        && let Some(previous) = predecessor
+    {
+        selected.push(previous);
+    }
+
+    let first_record_index = selected.first().map_or(0, |(index, _)| *index);
+    let mut words: Vec<_> = selected.into_iter().map(|(_, word)| word).collect();
+    apply_durations(bytes, &parsed, first_record_index, &mut words)?;
+    Ok(DecodedWordRange {
+        header: parsed.header,
+        words,
+        complete,
+        decoded_records,
+    })
+}
+
+struct ParsedWordBlock {
+    header: WordBlockHeader,
+    restarts: Vec<RestartEntry>,
+    record_end: usize,
+    duration_offset: usize,
+    block_len: usize,
+    value_bytes: usize,
+}
+
+fn parse_word_block(bytes: &[u8]) -> CodecResult<ParsedWordBlock> {
     let header = WordBlockHeader::from_bytes(bytes)?;
     let block_len = header.block_len as usize;
     if block_len != bytes.len() || block_len < BLOCK_HEADER_SIZE {
@@ -376,47 +528,25 @@ pub fn decode_word_block(bytes: &[u8]) -> CodecResult<DecodedWordBlock> {
         )?);
     }
     validate_restart_order(&restarts, header.word_count, header.record_payload_len)?;
+    Ok(ParsedWordBlock {
+        header,
+        restarts,
+        record_end,
+        duration_offset,
+        block_len,
+        value_bytes,
+    })
+}
 
-    let mut cursor = BLOCK_HEADER_SIZE;
-    let mut words = Vec::with_capacity(header.word_count as usize);
-    let mut timestamp = header.first_timestamp_ns;
-    let mut restart_index = 0usize;
-    for record_index in 0..header.word_count as usize {
-        let payload_offset = (cursor - BLOCK_HEADER_SIZE) as u32;
-        let delta = decode_u64(&bytes[..record_end], &mut cursor)?;
-        if record_index == 0 {
-            if delta != 0 {
-                return Err(invalid("first timestamp delta is not zero"));
-            }
-        } else {
-            timestamp = timestamp
-                .checked_add(delta)
-                .ok_or_else(|| invalid("timestamp delta overflow"))?;
-        }
-        let value = read_value(bytes, &mut cursor, record_end, value_bytes)?;
-        words.push(Word::new(value, timestamp));
-
-        if restarts
-            .get(restart_index)
-            .is_some_and(|restart| restart.record_index as usize == record_index)
-        {
-            let restart = restarts[restart_index];
-            if restart.timestamp_ns != timestamp || restart.payload_offset != payload_offset {
-                return Err(invalid("restart entry does not match record payload"));
-            }
-            restart_index += 1;
-        }
-    }
-    if cursor != record_end || restart_index != restarts.len() {
-        return Err(invalid("record payload length is inconsistent"));
-    }
-    if timestamp != header.last_timestamp_ns {
-        return Err(invalid("last timestamp does not match block header"));
-    }
-
-    let mut duration_cursor = duration_offset;
+fn apply_durations(
+    bytes: &[u8],
+    parsed: &ParsedWordBlock,
+    first_record_index: usize,
+    words: &mut [Word],
+) -> CodecResult<()> {
+    let mut duration_cursor = parsed.duration_offset;
     let mut previous_duration_index = 0usize;
-    for exception_index in 0..header.duration_count as usize {
+    for exception_index in 0..parsed.header.duration_count as usize {
         let index_delta = decode_u64(bytes, &mut duration_cursor)?;
         let record_index = if exception_index == 0 {
             usize::try_from(index_delta).map_err(|_| invalid("duration index overflow"))?
@@ -434,24 +564,24 @@ pub fn decode_word_block(bytes: &[u8]) -> CodecResult<DecodedWordBlock> {
         if duration_ns == 0 {
             return Err(invalid("zero duration stored as an exception"));
         }
-        let word = words
-            .get_mut(record_index)
-            .ok_or_else(|| invalid("duration exception index is out of bounds"))?;
-        word.duration_ns = duration_ns;
+        if record_index >= parsed.header.word_count as usize {
+            return Err(invalid("duration exception index is out of bounds"));
+        }
+        if let Some(local_index) = record_index.checked_sub(first_record_index)
+            && let Some(word) = words.get_mut(local_index)
+        {
+            word.duration_ns = duration_ns;
+        }
         previous_duration_index = record_index;
     }
     let padding = bytes
-        .get(duration_cursor..block_len)
+        .get(duration_cursor..parsed.block_len)
         .ok_or(CodecError::Truncated)?;
     if padding.len() > 7 || padding.iter().any(|&byte| byte != 0) {
         return Err(invalid("invalid word-block padding"));
     }
 
-    Ok(DecodedWordBlock {
-        header,
-        restarts,
-        words,
-    })
+    Ok(())
 }
 
 fn validate_order(words: &[Word]) -> CodecResult<()> {
@@ -617,6 +747,34 @@ mod tests {
         assert_eq!(metadata.restarts.len(), 4);
         assert_eq!(metadata.restarts[1].record_index, 256);
         assert_eq!(metadata.restarts[3].record_index, 768);
+    }
+
+    #[test]
+    fn range_decode_starts_at_restart_and_keeps_boundary_context() {
+        let words: Vec<_> = (0..2_000)
+            .map(|index| {
+                if index == 1_505 {
+                    Word::spanning(index as u64, index as u64 * 10, 7)
+                } else {
+                    Word::new(index as u64, index as u64 * 10)
+                }
+            })
+            .collect();
+        let mut bytes = Vec::new();
+        encode_word_block(0, &words, &mut bytes).unwrap();
+
+        let range = decode_word_block_range(&bytes, 15_000, 15_100, 32).unwrap();
+        assert!(range.complete);
+        assert_eq!(range.words, words[1_499..=1_511]);
+        assert!(
+            range.decoded_records <= DEFAULT_RESTART_INTERVAL + 12,
+            "decoded {} records",
+            range.decoded_records
+        );
+
+        let boundary = decode_word_block_range(&bytes, 15_360, 15_370, 8).unwrap();
+        assert_eq!(boundary.words, words[1_535..=1_538]);
+        assert!(boundary.decoded_records <= DEFAULT_RESTART_INTERVAL + 3);
     }
 
     #[test]

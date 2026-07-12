@@ -4,21 +4,31 @@
 //! File lifecycle, live publication, and viewer queries are layered on top in
 //! later implementation steps.
 
+#[cfg(not(target_arch = "wasm32"))]
+mod cache;
 mod codec;
 mod crc32c;
 mod format;
+mod query;
 #[cfg(not(target_arch = "wasm32"))]
 mod store;
 mod vlq;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use cache::DEFAULT_DECODED_BLOCK_CACHE_BYTES;
 pub use codec::{
-    BlockCodecConfig, DecodedWordBlock, EncodedBlockMetadata, PushResult, WordBlockBuilder,
-    decode_word_block, encode_word_block, find_restart_for_timestamp,
+    BlockCodecConfig, DecodedWordBlock, DecodedWordRange, EncodedBlockMetadata, PushResult,
+    WordBlockBuilder, decode_word_block, decode_word_block_range, encode_word_block,
+    find_restart_for_timestamp,
 };
 pub use format::{
     BLOCK_HEADER_SIZE, BLOCK_MAGIC, BlockDirectoryEntry, DATA_HEADER_SIZE, DATA_MAGIC,
     DEFAULT_MAX_BLOCK_PAYLOAD_BYTES, DEFAULT_MAX_INTER_WORD_GAP_NS, DEFAULT_MAX_WORDS_PER_BLOCK,
     DEFAULT_RESTART_INTERVAL, DataFileHeader, FORMAT_VERSION, RestartEntry, WordBlockHeader,
+};
+pub use query::{
+    AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
+    ExactAnnotationWindow, WordPresenceBucket,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use store::{
