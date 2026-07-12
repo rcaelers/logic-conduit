@@ -3,6 +3,7 @@
 pub mod capture;
 pub mod cooperative_manager;
 pub mod derived_index;
+pub mod derived_word_store;
 pub mod edge_query;
 pub mod errors;
 pub mod events;
