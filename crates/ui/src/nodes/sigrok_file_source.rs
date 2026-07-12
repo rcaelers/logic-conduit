@@ -37,12 +37,7 @@ impl NodeDef for SigrokFileSource {
     }
     fn state() -> Self::State {
         SigrokFileSourceState {
-            file: FileValue::with_filter(
-                "_captures/hello_world_8o1_115200.sr",
-                "Select sigrok capture",
-                "Sigrok captures",
-                &["sr"],
-            ),
+            file: FileValue::with_filter("", "Select sigrok capture", "Sigrok captures", &["sr"]),
             channels: IntValue::new(8, 1, 32),
         }
     }

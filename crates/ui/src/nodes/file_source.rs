@@ -43,7 +43,7 @@ impl NodeDef for DslFileSource {
     fn state() -> Self::State {
         DslFileSourceState {
             file: FileValue::with_filter(
-                "_captures/wipneus5.dsl",
+                "",
                 "Select DSLogic capture",
                 "DSLogic captures",
                 &["dsl"],

@@ -1334,14 +1334,21 @@ impl eframe::App for App {
             analyzer_height = analyzer_height.clamp(analyzer_min, usable_height - graph_min);
         }
 
-        // The viewer only knows the generic `CaptureDataSource` trait; this
-        // is the one place that knows a `.dsl` file path means opening it
-        // with `DslFileCaptureDataSource`.
+        // The viewer is generic over `CaptureDataSource`; the app maps the
+        // selected file-source node to its format-specific data source.
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(file) = nodes::dsl_file_source_path(self.node_graph.graph()) {
-            self.logic_analyzer.set_capture_path(file, |path| {
-                dsl::DslFileCaptureDataSource::open(path).map_err(|e| e.to_string())
-            });
+        match nodes::capture_file_source(self.node_graph.graph()) {
+            Some(nodes::CaptureFileSource::Dsl(file)) => {
+                self.logic_analyzer.set_capture_path(file, |path| {
+                    dsl::DslFileCaptureDataSource::open(path).map_err(|e| e.to_string())
+                })
+            }
+            Some(nodes::CaptureFileSource::Sigrok(file)) => {
+                self.logic_analyzer.set_capture_path(file, |path| {
+                    dsl::SigrokFileCaptureDataSource::open(path).map_err(|e| e.to_string())
+                })
+            }
+            None => self.logic_analyzer.clear_capture(),
         }
 
         let origin = ui.cursor().min;

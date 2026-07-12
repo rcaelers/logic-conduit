@@ -4,15 +4,17 @@
 //! more interleaved `logic-*` sample files.  This source decodes the logic
 //! samples into level changes for each selected probe.
 
-use crate::runtime::Sender;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
 use crate::runtime::ports::{PortDirection, PortSchema};
 use crate::runtime::sample::Sample;
+use crate::runtime::{
+    BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureSource, Sender,
+};
 use crate::{DslHeader, Error, Result};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
@@ -32,6 +34,120 @@ pub struct SigrokFileSource {
     threads: Option<Vec<JoinHandle<()>>>,
     spawned: bool,
     num_threads: usize,
+}
+
+/// Random-access reader for a sigrok v2 logic capture.
+pub struct SigrokCaptureReader {
+    source: SigrokFileSource,
+}
+
+impl SigrokCaptureReader {
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let source = SigrokFileSource::new(path, 1)?;
+        Ok(Self { source })
+    }
+}
+
+impl CaptureSource for SigrokCaptureReader {
+    fn metadata(&self) -> &DslHeader {
+        &self.source.header
+    }
+
+    fn read_sample(&mut self, channel: usize, position: u64) -> Result<bool> {
+        if channel >= self.source.header.total_probes {
+            return Err(Error::InvalidProbe(channel));
+        }
+        if position >= self.source.header.total_samples {
+            return Err(Error::OutOfBounds(position));
+        }
+        let byte = self.source.samples[position as usize * self.source.unitsize + channel / 8];
+        Ok(byte & (1 << (channel % 8)) != 0)
+    }
+}
+
+impl BlockCaptureSource for SigrokCaptureReader {
+    fn read_packed_block(&mut self, channel: usize, block: u64) -> Result<BlockData> {
+        if channel >= self.source.header.total_probes {
+            return Err(Error::InvalidProbe(channel));
+        }
+        if block != 0 {
+            return Err(Error::InvalidBlock(block));
+        }
+        let samples = self.source.header.total_samples as usize;
+        let mut packed = vec![0_u8; samples.div_ceil(8)];
+        for sample in 0..samples {
+            let byte = self.source.samples[sample * self.source.unitsize + channel / 8];
+            if byte & (1 << (channel % 8)) != 0 {
+                packed[sample / 8] |= 1 << (sample % 8);
+            }
+        }
+        Ok(BlockData::from(packed))
+    }
+}
+
+/// Indexable sigrok v2 capture data for the logic-analyzer viewer.
+#[derive(Debug, Clone)]
+pub struct SigrokFileCaptureDataSource {
+    path: PathBuf,
+    header: DslHeader,
+    source_len: u64,
+}
+
+impl SigrokFileCaptureDataSource {
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let source_len = std::fs::metadata(&path)?.len();
+        let header = SigrokFileSource::new(&path, 1)?.header.clone();
+        Ok(Self {
+            path,
+            header,
+            source_len,
+        })
+    }
+}
+
+impl CaptureDataSource for SigrokFileCaptureDataSource {
+    type Reader = SigrokCaptureReader;
+
+    fn open_reader(&self) -> Result<Self::Reader> {
+        SigrokCaptureReader::open(&self.path)
+    }
+    fn metadata(&self) -> &DslHeader {
+        &self.header
+    }
+    fn fingerprint(&self) -> CaptureFingerprint {
+        CaptureFingerprint {
+            revision: self.source_len,
+        }
+    }
+    fn index_path(&self) -> Option<PathBuf> {
+        Some(sigrok_sidecar_path(&self.path))
+    }
+    fn display_name(&self) -> String {
+        self.path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("capture.sr")
+            .to_string()
+    }
+}
+
+pub type SigrokChunkedCaptureReader = crate::IndexSampler<SigrokCaptureReader>;
+
+impl crate::IndexSampler<SigrokCaptureReader> {
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+        crate::IndexSampler::open_data_source(SigrokFileCaptureDataSource::open(path)?)
+    }
+}
+
+fn sigrok_sidecar_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("capture.sr")
+        .to_string();
+    name.push_str(".idx");
+    path.with_file_name(name)
 }
 
 impl SigrokFileSource {
@@ -332,13 +448,44 @@ fn parse_sample_rate(rate: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    fn fixture() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let file = std::fs::File::create(dir.path().join("hello.sr")).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        archive.start_file("version", options).unwrap();
+        archive.write_all(b"2").unwrap();
+        archive.start_file("metadata", options).unwrap();
+        archive.write_all(b"[device 1]\ncapturefile=logic-1\ntotal probes=8\nsamplerate=1 MHz\nprobe1=TX\nunitsize=1\n").unwrap();
+        archive.start_file("logic-1-1", options).unwrap();
+        archive.write_all(&[0, 1, 1, 0, 0, 1, 0, 1]).unwrap();
+        archive.finish().unwrap();
+        dir
+    }
 
     #[test]
     fn opens_checked_in_pulseview_capture() {
-        let source = SigrokFileSource::new("../../_captures/hello_world_8o1_115200.sr", 8).unwrap();
+        let dir = fixture();
+        let source = SigrokFileSource::new(dir.path().join("hello.sr"), 8).unwrap();
         assert_eq!(source.header().total_probes, 8);
         assert_eq!(source.header().samplerate_hz, 1_000_000.0);
-        assert_eq!(source.header().total_samples, 7114);
+        assert_eq!(source.header().total_samples, 8);
         assert_eq!(source.header().probe_names[0], "TX");
+    }
+
+    #[test]
+    fn builds_a_persistent_waveform_index() {
+        let dir = fixture();
+        let capture = dir.path().join("hello.sr");
+
+        let source = SigrokFileCaptureDataSource::open(&capture).unwrap();
+        let index_path = source.index_path().unwrap();
+        let mut reader = SigrokChunkedCaptureReader::open(&capture).unwrap();
+
+        assert!(index_path.exists());
+        assert_eq!(reader.header().total_samples, 8);
+        assert!(reader.sampled_window(&[0], 0, 128, 64).is_ok());
     }
 }

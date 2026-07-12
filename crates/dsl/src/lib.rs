@@ -40,8 +40,9 @@ pub use nodes::{
     DsLogicU3Pro16Source, DslCaptureReader, DslChunkedCaptureReader, DslFileCaptureDataSource,
     DslFileSource, LinkSpeed, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
     LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
-    LogicEncodingRequest, LogicTrigger, LogicTriggerStage, RusbTransport, SigrokFileSource,
-    TriggerCondition, TriggerLogic, UsbTransport,
+    LogicEncodingRequest, LogicTrigger, LogicTriggerStage, RusbTransport, SigrokCaptureReader,
+    SigrokChunkedCaptureReader, SigrokFileCaptureDataSource, SigrokFileSource, TriggerCondition,
+    TriggerLogic, UsbTransport,
 };
 
 pub use runtime::{

@@ -207,6 +207,23 @@ impl LogicAnalyzerViewer {
         self.worker_responses = Some(response_rx);
     }
 
+    /// Clear a capture when no file-backed source remains in the graph.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn clear_capture(&mut self) {
+        self.capture_path = None;
+        self.capture_info = None;
+        self.channels.clear();
+        self.channel_names.clear();
+        self.row_rename = None;
+        self.sampler = None;
+        self.sampled_key = None;
+        self.worker_responses = None;
+        self.index_progress = None;
+        self.cursors.clear();
+        self.hover_measurement = None;
+        self.status = "No capture loaded".to_string();
+    }
+
     /// One-line hint of available controls, for a status bar (Phase 4.1).
     pub fn status_hint(&self) -> &'static str {
         "Drag Pan · Scroll Zoom · Double-click ruler to add a cursor · Home Fit"

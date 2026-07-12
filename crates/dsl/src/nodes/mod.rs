@@ -52,7 +52,9 @@ pub use logic_analyzer::{
     LogicEncodingRequest, LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use sigrok_file::SigrokFileSource;
+pub use sigrok_file::{
+    SigrokCaptureReader, SigrokChunkedCaptureReader, SigrokFileCaptureDataSource, SigrokFileSource,
+};
 pub use uart_demo_source::UartDemoSource;
 
 /// Convenient name for the production DSLogic source node.

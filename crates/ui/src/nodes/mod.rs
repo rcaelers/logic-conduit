@@ -262,9 +262,9 @@ fn connect(
     widget.graph_mut().add_connection(from_socket, to_socket);
 }
 
-/// Builds the CCD analysis pipeline (`graphs/ccd_pipeline.json`) as
-/// the startup graph, wired for `_captures/wipneus5.dsl` (SPI cs=8 clk=7
-/// mosi=6; parallel strobe=10 (ACDK), data D0..D7 = ch 0..7).
+/// Builds the CCD analysis pipeline (`graphs/ccd_pipeline.json`) as the
+/// startup graph. Select a capture in its DSL File Source before running it
+/// (SPI cs=8 clk=7 mosi=6; parallel strobe=10 (ACDK), data D0..D7 = ch 0..7).
 ///
 /// The enable gate is `AND(CS, Q)` with no NOT node: CS idles high and the
 /// parallel bus is decodable only while it is *inactive* (channels 6/7 are
@@ -451,18 +451,27 @@ pub fn populate_uart_demo(widget: &mut node_graph::NodeGraphWidget) {
     connect(widget, (uart, "Words"), (viewer, "In"));
 }
 
-/// Path of the first DSL File Source node with a non-empty file, for the
-/// logic-analyzer view. Native-only: `DslFileSource` itself isn't
-/// registered on wasm (no filesystem), so no graph can ever have one there.
+/// The single file-backed source currently displayed by the logic-analyzer
+/// view. Multiple sources and live-capture snapshots are future work.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn dsl_file_source_path(graph: &node_graph::GraphState) -> Option<String> {
-    graph
-        .nodes
-        .values()
-        .filter(|node| node.def_name() == DslFileSource::name())
-        .filter_map(|node| serde_json::from_value::<DslFileSourceState>(node.state.clone()).ok())
-        .map(|state| state.file.value)
-        .find(|path| !path.is_empty())
+pub enum CaptureFileSource {
+    Dsl(String),
+    Sigrok(String),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn capture_file_source(graph: &node_graph::GraphState) -> Option<CaptureFileSource> {
+    graph.nodes.values().find_map(|node| {
+        if node.def_name() == DslFileSource::name() {
+            let state = serde_json::from_value::<DslFileSourceState>(node.state.clone()).ok()?;
+            (!state.file.value.is_empty()).then_some(CaptureFileSource::Dsl(state.file.value))
+        } else if node.def_name() == SigrokFileSource::name() {
+            let state = serde_json::from_value::<SigrokFileSourceState>(node.state.clone()).ok()?;
+            (!state.file.value.is_empty()).then_some(CaptureFileSource::Sigrok(state.file.value))
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(test)]
@@ -474,10 +483,9 @@ mod tests {
     fn checked_in_spi_decode_pipeline_lowers_cleanly() {
         use crate::compiler::{BuilderRegistry, lower};
 
-        let saved: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../graphs/spi_decode_pipeline.json"
-        ))
-        .expect("checked-in graph should be valid JSON");
+        let saved: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../graphs/spi_decode_pipeline.json"))
+                .expect("checked-in graph should be valid JSON");
         let graph: node_graph::GraphState =
             serde_json::from_value(saved).expect("checked-in graph should deserialize");
 
@@ -490,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn checked_in_spi_graph_decode_pipeline_lowers_cleanly() {
+    fn checked_in_spi_graph_decode_pipeline_requires_a_capture_selection() {
         use crate::compiler::{BuilderRegistry, lower};
 
         let saved: serde_json::Value = serde_json::from_str(include_str!(
@@ -504,8 +512,8 @@ mod tests {
         widget.set_graph(graph);
 
         let registry = BuilderRegistry::standard();
-        let compiled = lower(widget.graph(), &registry).expect("graph should lower cleanly");
-        assert_eq!(compiled.nodes.len(), 9);
+        let errors = lower(widget.graph(), &registry).expect_err("capture path should be required");
+        assert!(errors.iter().any(|error| error.message.contains("File")));
     }
 
     #[test]
@@ -623,8 +631,11 @@ mod tests {
             .unwrap();
         widget.graph_mut().nodes.get_mut(&source_id).unwrap().title = "My capture".to_owned();
         assert_eq!(
-            dsl_file_source_path(widget.graph()).as_deref(),
-            Some("_captures/wipneus5.dsl")
+            match capture_file_source(widget.graph()) {
+                Some(CaptureFileSource::Dsl(path)) => path,
+                _ => String::new(),
+            },
+            "_captures/wipneus5.dsl"
         );
     }
 }
