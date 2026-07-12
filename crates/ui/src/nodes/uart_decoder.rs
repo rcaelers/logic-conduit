@@ -93,7 +93,7 @@ impl NodeDef for UartDecoder {
 
     fn outputs() -> Vec<OutputDef<Self::State>> {
         vec![
-            OutputDef::new::<Words>("Data"),
+            OutputDef::new::<Words>("Words"),
             OutputDef::new::<Trigger>("Error"),
             OutputDef::new::<Words>("Bits"),
             OutputDef::new::<Words>("Data"),
