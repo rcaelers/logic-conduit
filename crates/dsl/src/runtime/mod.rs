@@ -8,6 +8,9 @@ pub(crate) mod edge_query;
 pub(crate) mod errors;
 pub(crate) mod events;
 pub(crate) mod graph;
+#[cfg_attr(target_arch = "wasm32", path = "idle_wasm.rs")]
+#[cfg_attr(not(target_arch = "wasm32"), path = "idle_native.rs")]
+mod idle;
 pub(crate) mod manager;
 pub(crate) mod node;
 pub(crate) mod pipeline;
@@ -41,6 +44,7 @@ pub use events::{
     instantaneous_word_end_ns,
 };
 pub use graph::{Connection, GraphBuilder, NodeId};
+pub(crate) use idle::idle_backoff;
 pub use manager::{DisconnectEvent, InputSub, NodeSpec, PipelineManager};
 
 /// The pipeline supervisor the app layer builds live graphs on: real OS

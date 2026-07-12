@@ -395,11 +395,9 @@ pub(crate) fn format_cursor_time(us: f64) -> String {
 
 #[cfg(test)]
 mod cursor_tests {
-    use dsl::DerivedLanes;
-    #[cfg(not(target_arch = "wasm32"))]
-    use dsl::{IndexedAnnotationLane, Word};
-    #[cfg(not(target_arch = "wasm32"))]
-    use dsl::{IndexedAnnotationWriter, LiveStoreConfig};
+    use dsl::{
+        DerivedLanes, IndexedAnnotationLane, IndexedAnnotationWriter, LiveStoreConfig, Word,
+    };
 
     use super::*;
     use crate::sampling::pulse_measurement_from_window;
@@ -503,7 +501,6 @@ mod cursor_tests {
         );
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn cursor_snaps_to_indexed_word_starts_and_explicit_ends() {
         let (mut writer, store) =

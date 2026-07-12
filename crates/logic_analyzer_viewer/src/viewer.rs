@@ -469,10 +469,10 @@ impl LogicAnalyzerViewer {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(not(target_arch = "wasm32"))]
-    use dsl::{DerivedLaneData, DerivedLanes, IndexedAnnotationLane, Word};
-    #[cfg(not(target_arch = "wasm32"))]
-    use dsl::{IndexedAnnotationWriter, LiveStoreConfig};
+    use dsl::{
+        DerivedLaneData, DerivedLanes, IndexedAnnotationLane, IndexedAnnotationWriter,
+        LiveStoreConfig, Word,
+    };
 
     use super::{ChannelSignal, LogicAnalyzerViewer};
 
@@ -493,7 +493,6 @@ mod tests {
         assert_eq!(viewer.visible_span_us, 240.0);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn reset_time_view_fits_indexed_annotations_without_a_capture() {
         let (mut writer, store) =

@@ -803,9 +803,9 @@ impl ProcessNode for ViewerSink {
             if self.lanes.iter().all(|lane| lane.eos) {
                 return Err(WorkError::Shutdown);
             }
-            // All lanes momentarily quiet; don't spin.
-            #[cfg(not(target_arch = "wasm32"))]
-            std::thread::sleep(std::time::Duration::from_millis(2));
+            // Native thread-driven execution backs off here; cooperative wasm
+            // scheduling already yields between work calls.
+            crate::runtime::idle_backoff();
         }
         Ok(progress)
     }

@@ -28,6 +28,9 @@ use serde_json::Value;
 
 mod binary_decoder;
 mod buffer;
+#[cfg_attr(target_arch = "wasm32", path = "cache_platform_wasm.rs")]
+#[cfg_attr(not(target_arch = "wasm32"), path = "cache_platform_native.rs")]
+mod cache_platform;
 mod counter;
 #[cfg(not(target_arch = "wasm32"))]
 mod csv_writer;
@@ -764,10 +767,8 @@ pub fn lower(
         edges,
         viewer_retention,
     };
-    #[cfg(not(target_arch = "wasm32"))]
     let mut compiled = compiled;
-    #[cfg(not(target_arch = "wasm32"))]
-    assign_persistent_viewer_caches(&mut compiled);
+    cache_platform::assign_viewer_caches(&mut compiled);
     Ok(compiled)
 }
 
@@ -1373,21 +1374,13 @@ pub fn start_live(
     registry: &BuilderRegistry,
     ctx: &mut CompileCtx,
 ) -> Result<LiveRun, Vec<CompileError>> {
-    let compiled = lower(graph, registry)?;
-    #[cfg(not(target_arch = "wasm32"))]
-    let mut compiled = compiled;
-    #[cfg(not(target_arch = "wasm32"))]
-    configure_persistent_cache_directory(&mut compiled, ctx.persistent_cache_directory.as_deref());
+    let mut compiled = lower(graph, registry)?;
+    cache_platform::configure_directory(&mut compiled, ctx.persistent_cache_directory.as_deref());
     ctx.viewer_retention = compiled.viewer_retention;
     let mut manager = AppManager::new();
     let mut names: HashMap<NodeId, String> = HashMap::new();
 
-    #[cfg(not(target_arch = "wasm32"))]
-    prepare_persistent_cache(&compiled);
-    #[cfg(not(target_arch = "wasm32"))]
-    let (execution, cache_pruned) = persistent_execution_graph(&compiled, registry);
-    #[cfg(target_arch = "wasm32")]
-    let (execution, cache_pruned) = (compiled.clone(), false);
+    let (execution, cache_pruned) = cache_platform::prepare_execution(&compiled, registry);
 
     for id in topo_order(&execution) {
         let node = compiled_node(&execution, id);
@@ -1439,11 +1432,8 @@ impl LiveRun {
         graph: &GraphState,
         registry: &BuilderRegistry,
     ) -> Result<ApplySummary, ApplyError> {
-        let new = lower(graph, registry).map_err(ApplyError::Compile)?;
-        #[cfg(not(target_arch = "wasm32"))]
-        let mut new = new;
-        #[cfg(not(target_arch = "wasm32"))]
-        configure_persistent_cache_directory(&mut new, self.persistent_cache_directory.as_deref());
+        let mut new = lower(graph, registry).map_err(ApplyError::Compile)?;
+        cache_platform::configure_directory(&mut new, self.persistent_cache_directory.as_deref());
         let edits = diff(&self.compiled, &new, registry).map_err(ApplyError::NeedsFullRestart)?;
         if edits.is_empty() {
             self.compiled = new;
