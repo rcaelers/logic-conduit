@@ -38,6 +38,33 @@ impl LogicChannel {
 }
 
 impl LogicAnalyzerViewer {
+    pub(crate) fn row_top(&self, origin_y: f32, row: usize, default_height: f32) -> f32 {
+        origin_y
+            + self
+                .row_order
+                .iter()
+                .take(row)
+                .map(|key| self.display_row_height(key, default_height))
+                .sum::<f32>()
+    }
+
+    pub(crate) fn row_at_vertical(
+        &self,
+        origin_y: f32,
+        y: f32,
+        default_height: f32,
+    ) -> Option<usize> {
+        let mut top = origin_y;
+        for (row, key) in self.row_order.iter().enumerate() {
+            let height = self.display_row_height(key, default_height);
+            if y >= top && y < top + height {
+                return Some(row);
+            }
+            top += height;
+        }
+        None
+    }
+
     pub(crate) fn uart_data_lane_name(bits: &str) -> Option<String> {
         bits.strip_suffix(".Bits")
             .map(|base| format!("{base}.Data"))
@@ -127,14 +154,16 @@ impl LogicAnalyzerViewer {
         if !layout.labels_rect.contains(pointer) {
             return false;
         }
-        let row = ((pointer.y - layout.labels_rect.top()) / layout.row_height).floor() as usize;
+        let Some(row) = self.row_at_vertical(layout.labels_rect.top(), pointer.y, layout.row_height) else {
+            return false;
+        };
         let Some(key) = self.row_order.get(row).cloned() else {
             return false;
         };
         let Some(label) = self.row_label(&key) else {
             return false;
         };
-        let row_top = layout.labels_rect.top() + row as f32 * layout.row_height;
+        let row_top = self.row_top(layout.labels_rect.top(), row, layout.row_height);
         self.row_rename = Some(RowRenameState {
             key,
             text: label.name,
@@ -203,16 +232,20 @@ impl LogicAnalyzerViewer {
         if y < layout.labels_rect.top() || y > layout.labels_rect.bottom() {
             return None;
         }
-        let row = ((y - layout.labels_rect.top()) / layout.row_height).floor() as usize;
-        (row < self.row_order.len()).then_some(row)
+        self.row_at_vertical(layout.labels_rect.top(), y, layout.row_height)
     }
 
     pub(crate) fn row_badge_rect(&self, layout: AnalyzerLayout, row: usize) -> Rect {
-        let row_top = layout.labels_rect.top() + row as f32 * layout.row_height;
+        let row_top = self.row_top(layout.labels_rect.top(), row, layout.row_height);
+        let height = self
+            .row_order
+            .get(row)
+            .map(|key| self.display_row_height(key, layout.row_height))
+            .unwrap_or(layout.row_height);
         Rect::from_min_size(
             Pos2::new(
                 layout.labels_rect.left() + 12.0 + layout.name_col_width + 10.0,
-                row_top + layout.row_height * 0.5 - 8.0,
+                row_top + height * 0.5 - 8.0,
             ),
             vec2(layout.badge_width, 16.0),
         )

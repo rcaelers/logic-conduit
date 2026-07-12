@@ -13,7 +13,7 @@ impl LogicAnalyzerViewer {
     ) {
         let yellow = Color32::from_rgb(255, 190, 0);
         let stroke = Stroke::new(1.2, yellow);
-        let row_top = wave_rect.top() + measurement.channel_row as f32 * row_height;
+        let row_top = self.row_top(wave_rect.top(), measurement.channel_row, row_height);
         let high_y = row_top + row_height * 0.28;
         let low_y = row_top + row_height * 0.72;
         let marker_y = row_top + row_height * 0.5;
