@@ -4,7 +4,7 @@
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 use dsl::runtime::ProcessNode;
-use dsl::{Sample, SampleBlock, TextSample};
+use dsl::{DEFAULT_VIEWER_MAX_ENTRIES, Sample, SampleBlock, TextSample, ViewerRetention};
 use node_graph::Socket;
 use serde_json::Value;
 
@@ -13,6 +13,9 @@ pub(super) struct FileSourceBuilder;
 impl RuntimeBuilder for FileSourceBuilder {
     fn is_source(&self) -> bool {
         true
+    }
+    fn viewer_retention(&self, _state: &Value) -> ViewerRetention {
+        ViewerRetention::MaxEntries(DEFAULT_VIEWER_MAX_ENTRIES)
     }
     fn accepted_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
         match socket.def_index {

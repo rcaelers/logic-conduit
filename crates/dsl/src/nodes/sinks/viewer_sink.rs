@@ -67,7 +67,8 @@ impl ViewerSinkMetrics {
 /// extend to the next word; words carrying a duration use their true extent.
 pub const MAX_ANNOTATION_NS: u64 = 1_000_000;
 /// Suggested per-lane limit for continuous sources that explicitly select
-/// rolling retention. Finite sources retain their complete timeline.
+/// rolling exact-detail retention. The summary index retains the complete
+/// timeline even when old raw entries are released.
 pub const DEFAULT_VIEWER_MAX_ENTRIES: usize = 1_000_000;
 
 /// Most items one lane drains from its channel per `work()` call. Bounds how
@@ -195,9 +196,9 @@ impl LaneFold<u64> for MarkerFold {
     }
 }
 
-/// The multi-resolution index kept alongside a lane's raw `data`, mirroring
-/// its shape one-for-one — updated by the same `append_*_batch` calls, so
-/// it's never out of sync with what's actually stored.
+/// The multi-resolution index kept alongside a lane's raw `data`. It is
+/// append-only and retains the complete timeline when a bounded retention
+/// policy releases old exact entries.
 #[derive(Debug, Clone)]
 pub enum LaneSummary {
     Digital(AppendOnlyMipmap<Sample, DigitalFold>),
@@ -320,8 +321,6 @@ impl DerivedLanes {
         }
         if let Some(target) = retention.trim_target(existing.len()) {
             existing.drain(..existing.len() - target);
-            *summary = AppendOnlyMipmap::new();
-            summary.extend(existing.iter());
         }
     }
 
@@ -377,12 +376,6 @@ impl DerivedLanes {
         }
         if let Some(target) = retention.trim_target(annotations.len()) {
             annotations.drain(..annotations.len() - target);
-            *summary = ChunkedMipmap::new();
-            summary.extend(
-                annotations
-                    .iter()
-                    .filter(|annotation| annotation.end_ns != annotation.start_ns),
-            );
         }
     }
 
@@ -412,8 +405,6 @@ impl DerivedLanes {
         }
         if let Some(target) = retention.trim_target(markers.len()) {
             markers.drain(..markers.len() - target);
-            *summary = AppendOnlyMipmap::new();
-            summary.extend(markers.iter());
         }
     }
 }
@@ -965,7 +956,7 @@ mod tests {
     }
 
     #[test]
-    fn viewer_retention_drops_oldest_chunk_and_rebuilds_summary() {
+    fn viewer_retention_drops_oldest_exact_entries_but_keeps_full_summary() {
         let store = DerivedLanes::new();
         let mut sink = ViewerSink::new(store.clone())
             .with_retention(ViewerRetention::MaxEntries(4))
@@ -997,7 +988,7 @@ mod tests {
         let LaneSummary::Annotations(summary) = &lanes[0].summary else {
             panic!("expected annotation summary");
         };
-        assert_eq!(summary.len(), 2, "the newest annotation remains open");
-        assert_eq!(summary.sampled_window(0, 1_000, 10)[0].start_ns, 300);
+        assert_eq!(summary.len(), 5, "the newest annotation remains open");
+        assert_eq!(summary.sampled_window(0, 1_000, 10)[0].start_ns, 0);
     }
 }

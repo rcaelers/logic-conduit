@@ -1,6 +1,6 @@
 use crate::viewer::LogicAnalyzerViewer;
 use dsl::nodes::sinks::MAX_ANNOTATION_NS;
-use dsl::{Annotation, Sample};
+use dsl::{Annotation, AnnotationFold, ChunkedMipmap, Sample};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
 impl LogicAnalyzerViewer {
@@ -107,11 +107,45 @@ impl LogicAnalyzerViewer {
         y_top: f32,
         row_height: f32,
         annotations: &[Annotation],
+        summary: &ChunkedMipmap<Annotation, AnnotationFold>,
     ) {
         let band_color = Color32::from_rgb(215, 140, 60);
         let box_top = y_top + row_height * 0.18;
         let box_bottom = y_top + row_height * 0.82;
         let (start_ns, end_ns) = self.visible_window_ns();
+
+        // Bounded lanes retain exact values only for their newest window.
+        // Render older, summarized entries as activity bands so the full
+        // recording remains visible without materializing billions of
+        // annotation structs in UI memory.
+        let exact_start_ns = annotations
+            .first()
+            .map_or(end_ns.saturating_add(1), |annotation| annotation.start_ns);
+        if start_ns < exact_start_ns {
+            let summary_end_ns = end_ns.min(exact_start_ns.saturating_sub(1));
+            let records = summary.sampled_window(
+                start_ns,
+                summary_end_ns,
+                wave_rect.width().max(1.0) as usize,
+            );
+            for record in records {
+                let record_start = record.start_ns.max(start_ns);
+                let record_end = record.end_ns.min(summary_end_ns);
+                if record_start > record_end {
+                    continue;
+                }
+                let x0 = self.ns_to_x(wave_rect, record_start);
+                let x1 = self
+                    .ns_to_x(wave_rect, record_end)
+                    .max(x0 + 1.0)
+                    .min(wave_rect.right());
+                painter.rect_filled(
+                    Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(x1, box_bottom)),
+                    0.0,
+                    band_color,
+                );
+            }
+        }
 
         let (first, last) = visible_annotation_range(annotations, start_ns, end_ns);
         let visible = &annotations[first..last];

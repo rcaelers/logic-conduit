@@ -20,6 +20,8 @@ pub struct BufferNode<T> {
 }
 
 impl<T> BufferNode<T> {
+    const BATCH_SIZE: usize = 65_536;
+
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -59,9 +61,13 @@ impl<T: Send + Sync + Clone + 'static> ProcessNode for BufferNode<T> {
             .and_then(|port| port.get::<T>())
             .ok_or_else(|| WorkError::NodeError("Missing buffer output".to_string()))?;
 
-        let item = input.recv()?;
-        output.send(item)?;
-        Ok(1)
+        let first = input.recv()?;
+        let mut batch = Vec::with_capacity(Self::BATCH_SIZE);
+        batch.push(first);
+        let _ = input.try_recv_many(&mut batch, Self::BATCH_SIZE - 1);
+        let count = batch.len();
+        output.send_batch(batch)?;
+        Ok(count)
     }
 }
 
@@ -97,9 +103,10 @@ mod tests {
         }
         out_rx
             .try_iter()
-            .filter_map(|m| match m {
-                ChannelMessage::Sample(v) => Some(v),
-                _ => None,
+            .flat_map(|message| match message {
+                ChannelMessage::Sample(value) => vec![value],
+                ChannelMessage::Batch(values) => values,
+                ChannelMessage::EndOfStream => Vec::new(),
             })
             .collect()
     }

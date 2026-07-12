@@ -58,6 +58,7 @@ pub struct BinaryFileWriter {
     index_csv: bool,
 
     data_buffer: VecDeque<Word>,
+    data_batch: Vec<Word>,
     name_buffer: VecDeque<TextSample>,
     /// Drained but not yet applicable name changes (timestamps ahead of the
     /// data stream), in channel (= timestamp) order.
@@ -74,12 +75,15 @@ pub struct BinaryFileWriter {
 }
 
 impl BinaryFileWriter {
+    const DRAIN_BATCH_SIZE: usize = 65_536;
+
     pub fn new() -> Self {
         Self {
             name: "binary_file_writer".to_string(),
             width: WriteWidth::default(),
             index_csv: false,
             data_buffer: VecDeque::new(),
+            data_batch: Vec::with_capacity(Self::DRAIN_BATCH_SIZE),
             name_buffer: VecDeque::new(),
             pending_names: VecDeque::new(),
             current_name: None,
@@ -221,6 +225,34 @@ impl BinaryFileWriter {
         }
         Ok(self.current_file.as_mut().unwrap())
     }
+
+    fn write_word(&mut self, word: Word) -> WorkResult<()> {
+        let word_ts = word.timestamp_ns;
+        while self
+            .pending_names
+            .front()
+            .is_some_and(|change| change.start_time_ns <= word_ts)
+        {
+            let change = self.pending_names.pop_front().unwrap();
+            self.apply_name_change(change)?;
+        }
+
+        if self.words_in_file == 0 {
+            self.file_start_ns = word.timestamp_ns;
+        }
+        self.file_end_ns = word.timestamp_ns;
+        self.last_word_ts = word_ts;
+
+        let width = self.width;
+        let value = word.value;
+        let writer = self.ensure_file_open()?;
+        let bytes = width
+            .write_to(writer, value)
+            .map_err(|e| WorkError::NodeError(format!("writing word: {e}")))?;
+        self.bytes_in_file += bytes as u64;
+        self.words_in_file += 1;
+        Ok(())
+    }
 }
 
 impl Default for BinaryFileWriter {
@@ -290,8 +322,10 @@ impl ProcessNode for BinaryFileWriter {
             self.pending_names.push_back(initial);
         }
 
-        // Block for data; on shutdown finalize the open file.
-        let word = match data.recv() {
+        // Block for the first word, then preserve the decoder's batches so
+        // a dense capture needs thousands of scheduler calls, not billions.
+        self.data_batch.clear();
+        let first = match data.recv() {
             Ok(word) => word,
             Err(WorkError::Shutdown) => {
                 self.close_current()
@@ -300,41 +334,42 @@ impl ProcessNode for BinaryFileWriter {
             }
             Err(e) => return Err(e),
         };
+        self.data_batch.push(first);
+        let _ = data.try_recv_many(
+            &mut self.data_batch,
+            Self::DRAIN_BATCH_SIZE.saturating_sub(1),
+        );
+        drop(data);
 
-        // Opportunistically drain name changes (never blocks).
+        // Establish a filename watermark for the complete data batch. A
+        // sparse control stream may lag the dense data channel; merely
+        // draining what's available would race a filename transition that
+        // belongs in the middle of this batch.
+        let batch_end_ns = self
+            .data_batch
+            .last()
+            .expect("the blocking receive populated the batch")
+            .timestamp_ns;
         if let Some(names) = &mut names {
-            while let Ok(change) = names.try_recv() {
-                self.pending_names.push_back(change);
+            loop {
+                match names.peek() {
+                    Ok(change) if change.start_time_ns <= batch_end_ns => {
+                        self.pending_names.push_back(names.recv()?);
+                    }
+                    Ok(_) | Err(WorkError::Shutdown) => break,
+                    Err(error) => return Err(error),
+                }
             }
         }
+        drop(names);
 
-        // Apply every name change the data stream has passed.
-        let word_ts = word.timestamp_ns;
-        while self
-            .pending_names
-            .front()
-            .is_some_and(|change| change.start_time_ns <= word_ts)
-        {
-            let change = self.pending_names.pop_front().unwrap();
-            self.apply_name_change(change)?;
+        let mut batch = std::mem::take(&mut self.data_batch);
+        let count = batch.len();
+        for word in batch.drain(..) {
+            self.write_word(word)?;
         }
-
-        // Append the word to the current file.
-        if self.words_in_file == 0 {
-            self.file_start_ns = word.timestamp_ns;
-        }
-        self.file_end_ns = word.timestamp_ns;
-        self.last_word_ts = word_ts;
-
-        let width = self.width;
-        let value = word.value;
-        let writer = self.ensure_file_open()?;
-        let bytes = width
-            .write_to(writer, value)
-            .map_err(|e| WorkError::NodeError(format!("writing word: {e}")))?;
-        self.bytes_in_file += bytes as u64;
-        self.words_in_file += 1;
-        Ok(1)
+        self.data_batch = batch;
+        Ok(count)
     }
 }
 
@@ -472,6 +507,47 @@ mod tests {
         assert_eq!(std::fs::read(dir.path().join("a.bin")).unwrap(), vec![1, 2]);
         // The word at exactly the boundary timestamp lands in the new file.
         assert_eq!(std::fs::read(dir.path().join("b.bin")).unwrap(), vec![3, 4]);
+    }
+
+    #[test]
+    fn waits_for_filename_watermark_before_writing_a_data_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.bin").display().to_string();
+        let b = dir.path().join("b.bin").display().to_string();
+        let Rig {
+            data_tx,
+            name_tx,
+            inputs,
+        } = rig();
+        name_tx
+            .send(ChannelMessage::Sample(TextSample::new(&a, 0)))
+            .unwrap();
+        for (value, timestamp) in [(1, 100), (2, 1_100)] {
+            data_tx
+                .send(ChannelMessage::Sample(word(value, timestamp)))
+                .unwrap();
+        }
+        drop(data_tx);
+
+        let delayed_name = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            name_tx
+                .send(ChannelMessage::Sample(TextSample::new(b, 1_000)))
+                .unwrap();
+        });
+
+        let mut writer = BinaryFileWriter::new();
+        loop {
+            match writer.work(&inputs, &[]) {
+                Ok(_) => {}
+                Err(WorkError::Shutdown) => break,
+                Err(error) => panic!("unexpected error: {error}"),
+            }
+        }
+        delayed_name.join().unwrap();
+
+        assert_eq!(std::fs::read(dir.path().join("a.bin")).unwrap(), vec![1]);
+        assert_eq!(std::fs::read(dir.path().join("b.bin")).unwrap(), vec![2]);
     }
 
     #[test]

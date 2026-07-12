@@ -850,6 +850,7 @@ impl DslFileSource {
         let BlockReaderGroupConfig {
             archive,
             blocks,
+            indexed_blocks,
             destinations,
             group_label,
             header,
@@ -886,17 +887,23 @@ impl DslFileSource {
 
             let mut last_samples_in_block = 0usize;
             for destination in &destinations {
-                let block_data =
-                    match Self::load_block(&archive, &blocks, destination.channel, block_num) {
-                        Ok(data) => data,
-                        Err(error) => {
-                            debug!(
-                                "[{}] Failed to read channel {} block {}: {}",
-                                group_label, destination.channel, block_num, error
-                            );
-                            break 'blocks;
-                        }
-                    };
+                let block_data = match indexed_blocks.as_ref() {
+                    Some(index) => index
+                        .lock()
+                        .unwrap()
+                        .packed_block(destination.channel, block_num),
+                    None => Self::load_block(&archive, &blocks, destination.channel, block_num),
+                };
+                let block_data = match block_data {
+                    Ok(data) => data,
+                    Err(error) => {
+                        debug!(
+                            "[{}] Failed to read channel {} block {}: {}",
+                            group_label, destination.channel, block_num, error
+                        );
+                        break 'blocks;
+                    }
+                };
                 let block_capacity = (block_data.len() * 8) as u64;
                 let samples_in_block =
                     block_capacity.min(total_samples - block_start_position) as usize;
@@ -1101,6 +1108,7 @@ impl ProcessNode for DslFileSource {
             destinations.sort_by_key(|destination| destination.channel);
             let archive = Arc::clone(&self.archive);
             let blocks = Arc::clone(&self.blocks);
+            let indexed_blocks = self.index.lock().unwrap().clone();
             let header = self.header.clone();
             let max_samples = self.max_samples;
             let shutdown = Arc::clone(&self.shutdown);
@@ -1112,6 +1120,7 @@ impl ProcessNode for DslFileSource {
                     Self::block_reader_thread(BlockReaderGroupConfig {
                         archive,
                         blocks,
+                        indexed_blocks,
                         destinations,
                         group_label,
                         header,
@@ -1300,6 +1309,7 @@ struct BlockDestination {
 struct BlockReaderGroupConfig {
     archive: Arc<Mutex<ZipArchive<File>>>,
     blocks: BlockCache,
+    indexed_blocks: Option<Arc<Mutex<DslChunkedCaptureReader>>>,
     destinations: Vec<BlockDestination>,
     group_label: String,
     header: DslHeader,

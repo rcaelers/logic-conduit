@@ -8,7 +8,7 @@ use crate::cursor::{cursor_color, cursor_flag_geometry, cursor_flag_label};
 use crate::format::{badge_text_color, format_duration, format_time, nice_step};
 use crate::types::{AnalyzerLayout, RowKey};
 use crate::viewer::LogicAnalyzerViewer;
-use dsl::DerivedLaneData;
+use dsl::{DerivedLaneData, LaneSummary};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, vec2};
 
 impl LogicAnalyzerViewer {
@@ -225,12 +225,16 @@ impl LogicAnalyzerViewer {
                             self.draw_derived_digital(&clip, wave_rect, y_top, row_height, samples);
                         }
                         DerivedLaneData::Annotations(annotations) => {
+                            let LaneSummary::Annotations(summary) = &lane.summary else {
+                                continue;
+                            };
                             self.draw_derived_annotations(
                                 &clip,
                                 wave_rect,
                                 y_top,
                                 row_height,
                                 annotations,
+                                summary,
                             );
                         }
                         DerivedLaneData::Markers(markers) => {

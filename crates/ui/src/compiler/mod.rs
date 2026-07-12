@@ -123,9 +123,8 @@ pub trait RuntimeBuilder {
     fn is_source(&self) -> bool {
         false
     }
-    /// Retention policy for viewers in this source's time domain. Finite
-    /// sources should keep the default; a continuous source must opt into a
-    /// bounded policy based on its expected rate and memory budget.
+    /// Retention policy for exact viewer entries in this source's time
+    /// domain. Summaries remain complete under bounded retention.
     fn viewer_retention(&self, _state: &Value) -> ViewerRetention {
         ViewerRetention::Unlimited
     }
@@ -1237,12 +1236,15 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn file_source_retains_the_complete_viewer_timeline() {
+    fn file_source_bounds_exact_viewer_entries() {
         let widget = startup_widget();
         let compiled = lower(widget.graph(), &BuilderRegistry::standard())
             .unwrap_or_else(|errors| panic!("lower failed: {errors:?}"));
 
-        assert_eq!(compiled.viewer_retention, ViewerRetention::Unlimited);
+        assert_eq!(
+            compiled.viewer_retention,
+            ViewerRetention::MaxEntries(dsl::DEFAULT_VIEWER_MAX_ENTRIES)
+        );
     }
 
     #[test]

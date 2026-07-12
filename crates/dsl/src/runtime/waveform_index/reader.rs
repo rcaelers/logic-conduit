@@ -566,6 +566,13 @@ where
         Ok(data)
     }
 
+    /// Return one packed capture block using the mmap-backed raw sidecar when
+    /// available. Block streaming sources use this to share the same
+    /// zero-copy cache as random-access waveform and edge queries.
+    pub(crate) fn packed_block(&mut self, channel: usize, block: u64) -> Result<BlockData> {
+        self.cached_packed_block(channel, block)
+    }
+
     fn sample_indexed_channel(
         &mut self,
         channel: usize,

@@ -507,12 +507,20 @@ struct FragmentBoundary {
     strobe_value: bool,
     data_value: u64,
     cs_eligible: bool,
+    reset_before: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct StreamScanConfig {
     mode: StrobeMode,
     cs_polarity: CsPolarity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EnabledRange {
+    start: usize,
+    end: usize,
+    reset_before: bool,
 }
 
 #[inline]
@@ -573,6 +581,127 @@ fn fragment_buffer_bytes(buffers: &DecodeFragmentBuffers) -> usize {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn enabled_ranges_for_window(
+    enable_query: Option<&Arc<dyn EdgeQuery>>,
+    enable_input: &mut Option<Receiver<'_, Sample>>,
+    current_enable_value: &mut bool,
+    next_enable_change_position: &mut u64,
+    block_start_position: u64,
+    window_start: usize,
+    window_end: usize,
+    timestamp_step: u64,
+) -> WorkResult<Vec<EnabledRange>> {
+    let absolute_start = block_start_position + window_start as u64;
+    let absolute_end = block_start_position + window_end as u64;
+
+    if let Some(query) = enable_query {
+        let query_err = |error: crate::Error| WorkError::NodeError(error.to_string());
+        let mut current = query.value_at(absolute_start).map_err(query_err)?;
+        let previous = if absolute_start == 0 {
+            current
+        } else {
+            query.value_at(absolute_start - 1).map_err(query_err)?
+        };
+        let mut reset_pending = !current || previous != current;
+        let mut cursor = absolute_start;
+        let mut ranges = Vec::new();
+
+        while cursor < absolute_end {
+            let transition = query
+                .next_edge(cursor, absolute_end)
+                .map_err(query_err)?
+                .filter(|transition| transition.sample < absolute_end);
+            let range_end = transition
+                .as_ref()
+                .map_or(absolute_end, |transition| transition.sample);
+            if current && cursor < range_end {
+                ranges.push(EnabledRange {
+                    start: window_start + (cursor - absolute_start) as usize,
+                    end: window_start + (range_end - absolute_start) as usize,
+                    reset_before: reset_pending,
+                });
+                reset_pending = false;
+            }
+            let Some(transition) = transition else {
+                break;
+            };
+            current = transition.value;
+            if !current {
+                reset_pending = true;
+            }
+            cursor = transition.sample;
+        }
+        *current_enable_value = current;
+        return Ok(ranges);
+    }
+
+    let Some(enable) = enable_input else {
+        *current_enable_value = true;
+        *next_enable_change_position = u64::MAX;
+        return Ok(vec![EnabledRange {
+            start: window_start,
+            end: window_end,
+            reset_before: false,
+        }]);
+    };
+
+    let timestamp_step = timestamp_step.max(1);
+    let end_time_ns = absolute_end.saturating_mul(timestamp_step);
+    let mut cursor = absolute_start;
+    let mut reset_pending = !*current_enable_value;
+    let mut ranges = Vec::new();
+
+    loop {
+        match enable.peek() {
+            Ok(next_edge) if next_edge.start_time_ns < end_time_ns => {
+                let transition_position = next_edge
+                    .start_time_ns
+                    .div_ceil(timestamp_step)
+                    .clamp(absolute_start, absolute_end);
+                if *current_enable_value && cursor < transition_position {
+                    ranges.push(EnabledRange {
+                        start: window_start + (cursor - absolute_start) as usize,
+                        end: window_start + (transition_position - absolute_start) as usize,
+                        reset_before: reset_pending,
+                    });
+                    reset_pending = false;
+                }
+                *current_enable_value = enable.recv()?.value;
+                if !*current_enable_value {
+                    reset_pending = true;
+                }
+                cursor = cursor.max(transition_position);
+            }
+            Ok(next_edge) => {
+                *next_enable_change_position = next_edge.start_time_ns;
+                if *current_enable_value && cursor < absolute_end {
+                    ranges.push(EnabledRange {
+                        start: window_start + (cursor - absolute_start) as usize,
+                        end: window_end,
+                        reset_before: reset_pending,
+                    });
+                }
+                break;
+            }
+            Err(WorkError::Shutdown) => {
+                *next_enable_change_position = u64::MAX;
+                if *current_enable_value && cursor < absolute_end {
+                    ranges.push(EnabledRange {
+                        start: window_start + (cursor - absolute_start) as usize,
+                        end: window_end,
+                        reset_before: reset_pending,
+                    });
+                }
+                break;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(ranges)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn scan_stream_fragment(
     config: StreamScanConfig,
     sequence: u64,
@@ -581,63 +710,79 @@ fn scan_stream_fragment(
     cs: Option<&SampleBlock>,
     window_start: usize,
     window_end: usize,
+    enabled_ranges: &[EnabledRange],
     mut buffers: DecodeFragmentBuffers,
 ) -> DecodeFragment {
     buffers.positions.clear();
     buffers.values.clear();
     buffers.reset_before.clear();
-    let boundary = matches!(
-        config.mode,
-        StrobeMode::RisingEdge | StrobeMode::FallingEdge | StrobeMode::AnyEdge
-    )
-    .then(|| FragmentBoundary {
-        position: strobe.start_position + window_start as u64,
-        strobe_value: packed_bit(&strobe.data, window_start),
-        data_value: packed_bus_value(data, window_start),
-        cs_eligible: cs_eligible(config, cs, window_start),
-    });
-    let mut reset_before_next = false;
-    let first_word = window_start / u64::BITS as usize;
-    let last_word = (window_end - 1) / u64::BITS as usize;
-    for word_index in first_word..=last_word {
-        let word_start = word_index * u64::BITS as usize;
-        let word = packed_word(&strobe.data, word_index);
-        let previous_bit = if word_start == 0 {
-            false
-        } else {
-            packed_bit(&strobe.data, word_start - 1)
-        };
-        let toggles = word ^ ((word << 1) | u64::from(previous_bit));
-        let mut triggers = match config.mode {
-            StrobeMode::RisingEdge => toggles & word,
-            StrobeMode::FallingEdge => toggles & !word,
-            StrobeMode::AnyEdge => toggles,
-            StrobeMode::HighLevel => word,
-            StrobeMode::LowLevel => !word,
-        };
-        let range_start = window_start.saturating_sub(word_start);
-        let range_end = window_end
-            .saturating_sub(word_start)
-            .min(u64::BITS as usize);
-        triggers &= bit_range_mask(range_start, range_end);
-        if boundary.is_some() && word_start <= window_start {
-            triggers &= !(1u64 << (window_start - word_start));
+    let boundary = enabled_ranges
+        .first()
+        .filter(|range| range.start == window_start)
+        .filter(|_| {
+            matches!(
+                config.mode,
+                StrobeMode::RisingEdge | StrobeMode::FallingEdge | StrobeMode::AnyEdge
+            )
+        })
+        .map(|range| FragmentBoundary {
+            position: strobe.start_position + window_start as u64,
+            strobe_value: packed_bit(&strobe.data, window_start),
+            data_value: packed_bus_value(data, window_start),
+            cs_eligible: cs_eligible(config, cs, window_start),
+            reset_before: range.reset_before,
+        });
+    let mut reset_before_next = boundary.is_none()
+        && enabled_ranges
+            .first()
+            .is_none_or(|range| range.reset_before);
+    for (range_index, range) in enabled_ranges.iter().enumerate() {
+        debug_assert!(window_start <= range.start);
+        debug_assert!(range.start < range.end);
+        debug_assert!(range.end <= window_end);
+        if range_index > 0 || (range.reset_before && boundary.is_none()) {
+            reset_before_next = true;
         }
-
-        while triggers != 0 {
-            let bit_in_word = triggers.trailing_zeros() as usize;
-            triggers &= triggers - 1;
-            let local_index = word_start + bit_in_word;
-            let position = strobe.start_position + local_index as u64;
-            if !cs_eligible(config, cs, local_index) {
-                reset_before_next = true;
-                continue;
+        let first_word = range.start / u64::BITS as usize;
+        let last_word = (range.end - 1) / u64::BITS as usize;
+        for word_index in first_word..=last_word {
+            let word_start = word_index * u64::BITS as usize;
+            let word = packed_word(&strobe.data, word_index);
+            let previous_bit = if word_start == 0 {
+                false
+            } else {
+                packed_bit(&strobe.data, word_start - 1)
+            };
+            let toggles = word ^ ((word << 1) | u64::from(previous_bit));
+            let mut triggers = match config.mode {
+                StrobeMode::RisingEdge => toggles & word,
+                StrobeMode::FallingEdge => toggles & !word,
+                StrobeMode::AnyEdge => toggles,
+                StrobeMode::HighLevel => word,
+                StrobeMode::LowLevel => !word,
+            };
+            let range_start = range.start.saturating_sub(word_start);
+            let range_end = range.end.saturating_sub(word_start).min(u64::BITS as usize);
+            triggers &= bit_range_mask(range_start, range_end);
+            if boundary.is_some() && word_start <= window_start {
+                triggers &= !(1u64 << (window_start - word_start));
             }
 
-            buffers.positions.push(position);
-            buffers.values.push(packed_bus_value(data, local_index));
-            buffers.reset_before.push(reset_before_next);
-            reset_before_next = false;
+            while triggers != 0 {
+                let bit_in_word = triggers.trailing_zeros() as usize;
+                triggers &= triggers - 1;
+                let local_index = word_start + bit_in_word;
+                let position = strobe.start_position + local_index as u64;
+                if !cs_eligible(config, cs, local_index) {
+                    reset_before_next = true;
+                    continue;
+                }
+
+                buffers.positions.push(position);
+                buffers.values.push(packed_bus_value(data, local_index));
+                buffers.reset_before.push(reset_before_next);
+                reset_before_next = false;
+            }
         }
     }
 
@@ -649,7 +794,10 @@ fn scan_stream_fragment(
         boundary,
         last_strobe_value: packed_bit(&strobe.data, window_end - 1),
         buffers,
-        reset_after: reset_before_next,
+        reset_after: reset_before_next
+            || enabled_ranges
+                .last()
+                .is_none_or(|range| range.end < window_end),
     }
 }
 
@@ -662,10 +810,6 @@ fn merge_stream_fragment(
     cycles_per_word: usize,
     endianness: Endianness,
     assembly: &mut AssemblyState,
-    enable_query: Option<&Arc<dyn EdgeQuery>>,
-    enable_input: &mut Option<Receiver<'_, Sample>>,
-    current_enable_value: &mut bool,
-    next_enable_change_position: &mut u64,
     word_batch: &mut Option<Vec<Word>>,
 ) -> WorkResult<u64> {
     let mut words_emitted = 0u64;
@@ -678,36 +822,6 @@ fn merge_stream_fragment(
             assembly.value = 0;
         }
         let timestamp_ns = position.saturating_mul(fragment.timestamp_step);
-
-        if let Some(query) = enable_query {
-            *current_enable_value = query
-                .value_at(position)
-                .map_err(|error| WorkError::NodeError(error.to_string()))?;
-        } else if timestamp_ns >= *next_enable_change_position
-            && let Some(enable) = enable_input
-        {
-            loop {
-                match enable.peek() {
-                    Ok(next_edge) if next_edge.start_time_ns <= timestamp_ns => {
-                        *current_enable_value = enable.recv()?.value;
-                    }
-                    Ok(next_edge) => {
-                        *next_enable_change_position = next_edge.start_time_ns;
-                        break;
-                    }
-                    Err(WorkError::Shutdown) => {
-                        *next_enable_change_position = u64::MAX;
-                        break;
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
-        }
-        if !*current_enable_value {
-            assembly.cycles = 0;
-            assembly.value = 0;
-            return Ok(());
-        }
 
         if assembly.cycles == 0 {
             assembly.first_ts = timestamp_ns;
@@ -738,7 +852,9 @@ fn merge_stream_fragment(
         Ok(())
     };
 
-    let mut boundary_reset = false;
+    let mut boundary_reset = fragment
+        .boundary
+        .is_some_and(|boundary| boundary.reset_before);
     if let Some(boundary) = fragment.boundary {
         let triggered = match mode {
             StrobeMode::RisingEdge => !*previous_strobe_value && boundary.strobe_value,
@@ -750,7 +866,12 @@ fn merge_stream_fragment(
         };
         if triggered {
             if boundary.cs_eligible {
-                merge_sample(boundary.position, boundary.data_value, false)?;
+                merge_sample(
+                    boundary.position,
+                    boundary.data_value,
+                    boundary.reset_before,
+                )?;
+                boundary_reset = false;
             } else {
                 boundary_reset = true;
             }
@@ -1281,6 +1402,16 @@ impl ParallelDecoder {
         let window_end = window_start
             .saturating_add(Self::STREAM_SAMPLES_PER_CALL)
             .min(num_samples);
+        let enabled_ranges = enabled_ranges_for_window(
+            enable_query.as_ref(),
+            &mut enable_input,
+            &mut current_enable_value,
+            &mut next_enable_change_position,
+            strobe_block.start_position,
+            window_start,
+            window_end,
+            strobe_block.timestamp_step,
+        )?;
         let mut fragment = scan_stream_fragment(
             StreamScanConfig {
                 mode: self.mode,
@@ -1292,6 +1423,7 @@ impl ParallelDecoder {
             cs_block.as_ref(),
             window_start,
             window_end,
+            &enabled_ranges,
             std::mem::take(&mut blocks.fragment_buffers),
         );
         if fragment.sequence != self.next_stream_merge_sequence {
@@ -1318,10 +1450,6 @@ impl ParallelDecoder {
             self.cycles_per_word,
             self.endianness,
             &mut assembly,
-            enable_query.as_ref(),
-            &mut enable_input,
-            &mut current_enable_value,
-            &mut next_enable_change_position,
             &mut word_batch,
         )?;
         blocks.next_sequence += 1;
@@ -1451,6 +1579,16 @@ impl ParallelDecoder {
                 .min(strobe.num_samples);
             let block_samples = strobe.num_samples;
             let sequence = blocks.next_sequence;
+            let enabled_ranges = enabled_ranges_for_window(
+                enable_query.as_ref(),
+                &mut enable_input,
+                &mut current_enable_value,
+                &mut next_enable_change_position,
+                strobe.start_position,
+                window_start,
+                window_end,
+                strobe.timestamp_step,
+            )?;
             let strobe = strobe.clone();
             let data = blocks.data.clone();
             let cs = blocks.cs.clone();
@@ -1475,6 +1613,7 @@ impl ParallelDecoder {
                             cs.as_ref(),
                             window_start,
                             window_end,
+                            &enabled_ranges,
                             buffers,
                         )
                     }));
@@ -1532,10 +1671,6 @@ impl ParallelDecoder {
             self.cycles_per_word,
             self.endianness,
             &mut assembly,
-            enable_query.as_ref(),
-            &mut enable_input,
-            &mut current_enable_value,
-            &mut next_enable_change_position,
             &mut word_batch,
         )?;
 
@@ -1889,9 +2024,6 @@ mod tests {
             cycles: 0,
             first_ts: 0,
         };
-        let mut enable_input: Option<Receiver<'_, Sample>> = None;
-        let mut current_enable_value = true;
-        let mut next_enable_change_position = u64::MAX;
         let mut words = Some(Vec::new());
         let mut previous_strobe_value = false;
 
@@ -1904,10 +2036,6 @@ mod tests {
                 3,
                 Endianness::Little,
                 &mut assembly,
-                None,
-                &mut enable_input,
-                &mut current_enable_value,
-                &mut next_enable_change_position,
                 &mut words,
             )
             .unwrap();
@@ -1963,6 +2091,11 @@ mod tests {
                 Some(&cs),
                 0,
                 sample_count,
+                &[EnabledRange {
+                    start: 0,
+                    end: sample_count,
+                    reset_before: false,
+                }],
                 DecodeFragmentBuffers::default(),
             );
             let (expected_words, expected_assembly) = merge_fragments_for_test(mode, &[whole]);
@@ -1976,6 +2109,11 @@ mod tests {
                     Some(&cs),
                     0,
                     split,
+                    &[EnabledRange {
+                        start: 0,
+                        end: split,
+                        reset_before: false,
+                    }],
                     DecodeFragmentBuffers::default(),
                 );
                 let second = scan_stream_fragment(
@@ -1986,6 +2124,11 @@ mod tests {
                     Some(&cs),
                     split,
                     sample_count,
+                    &[EnabledRange {
+                        start: split,
+                        end: sample_count,
+                        reset_before: false,
+                    }],
                     DecodeFragmentBuffers::default(),
                 );
                 let (actual_words, actual_assembly) =
@@ -2026,6 +2169,11 @@ mod tests {
             None,
             0,
             4,
+            &[EnabledRange {
+                start: 0,
+                end: 4,
+                reset_before: false,
+            }],
             DecodeFragmentBuffers::default(),
         );
         let second = scan_stream_fragment(
@@ -2036,6 +2184,11 @@ mod tests {
             None,
             4,
             8,
+            &[EnabledRange {
+                start: 4,
+                end: 8,
+                reset_before: false,
+            }],
             DecodeFragmentBuffers::default(),
         );
         let (sender, receiver) = bounded(2);
@@ -2496,6 +2649,105 @@ mod tests {
             }
         }
         collect_messages(out_rx)
+    }
+
+    #[test]
+    fn streamed_enable_builds_watermarked_scan_ranges() {
+        let wd = Watchdog::new();
+        let (tx, rx) = bounded::<ChannelMessage<Sample>>(8);
+        for (value, timestamp) in [(false, 0), (true, 4), (false, 8), (true, 12)] {
+            tx.send(ChannelMessage::Sample(Sample::new(value, timestamp)))
+                .unwrap();
+        }
+        drop(tx);
+        let input_port = InputPort::new_with_watchdog(rx, &wd, "pd", "enable_signal");
+        let mut buffer = VecDeque::new();
+        let mut enable_input = input_port.get::<Sample>(&mut buffer);
+        let mut current = false;
+        let mut next_change = 0;
+
+        let first = enabled_ranges_for_window(
+            None,
+            &mut enable_input,
+            &mut current,
+            &mut next_change,
+            0,
+            0,
+            8,
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            first,
+            vec![EnabledRange {
+                start: 4,
+                end: 8,
+                reset_before: true,
+            }]
+        );
+        assert_eq!(next_change, 8);
+
+        let second = enabled_ranges_for_window(
+            None,
+            &mut enable_input,
+            &mut current,
+            &mut next_change,
+            0,
+            8,
+            16,
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            second,
+            vec![EnabledRange {
+                start: 12,
+                end: 16,
+                reset_before: true,
+            }]
+        );
+        assert_eq!(next_change, u64::MAX);
+    }
+
+    #[test]
+    fn packed_scan_ignores_clock_toggles_outside_enabled_ranges() {
+        let strobe = block_from_bits(
+            &(0..16)
+                .map(|position| position % 2 == 1)
+                .collect::<Vec<_>>(),
+        );
+        let data = [block_from_bits(&[true; 16])];
+        let fragment = scan_stream_fragment(
+            StreamScanConfig {
+                mode: StrobeMode::AnyEdge,
+                cs_polarity: CsPolarity::Disabled,
+            },
+            0,
+            &strobe,
+            &data,
+            None,
+            0,
+            16,
+            &[
+                EnabledRange {
+                    start: 4,
+                    end: 8,
+                    reset_before: true,
+                },
+                EnabledRange {
+                    start: 12,
+                    end: 16,
+                    reset_before: true,
+                },
+            ],
+            DecodeFragmentBuffers::default(),
+        );
+
+        assert_eq!(fragment.buffers.positions, vec![4, 5, 6, 7, 12, 13, 14, 15]);
+        assert_eq!(
+            fragment.buffers.reset_before,
+            vec![true, false, false, false, true, false, false, false]
+        );
     }
 
     /// A long gated-off stretch makes no channel calls, so a `work()` call
