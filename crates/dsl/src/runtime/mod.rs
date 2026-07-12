@@ -36,7 +36,10 @@ pub use capture::{
 pub use cooperative_manager::CooperativeManager;
 pub use edge_query::EdgeQuery;
 pub use errors::{ConnectionError, PortError, WorkError, WorkResult};
-pub use events::{Annotation, NumberSample, TextSample, Trigger, Word};
+pub use events::{
+    Annotation, MAX_ANNOTATION_NS, NumberSample, TextSample, Trigger, Word,
+    instantaneous_word_end_ns,
+};
 pub use graph::{Connection, GraphBuilder, NodeId};
 pub use manager::{DisconnectEvent, InputSub, NodeSpec, PipelineManager};
 

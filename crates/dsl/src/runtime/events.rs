@@ -13,6 +13,30 @@
 //!
 //! All timestamps are nanoseconds, in the same domain as `Sample.start_time_ns`.
 
+/// Longest inferred display span for an instantaneous word when no recent
+/// cadence is available. Prevents sparse word events from painting a value
+/// continuously across an unrelated or gated-off interval.
+pub const MAX_ANNOTATION_NS: u64 = 1_000_000;
+
+/// Returns the visual end of an instantaneous word with a known successor.
+///
+/// Adjacent words in a burst still meet exactly. When the next word is much
+/// later than the recent cadence, the current word closes after one expected
+/// period so the intervening interval remains visibly empty.
+pub fn instantaneous_word_end_ns(
+    previous_start_ns: Option<u64>,
+    start_ns: u64,
+    next_start_ns: u64,
+) -> u64 {
+    let gap_ns = next_start_ns.saturating_sub(start_ns);
+    let inferred_limit_ns = previous_start_ns
+        .map(|previous| start_ns.saturating_sub(previous))
+        .filter(|interval| *interval > 0)
+        .unwrap_or(MAX_ANNOTATION_NS)
+        .min(MAX_ANNOTATION_NS);
+    start_ns.saturating_add(gap_ns.min(inferred_limit_ns))
+}
+
 /// Instantaneous event (e.g. a matcher hit). No payload beyond time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Trigger {
@@ -38,10 +62,9 @@ pub struct Word {
     /// Timestamp of the word's start (its first sampling edge), ns.
     pub timestamp_ns: u64,
     /// The word's real extent: start to its last sampling edge / frame
-    /// end, ns. `0` means instantaneous — a single-cycle parallel bus
-    /// word, whose value stands on the bus until the next strobe; the
-    /// viewer renders those as lasting until the next word, while a word
-    /// with a duration is drawn exactly that wide.
+    /// end, ns. `0` means instantaneous. The viewer joins adjacent
+    /// instantaneous words within a decode burst, but leaves long gaps
+    /// empty rather than implying valid decoded data while a gate is off.
     pub duration_ns: u64,
 }
 

@@ -67,10 +67,7 @@ impl ViewerSinkMetrics {
     }
 }
 
-/// Longest estimated box for the final open instantaneous annotation when no
-/// next word exists to establish its real end. Closed instantaneous words
-/// extend to the next word; words carrying a duration use their true extent.
-pub const MAX_ANNOTATION_NS: u64 = 1_000_000;
+pub use crate::runtime::MAX_ANNOTATION_NS;
 /// Suggested per-lane limit for continuous sources that explicitly select
 /// rolling in-memory exact-detail retention. Native indexed word lanes do
 /// not use this limit because their complete exact history is disk-backed.
@@ -105,8 +102,8 @@ pub enum DerivedLaneData {
     /// A boolean level stream, rendered like a channel waveform.
     Digital(Vec<Sample>),
     /// Word boxes. A word carrying a real duration is stored closed with
-    /// its true `end_ns`; an instantaneous word's `end_ns` is patched to
-    /// the next word's start as words arrive.
+    /// its true `end_ns`; adjacent instantaneous words meet within a burst,
+    /// while a cadence-bounded end leaves long decoding gaps empty.
     Annotations(Vec<Annotation>),
     /// Native disk-backed word lane. Rendering and cursor code query this
     /// handle without retaining every annotation in UI memory.
@@ -395,16 +392,24 @@ impl DerivedLanes {
             return;
         };
         for (start_ns, duration_ns, value) in words {
+            let previous_start_ns = annotations
+                .len()
+                .checked_sub(2)
+                .map(|index| annotations[index].start_ns);
             if let Some(previous) = annotations.last_mut()
                 && previous.end_ns == previous.start_ns
             {
-                previous.end_ns = start_ns;
+                previous.end_ns = crate::runtime::instantaneous_word_end_ns(
+                    previous_start_ns,
+                    previous.start_ns,
+                    start_ns,
+                );
                 // Only now that its `end_ns` is final can it join the
                 // summary — the mipmap is append-only and can never
                 // retroactively patch an entry once it's folded into a
                 // coarser tier, so the most recent annotation always lags
                 // the summary by exactly one entry until the next word
-                // closes it (or, if the run ends right after it, forever —
+                // closes or cadence-bounds it (or, if the run ends right after it, forever —
                 // the raw `data` entry is still fully correct and is what
                 // exact/near-zoom rendering reads directly; see
                 // `draw_derived_annotations`'s open-ended handling).
@@ -414,7 +419,7 @@ impl DerivedLanes {
                 start_ns,
                 // A word with a real duration is closed right away at its
                 // true end; an instantaneous one stays "open" (end ==
-                // start) until the next word patches it above.
+                // start) until the next word patches or cadence-bounds it.
                 end_ns: start_ns + duration_ns,
                 value,
             };
@@ -972,18 +977,24 @@ mod tests {
     }
 
     #[test]
-    fn instantaneous_annotation_extends_to_next_word_across_long_gaps() {
+    fn instantaneous_annotation_leaves_long_inter_word_gaps_empty() {
         let store = DerivedLanes::new();
         let lane = store.register("w", DerivedLaneData::Annotations(Vec::new()));
         store.append_word_batch(
             lane,
-            [(1_000, 0, 1), (1_000 + MAX_ANNOTATION_NS * 10, 0, 2)],
+            [
+                (1_000, 0, 1),
+                (1_100, 0, 2),
+                (1_100 + MAX_ANNOTATION_NS * 10, 0, 3),
+            ],
         );
         let lanes = store.read();
         let DerivedLaneData::Annotations(annotations) = &lanes[0].data else {
             panic!("expected annotations");
         };
-        assert_eq!(annotations[0].end_ns, 1_000 + MAX_ANNOTATION_NS * 10);
+        assert_eq!(annotations[0].end_ns, 1_100);
+        assert_eq!(annotations[1].end_ns, 1_200);
+        assert!(annotations[1].end_ns < annotations[2].start_ns);
     }
 
     #[test]

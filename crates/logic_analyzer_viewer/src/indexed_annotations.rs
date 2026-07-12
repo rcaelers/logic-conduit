@@ -181,6 +181,72 @@ mod tests {
     }
 
     #[test]
+    fn moderately_dense_presence_preserves_a_gap_inside_one_encoded_block() {
+        let mut config = LiveStoreConfig::default();
+        config.block.max_words = 1_000;
+        config.block.max_inter_word_gap_ns = u64::MAX;
+        let (mut writer, store) = IndexedAnnotationWriter::create(config).unwrap();
+        let mut words: Vec<_> = (0..150).map(|time| Word::new(1, time)).collect();
+        words.extend((10_000..10_150).map(|time| Word::new(2, time)));
+        writer.append_batch(&words).unwrap();
+        writer.finish().unwrap();
+
+        let lanes = DerivedLanes::new();
+        lanes.register(
+            "words",
+            DerivedLaneData::IndexedAnnotations(IndexedAnnotationLane::from_store(store)),
+        );
+        let mut viewer = LogicAnalyzerViewer::new();
+        viewer.set_derived_lanes(lanes);
+        viewer.visible_span_us = 10.15;
+        viewer.sample_indexed_annotations(layout(100.0));
+
+        let entry = viewer.indexed_annotation_cache.get("words").unwrap();
+        let IndexedAnnotationSamples::Presence(buckets) = &entry.samples else {
+            panic!("expected indexed presence buckets");
+        };
+        assert!(
+            buckets
+                .iter()
+                .all(|bucket| !(bucket.start_ns <= 5_000 && bucket.end_ns >= 5_000)),
+            "presence sampling must not smear a block across its internal gap"
+        );
+    }
+
+    #[test]
+    fn coarse_indexed_presence_preserves_a_gap_inside_one_encoded_block() {
+        let mut config = LiveStoreConfig::default();
+        config.block.max_words = 20_000;
+        config.block.max_inter_word_gap_ns = u64::MAX;
+        let (mut writer, store) = IndexedAnnotationWriter::create(config).unwrap();
+        let mut words: Vec<_> = (0..5_000).map(|index| Word::new(1, index * 10)).collect();
+        words.extend((0..5_000).map(|index| Word::new(2, 100_000 + index * 10)));
+        writer.append_batch(&words).unwrap();
+        writer.finish().unwrap();
+
+        let lanes = DerivedLanes::new();
+        lanes.register(
+            "words",
+            DerivedLaneData::IndexedAnnotations(IndexedAnnotationLane::from_store(store)),
+        );
+        let mut viewer = LogicAnalyzerViewer::new();
+        viewer.set_derived_lanes(lanes);
+        viewer.visible_span_us = 149.99;
+        viewer.sample_indexed_annotations(layout(100.0));
+
+        let entry = viewer.indexed_annotation_cache.get("words").unwrap();
+        let IndexedAnnotationSamples::Presence(buckets) = &entry.samples else {
+            panic!("expected indexed presence buckets");
+        };
+        assert!(
+            buckets
+                .iter()
+                .all(|bucket| !(bucket.start_ns <= 75_000 && bucket.end_ns >= 75_000)),
+            "coarse viewer sampling must keep the inactive interval empty"
+        );
+    }
+
+    #[test]
     fn live_generation_refreshes_the_cached_exact_window() {
         let config = LiveStoreConfig {
             hot_tail_publish_words: 1,

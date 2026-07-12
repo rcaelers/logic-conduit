@@ -6,7 +6,7 @@ use super::{
     WordPresenceBucket, WordPresenceIndex, WordSummaryRecord, decode_word_block,
     decode_word_block_range,
 };
-use crate::runtime::{Annotation, Word};
+use crate::runtime::{Annotation, MAX_ANNOTATION_NS, Word, instantaneous_word_end_ns};
 use memmap2::{Mmap, MmapOptions};
 use std::fs::File;
 use std::io::{self, Write};
@@ -19,6 +19,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub const DEFAULT_HOT_TAIL_PUBLISH_WORDS: usize = 16_384;
 pub const DEFAULT_HOT_TAIL_PUBLISH_INTERVAL: Duration = Duration::from_millis(50);
 pub const DEFAULT_MAX_PERSISTENT_CACHE_BYTES: u64 = 50 * 1024 * 1024 * 1024;
+const MAX_PRESENCE_RUNS_PER_BLOCK: usize = 256;
 static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -365,11 +366,13 @@ impl IndexedAnnotationStore {
             .directory
             .partition_point(|entry| entry.last_timestamp_ns < start_ns);
         let predecessor = first_by_start.checked_sub(1);
+        let previous_predecessor = first_by_start.checked_sub(2);
         let after_end = state
             .directory
             .partition_point(|entry| entry.first_timestamp_ns <= end_ns);
         let successor = (after_end < state.directory.len()).then_some(after_end);
-        let mut indices = state.presence.intersecting_leaf_indices(start_ns, end_ns);
+        let mut indices = state.presence.intersecting_block_indices(start_ns, end_ns);
+        indices.extend(previous_predecessor);
         indices.extend(predecessor);
         indices.extend(successor);
         indices.sort_unstable();
@@ -393,11 +396,13 @@ impl IndexedAnnotationStore {
             .directory
             .partition_point(|entry| entry.last_timestamp_ns < lower);
         let predecessor = first_by_start.checked_sub(1);
+        let previous_predecessor = first_by_start.checked_sub(2);
         let after_upper = state
             .directory
             .partition_point(|entry| entry.first_timestamp_ns <= upper);
         let successor = (after_upper < state.directory.len()).then_some(after_upper);
-        let mut indices = state.presence.intersecting_leaf_indices(lower, upper);
+        let mut indices = state.presence.intersecting_block_indices(lower, upper);
+        indices.extend(previous_predecessor);
         indices.extend(predecessor);
         indices.extend(successor);
         indices.sort_unstable();
@@ -443,6 +448,27 @@ impl AnnotationQuery for IndexedAnnotationStore {
             merge_hot_tail_presence(&mut buckets, &state.hot_tail);
             buckets
         };
+        // Exact boxes switch to presence at two words per pixel. Spend a
+        // bounded amount of additional decode work here so moderately dense
+        // burst traffic still preserves visible gaps instead of smearing one
+        // block summary across the whole viewport. The coarse estimate keeps
+        // truly dense overviews on the no-decode mipmap path.
+        let refine_limit = target_buckets.saturating_mul(8).max(32);
+        let estimated_words = buckets
+            .iter()
+            .map(|bucket| bucket.word_count)
+            .fold(0u64, u64::saturating_add);
+        if estimated_words <= refine_limit as u64
+            && let Ok(exact) = self.exact_window(start_ns, end_ns, refine_limit)
+            && exact.complete
+        {
+            return Ok(annotation_presence_buckets(
+                &exact.annotations,
+                start_ns,
+                end_ns,
+                target_buckets,
+            ));
+        }
         buckets.retain(|bucket| bucket.word_count > 0);
         Ok(buckets)
     }
@@ -463,7 +489,10 @@ impl AnnotationQuery for IndexedAnnotationStore {
         let mut candidates = ExactQueryCandidates::new(max_words);
 
         for entry in entries {
-            let remaining = max_words.saturating_sub(candidates.words.len()).max(1);
+            let remaining = max_words
+                .saturating_sub(candidates.words.len())
+                .saturating_add(3)
+                .max(3);
             let block = self
                 .query_entry_words(entry, start_ns, end_ns, remaining)
                 .map_err(query_store_error)?;
@@ -480,6 +509,11 @@ impl AnnotationQuery for IndexedAnnotationStore {
         }
 
         let mut context = candidates.words;
+        if let Some(previous) = candidates.previous_predecessor
+            && !context.contains(&previous)
+        {
+            context.push(previous);
+        }
         if let Some(predecessor) = candidates.predecessor
             && !context.contains(&predecessor)
         {
@@ -495,9 +529,15 @@ impl AnnotationQuery for IndexedAnnotationStore {
             let end = if word.duration_ns != 0 {
                 word.timestamp_ns.saturating_add(word.duration_ns)
             } else {
-                context
-                    .get(index + 1)
-                    .map_or(word.timestamp_ns, |next| next.timestamp_ns)
+                context.get(index + 1).map_or(word.timestamp_ns, |next| {
+                    instantaneous_word_end_ns(
+                        index
+                            .checked_sub(1)
+                            .map(|previous| context[previous].timestamp_ns),
+                        word.timestamp_ns,
+                        next.timestamp_ns,
+                    )
+                })
             };
             if word.timestamp_ns <= end_ns && end >= start_ns {
                 annotations.push(Annotation {
@@ -529,22 +569,19 @@ impl AnnotationQuery for IndexedAnnotationStore {
         let lower = timestamp_ns.saturating_sub(max_distance_ns);
         let upper = timestamp_ns.saturating_add(max_distance_ns);
         let mut nearest = None;
+        let mut context = Vec::new();
 
         for entry in entries {
             let block = self
                 .query_entry_words(entry, lower, upper, entry.word_count as usize + 2)
                 .map_err(query_store_error)?;
-            consider_word_boundaries(
-                block.words(),
-                lower,
-                upper,
-                timestamp_ns,
-                max_distance_ns,
-                &mut nearest,
-            );
+            context.extend_from_slice(block.words());
         }
+        context.extend_from_slice(&hot_tail);
+        context.sort_by_key(|word| word.timestamp_ns);
+        context.dedup();
         consider_word_boundaries(
-            &hot_tail,
+            &context,
             lower,
             upper,
             timestamp_ns,
@@ -553,6 +590,65 @@ impl AnnotationQuery for IndexedAnnotationStore {
         );
         Ok(nearest.map(|(boundary, _)| boundary))
     }
+}
+
+fn annotation_presence_buckets(
+    annotations: &[Annotation],
+    start_ns: u64,
+    end_ns: u64,
+    target_buckets: usize,
+) -> Vec<WordPresenceBucket> {
+    if annotations.is_empty() || target_buckets == 0 || start_ns > end_ns {
+        return Vec::new();
+    }
+    let span = end_ns.saturating_sub(start_ns).saturating_add(1);
+    let bucket_count = target_buckets
+        .min(usize::try_from(span).unwrap_or(usize::MAX))
+        .max(1);
+    let mut starts = vec![0u64; bucket_count];
+    let mut ends = vec![0u64; bucket_count + 1];
+    for annotation in annotations {
+        let overlap_start = annotation.start_ns.max(start_ns);
+        let overlap_end = annotation.end_ns.min(end_ns);
+        if overlap_start > overlap_end {
+            continue;
+        }
+        let first = ((u128::from(overlap_start - start_ns) * bucket_count as u128)
+            / u128::from(span)) as usize;
+        let last = ((u128::from(overlap_end - start_ns) * bucket_count as u128) / u128::from(span))
+            as usize;
+        let first = first.min(bucket_count - 1);
+        let last = last.min(bucket_count - 1);
+        starts[first] = starts[first].saturating_add(1);
+        ends[last + 1] = ends[last + 1].saturating_add(1);
+    }
+
+    let mut running_count = 0u64;
+    starts
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, starting)| {
+            running_count = running_count.saturating_sub(ends[index]);
+            running_count = running_count.saturating_add(starting);
+            let word_count = running_count;
+            if word_count == 0 {
+                return None;
+            }
+            let bucket_start = start_ns
+                .saturating_add(((u128::from(span) * index as u128) / bucket_count as u128) as u64);
+            let bucket_end_exclusive = start_ns.saturating_add(
+                ((u128::from(span) * (index + 1) as u128) / bucket_count as u128) as u64,
+            );
+            Some(WordPresenceBucket {
+                start_ns: bucket_start,
+                end_ns: bucket_end_exclusive
+                    .max(bucket_start.saturating_add(1))
+                    .saturating_sub(1)
+                    .min(end_ns),
+                word_count,
+            })
+        })
+        .collect()
 }
 
 enum QueryBlockWords {
@@ -606,6 +702,7 @@ fn validate_directory_header(
 
 struct ExactQueryCandidates {
     words: Vec<Word>,
+    previous_predecessor: Option<Word>,
     predecessor: Option<Word>,
     successor: Option<Word>,
     truncated: bool,
@@ -616,6 +713,7 @@ impl ExactQueryCandidates {
     fn new(limit: usize) -> Self {
         Self {
             words: Vec::with_capacity(limit),
+            previous_predecessor: None,
             predecessor: None,
             successor: None,
             truncated: false,
@@ -633,6 +731,7 @@ impl ExactQueryCandidates {
                     .predecessor
                     .is_none_or(|current| current.timestamp_ns <= word.timestamp_ns)
                 {
+                    self.previous_predecessor = self.predecessor;
                     self.predecessor = Some(word);
                 }
                 if word.duration_ns == 0
@@ -656,8 +755,8 @@ impl ExactQueryCandidates {
 
 fn consider_word_boundaries(
     words: &[Word],
-    lower: u64,
-    upper: u64,
+    _lower: u64,
+    _upper: u64,
     target: u64,
     max_distance: u64,
     nearest: &mut Option<(u64, u64)>,
@@ -665,36 +764,23 @@ fn consider_word_boundaries(
     if words.is_empty() {
         return;
     }
-    if words.iter().any(|word| word.duration_ns != 0) {
-        for word in words {
-            consider_boundary(word.timestamp_ns, target, max_distance, nearest);
-            if word.duration_ns != 0 {
-                consider_boundary(
-                    word.timestamp_ns.saturating_add(word.duration_ns),
-                    target,
-                    max_distance,
-                    nearest,
-                );
-            }
-        }
-        return;
-    }
-    let first = words
-        .partition_point(|word| word.timestamp_ns < lower)
-        .saturating_sub(1);
-    let end = words
-        .partition_point(|word| word.timestamp_ns <= upper)
-        .saturating_add(1)
-        .min(words.len());
-    for word in &words[first..end] {
+    for (index, word) in words.iter().enumerate() {
         consider_boundary(word.timestamp_ns, target, max_distance, nearest);
-        if word.duration_ns != 0 {
-            consider_boundary(
-                word.timestamp_ns.saturating_add(word.duration_ns),
-                target,
-                max_distance,
-                nearest,
-            );
+        let word_end = if word.duration_ns != 0 {
+            Some(word.timestamp_ns.saturating_add(word.duration_ns))
+        } else {
+            words.get(index + 1).map(|next| {
+                instantaneous_word_end_ns(
+                    index
+                        .checked_sub(1)
+                        .map(|previous| words[previous].timestamp_ns),
+                    word.timestamp_ns,
+                    next.timestamp_ns,
+                )
+            })
+        };
+        if let Some(word_end) = word_end {
+            consider_boundary(word_end, target, max_distance, nearest);
         }
     }
 }
@@ -971,19 +1057,7 @@ impl IndexedAnnotationWriter {
             value_bytes: header.value_bytes,
             flags: header.flags as u8,
         };
-        let summary = WordSummaryRecord {
-            start_ns: entry.first_timestamp_ns,
-            end_ns: self
-                .builder
-                .words()
-                .iter()
-                .map(|word| word.timestamp_ns.saturating_add(word.duration_ns))
-                .max()
-                .unwrap_or(entry.last_timestamp_ns),
-            word_count: u64::from(entry.word_count),
-            first_block: entry.sequence,
-            block_count: 1,
-        };
+        let summaries = word_presence_summaries(entry.sequence, self.builder.words());
 
         // File is unbuffered: once write_all returns, offset reads can see the
         // complete bytes. Publish the directory entry only after that point.
@@ -994,7 +1068,9 @@ impl IndexedAnnotationWriter {
         {
             let mut state = self.shared.state.write().unwrap();
             state.directory.push(entry);
-            state.presence.push(summary);
+            for summary in summaries {
+                state.presence.push(summary);
+            }
             state.committed_word_count += u64::from(entry.word_count);
             state.committed_data_len = entry.data_offset + u64::from(entry.block_len);
             state
@@ -1035,6 +1111,81 @@ impl IndexedAnnotationWriter {
         self.shared.mark_failed(error.to_string());
         self.terminal = true;
     }
+}
+
+fn word_presence_summaries(block: u64, words: &[Word]) -> Vec<WordSummaryRecord> {
+    let mut summaries: Vec<WordSummaryRecord> = Vec::new();
+    for (index, word) in words.iter().enumerate() {
+        let end_ns = if word.duration_ns != 0 {
+            word.timestamp_ns.saturating_add(word.duration_ns)
+        } else if let Some(next) = words.get(index + 1) {
+            instantaneous_word_end_ns(
+                index
+                    .checked_sub(1)
+                    .map(|previous| words[previous].timestamp_ns),
+                word.timestamp_ns,
+                next.timestamp_ns,
+            )
+        } else {
+            let inferred_period = index
+                .checked_sub(1)
+                .map(|previous| {
+                    word.timestamp_ns
+                        .saturating_sub(words[previous].timestamp_ns)
+                })
+                .filter(|period| *period > 0)
+                .unwrap_or(0)
+                .min(MAX_ANNOTATION_NS);
+            word.timestamp_ns.saturating_add(inferred_period)
+        };
+
+        if let Some(current) = summaries.last_mut()
+            && word.timestamp_ns <= current.end_ns
+        {
+            current.end_ns = current.end_ns.max(end_ns);
+            current.word_count = current.word_count.saturating_add(1);
+            continue;
+        }
+        summaries.push(WordSummaryRecord {
+            start_ns: word.timestamp_ns,
+            end_ns,
+            word_count: 1,
+            first_block: block,
+            block_count: 1,
+        });
+    }
+    coalesce_presence_summaries(summaries, MAX_PRESENCE_RUNS_PER_BLOCK)
+}
+
+fn coalesce_presence_summaries(
+    summaries: Vec<WordSummaryRecord>,
+    max_runs: usize,
+) -> Vec<WordSummaryRecord> {
+    if summaries.len() <= max_runs || max_runs == 0 {
+        return summaries;
+    }
+    let mut gaps: Vec<_> = summaries
+        .windows(2)
+        .enumerate()
+        .map(|(index, pair)| (pair[1].start_ns.saturating_sub(pair[0].end_ns), index))
+        .collect();
+    gaps.sort_unstable_by(|left, right| right.cmp(left));
+    let mut keep_gap = vec![false; summaries.len() - 1];
+    for &(_, index) in gaps.iter().take(max_runs - 1) {
+        keep_gap[index] = true;
+    }
+
+    let mut coalesced: Vec<WordSummaryRecord> = Vec::with_capacity(max_runs);
+    for (index, summary) in summaries.into_iter().enumerate() {
+        if index == 0 || keep_gap[index - 1] {
+            coalesced.push(summary);
+        } else {
+            let current = coalesced.last_mut().expect("first run was inserted");
+            current.end_ns = current.end_ns.max(summary.end_ns);
+            current.word_count = current.word_count.saturating_add(summary.word_count);
+        }
+    }
+    coalesced
 }
 
 impl Drop for IndexedAnnotationWriter {
@@ -1436,6 +1587,33 @@ mod tests {
     }
 
     #[test]
+    fn instantaneous_words_do_not_bridge_a_long_decoding_gap() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = test_config(directory.path());
+        config.block.max_words = 1;
+        config.hot_tail_publish_words = 1;
+        let (mut writer, store) = IndexedAnnotationWriter::create(config).unwrap();
+        writer
+            .append_batch(&[Word::new(1, 0), Word::new(2, 100), Word::new(3, 10_000)])
+            .unwrap();
+
+        let burst = store.exact_window(0, 500, 10).unwrap();
+        assert_eq!(burst.annotations[0].end_ns, 100);
+        assert_eq!(burst.annotations[1].end_ns, 200);
+        let inside_gap = store.exact_window(1_000, 9_000, 10).unwrap();
+        assert!(inside_gap.annotations.is_empty());
+        let panned_left = store.exact_window(0, 9_000, 10).unwrap();
+        assert!(
+            panned_left
+                .annotations
+                .iter()
+                .all(|annotation| !(annotation.start_ns <= 5_000 && annotation.end_ns >= 5_000)),
+            "panning left must not change whether the middle of the gap is empty"
+        );
+        assert_eq!(store.nearest_boundary(205, 10).unwrap(), Some(200));
+    }
+
+    #[test]
     fn nearest_boundary_checks_starts_explicit_ends_and_ties() {
         let directory = tempfile::tempdir().unwrap();
         let mut config = test_config(directory.path());
@@ -1534,22 +1712,24 @@ mod tests {
     }
 
     #[test]
-    fn presence_query_uses_summaries_and_hot_tail_without_decoding_blocks() {
+    fn dense_presence_uses_summaries_and_hot_tail_without_decoding_blocks() {
         let directory = tempfile::tempdir().unwrap();
         let mut config = test_config(directory.path());
-        config.block.max_words = 4;
+        config.block.max_words = 16;
         config.hot_tail_publish_words = 1;
         let (mut writer, store) = IndexedAnnotationWriter::create(config).unwrap();
-        let words: Vec<_> = (0..10).map(|index| Word::new(index, index * 100)).collect();
+        let words: Vec<_> = (0..40).map(|index| Word::new(index, index * 100)).collect();
         writer.append_batch(&words).unwrap();
         assert_eq!(store.snapshot().metadata.committed_block_count, 2);
-        assert_eq!(store.snapshot().metadata.hot_tail_word_count, 2);
+        assert_eq!(store.snapshot().metadata.hot_tail_word_count, 8);
         assert!(!cache_contains(store.shared.store_id, 0));
         assert!(!cache_contains(store.shared.store_id, 1));
 
-        let buckets = store.presence_window(0, 999, 10).unwrap();
-        assert!(buckets.len() <= 10);
-        assert!(buckets.iter().any(|bucket| bucket.end_ns >= 900));
+        // One target bucket permits at most 32 refined words, so this
+        // forty-word window must take the summary fallback.
+        let buckets = store.presence_window(0, 3_999, 1).unwrap();
+        assert!(buckets.len() <= 1);
+        assert!(buckets.iter().any(|bucket| bucket.end_ns >= 3_900));
         assert!(!cache_contains(store.shared.store_id, 0));
         assert!(!cache_contains(store.shared.store_id, 1));
     }
@@ -1572,6 +1752,111 @@ mod tests {
         assert_eq!(buckets[1].end_ns, 10_009);
     }
 
+    #[test]
+    fn refined_presence_keeps_visible_gaps_inside_one_encoded_block() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = test_config(directory.path());
+        config.block.max_words = 1_000;
+        config.block.max_inter_word_gap_ns = u64::MAX;
+        let (mut writer, store) = IndexedAnnotationWriter::create(config).unwrap();
+        let mut words: Vec<_> = (0..150).map(|timestamp| Word::new(1, timestamp)).collect();
+        words.extend((10_000..10_150).map(|timestamp| Word::new(2, timestamp)));
+        writer.append_batch(&words).unwrap();
+        writer.finish().unwrap();
+
+        assert_eq!(store.snapshot().metadata.committed_block_count, 1);
+        assert!(!store.exact_window(0, 10_149, 200).unwrap().complete);
+        let buckets = store.presence_window(0, 10_149, 100).unwrap();
+        assert!(
+            buckets
+                .iter()
+                .all(|bucket| !(bucket.start_ns <= 5_000 && bucket.end_ns >= 5_000)),
+            "presence refinement must not smear one block across its internal gap"
+        );
+    }
+
+    #[test]
+    fn coarse_presence_keeps_visible_gaps_inside_one_encoded_block_without_decoding() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = test_config(directory.path());
+        config.block.max_words = 20_000;
+        config.block.max_inter_word_gap_ns = u64::MAX;
+        let (mut writer, store) = IndexedAnnotationWriter::create(config).unwrap();
+        let mut words: Vec<_> = (0..5_000).map(|index| Word::new(1, index * 10)).collect();
+        words.extend((0..5_000).map(|index| Word::new(2, 100_000 + index * 10)));
+        writer.append_batch(&words).unwrap();
+        writer.finish().unwrap();
+
+        assert_eq!(store.snapshot().metadata.committed_block_count, 1);
+        assert_eq!(store.shared.state.read().unwrap().presence.len(), 2);
+        assert!(!cache_contains(store.shared.store_id, 0));
+        let buckets = store.presence_window(0, 149_990, 100).unwrap();
+        assert!(
+            buckets
+                .iter()
+                .all(|bucket| !(bucket.start_ns <= 75_000 && bucket.end_ns >= 75_000)),
+            "coarse summaries must preserve an inactive interval inside one block"
+        );
+        assert!(!cache_contains(store.shared.store_id, 0));
+    }
+
+    #[test]
+    fn presence_run_limit_preserves_the_largest_inactive_gaps() {
+        let mut timestamp = 0u64;
+        let mut words = Vec::new();
+        for index in 0..1_000 {
+            words.push(Word::new(index, timestamp));
+            timestamp += if index == 499 { 100_000_000 } else { 2_000_000 };
+        }
+
+        let summaries = word_presence_summaries(0, &words);
+        assert_eq!(summaries.len(), MAX_PRESENCE_RUNS_PER_BLOCK);
+        assert_eq!(
+            summaries
+                .iter()
+                .map(|summary| summary.word_count)
+                .sum::<u64>(),
+            words.len() as u64
+        );
+        let gap_midpoint = words[499].timestamp_ns + 50_000_000;
+        assert!(
+            summaries.iter().all(|summary| {
+                !(summary.start_ns <= gap_midpoint && summary.end_ns >= gap_midpoint)
+            }),
+            "the largest inactive interval must survive bounded coalescing"
+        );
+    }
+
+    #[test]
+    fn persistent_presence_reopens_multiple_runs_for_one_encoded_block() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache_key = [0x7b; 32];
+        let mut config = persistent_config(directory.path(), cache_key);
+        config.block.max_words = 20_000;
+        config.block.max_inter_word_gap_ns = u64::MAX;
+        let persistent = config.persistence.clone().unwrap();
+        let (mut writer, live_store) = IndexedAnnotationWriter::create(config).unwrap();
+        let mut words: Vec<_> = (0..5_000).map(|index| Word::new(1, index * 10)).collect();
+        words.extend((0..5_000).map(|index| Word::new(2, 100_000 + index * 10)));
+        writer.append_batch(&words).unwrap();
+        writer.finish().unwrap();
+        drop((writer, live_store));
+
+        let reopened = IndexedAnnotationStore::open_persistent(&persistent)
+            .unwrap()
+            .expect("published cache");
+        assert_eq!(reopened.snapshot().metadata.committed_block_count, 1);
+        assert_eq!(reopened.shared.state.read().unwrap().presence.len(), 2);
+        let buckets = reopened.presence_window(0, 149_990, 100).unwrap();
+        assert!(
+            buckets
+                .iter()
+                .all(|bucket| !(bucket.start_ns <= 75_000 && bucket.end_ns >= 75_000)),
+            "reopened presence summaries must retain internal gaps"
+        );
+        assert!(!cache_contains(reopened.shared.store_id, 0));
+    }
+
     fn direct_annotations(words: &[Word], start_ns: u64, end_ns: u64) -> Vec<Annotation> {
         words
             .iter()
@@ -1580,9 +1865,15 @@ mod tests {
                 let annotation_end = if word.duration_ns != 0 {
                     word.timestamp_ns.saturating_add(word.duration_ns)
                 } else {
-                    words
-                        .get(index + 1)
-                        .map_or(word.timestamp_ns, |next| next.timestamp_ns)
+                    words.get(index + 1).map_or(word.timestamp_ns, |next| {
+                        instantaneous_word_end_ns(
+                            index
+                                .checked_sub(1)
+                                .map(|previous| words[previous].timestamp_ns),
+                            word.timestamp_ns,
+                            next.timestamp_ns,
+                        )
+                    })
                 };
                 (word.timestamp_ns <= end_ns && annotation_end >= start_ns).then_some(Annotation {
                     start_ns: word.timestamp_ns,
@@ -1596,11 +1887,23 @@ mod tests {
     fn direct_nearest_boundary(words: &[Word], target: u64, max_distance: u64) -> Option<u64> {
         words
             .iter()
-            .flat_map(|word| {
+            .enumerate()
+            .flat_map(|(index, word)| {
                 [
                     Some(word.timestamp_ns),
-                    (word.duration_ns != 0)
-                        .then_some(word.timestamp_ns.saturating_add(word.duration_ns)),
+                    if word.duration_ns != 0 {
+                        Some(word.timestamp_ns.saturating_add(word.duration_ns))
+                    } else {
+                        words.get(index + 1).map(|next| {
+                            instantaneous_word_end_ns(
+                                index
+                                    .checked_sub(1)
+                                    .map(|previous| words[previous].timestamp_ns),
+                                word.timestamp_ns,
+                                next.timestamp_ns,
+                            )
+                        })
+                    },
                 ]
             })
             .flatten()

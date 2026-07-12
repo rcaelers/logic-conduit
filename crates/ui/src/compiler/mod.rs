@@ -47,7 +47,7 @@ mod viewer;
 mod word_matcher;
 
 #[cfg(not(target_arch = "wasm32"))]
-const DERIVED_CACHE_ABI_VERSION: u32 = 1;
+const DERIVED_CACHE_ABI_VERSION: u32 = 2;
 
 // ── Stream kinds ─────────────────────────────────────────────────────────────
 

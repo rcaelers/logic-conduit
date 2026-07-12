@@ -9,10 +9,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const INDEX_MAGIC: &[u8; 8] = b"DWRIDX1\0";
 const MANIFEST_MAGIC: &[u8; 8] = b"DWRMAN1\0";
-const INDEX_VERSION: u32 = 1;
+const INDEX_VERSION: u32 = 2;
 const MANIFEST_VERSION: u32 = 1;
 const INDEX_HEADER_SIZE: usize = 96;
 const INDEX_RECORD_SIZE: usize = 64;
+const SUMMARY_RECORD_SIZE: usize = 40;
 const MANIFEST_SIZE: usize = 96;
 
 pub(super) const DATA_FILE_NAME: &str = "words.dwd";
@@ -170,11 +171,6 @@ pub(super) fn publish_index_and_manifest(
     config: &PersistentStoreConfig,
     publication: Publication<'_>,
 ) -> StoreResult<(PathBuf, PathBuf)> {
-    if publication.directory.len() != publication.presence.leaf_records().len() {
-        return Err(StoreError::Persistent(
-            "directory and presence leaf counts differ".to_string(),
-        ));
-    }
     let cache_dir = cache_directory(config);
     fs::create_dir_all(&cache_dir)?;
     remove_stale_temporaries(&cache_dir);
@@ -289,11 +285,22 @@ fn encode_index(
     first_timestamp_ns: Option<u64>,
     last_timestamp_ns: Option<u64>,
 ) -> StoreResult<Vec<u8>> {
-    let record_bytes = directory
+    let directory_bytes = directory
         .len()
         .checked_mul(INDEX_RECORD_SIZE)
         .ok_or_else(|| StoreError::Persistent("index size overflow".into()))?;
-    let mut bytes = vec![0u8; INDEX_HEADER_SIZE + record_bytes];
+    let summary_bytes = summaries
+        .len()
+        .checked_mul(SUMMARY_RECORD_SIZE)
+        .ok_or_else(|| StoreError::Persistent("summary index size overflow".into()))?;
+    let index_len = INDEX_HEADER_SIZE
+        .checked_add(directory_bytes)
+        .and_then(|length| length.checked_add(summary_bytes))
+        .ok_or_else(|| StoreError::Persistent("index size overflow".into()))?;
+    let summary_count = u32::try_from(summaries.len())
+        .map_err(|_| StoreError::Persistent("summary count exceeds u32".into()))?;
+    validate_summaries(directory, summaries, word_count)?;
+    let mut bytes = vec![0u8; index_len];
     bytes[..8].copy_from_slice(INDEX_MAGIC);
     put_u32(&mut bytes, 8, INDEX_VERSION);
     put_u32(&mut bytes, 12, FORMAT_VERSION);
@@ -303,7 +310,8 @@ fn encode_index(
     put_optional_u64(&mut bytes, 64, first_timestamp_ns);
     put_optional_u64(&mut bytes, 72, last_timestamp_ns);
     put_u64(&mut bytes, 80, data_len);
-    for (index, (entry, summary)) in directory.iter().zip(summaries).enumerate() {
+    put_u32(&mut bytes, 92, summary_count);
+    for (index, entry) in directory.iter().enumerate() {
         let offset = INDEX_HEADER_SIZE + index * INDEX_RECORD_SIZE;
         put_u64(&mut bytes, offset, entry.sequence);
         put_u64(&mut bytes, offset + 8, entry.first_timestamp_ns);
@@ -313,7 +321,15 @@ fn encode_index(
         put_u32(&mut bytes, offset + 36, entry.word_count);
         bytes[offset + 40] = entry.value_bytes;
         bytes[offset + 41] = entry.flags;
-        put_u64(&mut bytes, offset + 48, summary.end_ns);
+    }
+    let summaries_offset = INDEX_HEADER_SIZE + directory_bytes;
+    for (index, summary) in summaries.iter().enumerate() {
+        let offset = summaries_offset + index * SUMMARY_RECORD_SIZE;
+        put_u64(&mut bytes, offset, summary.start_ns);
+        put_u64(&mut bytes, offset + 8, summary.end_ns);
+        put_u64(&mut bytes, offset + 16, summary.word_count);
+        put_u64(&mut bytes, offset + 24, summary.first_block);
+        put_u32(&mut bytes, offset + 32, summary.block_count);
     }
     let checksum = super::crc32c::block_checksum(&bytes, 88);
     put_u32(&mut bytes, 88, checksum);
@@ -342,10 +358,16 @@ fn decode_index(bytes: &[u8], cache_key: [u8; 32]) -> StoreResult<PersistentInde
     }
     let block_count = usize::try_from(get_u64(bytes, 48)?)
         .map_err(|_| StoreError::Persistent("block count exceeds usize".into()))?;
+    let summary_count = get_u32(bytes, 92)? as usize;
+    let directory_bytes = block_count
+        .checked_mul(INDEX_RECORD_SIZE)
+        .ok_or_else(|| StoreError::Persistent("persistent index record size overflow".into()))?;
+    let summary_bytes = summary_count
+        .checked_mul(SUMMARY_RECORD_SIZE)
+        .ok_or_else(|| StoreError::Persistent("persistent summary record size overflow".into()))?;
     let expected_len = INDEX_HEADER_SIZE
-        .checked_add(block_count.checked_mul(INDEX_RECORD_SIZE).ok_or_else(|| {
-            StoreError::Persistent("persistent index record size overflow".into())
-        })?)
+        .checked_add(directory_bytes)
+        .and_then(|length| length.checked_add(summary_bytes))
         .ok_or_else(|| StoreError::Persistent("persistent index size overflow".into()))?;
     if bytes.len() != expected_len {
         return Err(StoreError::Persistent(
@@ -353,7 +375,6 @@ fn decode_index(bytes: &[u8], cache_key: [u8; 32]) -> StoreResult<PersistentInde
         ));
     }
     let mut directory = Vec::with_capacity(block_count);
-    let mut presence = WordPresenceIndex::new();
     for index in 0..block_count {
         let offset = INDEX_HEADER_SIZE + index * INDEX_RECORD_SIZE;
         let entry = BlockDirectoryEntry {
@@ -366,23 +387,74 @@ fn decode_index(bytes: &[u8], cache_key: [u8; 32]) -> StoreResult<PersistentInde
             value_bytes: bytes[offset + 40],
             flags: bytes[offset + 41],
         };
-        presence.push(WordSummaryRecord {
-            start_ns: entry.first_timestamp_ns,
-            end_ns: get_u64(bytes, offset + 48)?,
-            word_count: u64::from(entry.word_count),
-            first_block: entry.sequence,
-            block_count: 1,
-        });
         directory.push(entry);
+    }
+    let mut summaries = Vec::with_capacity(summary_count);
+    let summaries_offset = INDEX_HEADER_SIZE + directory_bytes;
+    for index in 0..summary_count {
+        let offset = summaries_offset + index * SUMMARY_RECORD_SIZE;
+        summaries.push(WordSummaryRecord {
+            start_ns: get_u64(bytes, offset)?,
+            end_ns: get_u64(bytes, offset + 8)?,
+            word_count: get_u64(bytes, offset + 16)?,
+            first_block: get_u64(bytes, offset + 24)?,
+            block_count: get_u32(bytes, offset + 32)?,
+        });
+    }
+    let committed_word_count = get_u64(bytes, 56)?;
+    validate_summaries(&directory, &summaries, committed_word_count)?;
+    let mut presence = WordPresenceIndex::new();
+    for summary in summaries {
+        presence.push(summary);
     }
     Ok(PersistentIndex {
         directory,
         presence,
-        committed_word_count: get_u64(bytes, 56)?,
+        committed_word_count,
         committed_data_len: get_u64(bytes, 80)?,
         first_timestamp_ns: get_optional_u64(bytes, 64)?,
         last_timestamp_ns: get_optional_u64(bytes, 72)?,
     })
+}
+
+fn validate_summaries(
+    directory: &[BlockDirectoryEntry],
+    summaries: &[WordSummaryRecord],
+    expected_word_count: u64,
+) -> StoreResult<()> {
+    let mut words_per_block = vec![0u64; directory.len()];
+    let mut previous_start = None;
+    for summary in summaries {
+        let block = usize::try_from(summary.first_block)
+            .map_err(|_| StoreError::Persistent("summary block exceeds usize".into()))?;
+        if summary.word_count == 0
+            || summary.start_ns > summary.end_ns
+            || summary.block_count != 1
+            || block >= directory.len()
+            || previous_start.is_some_and(|start| summary.start_ns < start)
+        {
+            return Err(StoreError::Persistent(
+                "invalid persistent presence summary".into(),
+            ));
+        }
+        words_per_block[block] = words_per_block[block].saturating_add(summary.word_count);
+        previous_start = Some(summary.start_ns);
+    }
+    if words_per_block
+        .iter()
+        .zip(directory)
+        .any(|(&count, entry)| count != u64::from(entry.word_count))
+        || words_per_block
+            .iter()
+            .copied()
+            .fold(0u64, u64::saturating_add)
+            != expected_word_count
+    {
+        return Err(StoreError::Persistent(
+            "presence summary word count mismatch".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_directory(directory: &[BlockDirectoryEntry], data_len: u64) -> StoreResult<()> {

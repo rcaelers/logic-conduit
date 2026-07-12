@@ -399,7 +399,8 @@ pub fn decode_word_block(bytes: &[u8]) -> CodecResult<DecodedWordBlock> {
 
 /// Decodes only the records needed around a time window, beginning at the
 /// nearest restart entry rather than at the start of the block. The result
-/// includes one predecessor and one successor when available.
+/// includes two predecessors and one successor when available. Two prior
+/// timestamps are required to infer the cadence before a long word gap.
 pub fn decode_word_block_range(
     bytes: &[u8],
     start_ns: u64,
@@ -424,6 +425,7 @@ pub fn decode_word_block_range(
     let restart = parsed.restarts[restart_index];
     let mut cursor = BLOCK_HEADER_SIZE + restart.payload_offset as usize;
     let mut timestamp = restart.timestamp_ns;
+    let mut previous_predecessor = None;
     let mut predecessor = None;
     let mut selected: Vec<(usize, Word)> = Vec::new();
     let mut decoded_records = 0usize;
@@ -444,13 +446,19 @@ pub fn decode_word_block_range(
         decoded_records += 1;
         let word = Word::new(value, timestamp);
         if timestamp < start_ns {
+            previous_predecessor = predecessor;
             predecessor = Some((record_index, word));
             continue;
         }
-        if selected.is_empty()
-            && let Some(previous) = predecessor.take()
-        {
-            selected.push(previous);
+        if selected.is_empty() {
+            if let Some(previous) = previous_predecessor.take() {
+                selected.push(previous);
+            }
+            if let Some(previous) = predecessor.take()
+                && selected.len() < max_context_words
+            {
+                selected.push(previous);
+            }
         }
         if selected.len() >= max_context_words {
             complete = false;
@@ -461,10 +469,15 @@ pub fn decode_word_block_range(
             break;
         }
     }
-    if selected.is_empty()
-        && let Some(previous) = predecessor
-    {
-        selected.push(previous);
+    if selected.is_empty() {
+        if let Some(previous) = previous_predecessor {
+            selected.push(previous);
+        }
+        if let Some(previous) = predecessor
+            && selected.len() < max_context_words
+        {
+            selected.push(previous);
+        }
     }
 
     let first_record_index = selected.first().map_or(0, |(index, _)| *index);
@@ -774,7 +787,7 @@ mod tests {
 
         let range = decode_word_block_range(&bytes, 15_000, 15_100, 32).unwrap();
         assert!(range.complete);
-        assert_eq!(range.words, words[1_499..=1_511]);
+        assert_eq!(range.words, words[1_498..=1_511]);
         assert!(
             range.decoded_records <= DEFAULT_RESTART_INTERVAL + 12,
             "decoded {} records",
@@ -782,7 +795,7 @@ mod tests {
         );
 
         let boundary = decode_word_block_range(&bytes, 15_360, 15_370, 8).unwrap();
-        assert_eq!(boundary.words, words[1_535..=1_538]);
+        assert_eq!(boundary.words, words[1_534..=1_538]);
         assert!(boundary.decoded_records <= DEFAULT_RESTART_INTERVAL + 3);
     }
 

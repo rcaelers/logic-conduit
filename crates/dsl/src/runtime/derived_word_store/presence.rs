@@ -11,7 +11,7 @@ pub struct WordSummaryRecord {
     pub block_count: u32,
 }
 
-/// A 64-way append-only mipmap whose leaves summarize committed word blocks.
+/// A 64-way append-only mipmap whose leaves summarize occupied word runs.
 #[derive(Debug, Clone)]
 pub struct WordPresenceIndex {
     levels: Vec<Vec<WordSummaryRecord>>,
@@ -58,7 +58,7 @@ impl WordPresenceIndex {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn intersecting_leaf_indices(&self, start_ns: u64, end_ns: u64) -> Vec<usize> {
+    pub(super) fn intersecting_block_indices(&self, start_ns: u64, end_ns: u64) -> Vec<usize> {
         if start_ns > end_ns {
             return Vec::new();
         }
@@ -67,9 +67,20 @@ impl WordPresenceIndex {
             .prefix_max_end_ns
             .partition_point(|&prefix_end_ns| prefix_end_ns < start_ns);
         let end = leaves.partition_point(|record| record.start_ns <= end_ns);
-        (first.min(end)..end)
+        let mut blocks: Vec<_> = (first.min(end)..end)
             .filter(|&index| leaves[index].end_ns >= start_ns)
-            .collect()
+            .flat_map(|index| {
+                let record = leaves[index];
+                record.first_block
+                    ..record
+                        .first_block
+                        .saturating_add(u64::from(record.block_count))
+            })
+            .filter_map(|block| usize::try_from(block).ok())
+            .collect();
+        blocks.sort_unstable();
+        blocks.dedup();
+        blocks
     }
 
     pub fn push(&mut self, record: WordSummaryRecord) {
@@ -306,7 +317,7 @@ mod tests {
         });
         index.push(point(1, 100, 1));
         assert_eq!(index.extent_end_ns(), Some(10_000));
-        assert_eq!(index.intersecting_leaf_indices(9_000, 9_500), vec![0]);
+        assert_eq!(index.intersecting_block_indices(9_000, 9_500), vec![0]);
     }
 
     #[test]
