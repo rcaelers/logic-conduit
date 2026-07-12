@@ -112,8 +112,8 @@ impl LogicAnalyzerViewer {
         summary: &ChunkedMipmap<Annotation, AnnotationFold>,
     ) {
         let band_color = Color32::from_rgb(215, 140, 60);
-        let box_top = y_top + row_height * 0.18;
-        let box_bottom = y_top + row_height * 0.82;
+        let box_top = y_top + row_height * 0.12;
+        let box_bottom = y_top + row_height * 0.88;
         let (start_ns, end_ns) = self.visible_window_ns();
 
         // Bounded lanes retain exact values only for their newest window.
@@ -156,6 +156,30 @@ impl LogicAnalyzerViewer {
             box_bottom,
             annotations,
             annotations.last().map(|annotation| annotation.start_ns),
+            false,
+        );
+    }
+
+    /// UART's bit-detail track uses binary labels while ordinary decoded
+    /// values retain the viewer's hexadecimal convention.
+    pub(crate) fn draw_derived_bit_annotations(
+        &self,
+        painter: &Painter,
+        wave_rect: Rect,
+        y_top: f32,
+        row_height: f32,
+        annotations: &[Annotation],
+        summary: &ChunkedMipmap<Annotation, AnnotationFold>,
+    ) {
+        let _ = summary;
+        self.draw_annotation_slice(
+            painter,
+            wave_rect,
+            y_top + row_height * 0.12,
+            y_top + row_height * 0.88,
+            annotations,
+            annotations.last().map(|annotation| annotation.start_ns),
+            true,
         );
     }
 
@@ -169,8 +193,8 @@ impl LogicAnalyzerViewer {
         buckets: &[WordPresenceBucket],
     ) {
         let color = Color32::from_rgb(215, 140, 60);
-        let top = y_top + row_height * 0.18;
-        let bottom = y_top + row_height * 0.82;
+        let top = y_top + row_height * 0.12;
+        let bottom = y_top + row_height * 0.88;
         let (visible_start, visible_end) = self.visible_window_ns();
         for bucket in buckets {
             let start_ns = bucket.start_ns.max(visible_start);
@@ -204,10 +228,11 @@ impl LogicAnalyzerViewer {
         self.draw_annotation_slice(
             painter,
             wave_rect,
-            y_top + row_height * 0.18,
-            y_top + row_height * 0.82,
+            y_top + row_height * 0.12,
+            y_top + row_height * 0.88,
             annotations,
             last_timestamp_ns,
+            false,
         );
     }
 
@@ -220,6 +245,7 @@ impl LogicAnalyzerViewer {
         box_bottom: f32,
         annotations: &[Annotation],
         lane_last_timestamp_ns: Option<u64>,
+        bit_labels: bool,
     ) {
         let band_color = Color32::from_rgb(215, 140, 60);
         let (start_ns, end_ns) = self.visible_window_ns();
@@ -256,6 +282,7 @@ impl LogicAnalyzerViewer {
                         annotation,
                         is_last_ever,
                         previous_duration_ns,
+                        bit_labels,
                     );
                     continue;
                 }
@@ -291,6 +318,7 @@ impl LogicAnalyzerViewer {
                 annotation,
                 is_last_ever,
                 previous_duration_ns,
+                bit_labels,
             );
         }
     }
@@ -307,17 +335,56 @@ impl LogicAnalyzerViewer {
         annotation: &Annotation,
         is_last_ever: bool,
         previous_duration_ns: Option<u64>,
+        bit_labels: bool,
     ) {
-        let box_color = Color32::from_rgb(88, 58, 28);
-        let border = Stroke::new(1.0, Color32::from_rgb(215, 140, 60));
+        let is_error = annotation.value == u64::MAX - 2;
+        let box_color = if is_error {
+            Color32::from_rgb(92, 38, 38)
+        } else {
+            Color32::from_rgb(88, 58, 28)
+        };
+        let border = Stroke::new(
+            1.0,
+            if is_error {
+                Color32::from_rgb(235, 85, 85)
+            } else {
+                Color32::from_rgb(215, 140, 60)
+            },
+        );
         let effective_end = annotation_box_end(annotation, is_last_ever, previous_duration_ns);
         let x0 = self.ns_to_x(wave_rect, annotation.start_ns);
         let natural_x1 = self.ns_to_x(wave_rect, effective_end).max(x0 + 2.0);
-        let label = format!("{:02X}", annotation.value);
+        let label = if bit_labels && annotation.value <= 1 {
+            annotation.value.to_string()
+        } else {
+            match annotation.value {
+                u64::MAX => "S".to_owned(),
+                value if value == u64::MAX - 1 => "T".to_owned(),
+                value if value == u64::MAX - 2 => "Error".to_owned(),
+                value => format!("{:02X}", value),
+            }
+        };
         let label_width = annotation_label_width(&label);
         let rect = Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(natural_x1, box_bottom));
-        painter.rect_filled(rect, 2.0, box_color);
-        painter.rect_stroke(rect, 2.0, border, egui::StrokeKind::Inside);
+        // Keep the angled ends shallow and consistent. A large bevel turns
+        // short annotations into pointy hexagons instead of PulseView-style
+        // data boxes.
+        let bevel = (rect.height() * 0.20)
+            .min(rect.width() * 0.18)
+            .min(10.0)
+            .max(1.0);
+        painter.add(Shape::convex_polygon(
+            vec![
+                Pos2::new(rect.left() + bevel, rect.top()),
+                Pos2::new(rect.right() - bevel, rect.top()),
+                Pos2::new(rect.right(), rect.center().y),
+                Pos2::new(rect.right() - bevel, rect.bottom()),
+                Pos2::new(rect.left() + bevel, rect.bottom()),
+                Pos2::new(rect.left(), rect.center().y),
+            ],
+            box_color,
+            border,
+        ));
         if let Some(label_position) = annotation_label_position(rect, wave_rect, label_width) {
             painter.text(
                 label_position,

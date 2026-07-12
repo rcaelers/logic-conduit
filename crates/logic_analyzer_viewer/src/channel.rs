@@ -38,6 +38,29 @@ impl LogicChannel {
 }
 
 impl LogicAnalyzerViewer {
+    pub(crate) fn uart_data_lane_name(bits: &str) -> Option<String> {
+        bits.strip_suffix(".Bits")
+            .map(|base| format!("{base}.Data"))
+            .or_else(|| {
+                bits.replace(".Bits (", ".Data (")
+                    .ne(bits)
+                    .then(|| bits.replace(".Bits (", ".Data ("))
+            })
+    }
+
+    pub(crate) fn display_row_height(&self, key: &RowKey, default_height: f32) -> f32 {
+        if let RowKey::Derived(name) = key
+            && let Some(data_name) = Self::uart_data_lane_name(name)
+            && self
+                .derived
+                .as_ref()
+                .is_some_and(|store| store.read().iter().any(|lane| lane.name == data_name))
+        {
+            return default_height * 3.0;
+        }
+        default_height
+    }
+
     /// What to show for one row's label, whatever it is — the only place
     /// that knows a channel's badge is its index (colored by
     /// `color_profile`) and a derived lane's badge is a kind glyph (colored
@@ -72,7 +95,14 @@ impl LogicAnalyzerViewer {
                     .derived_names
                     .get(lane_name)
                     .cloned()
-                    .unwrap_or_else(|| lane.name.clone());
+                    .unwrap_or_else(|| {
+                        // UART detail and frame annotations share one
+                        // protocol row. The Bits lane owns its label.
+                        let data = Self::uart_data_lane_name(&lane.name);
+                        data.filter(|data| lanes.iter().any(|other| other.name == *data))
+                            .map(|data| data.replace(".Data", ""))
+                            .unwrap_or_else(|| lane.name.clone())
+                    });
                 Some(RowLabel {
                     name,
                     badge_text: badge_glyph.to_string(),
@@ -335,7 +365,17 @@ impl LogicAnalyzerViewer {
             }
         }
         if let Some(store) = &self.derived {
-            for lane in store.read().iter() {
+            let lanes = store.read();
+            for lane in lanes.iter() {
+                // A UART Bits/Data pair is one protocol row. Bits is the
+                // owner so it naturally stays above the data track.
+                if lane.name.contains(".Data")
+                    && lanes.iter().any(|other| {
+                        Self::uart_data_lane_name(&other.name).as_deref() == Some(&lane.name)
+                    })
+                {
+                    continue;
+                }
                 if seen_derived.insert(lane.name.clone()) {
                     order.push(RowKey::Derived(lane.name.clone()));
                 }

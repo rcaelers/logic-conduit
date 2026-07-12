@@ -8,6 +8,7 @@ use dsl::runtime::derived_word_store::LiveStoreConfig;
 use dsl::{Sample, Trigger, ViewerLaneKind, ViewerSink, Word};
 use node_graph::Socket;
 use serde_json::Value;
+use std::collections::HashMap;
 
 pub(super) struct ViewerBuilder;
 
@@ -53,6 +54,11 @@ impl RuntimeBuilder for ViewerBuilder {
         let mut sink = ViewerSink::new(ctx.derived_lanes.clone())
             .with_name(name)
             .with_retention(ctx.viewer_retention);
+        // `DerivedLanes` uses a lane name as its stable identity. Nodes of
+        // the same type share the default title (e.g. two UART Decoders),
+        // so make only colliding labels distinct instead of silently merging
+        // their output into one row.
+        let mut lane_name_counts: HashMap<String, usize> = HashMap::new();
         for (member, input) in resolved.members(0) {
             #[cfg(target_arch = "wasm32")]
             let _ = member;
@@ -61,9 +67,23 @@ impl RuntimeBuilder for ViewerBuilder {
             } else {
                 format!("{prefix}: {}", input.source)
             };
+            let count = lane_name_counts.entry(lane_name.clone()).or_default();
+            *count += 1;
+            let lane_name = if *count == 1 {
+                lane_name
+            } else {
+                format!("{lane_name} ({count})")
+            };
             sink = if input.kind == PortKind::of::<Sample>() {
                 sink.with_lane(ViewerLaneKind::Signal, lane_name)
             } else if input.kind == PortKind::of::<Word>() {
+                // UART's Bits/Data pair is drawn as two tracks in one
+                // protocol row. Keep those compact annotations in memory so
+                // they can be rendered together immediately.
+                let uart_track = input.source.ends_with(".Bits") || input.source.ends_with(".Data");
+                if uart_track {
+                    sink = sink.with_indexed_words(false);
+                }
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(Some(persistent)) = ctx.viewer_word_caches.get(member) {
                     sink = sink.with_word_store_config(LiveStoreConfig {
@@ -72,7 +92,11 @@ impl RuntimeBuilder for ViewerBuilder {
                         ..LiveStoreConfig::default()
                     });
                 }
-                sink.with_lane(ViewerLaneKind::Words, lane_name)
+                sink = sink.with_lane(ViewerLaneKind::Words, lane_name);
+                if uart_track {
+                    sink = sink.with_indexed_words(true);
+                }
+                sink
             } else if input.kind == PortKind::of::<Trigger>() {
                 sink.with_lane(ViewerLaneKind::Trigger, lane_name)
             } else {

@@ -495,7 +495,10 @@ fn with_auto_view_sink(graph: &GraphState) -> GraphState {
                 })
         })
         .collect();
-    watched.sort_by_key(|(socket, _)| (socket.node.0, socket.index));
+    // Protocol decoders can publish fine-grained annotations (UART Bits)
+    // alongside a frame-level annotation (UART Data). Keep the detail lane
+    // directly above its data lane, independent of its runtime port index.
+    watched.sort_by_key(|(socket, label)| (socket.node.0, !label.ends_with(".Bits"), socket.index));
 
     let mut graph = graph.clone();
     if watched.is_empty() {

@@ -55,7 +55,8 @@ impl UartStopBits {
 ///
 /// Input: `rx` — `Sample` edge stream of the transceive line
 /// Outputs: `words` — one `Word` per frame (timestamped at the
-///          start edge); `error` — `Trigger` per parity/framing error
+///          start edge); `error` — `Trigger` per parity/framing error;
+///          `bits` — one timed `Word` for every decoded data bit.
 ///          (the word is still emitted, annotation-style)
 pub struct UartDecoder {
     name: String,
@@ -173,7 +174,7 @@ impl ProcessNode for UartDecoder {
     }
 
     fn num_outputs(&self) -> usize {
-        2
+        4
     }
 
     fn input_schema(&self) -> Vec<PortSchema> {
@@ -184,6 +185,8 @@ impl ProcessNode for UartDecoder {
         vec![
             PortSchema::new::<Word>("words", 0, PortDirection::Output),
             PortSchema::new::<Trigger>("error", 1, PortDirection::Output),
+            PortSchema::new::<Word>("bits", 2, PortDirection::Output),
+            PortSchema::new::<Word>("frame", 3, PortDirection::Output),
         ]
     }
 
@@ -202,12 +205,11 @@ impl ProcessNode for UartDecoder {
             .first()
             .and_then(|port| port.get::<Sample>(&mut self.input_buffer))
             .ok_or_else(|| WorkError::NodeError("Missing rx input".to_string()))?;
-        let words_out = outputs
-            .first()
-            .and_then(|port| port.get::<Word>())
-            .ok_or_else(|| WorkError::NodeError("Missing words output".to_string()))?;
+        let words_out = outputs.first().and_then(|port| port.get::<Word>());
         // Optional; None when unconnected.
         let error_out = outputs.get(1).and_then(|port| port.get::<Trigger>());
+        let bits_out = outputs.get(2).and_then(|port| port.get::<Word>());
+        let frame_out = outputs.get(3).and_then(|port| port.get::<Word>());
 
         // ── 1. Hunt for a start edge past the previous frame ────────────
         let t0 = loop {
@@ -231,6 +233,7 @@ impl ProcessNode for UartDecoder {
 
         // ── 2. Sample data bits at their centers ────────────────────────
         let mut value: u64 = 0;
+        let mut bits = Vec::with_capacity(data_bits);
         for i in 0..data_bits {
             let t = sample_time(1.0 + i as f64);
             let Some(raw) = Self::value_at(&mut rx, t)? else {
@@ -245,6 +248,7 @@ impl ProcessNode for UartDecoder {
                 };
                 value |= 1 << bit_position;
             }
+            bits.push(logical(raw));
         }
 
         // ── 3. Parity ────────────────────────────────────────────────────
@@ -307,12 +311,40 @@ impl ProcessNode for UartDecoder {
         if frame_error && let Some(errors) = &error_out {
             errors.send(Trigger::new(t0))?;
         }
+        if let Some(bits_out) = bits_out {
+            let bit_duration = bit_ns.round() as u64;
+            for (index, bit) in bits.into_iter().enumerate() {
+                bits_out.send(Word::spanning(
+                    u64::from(bit),
+                    t0 + ((1.0 + index as f64) * bit_ns).round() as u64,
+                    bit_duration,
+                ))?;
+            }
+        }
         // The word spans its whole frame: start edge through the stop bits.
-        words_out.send(Word::spanning(
-            value,
-            t0,
-            (frame_len_bits * bit_ns).round() as u64,
-        ))?;
+        if let Some(words_out) = words_out {
+            words_out.send(Word::spanning(
+                value,
+                t0,
+                (frame_len_bits * bit_ns).round() as u64,
+            ))?;
+        }
+        if let Some(frame_out) = frame_out {
+            let bit_duration = bit_ns.round() as u64;
+            frame_out.send(Word::spanning(u64::MAX, t0, bit_duration))?;
+            frame_out.send(Word::spanning(
+                if frame_error { u64::MAX - 2 } else { value },
+                t0 + bit_duration,
+                bit_duration * data_bits as u64,
+            ))?;
+            if stop_bits.bits() > 0.0 {
+                frame_out.send(Word::spanning(
+                    u64::MAX - 1,
+                    t0 + bit_duration * (data_bits as u64 + 1),
+                    (stop_bits.bits() * bit_ns).round() as u64,
+                ))?;
+            }
+        }
         self.finished = rx.is_shutdown();
         Ok(1)
     }

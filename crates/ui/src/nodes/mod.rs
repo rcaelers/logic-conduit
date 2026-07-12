@@ -63,7 +63,7 @@ pub use sr_flip_flop::{SrFlipFlop, SrFlipFlopState};
 #[cfg(not(target_arch = "wasm32"))]
 pub use text_file_writer::TextFileWriter;
 pub use tgck_recorder::TgckRecorder;
-pub use uart_decoder::{UartDecoder, UartDecoderState};
+pub use uart_decoder::{UartDecoder, UartDecoderState, selected_baud_rate};
 pub use uart_demo_source::{UartDemoSource, UartDemoSourceState};
 pub use viewer::{Viewer, ViewerState};
 pub use word_matcher::{WordMatcher, WordMatcherState, default_match_op, default_trigger_at};
@@ -427,6 +427,7 @@ pub fn populate_uart_demo(widget: &mut node_graph::NodeGraphWidget) {
     widget.set_node_state(
         uart,
         serde_json::to_value(UartDecoderState {
+            baud_preset: uart_decoder::default_baud_preset(),
             baud_rate: IntValue::new(115_200, 300, 100_000_000),
             data_bits: IntValue::new(8, 5, 9),
             parity: EnumValue::new(0, &["None", "Odd", "Even", "Mark", "Space"]),

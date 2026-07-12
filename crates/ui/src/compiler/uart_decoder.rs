@@ -16,7 +16,7 @@ impl RuntimeBuilder for UartDecoderBuilder {
     }
     fn offered_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
         match socket.def_index {
-            0 => vec![PortKind::of::<Word>()],
+            0 | 2 | 3 => vec![PortKind::of::<Word>()],
             1 => vec![PortKind::of::<Trigger>()],
             _ => vec![],
         }
@@ -28,6 +28,8 @@ impl RuntimeBuilder for UartDecoderBuilder {
         match socket.def_index {
             0 => Some("words".into()),
             1 => Some("error".into()),
+            2 => Some("bits".into()),
+            3 => Some("frame".into()),
             _ => None,
         }
     }
@@ -62,7 +64,7 @@ impl RuntimeBuilder for UartDecoderBuilder {
             BitOrder::LsbFirst
         };
         let decoder = dsl::nodes::decoders::UartDecoder::new(
-            state.baud_rate.value.max(1) as u64,
+            nodes::selected_baud_rate(&state).max(1) as u64,
             state.data_bits.value.clamp(5, 9) as usize,
         )
         .with_parity(parity, state.check_parity.value)

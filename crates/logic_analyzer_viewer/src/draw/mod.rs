@@ -148,14 +148,15 @@ impl LogicAnalyzerViewer {
     ) {
         let clip = painter.with_clip_rect(wave_rect);
 
-        for (row, key) in self.row_order.iter().enumerate() {
-            let y_top = labels_rect.top() + row as f32 * row_height;
+        let mut y_top = labels_rect.top();
+        for key in &self.row_order {
+            let display_height = self.display_row_height(key, row_height);
             if y_top > labels_rect.bottom() {
                 break;
             }
             let row_rect = Rect::from_min_max(
                 Pos2::new(labels_rect.left(), y_top),
-                Pos2::new(wave_rect.right(), y_top + row_height),
+                Pos2::new(wave_rect.right(), y_top + display_height),
             );
             painter.line_segment(
                 [
@@ -166,6 +167,7 @@ impl LogicAnalyzerViewer {
             );
 
             let Some(label) = self.row_label(key) else {
+                y_top += display_height;
                 continue;
             };
             painter.text(
@@ -204,7 +206,14 @@ impl LogicAnalyzerViewer {
                         ],
                         Stroke::new(1.0, grid),
                     );
-                    self.draw_channel_waveform(&clip, wave_rect, y_top, row_height, channel, trace);
+                    self.draw_channel_waveform(
+                        &clip,
+                        wave_rect,
+                        y_top,
+                        display_height,
+                        channel,
+                        trace,
+                    );
                 }
                 RowKey::Derived(name) => {
                     let Some(store) = &self.derived else {
@@ -214,6 +223,43 @@ impl LogicAnalyzerViewer {
                     let Some(lane) = lanes.iter().find(|lane| &lane.name == name) else {
                         continue;
                     };
+                    if let Some(data_name) = Self::uart_data_lane_name(name)
+                        && let Some(data_lane) = lanes.iter().find(|other| other.name == data_name)
+                        && let (
+                            DerivedLaneData::Annotations(bits),
+                            LaneSummary::Annotations(bits_summary),
+                            DerivedLaneData::Annotations(data),
+                            LaneSummary::Annotations(data_summary),
+                        ) = (
+                            &lane.data,
+                            &lane.summary,
+                            &data_lane.data,
+                            &data_lane.summary,
+                        )
+                    {
+                        // UART protocol detail and frame annotations occupy
+                        // equal-height tracks under one lane label.
+                        let bit_height = display_height * 0.5;
+                        let data_height = bit_height;
+                        self.draw_derived_bit_annotations(
+                            &clip,
+                            wave_rect,
+                            y_top,
+                            bit_height,
+                            bits,
+                            bits_summary,
+                        );
+                        self.draw_derived_annotations(
+                            &clip,
+                            wave_rect,
+                            y_top + bit_height,
+                            data_height,
+                            data,
+                            data_summary,
+                        );
+                        y_top += display_height;
+                        continue;
+                    }
                     match &lane.data {
                         DerivedLaneData::Digital(samples) => {
                             let center_y = row_rect.center().y;
@@ -224,7 +270,13 @@ impl LogicAnalyzerViewer {
                                 ],
                                 Stroke::new(1.0, grid),
                             );
-                            self.draw_derived_digital(&clip, wave_rect, y_top, row_height, samples);
+                            self.draw_derived_digital(
+                                &clip,
+                                wave_rect,
+                                y_top,
+                                display_height,
+                                samples,
+                            );
                         }
                         DerivedLaneData::Annotations(annotations) => {
                             let LaneSummary::Annotations(summary) = &lane.summary else {
@@ -234,7 +286,7 @@ impl LogicAnalyzerViewer {
                                 &clip,
                                 wave_rect,
                                 y_top,
-                                row_height,
+                                display_height,
                                 annotations,
                                 summary,
                             );
@@ -252,23 +304,34 @@ impl LogicAnalyzerViewer {
                                     &clip,
                                     wave_rect,
                                     y_top,
-                                    row_height,
+                                    display_height,
                                     annotations,
                                     *last_timestamp_ns,
                                 ),
                                 IndexedAnnotationSamples::Presence(buckets) => self
                                     .draw_indexed_annotation_presence(
-                                        &clip, wave_rect, y_top, row_height, buckets,
+                                        &clip,
+                                        wave_rect,
+                                        y_top,
+                                        display_height,
+                                        buckets,
                                     ),
                                 IndexedAnnotationSamples::Error => {}
                             }
                         }
                         DerivedLaneData::Markers(markers) => {
-                            self.draw_derived_markers(&clip, wave_rect, y_top, row_height, markers);
+                            self.draw_derived_markers(
+                                &clip,
+                                wave_rect,
+                                y_top,
+                                display_height,
+                                markers,
+                            );
                         }
                     }
                 }
             }
+            y_top += display_height;
         }
     }
 

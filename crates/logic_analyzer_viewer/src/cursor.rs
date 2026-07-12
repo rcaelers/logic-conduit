@@ -166,14 +166,37 @@ impl LogicAnalyzerViewer {
     /// ruler or an empty row the time stays free.
     pub(crate) fn snap_cursor_time(&mut self, wave_rect: Rect, pointer: Pos2, time_us: f64) -> f64 {
         const SNAP_DISTANCE_PX: f32 = 8.0;
-        let row_height = 30.0;
         if pointer.y < wave_rect.top() || pointer.y > wave_rect.bottom() {
             return time_us;
         }
-        let channel_row = ((pointer.y - wave_rect.top()) / row_height).floor() as usize;
+        let mut channel_row = 0;
+        let mut row_top = wave_rect.top();
+        while let Some(key) = self.row_order.get(channel_row) {
+            let height = self.display_row_height(key, 30.0);
+            if pointer.y < row_top + height {
+                break;
+            }
+            row_top += height;
+            channel_row += 1;
+        }
         let annotation_source = match self.row_order.get(channel_row) {
             Some(RowKey::Derived(name)) => self.derived.as_ref().and_then(|store| {
                 let lanes = store.read();
+                if let Some(data_name) = Self::uart_data_lane_name(name) {
+                    let nearest = lanes
+                        .iter()
+                        .filter(|lane| lane.name == *name || lane.name == data_name)
+                        .filter_map(|lane| match &lane.data {
+                            DerivedLaneData::Annotations(annotations) => {
+                                nearest_annotation_boundary_time(annotations, time_us)
+                            }
+                            _ => None,
+                        })
+                        .min_by(|left, right| {
+                            (left - time_us).abs().total_cmp(&(right - time_us).abs())
+                        });
+                    return nearest.map(|time| AnnotationBoundarySource::InMemory(Some(time)));
+                }
                 lanes
                     .iter()
                     .find(|lane| &lane.name == name)
