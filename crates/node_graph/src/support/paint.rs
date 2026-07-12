@@ -215,6 +215,7 @@ fn mute_wire_color(base: Color32) -> Color32 {
 pub fn draw_connections(
     painter: &Painter,
     graph: &GraphState,
+    registry: &crate::runtime::NodeTypeRegistry,
     socket_positions: &HashMap<SocketId, Pos2>,
     wire_width: f32,
     emphasis: impl Fn(usize, &Connection) -> WireEmphasis,
@@ -226,12 +227,13 @@ pub fn draw_connections(
             highlighted.push((idx, conn));
             continue;
         }
-        draw_connection(painter, graph, socket_positions, wire_width, conn, emphasis);
+        draw_connection(painter, graph, registry, socket_positions, wire_width, conn, emphasis);
     }
     for (idx, conn) in highlighted {
         draw_connection(
             painter,
             graph,
+            registry,
             socket_positions,
             wire_width,
             conn,
@@ -243,6 +245,7 @@ pub fn draw_connections(
 fn draw_connection(
     painter: &Painter,
     graph: &GraphState,
+    registry: &crate::runtime::NodeTypeRegistry,
     socket_positions: &HashMap<SocketId, Pos2>,
     wire_width: f32,
     conn: &Connection,
@@ -254,11 +257,16 @@ fn draw_connection(
     let Some(&to_p) = socket_positions.get(&conn.to) else {
         return;
     };
+    // `socket.color` is the socket's *idle* look; a resolved polymorphic
+    // socket (e.g. a reroute's `Any` output taking on whatever flows
+    // through it) needs the connected type's registry-wide color instead —
+    // the same lookup socket dots already use — or the wire renders in the
+    // socket's flat default color forever, mismatched with the dot beside it.
     let base = graph
         .nodes
         .get(&conn.from.node)
         .and_then(|n| n.outputs.get(conn.from.index))
-        .map(|s| s.color)
+        .map(|s| registry.socket_display(s).0)
         .unwrap_or(Color32::from_rgb(160, 160, 160));
     let (color, width) = match emphasis {
         WireEmphasis::Normal => (base, wire_width),

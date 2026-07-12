@@ -12,6 +12,13 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 const WIRE_SNAP_DISTANCE: f32 = 18.0;
+/// Ctrl-held grid size while dragging a node (Phase 6.3), in canvas units.
+const GRID_SNAP: f32 = 10.0;
+
+/// Nearest `grid`-unit canvas grid point to `pos`.
+fn snap_to_grid(pos: Pos2, grid: f32) -> Pos2 {
+    Pos2::new((pos.x / grid).round() * grid, (pos.y / grid).round() * grid)
+}
 
 #[derive(Default)]
 pub(super) enum InteractionState {
@@ -494,6 +501,17 @@ impl NodeGraphWidget {
             }
         }
 
+        // Checked before the plain-click deselect below: egui fires both
+        // `clicked()` and `double_clicked()` on a double-click's second
+        // press, and inserting a reroute shouldn't also clear the selection
+        // as a side effect (Phase 6.2).
+        if responses.canvas.double_clicked()
+            && let Some(idx) = self.wire_near_point(pc, &layout.nodes)
+        {
+            self.insert_reroute_on_wire(idx, pc);
+            return InteractionState::Idle;
+        }
+
         if responses.canvas.clicked() && !ctrl {
             for node in self.graph.nodes.values_mut() {
                 node.selected = false;
@@ -538,7 +556,16 @@ impl NodeGraphWidget {
     ) -> InteractionState {
         if ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
             if let Some(pc) = pointer_canvas {
-                let new_pos = (pc.to_vec2() - offset).to_pos2();
+                let mut new_pos = (pc.to_vec2() - offset).to_pos2();
+                // Ctrl is free during an active drag (it only means
+                // toggle-select on the click that *starts* one) — reused
+                // here for Blender-style grid snap (Phase 6.3). Only the
+                // dragged node itself snaps to the grid; every other
+                // selected node moves by the same resulting delta, keeping
+                // the whole selection's relative layout intact.
+                if ui.input(|i| i.modifiers.ctrl) {
+                    new_pos = snap_to_grid(new_pos, GRID_SNAP);
+                }
                 let delta = self
                     .graph
                     .nodes
@@ -1242,6 +1269,68 @@ impl NodeGraphWidget {
         }
     }
 
+    /// Connection nearest `point_canvas`, within snap distance — double-click
+    /// to insert a reroute (Phase 6.2). Unlike `closest_insert_wire`, this
+    /// isn't gated on overlapping any particular node's rect; it's a plain
+    /// point-to-wire hit test.
+    fn wire_near_point(
+        &self,
+        point_canvas: Pos2,
+        nodes: &HashMap<NodeId, NodeWidget>,
+    ) -> Option<usize> {
+        let threshold = WIRE_SNAP_DISTANCE / self.view.zoom;
+        let mut best: Option<(usize, f32)> = None;
+        for (idx, conn) in self.graph.connections.iter().enumerate() {
+            let fp = nodes
+                .get(&conn.from.node)
+                .and_then(|w| w.output_socket_pos(conn.from.index));
+            let tp = nodes
+                .get(&conn.to.node)
+                .and_then(|w| w.input_socket_pos(conn.to.index));
+            let (Some(fp), Some(tp)) = (fp, tp) else {
+                continue;
+            };
+            let dist = bezier_wire_distance(fp, tp, point_canvas);
+            if dist <= threshold && dist < best.map_or(f32::INFINITY, |(_, d)| d) {
+                best = Some((idx, dist));
+            }
+        }
+        best.map(|(idx, _)| idx)
+    }
+
+    /// Splits the connection at `connection_index` by inserting a fresh
+    /// `Reroute` node at `pos_canvas` and rewiring both halves through it —
+    /// one undo step (Phase 6.2).
+    fn insert_reroute_on_wire(&mut self, connection_index: usize, pos_canvas: Pos2) {
+        let Some(conn) = self.graph.connections.get(connection_index).cloned() else {
+            return;
+        };
+        self.push_undo_snapshot();
+        self.graph.remove_connection_at(connection_index);
+        let Some(node_id) = self.add_node_at("Reroute", pos_canvas) else {
+            return;
+        };
+        self.graph.add_connection(
+            conn.from,
+            SocketId {
+                node: node_id,
+                index: 0,
+                direction: SocketDirection::Input,
+            },
+        );
+        self.graph.add_connection(
+            SocketId {
+                node: node_id,
+                index: 0,
+                direction: SocketDirection::Output,
+            },
+            conn.to,
+        );
+        self.run_update(conn.from.node);
+        self.run_update(node_id);
+        self.run_update(conn.to.node);
+    }
+
     /// Wire overlapped by the dragged node's rect, ignoring wires already
     /// attached to `node_id`; when several overlap, the one closest to
     /// `point` (the pointer) wins. Compatibility is deliberately not a
@@ -1390,6 +1479,39 @@ impl NodeGraphWidget {
         }
     }
 
+    /// Pans the view while the pointer sits within `MARGIN` of (or past) the
+    /// canvas edge during a drag (Phase 6.1). `DraggingNode`, `DraggingWire`,
+    /// `BoxSelecting`, and `PlacingNodes` all derive their target position
+    /// from `pointer_canvas` on the *next* frame, so nudging `view.pan` here
+    /// is enough to move the drag correctly — no per-state position math
+    /// needed.
+    fn edge_auto_pan(&mut self, pointer: Pos2, canvas_rect: Rect) {
+        const MARGIN: f32 = 24.0;
+        const MAX_SPEED: f32 = 15.0;
+        const GAIN: f32 = 0.15;
+
+        let overshoot_left = (canvas_rect.min.x + MARGIN) - pointer.x;
+        let overshoot_right = pointer.x - (canvas_rect.max.x - MARGIN);
+        let overshoot_top = (canvas_rect.min.y + MARGIN) - pointer.y;
+        let overshoot_bottom = pointer.y - (canvas_rect.max.y - MARGIN);
+
+        let mut delta = Vec2::ZERO;
+        if overshoot_left > 0.0 {
+            delta.x += (overshoot_left * GAIN).min(MAX_SPEED);
+        } else if overshoot_right > 0.0 {
+            delta.x -= (overshoot_right * GAIN).min(MAX_SPEED);
+        }
+        if overshoot_top > 0.0 {
+            delta.y += (overshoot_top * GAIN).min(MAX_SPEED);
+        } else if overshoot_bottom > 0.0 {
+            delta.y -= (overshoot_bottom * GAIN).min(MAX_SPEED);
+        }
+
+        if delta != Vec2::ZERO {
+            self.view.pan += delta;
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn update_interaction(
         &mut self,
@@ -1478,6 +1600,18 @@ impl NodeGraphWidget {
                     (canvas_rect.center() - origin) - canvas_pos.to_vec2() * self.view.zoom;
                 return;
             }
+        }
+
+        if let Some(pp) = pointer
+            && matches!(
+                self.interaction_state,
+                InteractionState::DraggingNode { .. }
+                    | InteractionState::DraggingWire { .. }
+                    | InteractionState::BoxSelecting { .. }
+                    | InteractionState::PlacingNodes { .. }
+            )
+        {
+            self.edge_auto_pan(pp, canvas_rect);
         }
 
         let state = std::mem::replace(&mut self.interaction_state, InteractionState::Idle);
@@ -1572,6 +1706,110 @@ mod tests {
             to: socket(2, 0, SocketDirection::Input),
         }];
         assert!(node_has_any_connection(&connections, NodeId(2)));
+    }
+
+    #[test]
+    fn snap_to_grid_rounds_to_the_nearest_grid_point() {
+        assert_eq!(snap_to_grid(Pos2::new(24.0, 26.0), 10.0), Pos2::new(20.0, 30.0));
+        assert_eq!(snap_to_grid(Pos2::new(-3.0, 5.0), 10.0), Pos2::new(0.0, 10.0));
+        assert_eq!(snap_to_grid(Pos2::new(10.0, 10.0), 10.0), Pos2::new(10.0, 10.0));
+    }
+
+    #[test]
+    fn edge_auto_pan_does_nothing_well_inside_the_canvas() {
+        use crate::runtime::NodeTypeRegistry;
+
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        let canvas_rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+        widget.edge_auto_pan(canvas_rect.center(), canvas_rect);
+
+        assert_eq!(widget.view.pan, Vec2::ZERO);
+    }
+
+    #[test]
+    fn edge_auto_pan_pans_positive_x_near_the_left_edge() {
+        use crate::runtime::NodeTypeRegistry;
+
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        let canvas_rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+        // Right at the left edge — well past the 24px margin.
+        widget.edge_auto_pan(Pos2::new(0.0, canvas_rect.center().y), canvas_rect);
+
+        assert!(widget.view.pan.x > 0.0);
+        assert_eq!(widget.view.pan.y, 0.0);
+    }
+
+    #[test]
+    fn edge_auto_pan_pans_negative_x_near_the_right_edge() {
+        use crate::runtime::NodeTypeRegistry;
+
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        let canvas_rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+        widget.edge_auto_pan(Pos2::new(800.0, canvas_rect.center().y), canvas_rect);
+
+        assert!(widget.view.pan.x < 0.0);
+        assert_eq!(widget.view.pan.y, 0.0);
+    }
+
+    #[test]
+    fn edge_auto_pan_clamps_to_max_speed_past_the_edge() {
+        use crate::runtime::NodeTypeRegistry;
+
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        let canvas_rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+        // Far past the edge — overshoot would blow past MAX_SPEED unclamped.
+        widget.edge_auto_pan(Pos2::new(-500.0, canvas_rect.center().y), canvas_rect);
+
+        assert_eq!(widget.view.pan.x, 15.0);
+    }
+
+    #[test]
+    fn double_click_wire_inserts_a_reroute_and_rewires_both_halves() {
+        use crate::runtime::NodeTypeRegistry;
+
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        let a = widget
+            .add_node_at("Reroute", Pos2::new(0.0, 0.0))
+            .expect("reroute should always be creatable");
+        let b = widget
+            .add_node_at("Reroute", Pos2::new(200.0, 0.0))
+            .expect("reroute should always be creatable");
+        let from = socket(a.0, 0, SocketDirection::Output);
+        let to = socket(b.0, 0, SocketDirection::Input);
+        widget.graph_mut().add_connection(from, to);
+
+        let layout = widget.build_layout(Pos2::ZERO);
+        // A and B's reroute sockets sit on a horizontal line at y=12
+        // (REROUTE_SIZE/2); this point sits right on that wire.
+        let click = Pos2::new(100.0, 12.0);
+        let idx = widget
+            .wire_near_point(click, &layout.nodes)
+            .expect("click should land on the wire");
+        widget.insert_reroute_on_wire(idx, click);
+
+        assert_eq!(widget.graph.connections.len(), 2);
+        assert_eq!(widget.graph.nodes.len(), 3);
+        let new_id = *widget
+            .graph
+            .nodes
+            .keys()
+            .find(|&&id| id != a && id != b)
+            .expect("a third node should have been inserted");
+        assert_eq!(widget.graph.nodes[&new_id].pos, click);
+        assert!(
+            widget
+                .graph
+                .connections
+                .iter()
+                .any(|c| c.from == from && c.to.node == new_id)
+        );
+        assert!(
+            widget
+                .graph
+                .connections
+                .iter()
+                .any(|c| c.from.node == new_id && c.to == to)
+        );
     }
 
     #[test]

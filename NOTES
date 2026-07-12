@@ -1,0 +1,28 @@
+54400 x 49781 6400 dpi 216x198 wipneus
+
+Actual: 1.384.114.397
+Expect: 1.384.126.116
+
+Grey 109440 
+
+D0 24 grey
+D1 23 brown
+D2 22 green
+D3 21 orange
+D4 19 yellow
+D5 18 blue
+D6 17 red
+D7 16 purple
+CS    white
+ACDK 14 red
+TGCK 9  brown
+
+
+215.9 10 48bit 1600dpi - 7.582076
+21.5  10 48bit 1600dpi - 7.58
+21.5  10 24bit 1600dpi - 7.58
+
+
+21.6  10 24bit 800dpi  - 2.16
+21.6  10 24bit 6400dpi - 72.3772
+21.6  10 24bit 3200dpi - 21.9074

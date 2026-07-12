@@ -380,14 +380,14 @@ impl NodeWidget {
             }
             if node.muted {
                 draw_mute_pass_through(painter, node, l, &s);
-                draw_muted_overlay(painter, node_s, header_s, rounding);
+                draw_muted_overlay(painter, node_s, header_s, rounding, sz(SOCKET_RADIUS * 1.3));
             }
             return;
         }
 
         if view.zoom < 0.35 {
             if node.muted {
-                draw_muted_overlay(painter, node_s, header_s, rounding);
+                draw_muted_overlay(painter, node_s, header_s, rounding, sz(SOCKET_RADIUS * 1.3));
             }
             return;
         }
@@ -450,7 +450,7 @@ impl NodeWidget {
 
         if node.muted {
             draw_mute_pass_through(painter, node, l, &s);
-            draw_muted_overlay(painter, node_s, header_s, rounding);
+            draw_muted_overlay(painter, node_s, header_s, rounding, sz(SOCKET_RADIUS * 1.3));
         }
     }
 
@@ -595,9 +595,19 @@ fn draw_mute_pass_through(painter: &Painter, node: &Node, layout: &NodeLayout, s
 
 /// Dims a muted node toward gray and strikes a diagonal line across its
 /// header, drawn last so it washes out the already-painted fills/text/sockets
-/// rather than being painted over by them.
-fn draw_muted_overlay(painter: &Painter, node_screen_rect: Rect, header_screen_rect: Rect, rounding: CornerRadius) {
-    painter.rect_filled(node_screen_rect, rounding, Color32::from_black_alpha(90));
+/// rather than being painted over by them. Widened by `socket_bulge` on the
+/// left/right — input/output socket centers sit exactly on the node rect's
+/// vertical edges, so half of each socket shape draws outside `node_screen_rect`
+/// and would otherwise stay bright while the rest of the node dims.
+fn draw_muted_overlay(
+    painter: &Painter,
+    node_screen_rect: Rect,
+    header_screen_rect: Rect,
+    rounding: CornerRadius,
+    socket_bulge: f32,
+) {
+    let overlay_rect = node_screen_rect.expand2(egui::Vec2::new(socket_bulge, 0.0));
+    painter.rect_filled(overlay_rect, rounding, Color32::from_black_alpha(90));
     painter.line_segment(
         [
             header_screen_rect.left_top(),

@@ -295,6 +295,7 @@ impl NodeGraphWidget {
     /// `on_update` re-run, badges recomputed.
     pub fn set_graph(&mut self, graph: GraphState) {
         self.graph = graph;
+        self.graph.fixup_reroute_outputs();
         self.external_badges.clear();
         self.node_statuses.clear();
         self.active_node = None;

@@ -1,4 +1,4 @@
-use super::{Connection, Frame, FrameId, Node, NodeId, Socket, SocketId, VariadicInfo};
+use super::{Connection, Frame, FrameId, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId, VariadicInfo};
 use egui::Color32;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -48,6 +48,7 @@ impl GraphState {
         self.connections.push(Connection { from, to });
         self.resolve_input(from, to);
         self.grow_variadic_group(to);
+        self.propagate_reroute_output(to.node);
     }
 
     /// Removes the connection feeding `to`, if any, and reverts the input
@@ -81,6 +82,7 @@ impl GraphState {
         } else {
             self.clear_input_resolution(to);
         }
+        self.propagate_reroute_output(to.node);
     }
 
     fn resolve_input(&mut self, from: SocketId, to: SocketId) {
@@ -108,6 +110,61 @@ impl GraphState {
             .and_then(|node| node.inputs.get_mut(to.index))
         {
             socket.resolved_type = None;
+        }
+    }
+
+    /// A reroute is transparent — its output should always mirror whatever
+    /// flows into its input. Unlike a regular node's sockets (kept in sync by
+    /// its own `on_update`), nothing else does this for a reroute, so its
+    /// output's `resolved_type` — and therefore its socket-dot color *and*
+    /// the color of any wire leaving it, both of which fall back to the
+    /// static idle color while unresolved — used to just stay at the
+    /// default gray forever. Called after a reroute's own input resolution
+    /// changes; cascades forward through whatever the output feeds,
+    /// including further chained reroutes.
+    fn propagate_reroute_output(&mut self, node_id: NodeId) {
+        let Some(node) = self.nodes.get(&node_id) else {
+            return;
+        };
+        if node.kind != NodeKind::Reroute {
+            return;
+        }
+        let input_type = node.inputs[0].effective_type().to_owned();
+        let Some(node) = self.nodes.get_mut(&node_id) else {
+            return;
+        };
+        node.outputs[0].resolved_type = (input_type != "Any").then_some(input_type);
+
+        let output = SocketId {
+            node: node_id,
+            index: 0,
+            direction: SocketDirection::Output,
+        };
+        let downstream: Vec<SocketId> = self
+            .connections
+            .iter()
+            .filter(|c| c.from == output)
+            .map(|c| c.to)
+            .collect();
+        for to in downstream {
+            self.resolve_input(output, to);
+            self.propagate_reroute_output(to.node);
+        }
+    }
+
+    /// Recomputes every reroute's output resolution from its current input —
+    /// a one-time correction after loading a graph that may have been saved
+    /// before reroute outputs propagated their resolved type at all (they
+    /// used to just render flat gray, wire included).
+    pub(crate) fn fixup_reroute_outputs(&mut self) {
+        let reroutes: Vec<NodeId> = self
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.kind == NodeKind::Reroute)
+            .map(|(&id, _)| id)
+            .collect();
+        for id in reroutes {
+            self.propagate_reroute_output(id);
         }
     }
 
@@ -398,6 +455,93 @@ mod tests {
         assert!(graph.disconnect_input(to));
         assert_eq!(graph.nodes[&dst].inputs[0].resolved_type, None);
         assert_eq!(graph.nodes[&dst].inputs[0].effective_type(), "Signal");
+    }
+
+    #[test]
+    fn reroute_output_mirrors_its_input_when_connected_and_disconnected() {
+        let mut graph = GraphState::default();
+        let src = graph.next_id();
+        let reroute_id = graph.next_id();
+        graph.add_node(node_with_sockets(src, vec![], vec![socket("Float", &[])]));
+        graph.add_node(Node::new_reroute(reroute_id, Pos2::ZERO));
+
+        graph.add_connection(
+            sid(src, 0, SocketDirection::Output),
+            sid(reroute_id, 0, SocketDirection::Input),
+        );
+        assert_eq!(
+            graph.nodes[&reroute_id].outputs[0].resolved_type.as_deref(),
+            Some("Float"),
+            "the reroute's output should mirror its resolved input type"
+        );
+        assert_eq!(graph.nodes[&reroute_id].outputs[0].effective_type(), "Float");
+
+        graph.disconnect_input(sid(reroute_id, 0, SocketDirection::Input));
+        assert_eq!(
+            graph.nodes[&reroute_id].outputs[0].resolved_type, None,
+            "disconnecting the input should revert the output back to Any"
+        );
+    }
+
+    #[test]
+    fn reroute_output_propagation_cascades_through_a_chain() {
+        let mut graph = GraphState::default();
+        let src = graph.next_id();
+        let reroute_a = graph.next_id();
+        let reroute_b = graph.next_id();
+        graph.add_node(node_with_sockets(src, vec![], vec![socket("Words", &[])]));
+        graph.add_node(Node::new_reroute(reroute_a, Pos2::ZERO));
+        graph.add_node(Node::new_reroute(reroute_b, Pos2::ZERO));
+
+        graph.add_connection(
+            sid(src, 0, SocketDirection::Output),
+            sid(reroute_a, 0, SocketDirection::Input),
+        );
+        graph.add_connection(
+            sid(reroute_a, 0, SocketDirection::Output),
+            sid(reroute_b, 0, SocketDirection::Input),
+        );
+
+        assert_eq!(
+            graph.nodes[&reroute_a].outputs[0].effective_type(),
+            "Words"
+        );
+        assert_eq!(
+            graph.nodes[&reroute_b].inputs[0].effective_type(),
+            "Words",
+            "reroute B's input should have resolved from A's now-correct output"
+        );
+        assert_eq!(
+            graph.nodes[&reroute_b].outputs[0].effective_type(),
+            "Words",
+            "propagation should cascade all the way through the chain"
+        );
+    }
+
+    #[test]
+    fn fixup_reroute_outputs_corrects_a_stale_load() {
+        // Simulates a graph saved before reroute outputs propagated at all:
+        // the connection and the input's resolution are both present and
+        // correct, but the output was never updated to match.
+        let mut graph = GraphState::default();
+        let src = graph.next_id();
+        let reroute_id = graph.next_id();
+        graph.add_node(node_with_sockets(src, vec![], vec![socket("Trigger", &[])]));
+        graph.add_node(Node::new_reroute(reroute_id, Pos2::ZERO));
+        graph.add_connection(
+            sid(src, 0, SocketDirection::Output),
+            sid(reroute_id, 0, SocketDirection::Input),
+        );
+        // Force it back to the stale/buggy state after the (correct) connect.
+        graph.nodes.get_mut(&reroute_id).unwrap().outputs[0].resolved_type = None;
+        assert_eq!(graph.nodes[&reroute_id].outputs[0].effective_type(), "Any");
+
+        graph.fixup_reroute_outputs();
+
+        assert_eq!(
+            graph.nodes[&reroute_id].outputs[0].effective_type(),
+            "Trigger"
+        );
     }
 
     #[test]

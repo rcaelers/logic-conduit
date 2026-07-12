@@ -7,11 +7,11 @@ use super::{
 use crate::{
     model::{NodeId, Socket, SocketDirection, SocketId},
     support::paint::{
-        WireEmphasis, draw_box_select, draw_connections, draw_frames, draw_grid, draw_knife_line,
-        draw_wire, to_screen_rect,
+        SOCKET_RADIUS, WireEmphasis, draw_box_select, draw_connections, draw_frames, draw_grid,
+        draw_knife_line, draw_wire, to_screen_rect,
     },
 };
-use egui::{Color32, CornerRadius, Painter, Pos2, Rect, RichText, Stroke};
+use egui::{Color32, CornerRadius, Painter, Pos2, Rect, RichText, Stroke, Vec2};
 
 impl NodeGraphWidget {
     pub(super) fn draw_graph(
@@ -76,6 +76,7 @@ impl NodeGraphWidget {
         draw_connections(
             painter,
             &self.graph,
+            &self.registry,
             &layout.socket_screen_pos,
             wire_w,
             |idx, conn| match insert_candidate {
@@ -216,7 +217,13 @@ impl NodeGraphWidget {
                     && id != *source_id
                     && !connectable.contains(&id)
                 {
-                    let screen_rect = to_screen_rect(widget.node_rect(), &self.view, origin);
+                    // Widened past the node rect on the left/right — input
+                    // and output socket centers sit exactly on those edges,
+                    // so half of each socket shape draws outside it and
+                    // would otherwise stay bright while the rest dims.
+                    let bulge = self.view.scale(SOCKET_RADIUS * 1.3);
+                    let screen_rect =
+                        to_screen_rect(widget.node_rect(), &self.view, origin).expand2(Vec2::new(bulge, 0.0));
                     painter.rect_filled(
                         screen_rect,
                         CornerRadius::same(5),
