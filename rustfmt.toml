@@ -3,5 +3,5 @@
 # those are both classified as external imports.
 edition = "2024"
 reorder_imports = true
-group_imports = "StdExternalCrate"
-imports_granularity = "Preserve"
+group_imports = "Preserve"
+imports_granularity = "Module"

@@ -5,10 +5,8 @@ use logic_analyzer_viewer::LogicAnalyzerViewer;
 use node_graph::{NodeBadge, NodeGraphWidget, NodeId};
 
 use crate::about::AboutWindow;
-use crate::compiler;
-use crate::demo_signals;
-use crate::nodes;
 use crate::toast::Toasts;
+use crate::{compiler, demo_signals, nodes};
 
 #[cfg(not(target_arch = "wasm32"))]
 enum FileCommand {

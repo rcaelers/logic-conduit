@@ -1,8 +1,7 @@
 use std::collections::{HashMap, VecDeque};
-use std::env;
 use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
+use std::{env, thread};
 
 use super::storage::IndexWriter;
 use super::types::{

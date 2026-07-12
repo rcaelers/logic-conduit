@@ -1,8 +1,7 @@
 //! `String Formatter` builder.
 
-use dsl::TextFormatter;
 use dsl::runtime::{ConfigValue, NodeConfig, ProcessNode};
-use dsl::{NumberSample, TextSample};
+use dsl::{NumberSample, TextFormatter, TextSample};
 use node_graph::Socket;
 use serde_json::Value;
 

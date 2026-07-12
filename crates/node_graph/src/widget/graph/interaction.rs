@@ -3,15 +3,16 @@ use std::rc::Rc;
 
 use egui::{Pos2, Rect, Vec2};
 
-use super::{
-    NodeGraphWidget, action::ActionEffect, layout::GraphWidgetLayout, menu::build_context_entries,
-    minimap,
+use super::action::ActionEffect;
+use super::layout::GraphWidgetLayout;
+use super::menu::build_context_entries;
+use super::{NodeGraphWidget, minimap};
+use crate::model::{Connection, FrameId, NodeId, SocketDirection, SocketId};
+use crate::support::paint::{
+    bezier_wire_distance, bezier_wire_intersects_rect, wire_intersects_knife,
 };
-use crate::{
-    model::{Connection, FrameId, NodeId, SocketDirection, SocketId},
-    support::paint::{bezier_wire_distance, bezier_wire_intersects_rect, wire_intersects_knife},
-    widget::{menu::dispatch_menu_shortcut, node::NodeWidget},
-};
+use crate::widget::menu::dispatch_menu_shortcut;
+use crate::widget::node::NodeWidget;
 
 const WIRE_SNAP_DISTANCE: f32 = 18.0;
 /// Ctrl-held grid size while dragging a node (Phase 6.3), in canvas units.

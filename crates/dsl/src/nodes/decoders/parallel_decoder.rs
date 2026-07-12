@@ -13,8 +13,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tracing::debug;
 
 use super::types::{CsPolarity, Endianness, ParallelInputStrategy, StrobeMode};
-use crate::runtime::Receiver;
-use crate::runtime::WorkError;
 use crate::runtime::capture::CaptureTransition;
 use crate::runtime::edge_query::EdgeQuery;
 use crate::runtime::events::Word;
@@ -23,6 +21,7 @@ use crate::runtime::node::{
 };
 use crate::runtime::protocol::ProtocolKind;
 use crate::runtime::sample::{Sample, SampleBlock};
+use crate::runtime::{Receiver, WorkError};
 
 #[derive(Clone)]
 pub struct ParallelDecoderMetrics {

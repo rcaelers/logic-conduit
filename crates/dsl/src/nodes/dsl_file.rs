@@ -7,8 +7,7 @@
 //! on one destination never blocks other destinations. All threads share a single ZipArchive
 //! and block cache via `Arc<Mutex<..>>`.
 
-use std::collections::HashMap;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -23,10 +22,10 @@ use crate::runtime::events::TextSample;
 use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkResult};
 use crate::runtime::sample::{Sample, SampleBlock};
 use crate::runtime::{
-    BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureSource,
-    CaptureTransition, DslHeader, DslSampledWindow, EdgeQuery, ProtocolKind, SampleKind, Sender,
+    BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureIndexProgress,
+    CaptureSource, CaptureTransition, DslHeader, DslSampledWindow, EdgeQuery, IndexSampler,
+    ProtocolKind, SampleKind, Sender,
 };
-use crate::runtime::{CaptureIndexProgress, IndexSampler};
 use crate::{Error, Result};
 
 const DEFAULT_BLOCK_CACHE_WINDOWS: usize = 2;

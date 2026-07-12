@@ -1,5 +1,3 @@
-//! `Word Matcher` node.
-
 use egui::Color32;
 use node_graph::{
     BoolValue, EnumValue, InputDef, NodeBadge, NodeDef, OutputDef, PanelSection, PropDef, Socket,

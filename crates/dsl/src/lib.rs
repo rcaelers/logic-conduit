@@ -26,12 +26,11 @@ pub mod runtime;
 
 // Re-export decoder data types
 // Re-export streaming nodes - DslFileSource only (SpiCommandController is application-specific)
-pub use nodes::UartDemoSource;
 // Re-export streaming decoders
-pub use nodes::decoders::SpiDecoder;
-pub use nodes::decoders::{CsPolarity, SpiMode, StrobeMode};
+pub use nodes::UartDemoSource;
 pub use nodes::decoders::{
-    ParallelDecoder, ParallelDecoderMetrics, ParallelDecoderMetricsSnapshot, ParallelInputStrategy,
+    CsPolarity, ParallelDecoder, ParallelDecoderMetrics, ParallelDecoderMetricsSnapshot,
+    ParallelInputStrategy, SpiDecoder, SpiMode, StrobeMode,
 };
 // Re-export control-path logic nodes and sinks
 pub use nodes::logic::{
@@ -57,14 +56,12 @@ pub use nodes::{
     TriggerLogic, UsbTransport,
 };
 // Re-export data types from runtime
-pub use runtime::Sample;
-pub use runtime::SampleBlock;
 pub use runtime::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 pub use runtime::{
     BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureIndex, CaptureMetadata,
     CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,
     CaptureWaveformSegment, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
-    DslWaveformSegment,
+    DslWaveformSegment, NumberSample, Sample, SampleBlock, TextSample, Trigger, Word,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use runtime::{CaptureIndexProgress, IndexSampler, exact_window_sample_limit};
@@ -74,7 +71,6 @@ pub use runtime::{
     PortDirection, PortError, PortSchema, ProcessNode, Scheduler, WorkError, WorkResult,
     register_type,
 };
-pub use runtime::{NumberSample, TextSample, Trigger, Word};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {

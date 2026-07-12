@@ -4,10 +4,8 @@ use egui::{Color32, Pos2};
 
 use super::super::menu::{MenuEntry, PopupMenu, Shortcut};
 use super::action::GraphAction;
-use crate::{
-    model::{FrameId, Socket, SocketId},
-    runtime::NodeTypeRegistry,
-};
+use crate::model::{FrameId, Socket, SocketId};
+use crate::runtime::NodeTypeRegistry;
 
 // ── Entry builders ────────────────────────────────────────────────────────────
 

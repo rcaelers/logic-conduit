@@ -44,14 +44,12 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use crossbeam_channel::TryRecvError;
-use dsl::DslFileSource;
-use dsl::Word;
-use dsl::nodes::decoders::{CsPolarity, SpiMode, StrobeMode};
-use dsl::nodes::decoders::{ParallelDecoder, SpiDecoder};
+use dsl::nodes::decoders::{CsPolarity, ParallelDecoder, SpiDecoder, SpiMode, StrobeMode};
 use dsl::runtime::{
     InputPort, OutputPort, Pipeline, PortDirection, PortSchema, ProcessNode, Sample, WorkError,
     WorkResult,
 };
+use dsl::{DslFileSource, Word};
 use tracing::{debug, info};
 
 /// One complete TGCK cycle record for the CSV output.

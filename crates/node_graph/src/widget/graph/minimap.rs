@@ -2,10 +2,8 @@ use std::collections::HashMap;
 
 use egui::{Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 
-use crate::{
-    model::{GraphState, NodeId},
-    support::ViewState,
-};
+use crate::model::{GraphState, NodeId};
+use crate::support::ViewState;
 
 const MINIMAP_SCALE: f32 = 0.20;
 const MINIMAP_MARGIN_FRACTION: f32 = 0.025;

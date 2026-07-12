@@ -15,12 +15,9 @@ use interaction::{GraphResponses, InteractionState};
 use menu::MenuController;
 use panel::{PanelState, PanelTab};
 
-use crate::{
-    model::{FrameId, GraphState, Node, NodeBadge, NodeId},
-    runtime::NodeTypeRegistry,
-    runtime::{NodeInstance, NodeRuntime},
-    support::ViewState,
-};
+use crate::model::{FrameId, GraphState, Node, NodeBadge, NodeId};
+use crate::runtime::{NodeInstance, NodeRuntime, NodeTypeRegistry};
+use crate::support::ViewState;
 
 // ── Main widget ───────────────────────────────────────────────────────────────
 

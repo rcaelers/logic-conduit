@@ -1,8 +1,7 @@
 //! `Counter` builder.
 
-use dsl::TriggerCounter;
 use dsl::runtime::ProcessNode;
-use dsl::{NumberSample, Trigger};
+use dsl::{NumberSample, Trigger, TriggerCounter};
 use node_graph::Socket;
 use serde_json::Value;
 

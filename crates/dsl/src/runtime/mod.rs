@@ -56,12 +56,10 @@ pub use node::{ConfigOutcome, ConfigValue, InputProtocolCandidate, NodeConfig, P
 pub use ports::{InputPort, OutputPort, Pipeline, PortDirection, PortSchema, register_type};
 pub use protocol::ProtocolKind;
 pub use receiver::{Receiver, ReceiverSelector};
-pub use sample::Sample;
-pub use sample::SampleBlock;
+pub use sample::{Sample, SampleBlock};
 pub use sample_kind::SampleKind;
 pub use scheduler::{Scheduler, StopHandle};
-pub use sender::ChannelMessage;
-pub use sender::{OverflowPolicy, Sender, SharedSenders};
+pub use sender::{ChannelMessage, OverflowPolicy, Sender, SharedSenders};
 pub use watchdog::Watchdog;
 #[cfg(not(target_arch = "wasm32"))]
 pub use waveform_index::{CaptureIndexProgress, IndexSampler, exact_window_sample_limit};

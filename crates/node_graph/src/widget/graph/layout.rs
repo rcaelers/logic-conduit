@@ -3,11 +3,9 @@ use std::collections::HashMap;
 use egui::{Pos2, Rect};
 
 use super::NodeGraphWidget;
-use crate::{
-    model::{FrameId, NodeId, SocketDirection, SocketId},
-    support::paint::{SOCKET_RADIUS, to_screen_rect},
-    widget::node::NodeWidget,
-};
+use crate::model::{FrameId, NodeId, SocketDirection, SocketId};
+use crate::support::paint::{SOCKET_RADIUS, to_screen_rect};
+use crate::widget::node::NodeWidget;
 
 const SOCKET_HIT_PADDING: f32 = 5.0;
 const FRAME_PADDING: f32 = 20.0;

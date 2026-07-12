@@ -1,8 +1,7 @@
 //! `Logic Gate` builder.
 
-use dsl::Sample;
 use dsl::runtime::ProcessNode;
-use dsl::{GateOp, LogicGate};
+use dsl::{GateOp, LogicGate, Sample};
 use node_graph::Socket;
 use serde_json::Value;
 
