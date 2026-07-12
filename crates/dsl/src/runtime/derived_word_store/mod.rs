@@ -9,6 +9,8 @@ mod cache;
 mod codec;
 mod crc32c;
 mod format;
+#[cfg(not(target_arch = "wasm32"))]
+mod persistent;
 mod presence;
 mod query;
 #[cfg(not(target_arch = "wasm32"))]
@@ -28,6 +30,8 @@ pub use format::{
     DEFAULT_MAX_WORDS_PER_BLOCK, DEFAULT_RESTART_INTERVAL, DataFileHeader, FORMAT_VERSION,
     RestartEntry, WordBlockHeader,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use persistent::{PersistentCacheStats, cleanup_cache, clear_cache, default_cache_directory};
 pub use presence::{WordPresenceIndex, WordSummaryRecord};
 pub use query::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
@@ -35,8 +39,9 @@ pub use query::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use store::{
-    DEFAULT_HOT_TAIL_PUBLISH_INTERVAL, DEFAULT_HOT_TAIL_PUBLISH_WORDS, IndexedAnnotationStore,
-    IndexedAnnotationWriter, LiveStoreConfig, LiveStoreMetadata, LiveStoreSnapshot, StoreError,
+    DEFAULT_HOT_TAIL_PUBLISH_INTERVAL, DEFAULT_HOT_TAIL_PUBLISH_WORDS,
+    DEFAULT_MAX_PERSISTENT_CACHE_BYTES, IndexedAnnotationStore, IndexedAnnotationWriter,
+    LiveStoreConfig, LiveStoreMetadata, LiveStoreSnapshot, PersistentStoreConfig, StoreError,
     StoreResult, StoreStatus,
 };
 pub use vlq::{decode_u64 as decode_vlq_u64, encode_u64 as encode_vlq_u64, encoded_len};

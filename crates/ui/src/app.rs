@@ -587,7 +587,8 @@ impl App {
         );
         let quit_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Q);
         let run_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::R);
-        let stop_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Period);
+        let stop_shortcut =
+            egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Period);
         let mut command = if ui.input_mut(|input| input.consume_shortcut(&new_shortcut)) {
             Some(FileCommand::New)
         } else if ui.input_mut(|input| input.consume_shortcut(&load_shortcut)) {
@@ -762,6 +763,11 @@ impl App {
 
         // Fresh lane store per run: stale lanes vanish atomically.
         let mut ctx = compiler::CompileCtx::default();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            ctx.persistent_cache_directory =
+                Some(dsl::runtime::derived_word_store::default_cache_directory());
+        }
         self.logic_analyzer
             .set_derived_lanes(ctx.derived_lanes.clone());
 
@@ -793,7 +799,8 @@ impl App {
     }
 
     fn stop_command(&mut self) {
-        if self.is_running() && !self.is_stopping()
+        if self.is_running()
+            && !self.is_stopping()
             && let Some(run) = &mut self.run
         {
             run.stop();

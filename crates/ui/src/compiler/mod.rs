@@ -13,6 +13,8 @@
 //! the source's dual `d{i}`/`b{i}` ports; every `Words` socket carries the
 //! same `Word` runtime type regardless of which decoder produced it.
 
+#[cfg(not(target_arch = "wasm32"))]
+use dsl::runtime::derived_word_store::PersistentStoreConfig;
 use dsl::runtime::{
     AppManager, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy, ProcessNode,
 };
@@ -41,6 +43,9 @@ mod uart_decoder;
 mod uart_demo_source;
 mod viewer;
 mod word_matcher;
+
+#[cfg(not(target_arch = "wasm32"))]
+const DERIVED_CACHE_ABI_VERSION: u32 = 1;
 
 // ── Stream kinds ─────────────────────────────────────────────────────────────
 
@@ -80,6 +85,10 @@ pub struct CompileCtx {
     /// their complete timeline; continuous sources can explicitly choose a
     /// bounded rolling window.
     pub viewer_retention: ViewerRetention,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub viewer_word_caches: Vec<Option<PersistentStoreConfig>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub persistent_cache_directory: Option<std::path::PathBuf>,
 }
 
 /// What one input edge settled on: the negotiated stream kind plus a
@@ -287,6 +296,8 @@ pub struct CompiledNode {
     /// Pipeline node name: `n{id}_{title_slug}`.
     pub runtime_name: String,
     pub resolved: ResolvedInputs,
+    #[cfg(not(target_arch = "wasm32"))]
+    viewer_word_caches: Vec<Option<PersistentStoreConfig>>,
 }
 
 #[derive(Debug, Clone)]
@@ -325,7 +336,9 @@ enum WireSource {
     /// sockets have no type-compatible input at all (a type-transforming
     /// node like a decoder, or a source with nothing to pass through in the
     /// first place), or the one that would match isn't connected.
-    MutedBlocked { output: SocketId },
+    MutedBlocked {
+        output: SocketId,
+    },
 }
 
 /// Chases `from` back through any run of Reroute and muted nodes to the
@@ -630,14 +643,21 @@ pub fn lower(
                 state: node.state.clone(),
                 runtime_name: runtime_name(node),
                 resolved: resolved.remove(&id).unwrap_or_default(),
+                #[cfg(not(target_arch = "wasm32"))]
+                viewer_word_caches: Vec::new(),
             }
         })
         .collect();
-    Ok(CompiledGraph {
+    let compiled = CompiledGraph {
         nodes,
         edges,
         viewer_retention,
-    })
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut compiled = compiled;
+    #[cfg(not(target_arch = "wasm32"))]
+    assign_persistent_viewer_caches(&mut compiled);
+    Ok(compiled)
 }
 
 fn has_cycle(nodes: &[NodeId], edges: &[CompiledEdge]) -> bool {
@@ -700,6 +720,286 @@ fn compiled_node(compiled: &CompiledGraph, id: NodeId) -> &CompiledNode {
         .iter()
         .find(|node| node.id == id)
         .expect("node in compiled graph")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn assign_persistent_viewer_caches(compiled: &mut CompiledGraph) {
+    use dsl::runtime::derived_word_store::default_cache_directory;
+
+    let viewer_ids: Vec<_> = compiled
+        .nodes
+        .iter()
+        .filter(|node| node.builder == "Viewer")
+        .map(|node| node.id)
+        .collect();
+    let mut assignments = Vec::new();
+    for viewer_id in viewer_ids {
+        let member_count = compiled_node(compiled, viewer_id).resolved.member_count(0);
+        let mut caches = vec![None; member_count];
+        for (member, slot) in caches.iter_mut().enumerate() {
+            let input_name = format!("in{member}");
+            let Some(edge) = compiled.edges.iter().find(|edge| {
+                edge.to.0 == viewer_id
+                    && edge.to.1 == input_name
+                    && edge.kind == PortKind::of::<dsl::Word>()
+            }) else {
+                continue;
+            };
+            if let Some(key) = persistent_lane_key(compiled, viewer_id, member, edge) {
+                *slot = Some(PersistentStoreConfig::new(default_cache_directory(), key));
+            }
+        }
+        assignments.push((viewer_id, caches));
+    }
+    for (viewer_id, caches) in assignments {
+        let node = compiled
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == viewer_id)
+            .expect("viewer node exists");
+        node.viewer_word_caches = caches;
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn persistent_lane_key(
+    compiled: &CompiledGraph,
+    viewer_id: NodeId,
+    member: usize,
+    edge: &CompiledEdge,
+) -> Option<[u8; 32]> {
+    let mut memo = HashMap::new();
+    let upstream = persistent_upstream_key(compiled, edge.from.0, &mut memo)?;
+    let viewer = compiled_node(compiled, viewer_id);
+    let mut hasher = blake3::Hasher::new();
+    hash_field(&mut hasher, b"dsl-derived-lane-cache-v1");
+    hash_field(&mut hasher, env!("CARGO_PKG_VERSION").as_bytes());
+    hash_field(&mut hasher, &DERIVED_CACHE_ABI_VERSION.to_le_bytes());
+    hash_field(&mut hasher, &canonical_json_bytes(&viewer.state));
+    hash_field(&mut hasher, &(member as u64).to_le_bytes());
+    hash_field(&mut hasher, edge.from.1.as_bytes());
+    hash_field(&mut hasher, edge.kind.name().as_bytes());
+    hash_field(&mut hasher, &upstream);
+    Some(*hasher.finalize().as_bytes())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn persistent_upstream_key(
+    compiled: &CompiledGraph,
+    node_id: NodeId,
+    memo: &mut HashMap<NodeId, [u8; 32]>,
+) -> Option<[u8; 32]> {
+    if let Some(key) = memo.get(&node_id) {
+        return Some(*key);
+    }
+    let node = compiled_node(compiled, node_id);
+    let mut hasher = blake3::Hasher::new();
+    hash_field(&mut hasher, b"node");
+    hash_field(&mut hasher, node.builder.as_bytes());
+    hash_field(&mut hasher, &canonical_json_bytes(&node.state));
+    if node.builder == "DSL File Source" {
+        // A wired filename is runtime data, not the static picker value in
+        // node state, so no stable capture identity exists at compile time.
+        if compiled.edges.iter().any(|edge| edge.to.0 == node_id) {
+            return None;
+        }
+        hash_capture_source(&mut hasher, &node.state)?;
+    }
+    let mut incoming: Vec<_> = compiled
+        .edges
+        .iter()
+        .filter(|edge| edge.to.0 == node_id)
+        .collect();
+    incoming.sort_by(|left, right| {
+        (&left.to.1, &left.from.1, left.kind.name()).cmp(&(
+            &right.to.1,
+            &right.from.1,
+            right.kind.name(),
+        ))
+    });
+    for edge in incoming {
+        hash_field(&mut hasher, edge.to.1.as_bytes());
+        hash_field(&mut hasher, edge.from.1.as_bytes());
+        hash_field(&mut hasher, edge.kind.name().as_bytes());
+        hash_field(
+            &mut hasher,
+            &persistent_upstream_key(compiled, edge.from.0, memo)?,
+        );
+    }
+    let key = *hasher.finalize().as_bytes();
+    memo.insert(node_id, key);
+    Some(key)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn hash_capture_source(hasher: &mut blake3::Hasher, state: &Value) -> Option<()> {
+    use dsl::{CaptureDataSource, DslFileCaptureDataSource};
+
+    let state: crate::nodes::DslFileSourceState = serde_json::from_value(state.clone()).ok()?;
+    let path = std::fs::canonicalize(&state.file.value).ok()?;
+    hash_capture_file_identity(hasher, &path)?;
+    let source = DslFileCaptureDataSource::open(&path).ok()?;
+    let metadata = source.metadata();
+    hash_field(hasher, &metadata.samplerate_hz.to_bits().to_le_bytes());
+    hash_field(hasher, &metadata.total_samples.to_le_bytes());
+    hash_field(hasher, &(metadata.total_probes as u64).to_le_bytes());
+    for name in &metadata.probe_names {
+        hash_field(hasher, name.as_bytes());
+    }
+    Some(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn hash_capture_file_identity(hasher: &mut blake3::Hasher, path: &std::path::Path) -> Option<()> {
+    let file_metadata = std::fs::metadata(path).ok()?;
+    let modified_ns = file_metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    hash_field(hasher, path.to_string_lossy().as_bytes());
+    hash_field(hasher, &file_metadata.len().to_le_bytes());
+    hash_field(hasher, &modified_ns.to_le_bytes());
+    Some(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn canonical_json_bytes(value: &Value) -> Vec<u8> {
+    fn append(value: &Value, output: &mut Vec<u8>) {
+        match value {
+            Value::Null => output.push(b'n'),
+            Value::Bool(value) => output.extend_from_slice(if *value { b"t" } else { b"f" }),
+            Value::Number(value) => {
+                output.push(b'#');
+                append_bytes(output, value.to_string().as_bytes());
+            }
+            Value::String(value) => {
+                output.push(b'"');
+                append_bytes(output, value.as_bytes());
+            }
+            Value::Array(values) => {
+                output.push(b'[');
+                for value in values {
+                    append(value, output);
+                }
+                output.push(b']');
+            }
+            Value::Object(values) => {
+                output.push(b'{');
+                let mut fields: Vec<_> = values.iter().collect();
+                fields.sort_by_key(|(name, _)| *name);
+                for (name, value) in fields {
+                    append_bytes(output, name.as_bytes());
+                    append(value, output);
+                }
+                output.push(b'}');
+            }
+        }
+    }
+    fn append_bytes(output: &mut Vec<u8>, bytes: &[u8]) {
+        output.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        output.extend_from_slice(bytes);
+    }
+    let mut output = Vec::new();
+    append(value, &mut output);
+    output
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn hash_field(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+    hasher.update(&(bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn prepare_persistent_cache(compiled: &CompiledGraph) {
+    use dsl::runtime::derived_word_store::cleanup_cache;
+
+    let configs: Vec<_> = compiled
+        .nodes
+        .iter()
+        .flat_map(|node| node.viewer_word_caches.iter().flatten())
+        .collect();
+    let Some(first) = configs.first() else {
+        return;
+    };
+    let pinned: Vec<_> = configs.iter().map(|config| config.cache_key).collect();
+    let _ = cleanup_cache(&first.directory, first.max_cache_bytes, &pinned);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn configure_persistent_cache_directory(
+    compiled: &mut CompiledGraph,
+    directory: Option<&std::path::Path>,
+) {
+    for node in &mut compiled.nodes {
+        for slot in &mut node.viewer_word_caches {
+            match (slot.as_mut(), directory) {
+                (_, None) => *slot = None,
+                (Some(config), Some(directory)) => config.directory = directory.to_path_buf(),
+                (None, Some(_)) => {}
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn persistent_execution_graph(
+    compiled: &CompiledGraph,
+    registry: &BuilderRegistry,
+) -> (CompiledGraph, bool) {
+    use dsl::runtime::derived_word_store::IndexedAnnotationStore;
+
+    let mut execution = compiled.clone();
+    let mut cached_inputs = HashSet::new();
+    for viewer in &compiled.nodes {
+        if viewer.builder != "Viewer" {
+            continue;
+        }
+        for (member, config) in viewer.viewer_word_caches.iter().enumerate() {
+            let Some(config) = config else {
+                continue;
+            };
+            if IndexedAnnotationStore::open_persistent(config)
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                cached_inputs.insert((viewer.id, format!("in{member}")));
+            }
+        }
+    }
+    if cached_inputs.is_empty() {
+        return (execution, false);
+    }
+    execution
+        .edges
+        .retain(|edge| !cached_inputs.contains(&(edge.to.0, edge.to.1.clone())));
+
+    let mut reachable: HashSet<NodeId> = execution
+        .nodes
+        .iter()
+        .filter(|node| {
+            registry
+                .get(&node.builder)
+                .is_some_and(RuntimeBuilder::is_sink)
+        })
+        .map(|node| node.id)
+        .collect();
+    let mut stack: Vec<_> = reachable.iter().copied().collect();
+    while let Some(node_id) = stack.pop() {
+        for edge in execution.edges.iter().filter(|edge| edge.to.0 == node_id) {
+            if reachable.insert(edge.from.0) {
+                stack.push(edge.from.0);
+            }
+        }
+    }
+    execution.nodes.retain(|node| reachable.contains(&node.id));
+    execution
+        .edges
+        .retain(|edge| reachable.contains(&edge.from.0) && reachable.contains(&edge.to.0));
+    (execution, true)
 }
 
 /// Input subscriptions for `id`, matched to the built node's input schema.
@@ -900,6 +1200,9 @@ pub struct LiveRun {
     /// Set by [`Self::stop`]: the wind-down has been signalled but node
     /// threads may still be finishing their current `work()` call.
     stop_requested: bool,
+    cache_pruned: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    persistent_cache_directory: Option<std::path::PathBuf>,
 }
 
 /// Lowers and materializes `graph` under an [`AppManager`] — real OS threads
@@ -910,22 +1213,37 @@ pub fn start_live(
     ctx: &mut CompileCtx,
 ) -> Result<LiveRun, Vec<CompileError>> {
     let compiled = lower(graph, registry)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut compiled = compiled;
+    #[cfg(not(target_arch = "wasm32"))]
+    configure_persistent_cache_directory(&mut compiled, ctx.persistent_cache_directory.as_deref());
     ctx.viewer_retention = compiled.viewer_retention;
     let mut manager = AppManager::new();
     let mut names: HashMap<NodeId, String> = HashMap::new();
 
-    for id in topo_order(&compiled) {
-        let node = compiled_node(&compiled, id);
+    #[cfg(not(target_arch = "wasm32"))]
+    prepare_persistent_cache(&compiled);
+    #[cfg(not(target_arch = "wasm32"))]
+    let (execution, cache_pruned) = persistent_execution_graph(&compiled, registry);
+    #[cfg(target_arch = "wasm32")]
+    let (execution, cache_pruned) = (compiled.clone(), false);
+
+    for id in topo_order(&execution) {
+        let node = compiled_node(&execution, id);
         let builder = registry.get(&node.builder).ok_or_else(|| {
             vec![CompileError::on(
                 id,
                 format!("unknown builder '{}'", node.builder),
             )]
         })?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            ctx.viewer_word_caches.clone_from(&node.viewer_word_caches);
+        }
         let process = builder
             .build(&node.runtime_name, &node.state, &node.resolved, ctx)
             .map_err(|message| vec![CompileError::on(id, message)])?;
-        let inputs = input_subs(&compiled, id, process.as_ref(), &names)
+        let inputs = input_subs(&execution, id, process.as_ref(), &names)
             .map_err(|message| vec![CompileError::on(id, message)])?;
         manager
             .add_node_deferred(dsl::runtime::NodeSpec {
@@ -948,6 +1266,9 @@ pub fn start_live(
         names,
         lanes: ctx.derived_lanes.clone(),
         stop_requested: false,
+        cache_pruned,
+        #[cfg(not(target_arch = "wasm32"))]
+        persistent_cache_directory: ctx.persistent_cache_directory.clone(),
     })
 }
 
@@ -962,15 +1283,29 @@ impl LiveRun {
         registry: &BuilderRegistry,
     ) -> Result<ApplySummary, ApplyError> {
         let new = lower(graph, registry).map_err(ApplyError::Compile)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut new = new;
+        #[cfg(not(target_arch = "wasm32"))]
+        configure_persistent_cache_directory(&mut new, self.persistent_cache_directory.as_deref());
         let edits = diff(&self.compiled, &new, registry).map_err(ApplyError::NeedsFullRestart)?;
         if edits.is_empty() {
             self.compiled = new;
             return Ok(ApplySummary::default());
         }
+        if self.cache_pruned {
+            return Err(ApplyError::NeedsFullRestart(
+                "the running graph reused persistent viewer data; stop and rerun to apply edits"
+                    .to_string(),
+            ));
+        }
 
         let mut ctx = CompileCtx {
             derived_lanes: self.lanes.clone(),
             viewer_retention: new.viewer_retention,
+            #[cfg(not(target_arch = "wasm32"))]
+            viewer_word_caches: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            persistent_cache_directory: self.persistent_cache_directory.clone(),
         };
         let mut summary = ApplySummary::default();
         for edit in edits {
@@ -986,6 +1321,8 @@ impl LiveRun {
                     let builder = registry.get(&node.builder).ok_or_else(|| {
                         ApplyError::Apply(format!("no builder '{}'", node.builder))
                     })?;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ctx.viewer_word_caches.clone_from(&node.viewer_word_caches);
                     let process = builder
                         .build(&node.runtime_name, &node.state, &node.resolved, &mut ctx)
                         .map_err(ApplyError::Apply)?;
@@ -1021,6 +1358,8 @@ impl LiveRun {
                     let builder = registry.get(&node.builder).ok_or_else(|| {
                         ApplyError::Apply(format!("no builder '{}'", node.builder))
                     })?;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ctx.viewer_word_caches.clone_from(&node.viewer_word_caches);
                     let process = builder
                         .build(&name, &node.state, &node.resolved, &mut ctx)
                         .map_err(ApplyError::Apply)?;
@@ -1205,6 +1544,170 @@ mod tests {
                 .iter()
                 .any(|e| e.to.1 == "enable_signal" && e.buffer == 1_000)
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn persistent_word_keys(compiled: &CompiledGraph) -> Vec<[u8; 32]> {
+        compiled
+            .nodes
+            .iter()
+            .flat_map(|node| node.viewer_word_caches.iter().flatten())
+            .map(|config| config.cache_key)
+            .collect()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn persistent_viewer_key_is_stable_but_decoder_configuration_invalidates_it() {
+        let mut widget = uart_demo_widget();
+        let registry = BuilderRegistry::standard();
+        let first = lower(widget.graph(), &registry).unwrap();
+        let repeated = lower(widget.graph(), &registry).unwrap();
+        let first_keys = persistent_word_keys(&first);
+        assert!(!first_keys.is_empty());
+        assert_eq!(first_keys, persistent_word_keys(&repeated));
+
+        let decoder = widget
+            .graph()
+            .nodes
+            .values()
+            .find(|node| node.def_name() == "UART Decoder")
+            .unwrap()
+            .id;
+        let mut state: nodes::UartDecoderState =
+            serde_json::from_value(widget.graph().nodes[&decoder].state.clone()).unwrap();
+        state.data_bits.value -= 1;
+        widget.set_node_state(decoder, serde_json::to_value(state).unwrap());
+        let changed = lower(widget.graph(), &registry).unwrap();
+        assert_ne!(first_keys, persistent_word_keys(&changed));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn persistent_viewer_key_includes_variadic_member_order() {
+        let compiled = lower(uart_demo_widget().graph(), &BuilderRegistry::standard()).unwrap();
+        let viewer = compiled
+            .nodes
+            .iter()
+            .find(|node| node.builder == "Viewer")
+            .unwrap();
+        let edge = compiled
+            .edges
+            .iter()
+            .find(|edge| edge.to.0 == viewer.id && edge.kind == PortKind::of::<Word>())
+            .unwrap();
+        assert_ne!(
+            persistent_lane_key(&compiled, viewer.id, 0, edge),
+            persistent_lane_key(&compiled, viewer.id, 1, edge)
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn capture_file_identity_changes_when_source_file_changes() {
+        use std::io::Write;
+
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"first").unwrap();
+        file.as_file().sync_data().unwrap();
+        let path = std::fs::canonicalize(file.path()).unwrap();
+        let digest = |path: &Path| {
+            let mut hasher = blake3::Hasher::new();
+            hash_capture_file_identity(&mut hasher, path).unwrap();
+            *hasher.finalize().as_bytes()
+        };
+        let first = digest(&path);
+        file.write_all(b"-changed").unwrap();
+        file.as_file().sync_data().unwrap();
+        let second = digest(&path);
+        assert_ne!(first, second);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn persistent_cache_hit_prunes_decoder_used_only_by_cached_viewer_lane() {
+        use dsl::runtime::derived_word_store::{IndexedAnnotationWriter, LiveStoreConfig};
+
+        let directory = tempfile::tempdir().unwrap();
+        let registry = BuilderRegistry::standard();
+        let mut compiled = lower(uart_demo_widget().graph(), &registry).unwrap();
+        configure_persistent_cache_directory(&mut compiled, Some(directory.path()));
+        let cache = compiled
+            .nodes
+            .iter()
+            .find(|node| node.builder == "Viewer")
+            .unwrap()
+            .viewer_word_caches
+            .iter()
+            .flatten()
+            .next()
+            .unwrap()
+            .clone();
+        let (mut writer, store) = IndexedAnnotationWriter::create(LiveStoreConfig {
+            directory: directory.path().to_path_buf(),
+            persistence: Some(cache),
+            ..LiveStoreConfig::default()
+        })
+        .unwrap();
+        writer.append(Word::new(0x48, 0)).unwrap();
+        writer.finish().unwrap();
+        drop((writer, store));
+
+        let (execution, pruned) = persistent_execution_graph(&compiled, &registry);
+
+        assert!(pruned);
+        assert!(
+            execution
+                .nodes
+                .iter()
+                .all(|node| node.builder != "UART Decoder")
+        );
+        assert!(execution.nodes.iter().any(|node| node.builder == "Viewer"));
+        assert!(
+            execution
+                .edges
+                .iter()
+                .all(|edge| edge.kind != PortKind::of::<Word>())
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn second_live_run_reuses_persistent_words_without_starting_decoder() {
+        let directory = tempfile::tempdir().unwrap();
+        let widget = uart_demo_widget();
+        let registry = BuilderRegistry::standard();
+        let decoder_id = widget
+            .graph()
+            .nodes
+            .values()
+            .find(|node| node.def_name() == "UART Decoder")
+            .unwrap()
+            .id;
+        let mut first_ctx = CompileCtx {
+            persistent_cache_directory: Some(directory.path().to_path_buf()),
+            ..CompileCtx::default()
+        };
+        let mut first = start_live(widget.graph(), &registry, &mut first_ctx).unwrap();
+        first.wait();
+        assert!(first.names.contains_key(&decoder_id));
+        drop((first, first_ctx));
+
+        let mut second_ctx = CompileCtx {
+            persistent_cache_directory: Some(directory.path().to_path_buf()),
+            ..CompileCtx::default()
+        };
+        let lanes = second_ctx.derived_lanes.clone();
+        let mut second = start_live(widget.graph(), &registry, &mut second_ctx).unwrap();
+        assert!(!second.names.contains_key(&decoder_id));
+        second.wait();
+
+        let lanes = lanes.read();
+        let indexed = lanes.iter().find_map(|lane| match &lane.data {
+            dsl::DerivedLaneData::IndexedAnnotations(indexed) => Some(indexed),
+            _ => None,
+        });
+        assert_eq!(indexed.unwrap().metadata().total_word_count, 6);
     }
 
     #[test]
@@ -1445,9 +1948,10 @@ mod tests {
         connect(&mut widget, (buf, "Out"), (viewer, "In"));
         widget.graph_mut().nodes.get_mut(&buf).unwrap().muted = true;
 
-        let compiled = lower(widget.graph(), &BuilderRegistry::standard()).unwrap_or_else(|errors| {
-            panic!("expected the muted buffer to splice through: {errors:?}")
-        });
+        let compiled =
+            lower(widget.graph(), &BuilderRegistry::standard()).unwrap_or_else(|errors| {
+                panic!("expected the muted buffer to splice through: {errors:?}")
+            });
 
         assert!(
             compiled.nodes.iter().all(|n| n.id != buf),
@@ -1475,9 +1979,7 @@ mod tests {
         let flip_flop = widget
             .add_node_at("SR Flip-Flop", Pos2::new(400.0, 0.0))
             .unwrap();
-        let viewer = widget
-            .add_node_at("Viewer", Pos2::new(600.0, 0.0))
-            .unwrap();
+        let viewer = widget.add_node_at("Viewer", Pos2::new(600.0, 0.0)).unwrap();
 
         let connect = |widget: &mut NodeGraphWidget, from: (NodeId, &str), to: (NodeId, &str)| {
             let from_socket = SocketId {

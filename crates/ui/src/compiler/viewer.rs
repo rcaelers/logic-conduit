@@ -3,6 +3,8 @@
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 use dsl::runtime::ProcessNode;
+#[cfg(not(target_arch = "wasm32"))]
+use dsl::runtime::derived_word_store::LiveStoreConfig;
 use dsl::{Sample, Trigger, ViewerLaneKind, ViewerSink, Word};
 use node_graph::Socket;
 use serde_json::Value;
@@ -51,7 +53,9 @@ impl RuntimeBuilder for ViewerBuilder {
         let mut sink = ViewerSink::new(ctx.derived_lanes.clone())
             .with_name(name)
             .with_retention(ctx.viewer_retention);
-        for (_, input) in resolved.members(0) {
+        for (member, input) in resolved.members(0) {
+            #[cfg(target_arch = "wasm32")]
+            let _ = member;
             let lane_name = if prefix.is_empty() {
                 input.source.clone()
             } else {
@@ -60,6 +64,14 @@ impl RuntimeBuilder for ViewerBuilder {
             sink = if input.kind == PortKind::of::<Sample>() {
                 sink.with_lane(ViewerLaneKind::Signal, lane_name)
             } else if input.kind == PortKind::of::<Word>() {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(Some(persistent)) = ctx.viewer_word_caches.get(member) {
+                    sink = sink.with_word_store_config(LiveStoreConfig {
+                        directory: persistent.directory.clone(),
+                        persistence: Some(persistent.clone()),
+                        ..LiveStoreConfig::default()
+                    });
+                }
                 sink.with_lane(ViewerLaneKind::Words, lane_name)
             } else if input.kind == PortKind::of::<Trigger>() {
                 sink.with_lane(ViewerLaneKind::Trigger, lane_name)

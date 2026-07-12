@@ -472,6 +472,8 @@ struct Lane {
     eos: bool,
     #[cfg(not(target_arch = "wasm32"))]
     word_writer: Option<IndexedAnnotationWriter>,
+    #[cfg(not(target_arch = "wasm32"))]
+    word_indexed: bool,
 }
 
 /// Sink with one typed input per lane. Never blocks *waiting* on any single
@@ -551,15 +553,41 @@ impl ViewerSink {
     pub fn with_lane(mut self, kind: ViewerLaneKind, name: impl Into<String>) -> Self {
         let name = name.into();
         #[cfg(not(target_arch = "wasm32"))]
-        let (data, word_writer) = match kind {
-            ViewerLaneKind::Signal => (DerivedLaneData::Digital(Vec::new()), None),
+        let (data, word_writer, word_indexed) = match kind {
+            ViewerLaneKind::Signal => (DerivedLaneData::Digital(Vec::new()), None, false),
             ViewerLaneKind::Words if self.indexed_words => {
+                if let Some(persistent) = self.word_store_config.persistence.as_ref() {
+                    match IndexedAnnotationStore::open_persistent(persistent) {
+                        Ok(Some(store)) => {
+                            let data = DerivedLaneData::IndexedAnnotations(
+                                IndexedAnnotationLane::from_store(store),
+                            );
+                            let store_index = self.store.register(name, data);
+                            self.lanes.push(Lane {
+                                kind,
+                                store_index,
+                                buffer: LaneBuffer::Words(VecDeque::new()),
+                                eos: false,
+                                word_writer: None,
+                                word_indexed: true,
+                            });
+                            return self;
+                        }
+                        Ok(None) => {}
+                        Err(error) => tracing::warn!(
+                            lane = %name,
+                            %error,
+                            "invalid persistent viewer cache; rebuilding"
+                        ),
+                    }
+                }
                 match IndexedAnnotationWriter::create(self.word_store_config.clone()) {
                     Ok((writer, store)) => (
                         DerivedLaneData::IndexedAnnotations(IndexedAnnotationLane::from_store(
                             store,
                         )),
                         Some(writer),
+                        true,
                     ),
                     Err(error) => {
                         tracing::warn!(
@@ -567,12 +595,12 @@ impl ViewerSink {
                             %error,
                             "could not create indexed viewer word lane; using in-memory storage"
                         );
-                        (DerivedLaneData::Annotations(Vec::new()), None)
+                        (DerivedLaneData::Annotations(Vec::new()), None, false)
                     }
                 }
             }
-            ViewerLaneKind::Words => (DerivedLaneData::Annotations(Vec::new()), None),
-            ViewerLaneKind::Trigger => (DerivedLaneData::Markers(Vec::new()), None),
+            ViewerLaneKind::Words => (DerivedLaneData::Annotations(Vec::new()), None, false),
+            ViewerLaneKind::Trigger => (DerivedLaneData::Markers(Vec::new()), None, false),
         };
         #[cfg(target_arch = "wasm32")]
         let data = match kind {
@@ -593,6 +621,8 @@ impl ViewerSink {
             eos: false,
             #[cfg(not(target_arch = "wasm32"))]
             word_writer,
+            #[cfg(not(target_arch = "wasm32"))]
+            word_indexed,
         });
         self
     }
@@ -702,7 +732,7 @@ impl ProcessNode for ViewerSink {
                     if !batch.is_empty() {
                         let append_started = metrics.as_ref().map(|_| Instant::now());
                         #[cfg(not(target_arch = "wasm32"))]
-                        let indexed = lane.word_writer.is_some();
+                        let indexed = lane.word_indexed;
                         #[cfg(target_arch = "wasm32")]
                         let indexed = false;
                         #[cfg(not(target_arch = "wasm32"))]
@@ -1282,5 +1312,55 @@ mod tests {
             panic!("expected indexed annotation lane");
         };
         assert_eq!(indexed.status(), StoreStatus::Cancelled);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn viewer_reopens_persistent_lane_and_does_not_rewrite_incoming_words() {
+        let directory = tempfile::tempdir().unwrap();
+        let persistent = crate::runtime::derived_word_store::PersistentStoreConfig::new(
+            directory.path(),
+            [9; 32],
+        );
+        let config = LiveStoreConfig {
+            directory: directory.path().to_path_buf(),
+            persistence: Some(persistent),
+            ..LiveStoreConfig::default()
+        };
+        let (mut writer, _) = IndexedAnnotationWriter::create(config.clone()).unwrap();
+        writer
+            .append_batch(&[Word::new(1, 10), Word::new(2, 20)])
+            .unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+
+        let lanes = DerivedLanes::new();
+        let mut sink = ViewerSink::new(lanes.clone())
+            .with_word_store_config(config)
+            .with_lane(ViewerLaneKind::Words, "words");
+        assert!(sink.lanes[0].word_writer.is_none());
+        assert!(sink.lanes[0].word_indexed);
+        let wd = Watchdog::new();
+        let (tx, rx) = bounded::<ChannelMessage<Word>>(4);
+        tx.send(ChannelMessage::Batch(vec![
+            Word::new(99, 10),
+            Word::new(100, 20),
+        ]))
+        .unwrap();
+        drop(tx);
+        run_sink(
+            &mut sink,
+            vec![InputPort::new_with_watchdog(rx, &wd, "viewer", "in0")],
+        );
+
+        let lanes = lanes.read();
+        let DerivedLaneData::IndexedAnnotations(indexed) = &lanes[0].data else {
+            panic!("expected indexed annotations");
+        };
+        assert_eq!(indexed.metadata().total_word_count, 2);
+        assert_eq!(
+            indexed.query.exact_window(0, 30, 10).unwrap().annotations[0].value,
+            1
+        );
     }
 }

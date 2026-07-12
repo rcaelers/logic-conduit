@@ -53,6 +53,11 @@ impl WordPresenceIndex {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn leaf_records(&self) -> &[WordSummaryRecord] {
+        &self.levels[0]
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn intersecting_leaf_indices(&self, start_ns: u64, end_ns: u64) -> Vec<usize> {
         if start_ns > end_ns {
             return Vec::new();
