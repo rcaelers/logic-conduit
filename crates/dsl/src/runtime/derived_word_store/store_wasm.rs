@@ -9,6 +9,7 @@ use std::sync::{Arc, RwLock};
 
 use super::CodecError;
 use super::config::{LiveStoreConfig, PersistentStoreConfig};
+use super::presence::{WordPresenceIndex, WordSummaryRecord};
 use super::query::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
     ExactAnnotationWindow, WordPresenceBucket,
@@ -36,6 +37,7 @@ pub type StoreResult<T> = std::result::Result<T, StoreError>;
 
 struct MemoryState {
     words: Vec<Word>,
+    presence: WordPresenceIndex,
     generation: u64,
     status: StoreStatus,
 }
@@ -62,11 +64,7 @@ impl IndexedAnnotationStore {
                 committed_data_len: 0,
                 first_timestamp_ns: state.words.first().map(|word| word.timestamp_ns),
                 last_timestamp_ns: state.words.last().map(|word| word.timestamp_ns),
-                extent_end_ns: state
-                    .words
-                    .iter()
-                    .map(|word| word.timestamp_ns.saturating_add(word.duration_ns))
-                    .max(),
+                extent_end_ns: state.presence.extent_end_ns(),
                 hot_tail_word_count: state.words.len(),
                 mmap_backed: false,
                 status: state.status.clone(),
@@ -100,30 +98,12 @@ impl AnnotationQuery for IndexedAnnotationStore {
         if target_buckets == 0 {
             return Err(AnnotationQueryError::ZeroBucketLimit);
         }
-        let exact = self.exact_window(start_ns, end_ns, usize::MAX)?;
-        if exact.annotations.is_empty() {
-            return Ok(Vec::new());
-        }
-        let span = end_ns.saturating_sub(start_ns).saturating_add(1);
-        let width = span.div_ceil(target_buckets as u64).max(1);
-        let mut buckets: Vec<WordPresenceBucket> = Vec::new();
-        for annotation in exact.annotations {
-            let bucket_start = start_ns
-                .saturating_add(annotation.start_ns.saturating_sub(start_ns) / width * width);
-            if let Some(bucket) = buckets.last_mut()
-                && bucket.start_ns == bucket_start
-            {
-                bucket.word_count += 1;
-                bucket.end_ns = bucket.end_ns.max(annotation.end_ns);
-            } else {
-                buckets.push(WordPresenceBucket {
-                    start_ns: bucket_start,
-                    end_ns: annotation.end_ns.max(bucket_start.saturating_add(width)),
-                    word_count: 1,
-                });
-            }
-        }
-        Ok(buckets)
+        Ok(self
+            .state
+            .read()
+            .unwrap()
+            .presence
+            .presence_window(start_ns, end_ns, target_buckets))
     }
 
     fn exact_window(
@@ -205,6 +185,7 @@ impl IndexedAnnotationWriter {
         let store = IndexedAnnotationStore {
             state: Arc::new(RwLock::new(MemoryState {
                 words: Vec::new(),
+                presence: WordPresenceIndex::new(),
                 generation: 0,
                 status: StoreStatus::Live,
             })),
@@ -246,7 +227,17 @@ impl IndexedAnnotationWriter {
                 }));
             }
         }
-        state.words.extend_from_slice(words);
+        let first_block = state.words.len() as u64;
+        for (offset, word) in words.iter().copied().enumerate() {
+            state.presence.push(WordSummaryRecord {
+                start_ns: word.timestamp_ns,
+                end_ns: word.timestamp_ns.saturating_add(word.duration_ns),
+                word_count: 1,
+                first_block: first_block.saturating_add(offset as u64),
+                block_count: 1,
+            });
+            state.words.push(word);
+        }
         state.generation += 1;
         Ok(())
     }
@@ -267,6 +258,7 @@ impl IndexedAnnotationWriter {
         let mut state = self.store.state.write().unwrap();
         ensure_live(&state)?;
         state.words.clear();
+        state.presence = WordPresenceIndex::new();
         state.status = StoreStatus::Cancelled;
         state.generation += 1;
         Ok(())
