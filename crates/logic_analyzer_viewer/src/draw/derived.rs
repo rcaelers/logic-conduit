@@ -228,8 +228,8 @@ impl LogicAnalyzerViewer {
 
         if visible.len() > wave_rect.width() as usize * 2 {
             // Dense window: bucket words into pixel-column runs, but keep
-            // the decision *local* — a lone word render as a labeled value
-            // box exactly like the sparse path (one 12k-word burst
+            // the decision *local* — a lone word renders as an exact value
+            // box like the sparse path (one 12k-word burst
             // somewhere in view must not reduce every isolated word
             // elsewhere to an anonymous tick). Only genuinely overlapping
             // clusters — several words per pixel, where per-word values
@@ -238,7 +238,7 @@ impl LogicAnalyzerViewer {
             let span_ns = (end_ns - start_ns).max(1);
             let width = wave_rect.width().max(1.0);
             let runs = dense_annotation_runs(visible, start_ns, span_ns, width as u32);
-            for (index, run) in runs.iter().enumerate() {
+            for run in &runs {
                 if run.count == 1 {
                     let global = first + run.first_index;
                     let annotation = &visible[run.first_index];
@@ -248,10 +248,6 @@ impl LogicAnalyzerViewer {
                         let previous = &annotations[global - 1];
                         previous.end_ns.saturating_sub(previous.start_ns)
                     });
-                    let next_x = runs
-                        .get(index + 1)
-                        .map(|next| wave_rect.left() + next.start_column as f32)
-                        .unwrap_or(wave_rect.right());
                     self.draw_annotation_box(
                         painter,
                         wave_rect,
@@ -260,7 +256,6 @@ impl LogicAnalyzerViewer {
                         annotation,
                         is_last_ever,
                         previous_duration_ns,
-                        next_x,
                     );
                     continue;
                 }
@@ -288,10 +283,6 @@ impl LogicAnalyzerViewer {
                 let previous = &annotations[first + offset - 1];
                 previous.end_ns.saturating_sub(previous.start_ns)
             });
-            let next_x = annotations
-                .get(first + offset + 1)
-                .map(|next| self.ns_to_x(wave_rect, next.start_ns))
-                .unwrap_or(wave_rect.right());
             self.draw_annotation_box(
                 painter,
                 wave_rect,
@@ -300,15 +291,12 @@ impl LogicAnalyzerViewer {
                 annotation,
                 is_last_ever,
                 previous_duration_ns,
-                next_x,
             );
         }
     }
 
-    /// One word as a bordered value box, hex label included whenever it
-    /// fits: naturally, or by widening a narrow box up to `next_x` (the
-    /// left edge of whatever comes next — the following word, cluster, or
-    /// window edge).
+    /// One word as a bordered value box. The hexadecimal label is included
+    /// only when it fits within the word's actual displayed time span.
     #[allow(clippy::too_many_arguments)]
     fn draw_annotation_box(
         &self,
@@ -319,7 +307,6 @@ impl LogicAnalyzerViewer {
         annotation: &Annotation,
         is_last_ever: bool,
         previous_duration_ns: Option<u64>,
-        next_x: f32,
     ) {
         let box_color = Color32::from_rgb(88, 58, 28);
         let border = Stroke::new(1.0, Color32::from_rgb(215, 140, 60));
@@ -328,15 +315,7 @@ impl LogicAnalyzerViewer {
         let natural_x1 = self.ns_to_x(wave_rect, effective_end).max(x0 + 2.0);
         let label = format!("{:02X}", annotation.value);
         let label_width = annotation_label_width(&label);
-        let max_labeled_x1 = next_x.min(wave_rect.right()) - 3.0;
-        let x1 = if natural_x1 - x0 >= label_width {
-            natural_x1
-        } else if max_labeled_x1 - x0 >= label_width {
-            x0 + label_width
-        } else {
-            natural_x1
-        };
-        let rect = Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(x1, box_bottom));
+        let rect = Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(natural_x1, box_bottom));
         painter.rect_filled(rect, 2.0, box_color);
         painter.rect_stroke(rect, 2.0, border, egui::StrokeKind::Inside);
         if let Some(label_position) = annotation_label_position(rect, wave_rect, label_width) {
@@ -646,8 +625,8 @@ mod tests {
     }
 
     /// A lone word and a real cluster must come out as separate runs — the
-    /// lone one (count 1) is what the dense path still renders as a full
-    /// labeled value box instead of an anonymous tick.
+    /// lone one (count 1) is what the dense path still renders as an exact
+    /// value box instead of folding it into an unrelated cluster.
     #[test]
     fn dense_runs_keep_isolated_words_separable_from_clusters() {
         // Window: 0..1_000_000ns over 100 columns → 10_000ns per column.
