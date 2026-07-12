@@ -19,7 +19,11 @@ use dsl::runtime::{
     AppManager, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy, ProcessNode,
 };
 use dsl::{DerivedLanes, SampleBlock, ViewerRetention};
-use node_graph::{GraphState, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId};
+use egui::{Color32, Pos2};
+use node_graph::{
+    Connection, GraphState, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId, SocketShape,
+    VariadicInfo,
+};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -448,10 +452,100 @@ fn member_index(node: &Node, socket_index: usize) -> usize {
         .count()
 }
 
+/// Fixed id for the compiler-synthesized `Viewer` sink that gathers every
+/// output checked in the node panel's generic "View" section
+/// (`Socket::show_in_view`, `docs/APP_DESIGN.md`) without an explicit wire.
+/// Kept constant (rather than derived from the graph's own ids) so
+/// live-diffing sees the same node across `lower()` calls while the watched
+/// set is unchanged, regardless of how many real nodes come and go.
+const AUTO_VIEW_NODE_ID: NodeId = NodeId(u32::MAX);
+
+/// If any output in `graph` is checked "Show in view", returns a clone with
+/// a synthetic `Viewer` node wired to every one of them — the View panel's
+/// checkboxes become lanes without the user dragging a wire. Reuses the
+/// exact same pruning and edge-negotiation path an explicit Viewer
+/// connection would take, so nothing downstream in `lower()` needs to know
+/// this node isn't real.
+fn with_auto_view_sink(graph: &GraphState) -> GraphState {
+    let mut watched: Vec<(SocketId, String)> = graph
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.kind == NodeKind::Regular)
+        .flat_map(|(&id, node)| {
+            node.outputs
+                .iter()
+                .enumerate()
+                .filter(|(_, output)| output.visible && output.show_in_view)
+                .map(move |(index, output)| {
+                    (
+                        SocketId {
+                            node: id,
+                            index,
+                            direction: SocketDirection::Output,
+                        },
+                        format!("{}.{}", node.title, output.name),
+                    )
+                })
+        })
+        .collect();
+    watched.sort_by_key(|(socket, _)| (socket.node.0, socket.index));
+
+    let mut graph = graph.clone();
+    if watched.is_empty() {
+        return graph;
+    }
+
+    let inputs = watched
+        .iter()
+        .map(|(_, label)| Socket {
+            name: label.clone(),
+            type_name: "Signal".to_owned(),
+            color: Color32::from_rgb(0, 205, 160),
+            shape: SocketShape::Circle,
+            allowed: vec!["Words".to_owned(), "Trigger".to_owned()],
+            resolved_type: None,
+            def_index: 0,
+            variadic: Some(VariadicInfo {
+                base: "In".to_owned(),
+                max: watched.len(),
+                placeholder: false,
+            }),
+            visible: true,
+            hidden: false,
+            has_control: false,
+            show_in_view: false,
+        })
+        .collect();
+    let mut auto_view = Node::blank(AUTO_VIEW_NODE_ID, "Viewer", Pos2::ZERO);
+    auto_view.title = "Auto View".to_owned();
+    auto_view.header_color = Color32::from_rgb(160, 80, 60);
+    auto_view.inputs = inputs;
+    auto_view.state = serde_json::json!({ "label": { "value": "" } });
+    graph.nodes.insert(AUTO_VIEW_NODE_ID, auto_view);
+    graph
+        .connections
+        .extend(
+            watched
+                .into_iter()
+                .enumerate()
+                .map(|(member, (from, _))| Connection {
+                    from,
+                    to: SocketId {
+                        node: AUTO_VIEW_NODE_ID,
+                        index: member,
+                        direction: SocketDirection::Input,
+                    },
+                }),
+        );
+    graph
+}
+
 pub fn lower(
     graph: &GraphState,
     registry: &BuilderRegistry,
 ) -> Result<CompiledGraph, Vec<CompileError>> {
+    let augmented = with_auto_view_sink(graph);
+    let graph = &augmented;
     let (wires, mut errors) = resolve_reroute_edges(graph);
 
     // Prune: keep only what feeds a sink.
@@ -1461,7 +1555,7 @@ mod tests {
     use dsl::BinaryFileWriter;
     use dsl::runtime::{ConfigValue, Pipeline};
     use dsl::{Sample, Trigger, Word};
-    use node_graph::NodeGraphWidget;
+    use node_graph::{NodeDef, NodeGraphWidget};
     use std::path::{Path, PathBuf};
 
     fn startup_widget() -> NodeGraphWidget {
@@ -1548,6 +1642,87 @@ mod tests {
                 .iter()
                 .any(|e| e.to.1 == "enable_signal" && e.buffer == 1_000)
         );
+    }
+
+    /// A lone source node, no explicit sink — the graph the "no wiring
+    /// needed" View-panel feature exists to make compilable.
+    fn source_only_widget() -> NodeGraphWidget {
+        let mut widget = NodeGraphWidget::new(nodes::build_registry());
+        widget
+            .add_node_at(nodes::UartDemoSource::name(), egui::Pos2::ZERO)
+            .expect("UART Demo Source is registered");
+        widget
+    }
+
+    fn watch_first_output(widget: &mut NodeGraphWidget) -> NodeId {
+        let id = *widget.graph().nodes.keys().next().unwrap();
+        widget.graph_mut().nodes.get_mut(&id).unwrap().outputs[0].show_in_view = true;
+        id
+    }
+
+    #[test]
+    fn unwatched_source_has_no_sink() {
+        let widget = source_only_widget();
+        let errors = lower(widget.graph(), &BuilderRegistry::standard()).unwrap_err();
+        assert!(errors.iter().any(|e| e.message.contains("no sink")));
+    }
+
+    #[test]
+    fn watched_output_compiles_without_an_explicit_viewer_node() {
+        let mut widget = source_only_widget();
+        let source_id = watch_first_output(&mut widget);
+        let source_title = widget.graph().nodes[&source_id].title.clone();
+
+        let compiled = lower(widget.graph(), &BuilderRegistry::standard())
+            .unwrap_or_else(|errors| panic!("lower failed: {errors:?}"));
+
+        assert_eq!(compiled.nodes.len(), 2);
+        let auto_view = compiled
+            .nodes
+            .iter()
+            .find(|n| n.builder == "Viewer")
+            .expect("a synthetic Viewer sink is added");
+        let lanes = auto_view.resolved.members(0);
+        assert_eq!(lanes.len(), 1);
+        assert_eq!(lanes[0].1.source, format!("{source_title}.RX"));
+    }
+
+    #[test]
+    fn unwatching_the_only_output_drops_the_synthetic_viewer() {
+        let mut widget = source_only_widget();
+        let source_id = watch_first_output(&mut widget);
+        let registry = BuilderRegistry::standard();
+        assert!(lower(widget.graph(), &registry).is_ok());
+
+        widget
+            .graph_mut()
+            .nodes
+            .get_mut(&source_id)
+            .unwrap()
+            .outputs[0]
+            .show_in_view = false;
+        let errors = lower(widget.graph(), &registry).unwrap_err();
+        assert!(errors.iter().any(|e| e.message.contains("no sink")));
+    }
+
+    #[test]
+    fn synthetic_viewer_id_is_stable_across_relowers() {
+        let mut widget = source_only_widget();
+        watch_first_output(&mut widget);
+        let registry = BuilderRegistry::standard();
+
+        let first = lower(widget.graph(), &registry).unwrap();
+        let second = lower(widget.graph(), &registry).unwrap();
+        let viewer_id = |compiled: &CompiledGraph| {
+            compiled
+                .nodes
+                .iter()
+                .find(|n| n.builder == "Viewer")
+                .unwrap()
+                .id
+        };
+        assert_eq!(viewer_id(&first), AUTO_VIEW_NODE_ID);
+        assert_eq!(viewer_id(&first), viewer_id(&second));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1810,6 +1985,7 @@ mod tests {
             visible: true,
             hidden: false,
             has_control: true,
+            show_in_view: false,
         };
         assert_eq!(
             builder.accepted_kinds(&file_socket, &state),

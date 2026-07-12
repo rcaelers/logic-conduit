@@ -27,6 +27,7 @@ fn input_socket<S>(def_index: usize, input: &InputDef<S>) -> Socket {
         visible: true,
         hidden: false,
         has_control: input.control.is_some() && input.variadic_max.is_none(),
+        show_in_view: false,
     }
 }
 
@@ -43,6 +44,7 @@ fn output_socket<S>(def_index: usize, output: &OutputDef<S>) -> Socket {
         visible: true,
         hidden: false,
         has_control: output.control.is_some(),
+        show_in_view: false,
     }
 }
 
@@ -508,6 +510,7 @@ mod tests {
             visible: true,
             hidden: false,
             has_control: false,
+            show_in_view: false,
         };
         let matches = registry.connectable_types(&float_output, SocketDirection::Output);
         assert!(matches.iter().any(|def| def.name == "Mix"));
@@ -529,6 +532,7 @@ mod tests {
             visible: true,
             hidden: false,
             has_control: false,
+            show_in_view: false,
         };
         let matches = registry.connectable_types(&any_output, SocketDirection::Output);
         // "Any" satisfies every input, so both defs with an input should match.

@@ -1,4 +1,7 @@
-use super::{Connection, Frame, FrameId, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId, VariadicInfo};
+use super::{
+    Connection, Frame, FrameId, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId,
+    VariadicInfo,
+};
 use egui::Color32;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -402,6 +405,7 @@ mod tests {
             visible: true,
             hidden: false,
             has_control: false,
+            show_in_view: false,
         }
     }
 
@@ -474,7 +478,10 @@ mod tests {
             Some("Float"),
             "the reroute's output should mirror its resolved input type"
         );
-        assert_eq!(graph.nodes[&reroute_id].outputs[0].effective_type(), "Float");
+        assert_eq!(
+            graph.nodes[&reroute_id].outputs[0].effective_type(),
+            "Float"
+        );
 
         graph.disconnect_input(sid(reroute_id, 0, SocketDirection::Input));
         assert_eq!(
@@ -502,10 +509,7 @@ mod tests {
             sid(reroute_b, 0, SocketDirection::Input),
         );
 
-        assert_eq!(
-            graph.nodes[&reroute_a].outputs[0].effective_type(),
-            "Words"
-        );
+        assert_eq!(graph.nodes[&reroute_a].outputs[0].effective_type(), "Words");
         assert_eq!(
             graph.nodes[&reroute_b].inputs[0].effective_type(),
             "Words",

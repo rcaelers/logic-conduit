@@ -152,6 +152,7 @@ impl Node {
             visible: true,
             hidden: false,
             has_control: false,
+            show_in_view: false,
         };
         let output = input.clone();
         Self {
@@ -163,6 +164,30 @@ impl Node {
             pos,
             inputs: vec![input],
             outputs: vec![output],
+            collapsed: false,
+            muted: false,
+            state: Value::Null,
+            property_count: 0,
+            badge: None,
+            selected: false,
+        }
+    }
+
+    /// A regular node with no properties panel, its sockets and state left
+    /// for the caller to fill in. For building a `Node` directly outside the
+    /// widget/registry path — e.g. the compiler's synthetic auto-view sink,
+    /// which is never rendered and so has no properties panel to size.
+    pub fn blank(id: NodeId, type_name: impl Into<String>, pos: Pos2) -> Self {
+        let type_name = type_name.into();
+        Self {
+            id,
+            kind: NodeKind::Regular,
+            title: type_name.clone(),
+            type_name,
+            header_color: Color32::from_rgb(80, 80, 80),
+            pos,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
             collapsed: false,
             muted: false,
             state: Value::Null,

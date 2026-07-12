@@ -120,6 +120,18 @@ impl NodeGraphWidget {
             + 2.0 * DEFAULT_ROW_HEIGHT
             + PANEL_SECTION_GAP;
 
+        let watchable_outputs = self
+            .graph
+            .nodes
+            .get(&node_id)
+            .map(|node| node.outputs.iter().filter(|output| output.visible).count())
+            .unwrap_or(0);
+        if watchable_outputs > 0 {
+            height += COLLAPSING_HEADER_HEIGHT
+                + PANEL_SECTION_GAP
+                + watchable_outputs as f32 * DEFAULT_ROW_HEIGHT;
+        }
+
         if let Some(instance) = self.runtime.get(&node_id) {
             for section in instance.panel_sections() {
                 height += COLLAPSING_HEADER_HEIGHT + PANEL_SECTION_GAP;
@@ -310,6 +322,35 @@ impl NodeGraphWidget {
                                         ui.color_edit_button_srgba(&mut node.header_color);
                                     });
                                 });
+
+                            // Built-in section, generic across every node type
+                            // (no per-node code): one checkbox per output,
+                            // showing it as a logic analyzer lane without an
+                            // explicit wire to a `Viewer` node — the compiler
+                            // synthesizes the connection from `Socket::show_in_view`.
+                            let watchable: Vec<usize> = node
+                                .outputs
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, output)| output.visible)
+                                .map(|(index, _)| index)
+                                .collect();
+                            if !watchable.is_empty() {
+                                egui::CollapsingHeader::new("View").default_open(true).show(
+                                    ui,
+                                    |ui| {
+                                        for index in watchable {
+                                            let output = &mut node.outputs[index];
+                                            if ui
+                                                .checkbox(&mut output.show_in_view, &output.name)
+                                                .changed()
+                                            {
+                                                changed = true;
+                                            }
+                                        }
+                                    },
+                                );
+                            }
 
                             for (section_index, section) in sections.iter().enumerate() {
                                 egui::CollapsingHeader::new(section.title)

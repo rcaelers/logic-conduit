@@ -57,6 +57,11 @@ pub struct Socket {
     pub hidden: bool,
     #[serde(default)]
     pub has_control: bool,
+    /// User-toggled from the node panel's generic "View" section (outputs
+    /// only): show this output as a logic analyzer lane without an explicit
+    /// wire to a `Viewer` node. The compiler synthesizes the connection.
+    #[serde(default)]
+    pub show_in_view: bool,
 }
 
 impl Socket {
@@ -89,7 +94,12 @@ impl Socket {
     /// performs, usable before either socket has a [`super::SocketId`] (e.g.
     /// a freshly instantiated, not-yet-added node being probed for
     /// compatibility with a dragged wire).
-    pub fn compatible(from: &Socket, from_dir: SocketDirection, to: &Socket, to_dir: SocketDirection) -> bool {
+    pub fn compatible(
+        from: &Socket,
+        from_dir: SocketDirection,
+        to: &Socket,
+        to_dir: SocketDirection,
+    ) -> bool {
         if from_dir == to_dir {
             return false;
         }
@@ -119,6 +129,7 @@ mod tests {
             visible: true,
             hidden: false,
             has_control: false,
+            show_in_view: false,
         }
     }
 
