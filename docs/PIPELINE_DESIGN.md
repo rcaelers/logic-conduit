@@ -1,6 +1,7 @@
 # Pipeline Runtime — Design
 
-Design of the `dsl` crate ([crates/signal_processing](../crates/signal_processing)): the streaming engine that executes
+Design of the `signal-processing` crate
+([crates/signal_processing](../crates/signal_processing)): the streaming engine that executes
 decode pipelines. It is UI-free — the node-graph editor and the graph→pipeline compiler
 live above it (see [APP_DESIGN.md](APP_DESIGN.md)).
 
@@ -86,6 +87,46 @@ current value.
 `Sample` vs `SampleBlock` is a bandwidth concern, not a semantic one: a source exposes each
 channel both as RLE edges (`d{i}`) and packed blocks (`b{i}`); consumers declare which they
 take and the compiler picks per edge.
+
+## High-throughput transport and parallel-bus decoding
+
+The high-bandwidth path is designed around bounded, shared storage rather than scalar
+messages or capture-sized queues:
+
+- `BlockData` adopts owned `Vec<u8>` allocations, shares `Arc<[u8]>`, and can reference
+  native mmap storage. Byte-aligned `SampleBlock` subviews retain the same backing.
+- File sources use a bounded two-window block cache and send aligned channel groups in
+  lockstep. Default packed-block connections are deliberately small.
+- `ChannelMessage<T>::Batch(Vec<T>)` amortizes channel overhead. Ordinary receivers flatten
+  batches transparently; batch-aware sinks can drain them directly.
+- `ViewerRetention::Unlimited` preserves finite captures, while continuous sources may
+  explicitly request bounded rolling retention.
+
+`ParallelDecoder` supports `Auto`, `PackedStream`, and `Indexed` input strategies. Indexed
+mode uses hierarchical transition queries and batched point reads, making it appropriate
+for sparse signals. Packed mode scans resident 64-bit words and is appropriate for dense or
+live signals. Auto uses the strobe channel's index activity hint and applies one coordinated
+choice to strobe, data, and CS; explicit strategies always override it.
+
+Packed decoding separates immutable scanning from ordered state updates. Each bounded
+65,536-sample fragment records trigger positions, bus values, reset markers, and boundary
+state. Ordered merge repairs fragment-edge transitions, carries partial words, and emits one
+ordered word batch. Native builds submit scans to a shared worker pool; each decoder uses
+four workers by default, allows at most `2 * workers` outstanding fragments, and reorders
+completion by sequence. The wasm backend implements the same contract sequentially through
+the selected worker module.
+
+These boundaries preserve deterministic values/timestamps, bounded memory and backpressure,
+and responsive cancellation. The opt-in `parallel-decoder-bench` binary reports protocol
+selection, fingerprints, throughput, worker/reorder metrics, and retention behavior:
+
+```bash
+cargo run -p signal-processing --release --bin parallel-decoder-bench -- --help
+```
+
+Correctness tests compare indexed, packed, sequential, and parallel paths, including every
+strobe mode, CS/enable boundaries, partial-word assembly, deliberately reordered completion,
+and stop latency.
 
 ## Flow control philosophy
 

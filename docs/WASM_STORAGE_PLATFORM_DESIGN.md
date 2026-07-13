@@ -1,193 +1,123 @@
 # WASM Storage Platform Design
 
-## Goal
+## Design
 
-Keep decoded-word storage, viewer lanes, and compiler code platform-neutral.
-Platform conditionals belong at implementation-file boundaries. Native builds
-use file-backed, mmap-backed persistent storage; wasm builds use an in-memory
-implementation with the same query and writer contracts.
+Decoded-word storage, viewer lanes, and compiler code use a platform-neutral data model.
+Native builds use file-backed and mmap-backed persistent storage; wasm builds use an in-memory
+store with the same query and writer contracts.
 
-File I/O, mmap, filesystem cache discovery/cleanup, USB access, and other
-genuinely unavailable facilities may remain unavailable on wasm. Their entire
-implementation files should be selected or excluded, rather than placing
-`#[cfg(target_arch = "wasm32")]` on fields, enum variants, match arms, imports,
-and statements throughout consumers.
+Platform selection occurs at implementation-file boundaries. File I/O, mmap, filesystem cache
+administration, USB access, native dialogs, and similar unavailable capabilities are selected or
+excluded as complete implementations or node registrations. Consumers do not contain target
+conditionals for fields, enum variants, match arms, functions, or statements.
 
-## Current problem
+## Platform-neutral surface
 
-The native derived-word store was introduced as a platform-specific type. Its
-platform choice consequently leaked through:
+The following concepts exist on every target:
 
-- `ViewerSink` lane variants, fields, constructors, work loops, and tests;
-- logic-analyzer channel, cursor, drawing, sampling, and viewer code;
-- compiler context, compiled graph state, cache inventory, live-run state, and
-  viewer builder code;
-- public re-exports in `dsl` and UI crates.
-
-This makes wasm and native compile different application models. It also makes
-ordinary refactoring require paired `cfg` edits across unrelated crates.
-
-## Stable platform-neutral surface
-
-The following concepts must exist on every target:
-
-- `AnnotationQuery` and its metadata/window/result types;
-- `IndexedAnnotationStore` (read/query handle);
-- `IndexedAnnotationWriter` (append/finish/cancel handle);
-- `LiveStoreConfig`;
-- `StoreStatus` and a platform-neutral `StoreError`;
+- `AnnotationQuery` and its metadata, window, and result types;
+- `IndexedAnnotationStore` and `IndexedAnnotationWriter`;
+- `LiveStoreConfig` and `BlockCodecConfig`;
+- `StoreStatus` and platform-neutral store errors;
 - `IndexedAnnotationLane` and `DerivedLaneData::IndexedAnnotations`;
-- cache/persistence configuration as an optional capability, not a different
-  graph or lane shape.
+- optional persistence configuration without a different graph or lane shape.
 
-The name `IndexedAnnotationStore` describes its behavior, not its physical
-medium. On native it may be disk/mmap backed; on wasm its index and exact words
-live in memory.
+`IndexedAnnotationStore` names the behavior of the store rather than its physical medium. Native
+stores can be disk- and mmap-backed. Wasm stores keep their index and exact words in memory.
 
 ## Backend contracts
 
-Use small private traits behind the stable facade:
+Private backend traits sit behind the public facade. The store and writer handles delegate to
+these traits, so callers use the same API on every platform.
 
 ```rust
 trait AnnotationStoreBackend: AnnotationQuery + Send + Sync {
     fn snapshot(&self) -> LiveStoreSnapshot;
+}
+
+trait AnnotationStoreWriterBackend: Send + Sync {
     fn append(&self, words: &[Word]) -> StoreResult<()>;
     fn finish(&self) -> StoreResult<()>;
     fn cancel(&self);
 }
-
-trait PersistentCacheBackend: Send + Sync {
-    fn open(&self, config: &PersistentStoreConfig)
-        -> StoreResult<Option<IndexedAnnotationStore>>;
-    fn clear_entry(&self, config: &PersistentStoreConfig) -> StoreResult<()>;
-    fn cleanup(&self, directory: &Path, max_bytes: u64) -> StoreResult<()>;
-}
 ```
 
-The exact ownership can use an `Arc<dyn AnnotationStoreBackend>` shared by the
-store and writer handles. The public facade delegates and contains no target
-conditionals.
-
-The persistent-cache trait is deliberately separate. In-memory annotation
-storage is useful on wasm; filesystem persistence is not. The wasm cache
-implementation returns `Ok(None)` for open and a typed `Unsupported` result
-for explicitly requested filesystem operations. Normal viewer operation must
-not call those unsupported operations.
+Persistent-cache administration is a separate native capability. In-memory indexed annotation
+storage is available on wasm, while filesystem persistence is not part of the wasm contract.
 
 ## File layout and platform selection
 
-Common code:
+The derived-word store separates common contracts and data structures from complete platform
+implementations:
 
 ```text
 derived_word_store/
-  mod.rs                 public facade and common types
+  mod.rs                 facade and common types
   backend.rs             private backend traits
-  codec.rs               platform-neutral encoding
-  format.rs              platform-neutral format definitions
+  config.rs              platform-neutral configuration
   presence.rs            platform-neutral presence index
   query.rs               platform-neutral query contract
+  state.rs               shared status and metadata
+  store.rs               native file-backed implementation
+  store_wasm.rs          wasm in-memory implementation
   platform/
-    mod.rs               the only target selection point
-    native.rs            files, mmap, persistent cache, decoded-block cache
-    wasm.rs              in-memory blocks and presence index
+    mod.rs               target-selection point
+    native.rs            native exports and implementation wiring
+    wasm.rs              wasm exports and implementation wiring
 ```
 
-Selection is at the whole-file boundary:
+`platform/mod.rs` selects one complete implementation file:
 
 ```rust
 #[cfg_attr(target_arch = "wasm32", path = "wasm.rs")]
 #[cfg_attr(not(target_arch = "wasm32"), path = "native.rs")]
 mod imp;
-
-pub(crate) use imp::PlatformBackend;
 ```
 
-If `cfg_attr(path = ...)` proves awkward for tooling, two module declarations
-inside `platform/mod.rs` are acceptable. Target conditionals must not appear in
-callers.
-
-Native-only cache administration can use the same pattern in a separate
-`cache_platform` module. This keeps unavoidable filesystem switches at a
-module boundary.
+The native implementation owns codec, file, mmap, persistent-cache, and decoded-block-cache
+details. The wasm implementation owns its in-memory representation. Target conditionals do not
+propagate into callers.
 
 ## Viewer and sink design
 
-`DerivedLaneData::IndexedAnnotations` and `IndexedAnnotationLane` exist on all
-targets. The lane holds an `Arc<dyn AnnotationQuery>` and platform-neutral
-status/metadata handles. Drawing, cursor snapping, sampling, and row handling
-therefore use one code path.
+`DerivedLaneData::IndexedAnnotations` and `IndexedAnnotationLane` exist on every target. Each
+lane holds an `Arc<dyn AnnotationQuery>` plus platform-neutral status and metadata handles.
+Drawing, cursor snapping, sampling, and row handling therefore use one code path.
 
-`ViewerSink` always owns the same optional writer/query fields. Store creation
-selects the backend internally. Wasm receives a bounded or unbounded in-memory
-store based on `ViewerRetention`; native may additionally persist it.
-
-The existing plain `Annotations(Vec<Annotation>)` lane remains useful for
-small, explicitly non-indexed streams. It must not be the platform fallback
-for the same compiled graph, because that recreates platform-specific lane
-shapes.
+`ViewerSink` uses the same optional writer and query fields on every target. Store construction
+selects the backend internally. The plain `Annotations(Vec<Annotation>)` lane remains available
+for explicitly non-indexed streams; it is not a platform-specific substitute for an indexed lane.
 
 ## Compiler design
 
-Compiler IR and live-run state must not contain target-gated fields or enum
-variants. The compiler always describes the requested storage behavior:
+Compiler IR and live-run state have the same fields and variants on every platform. The compiler
+describes storage requirements such as exact-history retention, persistence settings, cache
+budgets, and indexing. Backend construction resolves platform capabilities.
 
-- exact-history retention;
-- optional persistent cache key/directory;
-- memory/entry budget;
-- indexing requirement.
+Nodes that fundamentally require native resources, including file readers, file writers, and USB
+devices, are selected as complete node modules and registry entries.
 
-Backend capability resolution happens when the viewer sink/store is built.
-On wasm, persistence requests become a warning/capability result while the
-in-memory indexed lane still runs. Nodes that fundamentally require native
-resources—file readers, file writers, USB devices—remain excluded as complete
-node modules and registry entries.
+## Permitted target gates
 
-## Unavoidable target gates
-
-These switches are acceptable when applied to whole files/modules or registry
-entries:
+Target gates are confined to whole files, modules, or registry entries for:
 
 - file and directory I/O;
 - mmap and advisory locking;
-- persistent cache cleanup/discovery;
+- persistent cache cleanup and discovery;
 - native worker pools or threads unavailable in the wasm runtime;
-- USB/device capture backends;
-- native file dialogs and native application integration.
+- USB and device capture backends;
+- native file dialogs and application integration.
 
-OS-family switches inside a native implementation (`unix`, `windows`, macOS
-filesystem behavior) are also legitimate.
+OS-family selection inside a native implementation is also valid.
 
-## Migration plan
+## Invariants
 
-1. Introduce the backend traits and platform-neutral store facade without
-   changing native behavior.
-2. Move the current file/mmap/cache implementation into `platform/native.rs`.
-3. Implement `platform/wasm.rs` using the codec, presence index, and an
-   in-memory ordered block store.
-4. Make all store/query/config/status types available on every target.
-5. Remove target gates from `DerivedLaneData`, `IndexedAnnotationLane`, and
-   `ViewerSink`; use the common facade.
-6. Remove target gates from logic-analyzer channel, cursor, drawing, sampling,
-   and viewer code.
-7. Remove storage-related target gates from compiler IR, compiler context,
-   live-run state, and viewer builder code.
-8. Keep native-only source/sink nodes switched at whole module and registry
-   boundaries.
-9. Add native and wasm contract tests for identical append, exact-window,
-   presence-window, nearest-boundary, finish, and cancellation behavior.
-10. Add a CI check that builds/tests native and runs `cargo check` for
-    `wasm32-unknown-unknown`.
-
-## Acceptance criteria
-
-- No `target_arch = "wasm32"` conditionals in `viewer_sink.rs` for derived-word
-  lane shape or store operation.
-- No storage-related wasm conditionals in logic-analyzer drawing, cursor,
-  channel, sampling, or viewer modules.
-- No storage-related wasm conditionals in generic compiler IR/live-run code.
-- `derived_word_store/mod.rs` contains no per-item target-gated public API.
-- Target selection is confined to platform module files and genuinely
-  unavailable native node registrations.
-- Native persistent cache behavior and current tests remain unchanged.
-- Wasm supports indexed in-memory annotation queries with the same semantics.
-
+- `viewer_sink.rs` has one derived-word lane shape and one store operation path.
+- Logic-analyzer drawing, cursor, channel, sampling, and viewer modules are independent of the
+  storage platform.
+- Generic compiler IR and live-run code are independent of the storage platform.
+- `derived_word_store/mod.rs` does not expose per-item target-gated API variants.
+- Native and wasm backends implement identical append, exact-window, presence-window,
+  nearest-boundary, finish, and cancellation semantics.
+- Native persistent cache behavior is an additional capability, not a different application
+  model.

@@ -11,7 +11,7 @@ Public surface:
 pub use viewer::{ChannelSignal, LogicAnalyzerViewer};
 ```
 
-Capture/lane data types come from the `dsl` crate: `CaptureDataSource`,
+Capture/lane data types come from the `signal-processing` crate: `CaptureDataSource`,
 `DslFileCaptureDataSource`, `DerivedLanes`.
 
 ---

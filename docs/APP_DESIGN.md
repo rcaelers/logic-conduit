@@ -45,6 +45,15 @@ One window, split by a draggable horizontal splitter:
   `tracing_subscriber` with `RUST_LOG` env filter,
   eframe native window. On wasm the same `App` runs with a demo UART graph pre-populated
   and the cooperative scheduler (below).
+- File commands include New, Open, Open Recent, Save, and Save As. Destructive actions over
+  an unsaved graph share one save/discard/cancel guard; recent paths are deduplicated and
+  persisted.
+- `eframe` storage retains the analyzer split, node-graph panel/minimap preferences, recent
+  files, and dialog directory. The viewport uses eframe's own persisted geometry.
+- Transient file/edit/live-run results use dismissible, self-expiring toasts; persistent run
+  state remains in the toolbar. The toolbar also shows the active pane's contextual hint.
+- Run and Stop are shared guarded commands used by toolbar and menus. Their shortcuts are
+  `Cmd/Ctrl+R` and `Cmd/Ctrl+.` respectively.
 
 ## Socket styling: shape = time structure, color = payload
 

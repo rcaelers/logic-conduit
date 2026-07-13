@@ -1,49 +1,45 @@
 # Decoder View Lane Design
 
-## Decision
+## Architecture boundary
 
-The generic layers must not contain decoder-specific behavior.
+Generic layers do not contain decoder-specific behavior.
 
-In particular, `node_graph`, `logic_analyzer_viewer`, and the generic graph
-compiler must not know about UART, SPI, Binary Decoder, or any other concrete
-node type. They must not inspect node titles, output names such as `Bits` or
-`Data`, or protocol-specific values such as UART start/stop/error markers.
-
-Concrete node behavior belongs only in:
+`node_graph`, `logic_analyzer_viewer`, and generic graph compiler infrastructure remain
+independent of UART, SPI, Binary Decoder, and all other concrete node types. Protocol behavior
+belongs in:
 
 - the node definition in `crates/logic_analyzer_graph/src/nodes/`;
-- its runtime builder in `crates/logic_analyzer_graph/src/compiler/`;
+- its UI/runtime builder in `crates/logic_analyzer_graph/src/compiler/`;
 - its runtime implementation in `crates/signal_processing/src/nodes/`.
 
-The UI compiler may translate a node-specific display declaration into a
-generic viewer contract, but the rest of the compiler remains node-agnostic.
+The generic viewer renders derived lanes from generic metadata. Saved-graph compatibility is
+handled at node restore/load boundaries and reported with user-visible warnings.
 
-## Generic viewer contract
+## Current lane model
 
-The runtime must expose a generic `ViewerLaneGroup` / `ViewerLaneTrack`
-description alongside derived lanes. A group provides:
+Runtime nodes publish ordinary derived lanes with stable names and presentation metadata. The
+viewer renders each lane without knowing which node or protocol produced it.
 
-- stable group identifier;
-- display label;
+UART bits and data still use temporary name-based pairing through `uart_data_lane_name` and
+`Bits`/`Data` matching. This is legacy node-specific behavior in generic code and is tracked for
+removal in [TODO.md](../TODO.md).
+
+## Proposed future lane-group contract
+
+A generic `ViewerLaneGroup` / `ViewerLaneTrack` contract can represent several derived tracks as
+one visual lane without exposing protocol concepts to generic code.
+
+A group provides:
+
+- a stable group identifier;
+- a display label;
 - ordered tracks;
-- per-track relative height;
-- optional value-display representation.
+- a relative height for each track;
+- optional generic value-presentation metadata.
 
-Each track provides its ordinary derived-lane payload. The viewer renders the
-group from this metadata only; it never infers grouping from lane names.
+Each track carries an ordinary derived-lane payload. A UART-specific builder can describe a
+bits track and a data track, while the viewer sees only generic tracks, ordering, and geometry.
+No grouping is inferred from display names.
 
-For example, the UART-specific builder can declare a group named after its
-decoder instance with a `bits` track and a `data` track. The viewer only sees
-two generic tracks, their order, and their heights.
-
-## Compatibility
-
-Saved graphs may retain legacy sockets internally where needed, but migrations
-must be expressed at node restore/load boundaries and reported as warnings.
-They must not be hidden through generic viewer or compiler special cases.
-
-## Consequence
-
-The current temporary UART name-based grouping (`uart_data_lane_name` and
-related `Bits`/`Data` matching) is explicitly non-compliant and must be
-removed when the generic lane-group contract is implemented.
+Saved graphs can retain legacy sockets during migration, but compatibility remains an explicit
+node-level load concern rather than a generic compiler or viewer special case.

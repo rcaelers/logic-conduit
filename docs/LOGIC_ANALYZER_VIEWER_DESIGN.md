@@ -359,7 +359,7 @@ tick.
 
 ### Derived lanes
 
-`DerivedLanes` (defined in the `dsl` crate) maps lane name → `DerivedLaneData`:
+`DerivedLanes` (defined in the `signal-processing` crate) maps lane name → `DerivedLaneData`:
 
 - `Digital(Vec<Sample>)` — rendered like a channel waveform;
 - `Annotations(Vec<Annotation>)` — `(start_ns, end_ns, label)` boxes (decoded words,

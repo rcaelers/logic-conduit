@@ -129,18 +129,28 @@ retained scene graph.
 Interaction highlights:
 
 - **Wire dragging** with live compatibility checking and snap-to-socket; a snap candidate
-  previews the shape it would resolve to. Fast-render mode suppresses per-socket hit
-  targets during heavy drags.
+  previews the shape it would resolve to. Releasing on empty canvas opens a compatible-node
+  search and can add/connect the selected node in one undoable gesture. Non-connectable
+  nodes dim during the drag. Fast-render mode suppresses per-socket hit targets during
+  heavy drags.
 - **Reroute nodes** (`NodeKind::Reroute`) are model-level wire waypoints with a single
   `Any` in/out; the compiler follows wires through them. *Dissolve* removes a node and
-  directly reconnects compatible in/out pairs.
+  directly reconnects compatible in/out pairs. Double-clicking a wire inserts a reroute.
 - **Frames** group nodes visually (label, color, rename-in-place, membership editing);
-  frames with no members are cleaned up automatically.
+  dropping nodes inside/outside a frame updates membership, and empty frames are cleaned
+  up automatically.
 - **Node presentation**: collapse (header only) and hide-unconnected-sockets toggles;
   per-node title rename; selection (click, box select, shift-add).
 - **Menus**: right-click context menu (add, cut/copy/paste, duplicate, delete, dissolve,
-  frame ops, show/hide, undo/redo) and an `A` add-search popup with fuzzy matching over
+  frame ops, show/hide, undo/redo) and a `Shift+A` add-search popup with fuzzy matching over
   `category → name`.
+- **Placement and navigation**: new, duplicated, and pasted nodes follow the pointer until
+  click confirms or Escape cancels. Active drags auto-pan near viewport edges; holding Ctrl
+  while dragging snaps the selection anchor to a 10-unit grid.
+- **Mute/bypass**: `Node::muted` is persisted with a serde default. The model computes local
+  input/output pass-through pairs from the node's declared sockets; rendering shows those
+  links inside the muted node, and the product compiler follows the same pairs. Generic
+  `node-graph` code never decides runtime bypass semantics.
 - **Clipboard** is the system clipboard: selected nodes + their internal connections
   serialize to a JSON payload tagged `node_graph_clipboard_v1`, so copy/paste works across
   application instances. Paste remaps ids, offsets positions, selects the pasted set, and
@@ -148,8 +158,26 @@ Interaction highlights:
 - **Undo/redo** snapshot the whole `GraphState` (cheap: plain data). Because sockets —
   including resolution and variadic growth — live in the model, everything undoes for free.
   Node state is synced from instances into the model before every snapshot.
-- **Minimap** (toggle `M`): scaled-down node rectangles + viewport indicator, click/drag to
+- **Minimap** (toggle `Ctrl+M`): scaled-down node rectangles + viewport indicator, click/drag to
   navigate.
+
+### Default keymap
+
+| Key | Action |
+|---|---|
+| `A` / `Alt+A` | Select all / deselect all |
+| `Shift+A` | Add/search |
+| `Shift+D` | Duplicate, then place |
+| `F2` | Rename active node |
+| `.` / `Home` | Fit selection / fit graph |
+| `H` / `Ctrl+H` | Collapse / hide unconnected sockets |
+| `M` / `Ctrl+M` | Mute / minimap |
+| `N` | Properties panel |
+| `X`, Delete, Backspace | Delete |
+| `Ctrl+J` | Frame selected nodes |
+
+The contextual status hint exposes the relevant gestures for idle, selection, wire-drag,
+and placement states so these accelerators are discoverable.
 
 ### Properties panel
 

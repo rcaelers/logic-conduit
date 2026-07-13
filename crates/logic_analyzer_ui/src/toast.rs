@@ -1,5 +1,5 @@
-//! Transient toasts (`docs/UI_UX_IMPROVEMENT_PLAN.md` Phase 4.2) — the single
-//! place `App` reports one-off events (file loaded/saved, node(s)
+//! Transient toasts are the single place `App` reports one-off events (file
+//! loaded/saved, node(s)
 //! copied/pasted, a live edit applied or failed) without them pinning a
 //! toolbar label forever. Ongoing *state* (a run that needs a restart to
 //! pick up an edit, the current compile-error summary) stays in the toolbar
