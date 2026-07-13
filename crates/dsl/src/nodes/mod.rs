@@ -25,41 +25,40 @@
 //! ```
 
 pub mod decoders;
-#[cfg(not(target_arch = "wasm32"))]
-mod dsl_file;
-#[cfg(not(target_arch = "wasm32"))]
-mod dslogic_u3pro16;
 pub mod logic;
-#[cfg(not(target_arch = "wasm32"))]
-mod logic_analyzer;
-#[cfg(not(target_arch = "wasm32"))]
-mod sigrok_file;
 pub mod sinks;
 mod uart_demo_source;
 
-// Export DslFileSource and related types for file I/O
-#[cfg(not(target_arch = "wasm32"))]
-pub use dsl_file::{
-    DeferredDslFileSource, DslCaptureReader, DslChunkedCaptureReader, DslFileCaptureDataSource,
-    DslFileSource,
-};
-#[cfg(not(target_arch = "wasm32"))]
-pub use dslogic_u3pro16::{DsLogicU3Pro16, LinkSpeed, RusbTransport, UsbTransport};
-#[cfg(not(target_arch = "wasm32"))]
-pub use logic_analyzer::{
-    CaptureMode, ClockEdge, ClockSource, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
-    LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
-    LogicEncodingRequest, LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic,
-};
-#[cfg(not(target_arch = "wasm32"))]
-pub use sigrok_file::{
-    SigrokCaptureReader, SigrokChunkedCaptureReader, SigrokFileCaptureDataSource, SigrokFileSource,
-};
 pub use uart_demo_source::UartDemoSource;
 
-/// Convenient name for the production DSLogic source node.
-#[cfg(not(target_arch = "wasm32"))]
-pub type DsLogicU3Pro16Source = LogicAnalyzerSource<DsLogicU3Pro16<RusbTransport>>;
+std::cfg_select! {
+    target_arch = "wasm32" => {}
+    _ => {
+        mod dsl_file;
+        mod dslogic_u3pro16;
+        mod logic_analyzer;
+        mod sigrok_file;
+
+        pub use dsl_file::{
+            DeferredDslFileSource, DslCaptureReader, DslChunkedCaptureReader,
+            DslFileCaptureDataSource, DslFileSource,
+        };
+        pub use dslogic_u3pro16::{DsLogicU3Pro16, LinkSpeed, RusbTransport, UsbTransport};
+        pub use logic_analyzer::{
+            CaptureMode, ClockEdge, ClockSource, LogicAnalyzer, LogicAnalyzerError,
+            LogicAnalyzerInfo, LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig,
+            LogicChunk, LogicEncoding, LogicEncodingRequest, LogicTrigger, LogicTriggerStage,
+            TriggerCondition, TriggerLogic,
+        };
+        pub use sigrok_file::{
+            SigrokCaptureReader, SigrokChunkedCaptureReader, SigrokFileCaptureDataSource,
+            SigrokFileSource,
+        };
+
+        /// Convenient name for the production DSLogic source node.
+        pub type DsLogicU3Pro16Source = LogicAnalyzerSource<DsLogicU3Pro16<RusbTransport>>;
+    }
+}
 
 // Re-export Sample from runtime
 pub use crate::runtime::Sample;

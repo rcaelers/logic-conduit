@@ -28,31 +28,34 @@ use serde_json::Value;
 
 mod binary_decoder;
 mod buffer;
-#[cfg_attr(target_arch = "wasm32", path = "cache_platform_wasm.rs")]
-#[cfg_attr(not(target_arch = "wasm32"), path = "cache_platform_native.rs")]
-mod cache_platform;
 mod counter;
-#[cfg(not(target_arch = "wasm32"))]
-mod csv_writer;
-#[cfg(not(target_arch = "wasm32"))]
-mod file_source;
-#[cfg(not(target_arch = "wasm32"))]
-mod file_writer;
 mod formatter;
 mod logic_gate;
 mod plugin;
 mod port_kind;
-#[cfg(not(target_arch = "wasm32"))]
-mod sigrok_file_source;
 mod spi_decoder;
 mod sr_flip_flop;
-#[cfg(not(target_arch = "wasm32"))]
-mod text_file_writer;
 mod tgck_recorder;
 mod uart_decoder;
 mod uart_demo_source;
 mod viewer;
 mod word_matcher;
+
+std::cfg_select! {
+    target_arch = "wasm32" => {
+        #[path = "cache_platform_wasm.rs"]
+        mod cache_platform;
+    }
+    _ => {
+        #[path = "cache_platform_native.rs"]
+        mod cache_platform;
+        mod csv_writer;
+        mod file_source;
+        mod file_writer;
+        mod sigrok_file_source;
+        mod text_file_writer;
+    }
+}
 
 // ── Stream kinds ─────────────────────────────────────────────────────────────
 
@@ -202,16 +205,28 @@ pub struct BuilderRegistry(HashMap<String, Box<dyn RuntimeBuilder>>);
 impl BuilderRegistry {
     pub fn standard() -> Self {
         let mut builders: HashMap<String, Box<dyn RuntimeBuilder>> = HashMap::new();
-        #[cfg(not(target_arch = "wasm32"))]
-        builders.insert(
-            "DSL File Source".into(),
-            Box::new(file_source::FileSourceBuilder),
-        );
-        #[cfg(not(target_arch = "wasm32"))]
-        builders.insert(
-            "Sigrok File Source".into(),
-            Box::new(sigrok_file_source::SigrokFileSourceBuilder),
-        );
+        std::cfg_select! {
+            target_arch = "wasm32" => {}
+            _ => {
+                builders.insert(
+                    "DSL File Source".into(),
+                    Box::new(file_source::FileSourceBuilder),
+                );
+                builders.insert(
+                    "Sigrok File Source".into(),
+                    Box::new(sigrok_file_source::SigrokFileSourceBuilder),
+                );
+                builders.insert(
+                    "File Writer".into(),
+                    Box::new(file_writer::FileWriterBuilder),
+                );
+                builders.insert(
+                    "Text File Writer".into(),
+                    Box::new(text_file_writer::TextFileWriterBuilder),
+                );
+                builders.insert("CSV Writer".into(), Box::new(csv_writer::CsvWriterBuilder));
+            }
+        }
         builders.insert(
             "UART Demo Source".into(),
             Box::new(uart_demo_source::UartDemoSourceBuilder),
@@ -243,18 +258,6 @@ impl BuilderRegistry {
             "String Formatter".into(),
             Box::new(formatter::FormatterBuilder),
         );
-        #[cfg(not(target_arch = "wasm32"))]
-        builders.insert(
-            "File Writer".into(),
-            Box::new(file_writer::FileWriterBuilder),
-        );
-        #[cfg(not(target_arch = "wasm32"))]
-        builders.insert(
-            "Text File Writer".into(),
-            Box::new(text_file_writer::TextFileWriterBuilder),
-        );
-        #[cfg(not(target_arch = "wasm32"))]
-        builders.insert("CSV Writer".into(), Box::new(csv_writer::CsvWriterBuilder));
         builders.insert(
             "TGCK Recorder".into(),
             Box::new(tgck_recorder::TgckRecorderBuilder),

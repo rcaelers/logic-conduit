@@ -5,25 +5,25 @@
 //! later implementation steps.
 
 mod backend;
-#[cfg(not(target_arch = "wasm32"))]
-mod cache;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod codec;
 mod config;
 #[cfg(test)]
 mod contract_tests;
-#[cfg(not(target_arch = "wasm32"))]
-mod crc32c;
-#[cfg(not(target_arch = "wasm32"))]
-mod format;
-#[cfg(not(target_arch = "wasm32"))]
-mod persistent;
 mod platform;
 mod presence;
 mod query;
 mod state;
-#[cfg(not(target_arch = "wasm32"))]
-mod vlq;
+
+std::cfg_select! {
+    target_arch = "wasm32" => {}
+    _ => {
+        mod cache;
+        pub(crate) mod codec;
+        mod crc32c;
+        mod format;
+        mod persistent;
+        mod vlq;
+    }
+}
 
 pub(crate) use platform::store;
 

@@ -1,5 +1,4 @@
-#[cfg(not(target_arch = "wasm32"))]
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use logic_analyzer_viewer::LogicAnalyzerViewer;
 use node_graph::{NodeBadge, NodeGraphWidget, NodeId};
@@ -8,135 +7,15 @@ use crate::about::AboutWindow;
 use crate::toast::Toasts;
 use crate::{compiler, demo_signals, nodes};
 
-#[cfg(not(target_arch = "wasm32"))]
-enum FileCommand {
-    New,
-    Load,
-    LoadPath(PathBuf),
-    ClearRecent,
-    Save,
-    SaveAs,
-    Quit,
-}
+#[cfg_attr(target_arch = "wasm32", path = "app_platform/wasm_hooks.rs")]
+#[cfg_attr(not(target_arch = "wasm32"), path = "app_platform/native_hooks.rs")]
+mod platform_hooks;
 
-/// A destructive action (quit, new, or loading over the current graph) that
-/// must not proceed silently while there are unsaved changes. Set when the
-/// action is requested over a dirty graph; `show_guarded_action_dialog`
-/// resolves it (Save/Don't Save/Cancel) and either runs the action or drops
-/// it (Phase 5.1).
-#[cfg(not(target_arch = "wasm32"))]
-enum GuardedAction {
-    Quit,
-    New,
-    LoadPath(PathBuf),
-}
+#[cfg_attr(target_arch = "wasm32", path = "app_platform/wasm_font.rs")]
+#[cfg_attr(not(target_arch = "wasm32"), path = "app_platform/native_font.rs")]
+mod font_platform;
 
-/// UI/session state persisted across launches via `eframe::Storage`
-/// (Phase 5.2) — the graph document itself is never part of this; only
-/// layout and recently-opened files.
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(serde::Serialize, serde::Deserialize)]
-struct PersistedState {
-    analyzer_split: f32,
-    graph_ui_prefs: node_graph::GraphUiPrefs,
-    recent_files: Vec<PathBuf>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-const MAX_RECENT_FILES: usize = 10;
-
-/// Canonicalizes every path and drops later duplicates, keeping first
-/// occurrence (i.e. most-recent-first order survives) and capping at
-/// `MAX_RECENT_FILES`. Applied both when loading a persisted list (in case
-/// it was saved by a build before this normalization existed, or before a
-/// canonicalization edge case was fixed — old duplicate entries would
-/// otherwise never clear themselves out) and after every push, so the
-/// stored list is always self-healing rather than only preventing *new*
-/// duplicates.
-#[cfg(not(target_arch = "wasm32"))]
-fn normalize_recent_files(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
-    let mut seen = std::collections::HashSet::new();
-    let mut result = Vec::new();
-    for path in paths {
-        let canonical = path.canonicalize().unwrap_or(path);
-        if seen.insert(canonical.clone()) {
-            result.push(canonical);
-        }
-        if result.len() >= MAX_RECENT_FILES {
-            break;
-        }
-    }
-    result
-}
-
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
-fn is_quit_shortcut(event: &egui::Event) -> bool {
-    matches!(
-        event,
-        egui::Event::Key {
-            key: egui::Key::Q,
-            pressed: true,
-            modifiers,
-            ..
-        } if modifiers.matches_logically(egui::Modifiers::COMMAND)
-    )
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Clone)]
-pub enum NativeMenuCommand {
-    About,
-    New,
-    Load,
-    LoadPath(std::path::PathBuf),
-    ClearRecent,
-    Save,
-    SaveAs,
-    Quit,
-    Run,
-    Stop,
-    ClearDerivedCaches,
-}
-
-#[cfg(target_os = "macos")]
-struct NativeMenuBridge {
-    sender: crossbeam_channel::Sender<NativeMenuCommand>,
-    context: egui::Context,
-}
-
-#[cfg(target_os = "macos")]
-static NATIVE_MENU_BRIDGE: std::sync::OnceLock<NativeMenuBridge> = std::sync::OnceLock::new();
-
-#[cfg(target_os = "macos")]
-pub fn dispatch_native_menu_command(command: NativeMenuCommand) {
-    if let Some(bridge) = NATIVE_MENU_BRIDGE.get() {
-        let _ = bridge.sender.send(command);
-        bridge.context.request_repaint();
-    }
-}
-
-/// Reverse direction of `NATIVE_MENU_BRIDGE`: app state → native menu. The
-/// only current use is keeping the native "Open Recent" submenu live as
-/// files are opened/saved during the session, instead of only reflecting
-/// what was persisted as of the last launch. `main.rs` registers this once,
-/// on startup, with a closure that rebuilds the Cocoa submenu; both the
-/// registration and every call happen on the main thread (menu mutation
-/// requires it), so no synchronization beyond `OnceLock`'s own is needed.
-#[cfg(target_os = "macos")]
-static RECENT_FILES_LISTENER: std::sync::OnceLock<Box<dyn Fn(&[PathBuf]) + Send + Sync>> =
-    std::sync::OnceLock::new();
-
-#[cfg(target_os = "macos")]
-pub fn set_recent_files_listener(listener: impl Fn(&[PathBuf]) + Send + Sync + 'static) {
-    let _ = RECENT_FILES_LISTENER.set(Box::new(listener));
-}
-
-#[cfg(target_os = "macos")]
-fn notify_recent_files_changed(paths: &[PathBuf]) {
-    if let Some(listener) = RECENT_FILES_LISTENER.get() {
-        listener(paths);
-    }
-}
+use font_platform::load_symbol_font;
 
 pub struct App {
     node_graph: NodeGraphWidget,
@@ -152,27 +31,7 @@ pub struct App {
     /// Transient one-off notifications (file loaded/saved, node(s)
     /// copied/pasted, live-edit results) — bottom-right, self-clearing.
     toasts: Toasts,
-    #[cfg(not(target_arch = "wasm32"))]
-    current_file: Option<PathBuf>,
-    #[cfg(not(target_arch = "wasm32"))]
-    saved_graph: serde_json::Value,
-    #[cfg(not(target_arch = "wasm32"))]
-    pending_guarded_action: Option<GuardedAction>,
-    #[cfg(not(target_arch = "wasm32"))]
-    allow_close: bool,
-    /// MRU list, most recent first, max `MAX_RECENT_FILES`, deduped.
-    #[cfg(not(target_arch = "wasm32"))]
-    recent_files: Vec<PathBuf>,
-    /// Set while the "Clear the recent files list?" confirmation is up.
-    #[cfg(not(target_arch = "wasm32"))]
-    confirm_clear_recent: bool,
-    /// Set while the destructive all-derived-caches confirmation is open.
-    #[cfg(not(target_arch = "wasm32"))]
-    confirm_clear_derived_caches: bool,
-    #[cfg(not(target_arch = "wasm32"))]
-    derived_cache_nodes: std::collections::HashSet<NodeId>,
-    #[cfg(target_os = "macos")]
-    native_menu_commands: crossbeam_channel::Receiver<NativeMenuCommand>,
+    platform: crate::app_platform::PlatformState,
     about: AboutWindow,
     /// Nodes badged with compile errors; cleared on the next Run.
     error_badges: Vec<NodeId>,
@@ -189,14 +48,7 @@ impl App {
     /// the native macOS menu to build its "Open Recent" submenu (Phase 5.1).
     /// Empty on wasm, where there is no recent-files list at all.
     pub fn recent_files(&self) -> &[std::path::PathBuf] {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            &self.recent_files
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            &[]
-        }
+        self.platform.recent_files()
     }
 
     /// Like [`Self::new`], but first runs `register_plugins` against a
@@ -210,23 +62,16 @@ impl App {
         cc: &eframe::CreationContext,
         register_plugins: impl FnOnce(&mut compiler::PluginContext),
     ) -> Self {
-        #[cfg(not(target_arch = "wasm32"))]
-        return Self::new_with_plugins_and_file(cc, None, register_plugins);
-
-        #[cfg(target_arch = "wasm32")]
-        Self::build(cc, register_plugins)
+        Self::new_with_plugins_and_file(cc, None, register_plugins)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn new_with_plugins_and_file(
         cc: &eframe::CreationContext,
         file: Option<&Path>,
         register_plugins: impl FnOnce(&mut compiler::PluginContext),
     ) -> Self {
         let mut app = Self::build(cc, register_plugins);
-        if let Some(file) = file {
-            app.load_file(file.to_owned());
-        }
+        app.platform_load_startup_file(file);
         app
     }
 
@@ -241,48 +86,11 @@ impl App {
             &mut registry,
             &mut builders,
         ));
-        #[allow(unused_mut)] // mutable only for the wasm demo graph
         let mut widget = NodeGraphWidget::new(registry);
-        #[cfg(target_arch = "wasm32")]
-        nodes::populate_uart_demo(&mut widget);
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let persisted = cc
-            .storage
-            .and_then(|storage| eframe::get_value::<PersistedState>(storage, eframe::APP_KEY));
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(persisted) = &persisted {
-            widget.set_ui_prefs(persisted.graph_ui_prefs.clone());
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        let analyzer_split = persisted.as_ref().map_or(0.42, |p| p.analyzer_split);
-        #[cfg(target_arch = "wasm32")]
-        let analyzer_split = 0.42;
-        #[cfg(not(target_arch = "wasm32"))]
-        let recent_files = persisted
-            .map(|p| normalize_recent_files(p.recent_files))
-            .unwrap_or_default();
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let saved_graph = widget
-            .snapshot_value()
-            .expect("new graph should always serialize");
+        let (platform, analyzer_split) =
+            crate::app_platform::PlatformState::restore(cc, &mut widget);
         let mut logic_analyzer = LogicAnalyzerViewer::new();
         logic_analyzer.set_channels(demo_signals::channels());
-        #[cfg(target_os = "macos")]
-        let native_menu_commands = {
-            let (sender, receiver) = crossbeam_channel::unbounded();
-            assert!(
-                NATIVE_MENU_BRIDGE
-                    .set(NativeMenuBridge {
-                        sender,
-                        context: cc.egui_ctx.clone(),
-                    })
-                    .is_ok(),
-                "only one native application instance is supported"
-            );
-            receiver
-        };
         Self {
             node_graph: widget,
             logic_analyzer,
@@ -291,498 +99,10 @@ impl App {
             run: None,
             run_message: None,
             toasts: Toasts::default(),
-            #[cfg(not(target_arch = "wasm32"))]
-            current_file: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            saved_graph,
-            #[cfg(not(target_arch = "wasm32"))]
-            pending_guarded_action: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            allow_close: false,
-            #[cfg(not(target_arch = "wasm32"))]
-            recent_files,
-            #[cfg(not(target_arch = "wasm32"))]
-            confirm_clear_recent: false,
-            #[cfg(not(target_arch = "wasm32"))]
-            confirm_clear_derived_caches: false,
-            #[cfg(not(target_arch = "wasm32"))]
-            derived_cache_nodes: std::collections::HashSet::new(),
-            #[cfg(target_os = "macos")]
-            native_menu_commands,
+            platform,
             about: AboutWindow::new(),
             error_badges: Vec::new(),
             last_live_sync: 0.0,
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn load_file(&mut self, path: PathBuf) {
-        match self.node_graph.load_from_path(&path) {
-            Ok(()) => {
-                if let Some(run) = &mut self.run {
-                    run.stop();
-                }
-                self.run_message = None;
-                self.error_badges.clear();
-                self.current_file = Some(path.clone());
-                self.mark_graph_saved();
-                self.push_recent_file(path.clone());
-                self.refresh_derived_cache_nodes();
-                self.toasts.info(format!("Loaded {}", path.display()));
-            }
-            Err(error) => self.toasts.error(error),
-        }
-    }
-
-    /// Inserts `path` at the front of the MRU list, deduping and capping at
-    /// `MAX_RECENT_FILES` (Phase 5.1).
-    #[cfg(not(target_arch = "wasm32"))]
-    fn push_recent_file(&mut self, path: PathBuf) {
-        let mut paths = self.recent_files.clone();
-        paths.insert(0, path);
-        self.recent_files = normalize_recent_files(paths);
-        #[cfg(target_os = "macos")]
-        notify_recent_files_changed(&self.recent_files);
-    }
-
-    /// Resets to a fresh, empty graph — File → New (Phase 5.1). Assumes the
-    /// unsaved-changes guard has already been resolved by the caller.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn do_new(&mut self) {
-        if let Some(run) = &mut self.run {
-            run.stop();
-        }
-        self.run_message = None;
-        self.error_badges.clear();
-        self.node_graph.new_graph();
-        self.derived_cache_nodes.clear();
-        self.current_file = None;
-        self.mark_graph_saved();
-        self.toasts.info("New graph");
-    }
-
-    /// Requests File → New, guarding on unsaved changes the same way
-    /// `request_quit` does.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn request_new(&mut self) {
-        if self.has_unsaved_changes() {
-            self.pending_guarded_action = Some(GuardedAction::New);
-        } else {
-            self.do_new();
-        }
-    }
-
-    /// Requests loading `path` (e.g. from Open Recent), guarding on unsaved
-    /// changes the same way `request_quit` does.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn request_load_path(&mut self, path: PathBuf) {
-        if self.has_unsaved_changes() {
-            self.pending_guarded_action = Some(GuardedAction::LoadPath(path));
-        } else {
-            self.load_file(path);
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn choose_and_load_file(&mut self) {
-        let mut dialog = rfd::FileDialog::new()
-            .set_title("Load graph")
-            .add_filter("Graph JSON", &["json"]);
-        if let Some(parent) = self.current_file.as_ref().and_then(|path| path.parent()) {
-            dialog = dialog.set_directory(parent);
-        }
-        if let Some(path) = dialog.pick_file() {
-            self.load_file(path);
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn save_file(&mut self) -> bool {
-        let Some(path) = self.current_file.clone() else {
-            return self.save_file_as();
-        };
-        self.save_to_file(path)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn save_file_as(&mut self) -> bool {
-        let mut dialog = rfd::FileDialog::new()
-            .set_title("Save graph as")
-            .set_file_name("pipeline.json")
-            .add_filter("Graph JSON", &["json"]);
-        if let Some(path) = &self.current_file {
-            if let Some(parent) = path.parent() {
-                dialog = dialog.set_directory(parent);
-            }
-            if let Some(file_name) = path.file_name().and_then(|name| name.to_str()) {
-                dialog = dialog.set_file_name(file_name);
-            }
-        }
-        let path = dialog.save_file();
-        let Some(path) = path else {
-            return false;
-        };
-        self.save_to_file(path)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn save_to_file(&mut self, path: PathBuf) -> bool {
-        match self.node_graph.save_to_path(&path) {
-            Ok(()) => {
-                self.current_file = Some(path.clone());
-                self.mark_graph_saved();
-                self.push_recent_file(path.clone());
-                self.toasts.info(format!("Saved {}", path.display()));
-                true
-            }
-            Err(error) => {
-                self.toasts.error(error);
-                false
-            }
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn mark_graph_saved(&mut self) {
-        match self.node_graph.snapshot_value() {
-            Ok(graph) => self.saved_graph = graph,
-            Err(error) => self.toasts.error(error),
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn has_unsaved_changes(&mut self) -> bool {
-        self.node_graph
-            .snapshot_value()
-            .map_or(true, |graph| graph != self.saved_graph)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn request_quit(&mut self, ctx: &egui::Context) {
-        if self.has_unsaved_changes() {
-            self.pending_guarded_action = Some(GuardedAction::Quit);
-        } else {
-            self.allow_close = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn execute_file_command(&mut self, command: FileCommand, ctx: &egui::Context) {
-        match command {
-            FileCommand::New => self.request_new(),
-            FileCommand::Load => self.choose_and_load_file(),
-            FileCommand::LoadPath(path) => self.request_load_path(path),
-            FileCommand::ClearRecent => self.confirm_clear_recent = true,
-            FileCommand::Save => {
-                self.save_file();
-            }
-            FileCommand::SaveAs => {
-                self.save_file_as();
-            }
-            FileCommand::Quit => self.request_quit(ctx),
-        }
-    }
-
-    /// Resolves whatever `pending_guarded_action` (quit/new/load-over-dirty)
-    /// is outstanding — Save/Don't Save/Cancel, same dialog for all three
-    /// (Phase 5.1).
-    #[cfg(not(target_arch = "wasm32"))]
-    fn show_guarded_action_dialog(&mut self, ctx: &egui::Context) {
-        if self.pending_guarded_action.is_none() {
-            return;
-        }
-
-        enum DialogChoice {
-            Save,
-            Discard,
-            Cancel,
-        }
-
-        let mut choice = None;
-        egui::Window::new("Save changes?")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .show(ctx, |ui| {
-                ui.label("Save changes to the graph before continuing?");
-                ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
-                        choice = Some(DialogChoice::Save);
-                    }
-                    if ui.button("Don't Save").clicked() {
-                        choice = Some(DialogChoice::Discard);
-                    }
-                    if ui.button("Cancel").clicked() {
-                        choice = Some(DialogChoice::Cancel);
-                    }
-                });
-            });
-
-        match choice {
-            // Save can itself open a blocking Save As dialog and be
-            // cancelled — leave `pending_guarded_action` set so this dialog
-            // simply reopens next frame rather than silently dropping the
-            // action.
-            Some(DialogChoice::Save) if self.save_file() => self.complete_guarded_action(ctx),
-            Some(DialogChoice::Discard) => self.complete_guarded_action(ctx),
-            Some(DialogChoice::Cancel) => self.pending_guarded_action = None,
-            _ => {}
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn complete_guarded_action(&mut self, ctx: &egui::Context) {
-        let Some(action) = self.pending_guarded_action.take() else {
-            return;
-        };
-        match action {
-            GuardedAction::Quit => {
-                self.allow_close = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-            GuardedAction::New => self.do_new(),
-            GuardedAction::LoadPath(path) => self.load_file(path),
-        }
-    }
-
-    /// Resolves the "Clear the recent files list?" confirmation triggered
-    /// by either the egui or native "Clear Recent" menu item.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn show_clear_recent_dialog(&mut self, ctx: &egui::Context) {
-        if !self.confirm_clear_recent {
-            return;
-        }
-
-        enum DialogChoice {
-            Clear,
-            Cancel,
-        }
-
-        let mut choice = None;
-        egui::Window::new("Clear recent files?")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .show(ctx, |ui| {
-                ui.label("Remove all entries from the recent files list?");
-                ui.horizontal(|ui| {
-                    if ui.button("Clear").clicked() {
-                        choice = Some(DialogChoice::Clear);
-                    }
-                    if ui.button("Cancel").clicked() {
-                        choice = Some(DialogChoice::Cancel);
-                    }
-                });
-            });
-
-        match choice {
-            Some(DialogChoice::Clear) => {
-                self.recent_files.clear();
-                #[cfg(target_os = "macos")]
-                notify_recent_files_changed(&[]);
-                self.confirm_clear_recent = false;
-            }
-            Some(DialogChoice::Cancel) => self.confirm_clear_recent = false,
-            None => {}
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn show_clear_derived_caches_dialog(&mut self, ctx: &egui::Context) {
-        if !self.confirm_clear_derived_caches {
-            return;
-        }
-
-        let mut clear = false;
-        let mut cancel = false;
-        egui::Window::new("Clear all derived data caches?")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .show(ctx, |ui| {
-                ui.label("Cached decoded data for every pipeline will be removed.");
-                ui.horizontal(|ui| {
-                    if ui.button("Clear All").clicked() {
-                        clear = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        cancel = true;
-                    }
-                });
-            });
-
-        if clear {
-            self.confirm_clear_derived_caches = false;
-            self.clear_all_derived_caches();
-        } else if cancel {
-            self.confirm_clear_derived_caches = false;
-        }
-    }
-
-    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
-    fn show_menu_bar(&mut self, ui: &mut egui::Ui) {
-        let new_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::N);
-        let load_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::O);
-        let save_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
-        let save_as_shortcut = egui::KeyboardShortcut::new(
-            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-            egui::Key::S,
-        );
-        let quit_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Q);
-        let run_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::R);
-        let stop_shortcut =
-            egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Period);
-        let mut command = if ui.input_mut(|input| input.consume_shortcut(&new_shortcut)) {
-            Some(FileCommand::New)
-        } else if ui.input_mut(|input| input.consume_shortcut(&load_shortcut)) {
-            Some(FileCommand::Load)
-        } else if ui.input_mut(|input| input.consume_shortcut(&save_as_shortcut)) {
-            Some(FileCommand::SaveAs)
-        } else if ui.input_mut(|input| input.consume_shortcut(&save_shortcut)) {
-            Some(FileCommand::Save)
-        } else if ui.input_mut(|input| input.consume_shortcut(&quit_shortcut)) {
-            Some(FileCommand::Quit)
-        } else {
-            None
-        };
-        // Not routed through `command`/`execute_file_command` like the File
-        // items above — Run/Stop are self-contained and idempotent
-        // (`run_command`/`stop_command` no-op when they don't apply), so
-        // there's nothing to defer.
-        if ui.input_mut(|input| input.consume_shortcut(&run_shortcut)) {
-            self.run_command();
-        } else if ui.input_mut(|input| input.consume_shortcut(&stop_shortcut)) {
-            self.stop_command();
-        }
-
-        egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if ui
-                    .add(
-                        egui::Button::new("New")
-                            .shortcut_text(ui.ctx().format_shortcut(&new_shortcut)),
-                    )
-                    .clicked()
-                {
-                    command = Some(FileCommand::New);
-                    ui.close();
-                }
-                if ui
-                    .add(
-                        egui::Button::new("Load...")
-                            .shortcut_text(ui.ctx().format_shortcut(&load_shortcut)),
-                    )
-                    .clicked()
-                {
-                    command = Some(FileCommand::Load);
-                    ui.close();
-                }
-                ui.menu_button("Open Recent", |ui| {
-                    let existing: Vec<PathBuf> = self
-                        .recent_files
-                        .iter()
-                        .filter(|path| path.exists())
-                        .cloned()
-                        .collect();
-                    if existing.is_empty() {
-                        ui.weak("No recent files");
-                    } else {
-                        for path in &existing {
-                            let label = path
-                                .file_name()
-                                .and_then(|name| name.to_str())
-                                .unwrap_or("?");
-                            if ui.button(label).clicked() {
-                                command = Some(FileCommand::LoadPath(path.clone()));
-                                ui.close();
-                            }
-                        }
-                    }
-                    ui.separator();
-                    if ui
-                        .add_enabled(!existing.is_empty(), egui::Button::new("Clear Recent"))
-                        .clicked()
-                    {
-                        command = Some(FileCommand::ClearRecent);
-                        ui.close();
-                    }
-                });
-                if ui
-                    .add(
-                        egui::Button::new("Save")
-                            .shortcut_text(ui.ctx().format_shortcut(&save_shortcut)),
-                    )
-                    .clicked()
-                {
-                    command = Some(FileCommand::Save);
-                    ui.close();
-                }
-                if ui
-                    .add(
-                        egui::Button::new("Save As...")
-                            .shortcut_text(ui.ctx().format_shortcut(&save_as_shortcut)),
-                    )
-                    .clicked()
-                {
-                    command = Some(FileCommand::SaveAs);
-                    ui.close();
-                }
-                ui.separator();
-                if ui
-                    .add(
-                        egui::Button::new("Quit")
-                            .shortcut_text(ui.ctx().format_shortcut(&quit_shortcut)),
-                    )
-                    .clicked()
-                {
-                    command = Some(FileCommand::Quit);
-                    ui.close();
-                }
-            });
-            ui.menu_button("Pipeline", |ui| {
-                if ui
-                    .add(
-                        egui::Button::new("Run")
-                            .shortcut_text(ui.ctx().format_shortcut(&run_shortcut)),
-                    )
-                    .clicked()
-                {
-                    self.run_command();
-                    ui.close();
-                }
-                if ui
-                    .add(
-                        egui::Button::new("Stop")
-                            .shortcut_text(ui.ctx().format_shortcut(&stop_shortcut)),
-                    )
-                    .clicked()
-                {
-                    self.stop_command();
-                    ui.close();
-                }
-                ui.separator();
-                if ui
-                    .add_enabled(
-                        !self.is_running(),
-                        egui::Button::new("Clear All Derived Data Caches..."),
-                    )
-                    .clicked()
-                {
-                    self.request_clear_all_derived_caches();
-                    ui.close();
-                }
-            });
-            ui.menu_button("Help", |ui| {
-                if ui.button("About DSL Pipeline Editor").clicked() {
-                    self.about.open();
-                    ui.close();
-                }
-            });
-        });
-
-        if let Some(command) = command {
-            self.execute_file_command(command, ui.ctx());
         }
     }
 
@@ -810,8 +130,6 @@ impl App {
     }
 
     fn start_run(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        self.refresh_derived_cache_nodes();
         for id in self.error_badges.drain(..) {
             self.node_graph.set_node_badge(id, None);
         }
@@ -820,10 +138,7 @@ impl App {
 
         // Fresh lane store per run: stale lanes vanish atomically.
         let mut ctx = compiler::CompileCtx::default();
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            ctx.persistent_cache_directory = Some(dsl::default_cache_directory());
-        }
+        self.platform_prepare_run(&mut ctx);
         self.logic_analyzer
             .set_derived_lanes(ctx.derived_lanes.clone());
 
@@ -860,130 +175,6 @@ impl App {
             && let Some(run) = &mut self.run
         {
             run.stop();
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn can_clear_derived_caches(&mut self) -> bool {
-        if self.is_running() {
-            self.toasts
-                .error("Stop the pipeline before clearing derived data caches");
-            false
-        } else {
-            true
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn release_derived_data_handles(&mut self) {
-        self.run = None;
-        self.logic_analyzer
-            .set_derived_lanes(dsl::DerivedLanes::new());
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn refresh_derived_cache_nodes(&mut self) {
-        self.derived_cache_nodes =
-            compiler::derived_cache_configs_by_node(self.node_graph.graph(), &self.builders)
-                .map(|inventory| {
-                    inventory
-                        .into_keys()
-                        .filter(|id| self.node_graph.graph().nodes.contains_key(id))
-                        .collect()
-                })
-                .unwrap_or_default();
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn clear_node_derived_cache(&mut self, node_id: NodeId) {
-        if !self.can_clear_derived_caches() {
-            return;
-        }
-        let node_name = self
-            .node_graph
-            .graph()
-            .nodes
-            .get(&node_id)
-            .map(|node| node.title.clone())
-            .unwrap_or_else(|| "node".to_owned());
-        let configs = match compiler::derived_cache_configs_by_node(
-            self.node_graph.graph(),
-            &self.builders,
-        ) {
-            Ok(mut inventory) => inventory.remove(&node_id).unwrap_or_default(),
-            Err(errors) => {
-                let message = errors
-                    .first()
-                    .map(|error| error.message.as_str())
-                    .unwrap_or("graph could not be compiled");
-                self.toasts
-                    .error(format!("Cannot determine cache: {message}"));
-                return;
-            }
-        };
-        if configs.is_empty() {
-            self.toasts
-                .info(format!("No derived data cache found for {node_name}"));
-            return;
-        }
-
-        self.release_derived_data_handles();
-        let mut removed_entries = 0usize;
-        let mut removed_bytes = 0u64;
-        for config in &configs {
-            match dsl::clear_cache_entry(config) {
-                Ok(stats) => {
-                    removed_entries += stats.removed_entries;
-                    removed_bytes = removed_bytes.saturating_add(stats.removed_bytes);
-                }
-                Err(error) => {
-                    self.toasts.error(format!("Failed to clear cache: {error}"));
-                    return;
-                }
-            }
-        }
-        if removed_entries == 0 {
-            self.toasts
-                .info(format!("No derived data cache found for {node_name}"));
-        } else {
-            self.toasts.info(format!(
-                "Cleared {removed_entries} derived cache entr{} for {node_name} ({removed_bytes} bytes)",
-                if removed_entries == 1 { "y" } else { "ies" }
-            ));
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn request_clear_all_derived_caches(&mut self) {
-        if self.can_clear_derived_caches() {
-            self.confirm_clear_derived_caches = true;
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn clear_all_derived_caches(&mut self) {
-        if !self.can_clear_derived_caches() {
-            return;
-        }
-        self.release_derived_data_handles();
-        let directory = dsl::default_cache_directory();
-        match dsl::clear_cache(&directory) {
-            Ok(stats) if stats.removed_entries == 0 && stats.removed_bytes == 0 => {
-                self.toasts.info("No derived data caches found");
-            }
-            Ok(stats) => self.toasts.info(format!(
-                "Cleared {} derived cache entr{} ({} bytes)",
-                stats.removed_entries,
-                if stats.removed_entries == 1 {
-                    "y"
-                } else {
-                    "ies"
-                },
-                stats.removed_bytes
-            )),
-            Err(error) => self
-                .toasts
-                .error(format!("Failed to clear caches: {error}")),
         }
     }
 
@@ -1143,49 +334,6 @@ fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-#[cfg(target_arch = "wasm32")]
-fn load_symbol_font() -> Option<egui::FontData> {
-    None
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn load_symbol_font() -> Option<egui::FontData> {
-    symbol_font_paths()
-        .iter()
-        .find_map(|path| std::fs::read(path).ok())
-        .map(egui::FontData::from_owned)
-}
-
-#[cfg(target_os = "macos")]
-fn symbol_font_paths() -> &'static [&'static str] {
-    &["/System/Library/Fonts/Apple Symbols.ttf"]
-}
-
-#[cfg(target_os = "windows")]
-fn symbol_font_paths() -> &'static [&'static str] {
-    &[r"C:\Windows\Fonts\seguisym.ttf"]
-}
-
-#[cfg(target_os = "linux")]
-fn symbol_font_paths() -> &'static [&'static str] {
-    &[
-        "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
-        "/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
-        "/usr/share/fonts/google-noto-sans-symbols2-fonts/NotoSansSymbols2-Regular.ttf",
-        "/usr/local/share/fonts/NotoSansSymbols2-Regular.ttf",
-    ]
-}
-
-#[cfg(not(any(
-    target_os = "macos",
-    target_os = "windows",
-    target_os = "linux",
-    target_arch = "wasm32"
-)))]
-fn symbol_font_paths() -> &'static [&'static str] {
-    &[]
-}
-
 #[cfg(test)]
 mod font_tests {
     use super::{install_fonts, load_symbol_font};
@@ -1223,103 +371,21 @@ mod font_tests {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32"), not(target_os = "macos")))]
-mod close_shortcut_tests {
-    use super::is_quit_shortcut;
-
-    #[test]
-    fn recognizes_command_q_key_presses() {
-        let press = egui::Event::Key {
-            key: egui::Key::Q,
-            physical_key: Some(egui::Key::Q),
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::COMMAND,
-        };
-        let release = egui::Event::Key {
-            key: egui::Key::Q,
-            physical_key: Some(egui::Key::Q),
-            pressed: false,
-            repeat: false,
-            modifiers: egui::Modifiers::COMMAND,
-        };
-
-        assert!(is_quit_shortcut(&press));
-        assert!(!is_quit_shortcut(&release));
-    }
-}
-
 impl eframe::App for App {
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, _raw_input: &mut egui::RawInput) {
-        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
-        {
-            let quit_requested = _raw_input.events.iter().any(is_quit_shortcut);
-            _raw_input.events.retain(|event| !is_quit_shortcut(event));
-            if quit_requested && !self.allow_close {
-                self.request_quit(_ctx);
-            }
-        }
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.platform_raw_input_hook(ctx, raw_input);
     }
 
-    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        #[cfg(target_os = "macos")]
-        while let Ok(command) = self.native_menu_commands.try_recv() {
-            let command = match command {
-                NativeMenuCommand::About => {
-                    self.about.open();
-                    continue;
-                }
-                NativeMenuCommand::Run => {
-                    self.run_command();
-                    continue;
-                }
-                NativeMenuCommand::Stop => {
-                    self.stop_command();
-                    continue;
-                }
-                NativeMenuCommand::ClearDerivedCaches => {
-                    self.request_clear_all_derived_caches();
-                    continue;
-                }
-                NativeMenuCommand::New => FileCommand::New,
-                NativeMenuCommand::Load => FileCommand::Load,
-                NativeMenuCommand::LoadPath(path) => FileCommand::LoadPath(path),
-                NativeMenuCommand::ClearRecent => FileCommand::ClearRecent,
-                NativeMenuCommand::Save => FileCommand::Save,
-                NativeMenuCommand::SaveAs => FileCommand::SaveAs,
-                NativeMenuCommand::Quit => FileCommand::Quit,
-            };
-            self.execute_file_command(command, _ctx);
-        }
-
-        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
-        {
-            let os_close_requested = _ctx.input(|input| input.viewport().close_requested());
-            if !self.allow_close && os_close_requested {
-                if self.has_unsaved_changes() {
-                    self.pending_guarded_action = Some(GuardedAction::Quit);
-                    _ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                } else {
-                    self.allow_close = true;
-                    _ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            }
-        }
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.platform_logic(ctx);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        let state = PersistedState {
-            analyzer_split: self.analyzer_split,
-            graph_ui_prefs: self.node_graph.ui_prefs(),
-            recent_files: self.recent_files.clone(),
-        };
-        eframe::set_value(storage, eframe::APP_KEY, &state);
+        self.platform_save(storage);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
-        self.show_menu_bar(ui);
+        self.platform_before_ui(ui);
 
         let available = ui.available_size();
         let splitter_hit_height = 7.0;
@@ -1333,22 +399,7 @@ impl eframe::App for App {
             analyzer_height = analyzer_height.clamp(analyzer_min, usable_height - graph_min);
         }
 
-        // The viewer is generic over `CaptureDataSource`; the app maps the
-        // selected file-source node to its format-specific data source.
-        #[cfg(not(target_arch = "wasm32"))]
-        match nodes::capture_file_source(self.node_graph.graph()) {
-            Some(nodes::CaptureFileSource::Dsl(file)) => {
-                self.logic_analyzer.set_capture_path(file, |path| {
-                    dsl::DslFileCaptureDataSource::open(path).map_err(|e| e.to_string())
-                })
-            }
-            Some(nodes::CaptureFileSource::Sigrok(file)) => {
-                self.logic_analyzer.set_capture_path(file, |path| {
-                    dsl::SigrokFileCaptureDataSource::open(path).map_err(|e| e.to_string())
-                })
-            }
-            None => self.logic_analyzer.clear_capture(),
-        }
+        self.platform_sync_capture();
 
         let origin = ui.cursor().min;
         let splitter_rect = egui::Rect::from_min_size(
@@ -1412,28 +463,18 @@ impl eframe::App for App {
             self.show_toolbar(ui, status_hint);
         });
 
-        #[cfg(not(target_arch = "wasm32"))]
-        self.node_graph
-            .set_derived_cache_nodes(self.derived_cache_nodes.iter().copied());
+        self.platform_before_graph();
         ui.allocate_ui(egui::vec2(available.x, graph_height), |ui| {
             self.node_graph.show(ui);
         });
         if let Some(message) = self.node_graph.take_io_status() {
             self.toasts.info(message);
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(node_id) = self.node_graph.take_clear_derived_cache_request() {
-            self.clear_node_derived_cache(node_id);
-        }
+        self.platform_after_graph();
 
         self.about.show(ui.ctx());
 
-        #[cfg(not(target_arch = "wasm32"))]
-        self.show_guarded_action_dialog(ui.ctx());
-        #[cfg(not(target_arch = "wasm32"))]
-        self.show_clear_recent_dialog(ui.ctx());
-        #[cfg(not(target_arch = "wasm32"))]
-        self.show_clear_derived_caches_dialog(ui.ctx());
+        self.platform_after_ui(ui.ctx());
 
         self.toasts.show(ui.ctx());
     }

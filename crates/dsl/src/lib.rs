@@ -43,30 +43,11 @@ pub use nodes::sinks::{
     IndexedAnnotationLane, LaneSummary, MarkerFold, TextFileWriter, TgckRecorder, ViewerLaneKind,
     ViewerRetention, ViewerSink, ViewerSinkMetrics, ViewerSinkMetricsSnapshot, WriteWidth,
 };
-#[cfg(not(target_arch = "wasm32"))]
-pub use nodes::{
-    CaptureMode, ClockEdge, ClockSource, DeferredDslFileSource, DsLogicU3Pro16,
-    DsLogicU3Pro16Source, DslCaptureReader, DslChunkedCaptureReader, DslFileCaptureDataSource,
-    DslFileSource, LinkSpeed, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
-    LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
-    LogicEncodingRequest, LogicTrigger, LogicTriggerStage, RusbTransport, SigrokCaptureReader,
-    SigrokChunkedCaptureReader, SigrokFileCaptureDataSource, SigrokFileSource, TriggerCondition,
-    TriggerLogic, UsbTransport,
-};
 // Re-export data types from runtime
 pub use runtime::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 pub use runtime::derived_word_store::{
     AnnotationQuery, BlockCodecConfig, IndexedAnnotationStore, IndexedAnnotationWriter,
     LiveStoreConfig, PersistentStoreConfig, StoreStatus, WordPresenceBucket,
-};
-#[cfg(not(target_arch = "wasm32"))]
-pub use runtime::derived_word_store::{
-    DecodedBlockCacheStats, configure_decoded_block_cache, decoded_block_cache_stats,
-    reset_decoded_block_cache_stats,
-};
-#[cfg(not(target_arch = "wasm32"))]
-pub use runtime::derived_word_store::{
-    cleanup_cache, clear_cache, clear_cache_entry, default_cache_directory,
 };
 pub use runtime::{
     BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureIndex, CaptureMetadata,
@@ -74,8 +55,6 @@ pub use runtime::{
     CaptureWaveformSegment, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
     DslWaveformSegment, NumberSample, Sample, SampleBlock, TextSample, Trigger, Word,
 };
-#[cfg(not(target_arch = "wasm32"))]
-pub use runtime::{CaptureIndexProgress, IndexSampler, exact_window_sample_limit};
 // Re-export streaming runtime components
 pub use runtime::{
     AppManager, ChannelMessage, ConfigOutcome, ConfigValue, Connection, ConnectionError,
@@ -85,6 +64,28 @@ pub use runtime::{
     ReceiverSelector, SampleKind, Scheduler, Sender, SharedSenders, StopHandle, Watchdog,
     WorkError, WorkResult, register_type,
 };
+
+std::cfg_select! {
+    target_arch = "wasm32" => {}
+    _ => {
+        pub use nodes::{
+            CaptureMode, ClockEdge, ClockSource, DeferredDslFileSource, DsLogicU3Pro16,
+            DsLogicU3Pro16Source, DslCaptureReader, DslChunkedCaptureReader,
+            DslFileCaptureDataSource, DslFileSource, LinkSpeed, LogicAnalyzer,
+            LogicAnalyzerError, LogicAnalyzerInfo, LogicAnalyzerResult, LogicAnalyzerSource,
+            LogicCaptureConfig, LogicChunk, LogicEncoding, LogicEncodingRequest, LogicTrigger,
+            LogicTriggerStage, RusbTransport, SigrokCaptureReader, SigrokChunkedCaptureReader,
+            SigrokFileCaptureDataSource, SigrokFileSource, TriggerCondition, TriggerLogic,
+            UsbTransport,
+        };
+        pub use runtime::derived_word_store::{
+            DecodedBlockCacheStats, cleanup_cache, clear_cache, clear_cache_entry,
+            configure_decoded_block_cache, decoded_block_cache_stats, default_cache_directory,
+            reset_decoded_block_cache_stats,
+        };
+        pub use runtime::{CaptureIndexProgress, IndexSampler, exact_window_sample_limit};
+    }
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {

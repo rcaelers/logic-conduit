@@ -21,52 +21,56 @@ use node_graph::{NodeDef, NodeTypeRegistry, SocketDef, SocketShape};
 mod binary_decoder;
 mod buffer;
 mod counter;
-#[cfg(not(target_arch = "wasm32"))]
-mod csv_writer;
 mod dslogic_u3pro16;
 mod file_source;
 mod file_writer;
 mod formatter;
 mod i2c_decoder;
 mod logic_gate;
-#[cfg(not(target_arch = "wasm32"))]
-mod sigrok_file_source;
 mod spi_decoder;
 mod sr_flip_flop;
-#[cfg(not(target_arch = "wasm32"))]
-mod text_file_writer;
 mod tgck_recorder;
 mod uart_decoder;
 mod uart_demo_source;
 mod viewer;
 mod word_matcher;
 
+std::cfg_select! {
+    target_arch = "wasm32" => {}
+    _ => {
+        mod csv_writer;
+        mod sigrok_file_source;
+        mod text_file_writer;
+    }
+}
+
 pub use binary_decoder::{BinaryDecoder, BinaryDecoderState};
 pub use buffer::{Buffer, BufferState};
 pub use counter::{Counter, CounterState};
-#[cfg(not(target_arch = "wasm32"))]
-pub use csv_writer::{CsvWriter, CsvWriterState};
 pub use dslogic_u3pro16::DsLogicU3Pro16;
 pub use file_source::DslFileSource;
-#[cfg(not(target_arch = "wasm32"))]
-pub use file_source::DslFileSourceState;
 pub use file_writer::FileWriter;
-#[cfg(not(target_arch = "wasm32"))]
-pub use file_writer::FileWriterState;
 pub use formatter::{StringFormatter, StringFormatterState};
 pub use i2c_decoder::I2cDecoder;
 pub use logic_gate::{LogicGate, LogicGateState};
-#[cfg(not(target_arch = "wasm32"))]
-pub use sigrok_file_source::{SigrokFileSource, SigrokFileSourceState};
 pub use spi_decoder::{SpiDecoder, SpiDecoderState};
 pub use sr_flip_flop::{SrFlipFlop, SrFlipFlopState};
-#[cfg(not(target_arch = "wasm32"))]
-pub use text_file_writer::TextFileWriter;
 pub use tgck_recorder::TgckRecorder;
 pub use uart_decoder::{UartDecoder, UartDecoderState, selected_baud_rate};
 pub use uart_demo_source::{UartDemoSource, UartDemoSourceState};
 pub use viewer::{Viewer, ViewerState};
 pub use word_matcher::{WordMatcher, WordMatcherState, default_match_op, default_trigger_at};
+
+std::cfg_select! {
+    target_arch = "wasm32" => {}
+    _ => {
+        pub use csv_writer::{CsvWriter, CsvWriterState};
+        pub use file_source::DslFileSourceState;
+        pub use file_writer::FileWriterState;
+        pub use sigrok_file_source::{SigrokFileSource, SigrokFileSourceState};
+        pub use text_file_writer::TextFileWriter;
+    }
+}
 
 // ── Stream socket types (`docs/APP_DESIGN.md`) ───────────────────────────────────────────────
 
@@ -191,10 +195,16 @@ pub fn build_registry() -> NodeTypeRegistry {
     // File-backed node types are native-only (no filesystem in the
     // browser) — gated here too, not just in `compiler::BuilderRegistry`,
     // so a wasm build never lets a node be added that can't compile.
-    #[cfg(not(target_arch = "wasm32"))]
-    registry.register::<DslFileSource>();
-    #[cfg(not(target_arch = "wasm32"))]
-    registry.register::<SigrokFileSource>();
+    std::cfg_select! {
+        target_arch = "wasm32" => {}
+        _ => {
+            registry.register::<DslFileSource>();
+            registry.register::<SigrokFileSource>();
+            registry.register::<FileWriter>();
+            registry.register::<TextFileWriter>();
+            registry.register::<CsvWriter>();
+        }
+    }
     registry.register::<UartDemoSource>();
     registry.register::<DsLogicU3Pro16>();
     registry.register::<SpiDecoder>();
@@ -207,12 +217,6 @@ pub fn build_registry() -> NodeTypeRegistry {
     registry.register::<Buffer>();
     registry.register::<Counter>();
     registry.register::<StringFormatter>();
-    #[cfg(not(target_arch = "wasm32"))]
-    registry.register::<FileWriter>();
-    #[cfg(not(target_arch = "wasm32"))]
-    registry.register::<TextFileWriter>();
-    #[cfg(not(target_arch = "wasm32"))]
-    registry.register::<CsvWriter>();
     registry.register::<TgckRecorder>();
     registry.register::<Viewer>();
     registry
