@@ -178,58 +178,70 @@ impl LogicAnalyzerViewer {
             row_top += height;
             channel_row += 1;
         }
-        let annotation_source = match self.row_order.get(channel_row) {
-            Some(RowKey::Derived(name)) => self.derived.as_ref().and_then(|store| {
-                let lanes = store.read();
-                if let Some(data_name) = Self::uart_data_lane_name(name) {
-                    let nearest = lanes
+        let annotation_sources = match self.row_order.get(channel_row) {
+            Some(RowKey::Derived(group_id)) => {
+                self.derived.as_ref().map_or_else(Vec::new, |store| {
+                    let Some(group) = self
+                        .viewer_lanes
+                        .read()
                         .iter()
-                        .filter(|lane| lane.name == *name || lane.name == data_name)
-                        .filter_map(|lane| match &lane.data {
-                            DerivedLaneData::Annotations(annotations) => {
-                                nearest_annotation_boundary_time(annotations, time_us)
-                            }
-                            _ => None,
+                        .find(|group| &group.id == group_id)
+                        .cloned()
+                    else {
+                        return Vec::new();
+                    };
+                    let row_height = self.display_row_height(
+                        self.row_order.get(channel_row).expect("row exists"),
+                        30.0,
+                    );
+                    let pointer_fraction = (pointer.y - row_top) / row_height.max(1.0);
+                    let selected = group.renderer.snap_lanes(&group, pointer_fraction);
+                    let lanes = store.read();
+                    selected
+                        .iter()
+                        .filter_map(|lane_id| {
+                            lanes
+                                .iter()
+                                .find(|lane| lane.name == lane_id.as_str())
+                                .and_then(|lane| match &lane.data {
+                                    DerivedLaneData::Annotations(annotations) => {
+                                        Some(AnnotationBoundarySource::InMemory(
+                                            nearest_annotation_boundary_time(annotations, time_us),
+                                        ))
+                                    }
+                                    DerivedLaneData::IndexedAnnotations(indexed) => {
+                                        Some(AnnotationBoundarySource::Indexed(Arc::clone(
+                                            &indexed.query,
+                                        )))
+                                    }
+                                    _ => None,
+                                })
                         })
-                        .min_by(|left, right| {
-                            (left - time_us).abs().total_cmp(&(right - time_us).abs())
-                        });
-                    return nearest.map(|time| AnnotationBoundarySource::InMemory(Some(time)));
-                }
-                lanes
-                    .iter()
-                    .find(|lane| &lane.name == name)
-                    .and_then(|lane| match &lane.data {
-                        DerivedLaneData::Annotations(annotations) => {
-                            Some(AnnotationBoundarySource::InMemory(
-                                nearest_annotation_boundary_time(annotations, time_us),
-                            ))
-                        }
-                        DerivedLaneData::IndexedAnnotations(indexed) => Some(
-                            AnnotationBoundarySource::Indexed(Arc::clone(&indexed.query)),
-                        ),
-                        _ => None,
-                    })
-            }),
-            _ => None,
+                        .collect()
+                })
+            }
+            _ => Vec::new(),
         };
-        if let Some(source) = annotation_source {
-            let nearest = match source {
-                AnnotationBoundarySource::InMemory(nearest) => nearest,
-                AnnotationBoundarySource::Indexed(query) => {
-                    let timestamp_ns = (time_us.max(0.0) * 1_000.0).round() as u64;
-                    let max_distance_ns =
-                        (self.visible_span_us * 1_000.0 * f64::from(SNAP_DISTANCE_PX)
-                            / f64::from(wave_rect.width().max(1.0)))
-                        .ceil()
-                        .max(1.0) as u64;
-                    query
-                        .nearest_boundary(timestamp_ns, max_distance_ns)
-                        .ok()
-                        .flatten()
-                        .map(|boundary_ns| boundary_ns as f64 / 1_000.0)
-                }
-            };
+        if !annotation_sources.is_empty() {
+            let nearest = annotation_sources
+                .into_iter()
+                .filter_map(|source| match source {
+                    AnnotationBoundarySource::InMemory(nearest) => nearest,
+                    AnnotationBoundarySource::Indexed(query) => {
+                        let timestamp_ns = (time_us.max(0.0) * 1_000.0).round() as u64;
+                        let max_distance_ns =
+                            (self.visible_span_us * 1_000.0 * f64::from(SNAP_DISTANCE_PX)
+                                / f64::from(wave_rect.width().max(1.0)))
+                            .ceil()
+                            .max(1.0) as u64;
+                        query
+                            .nearest_boundary(timestamp_ns, max_distance_ns)
+                            .ok()
+                            .flatten()
+                            .map(|boundary_ns| boundary_ns as f64 / 1_000.0)
+                    }
+                })
+                .min_by(|left, right| (left - time_us).abs().total_cmp(&(right - time_us).abs()));
             let Some(nearest) = nearest else {
                 return time_us;
             };

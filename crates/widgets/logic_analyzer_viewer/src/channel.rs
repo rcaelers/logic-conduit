@@ -8,6 +8,7 @@ use signal_processing::{
     DerivedLaneData, DigitalFold, LaneSummary, MarkerFold, MipmapRecord, Sample,
 };
 
+use crate::lanes::{DerivedLaneId, ViewerLaneBadge, ViewerLaneGroup, ViewerLaneGroupId};
 use crate::sampling::sample_to_us;
 use crate::types::{
     AnalyzerLayout, RowDragState, RowKey, RowLabel, RowRenameState, Transition, WaveformSegment,
@@ -68,25 +69,18 @@ impl LogicAnalyzerViewer {
         None
     }
 
-    pub(crate) fn uart_data_lane_name(bits: &str) -> Option<String> {
-        bits.strip_suffix(".Bits")
-            .map(|base| format!("{base}.Data"))
-            .or_else(|| {
-                bits.replace(".Bits (", ".Data (")
-                    .ne(bits)
-                    .then(|| bits.replace(".Bits (", ".Data ("))
-            })
-    }
-
     pub(crate) fn display_row_height(&self, key: &RowKey, default_height: f32) -> f32 {
-        if let RowKey::Derived(name) = key
-            && let Some(data_name) = Self::uart_data_lane_name(name)
-            && self
-                .derived
-                .as_ref()
-                .is_some_and(|store| store.read().iter().any(|lane| lane.name == data_name))
-        {
-            return default_height * 3.0;
+        let group = match key {
+            RowKey::Derived(id) => self
+                .viewer_lanes
+                .read()
+                .iter()
+                .find(|group| &group.id == id)
+                .cloned(),
+            RowKey::Channel(_) => None,
+        };
+        if let Some(group) = group {
+            return group.renderer.row_height(&group, default_height);
         }
         default_height
     }
@@ -109,33 +103,18 @@ impl LogicAnalyzerViewer {
                     badge_color: self.color_profile.channel_color(*index),
                 })
             }
-            RowKey::Derived(lane_name) => {
-                let lanes = self.derived.as_ref()?.read();
-                let lane = lanes.iter().find(|lane| &lane.name == lane_name)?;
-                let (badge_color, badge_glyph) = match &lane.data {
-                    DerivedLaneData::Digital(_) => (Color32::from_rgb(95, 175, 95), "S"),
-                    DerivedLaneData::Annotations(_) => (Color32::from_rgb(215, 140, 60), "W"),
-                    DerivedLaneData::IndexedAnnotations(_) => {
-                        (Color32::from_rgb(215, 140, 60), "W")
-                    }
-                    DerivedLaneData::Markers(_) => (Color32::from_rgb(230, 190, 80), "T"),
-                };
+            RowKey::Derived(group_id) => {
+                let groups = self.viewer_lanes.read();
+                let group = groups.iter().find(|group| &group.id == group_id)?;
                 let name = self
                     .derived_names
-                    .get(lane_name)
+                    .get(group_id)
                     .cloned()
-                    .unwrap_or_else(|| {
-                        // UART detail and frame annotations share one
-                        // protocol row. The Bits lane owns its label.
-                        let data = Self::uart_data_lane_name(&lane.name);
-                        data.filter(|data| lanes.iter().any(|other| other.name == *data))
-                            .map(|data| data.replace(".Data", ""))
-                            .unwrap_or_else(|| lane.name.clone())
-                    });
+                    .unwrap_or_else(|| group.label.clone());
                 Some(RowLabel {
                     name,
-                    badge_text: badge_glyph.to_string(),
-                    badge_color,
+                    badge_text: group.badge.text.clone(),
+                    badge_color: group.badge.color,
                 })
             }
         }
@@ -303,12 +282,18 @@ impl LogicAnalyzerViewer {
     pub(crate) fn set_row_name(&mut self, key: &RowKey, name: String) {
         match key {
             RowKey::Channel(index) => self.set_channel_name(*index, name),
-            RowKey::Derived(lane_name) => {
+            RowKey::Derived(group_id) => {
                 let name = name.trim().to_string();
-                if name.is_empty() || &name == lane_name {
-                    self.derived_names.remove(lane_name);
+                let default_name = self
+                    .viewer_lanes
+                    .read()
+                    .iter()
+                    .find(|group| &group.id == group_id)
+                    .map(|group| group.label.clone());
+                if name.is_empty() || default_name.as_deref() == Some(name.as_str()) {
+                    self.derived_names.remove(group_id);
                 } else {
-                    self.derived_names.insert(lane_name.clone(), name);
+                    self.derived_names.insert(group_id.clone(), name);
                 }
             }
         }
@@ -376,6 +361,7 @@ impl LogicAnalyzerViewer {
     /// their position across a resample" and "derived lanes keep their
     /// position across a run restart".
     pub(crate) fn ensure_row_order(&mut self) {
+        self.ensure_default_viewer_groups();
         let mut seen_channels = HashSet::new();
         let mut seen_derived = HashSet::new();
         let mut order = Vec::with_capacity(self.row_order.len());
@@ -385,11 +371,8 @@ impl LogicAnalyzerViewer {
                     self.channels.iter().any(|channel| channel.index == *index)
                         && seen_channels.insert(*index)
                 }
-                RowKey::Derived(name) => {
-                    self.derived
-                        .as_ref()
-                        .is_some_and(|store| store.read().iter().any(|lane| &lane.name == name))
-                        && seen_derived.insert(name.clone())
+                RowKey::Derived(group_id) => {
+                    self.viewer_group_is_active(group_id) && seen_derived.insert(group_id.clone())
                 }
             };
             if keep {
@@ -401,26 +384,65 @@ impl LogicAnalyzerViewer {
                 order.push(RowKey::Channel(channel.index));
             }
         }
-        if let Some(store) = &self.derived {
-            let lanes = store.read();
-            for lane in lanes.iter() {
-                // A UART Bits/Data pair is one protocol row. Bits is the
-                // owner so it naturally stays above the data track.
-                if lane.name.contains(".Data")
-                    && lanes.iter().any(|other| {
-                        Self::uart_data_lane_name(&other.name).as_deref() == Some(&lane.name)
-                    })
-                {
-                    continue;
-                }
-                if seen_derived.insert(lane.name.clone()) {
-                    order.push(RowKey::Derived(lane.name.clone()));
-                }
+        for group in self.viewer_lanes.read().iter() {
+            if self.viewer_group_is_active(&group.id) && seen_derived.insert(group.id.clone()) {
+                order.push(RowKey::Derived(group.id.clone()));
             }
         }
         if self.row_order != order {
             self.row_order = order;
             self.sampled_key = None;
+        }
+    }
+
+    fn viewer_group_is_active(&self, group_id: &ViewerLaneGroupId) -> bool {
+        let Some(store) = &self.derived else {
+            return false;
+        };
+        let groups = self.viewer_lanes.read();
+        let Some(group) = groups.iter().find(|group| &group.id == group_id) else {
+            return false;
+        };
+        let lanes = store.read();
+        group
+            .tracks
+            .iter()
+            .any(|track| lanes.iter().any(|lane| lane.name == track.lane.as_str()))
+    }
+
+    fn ensure_default_viewer_groups(&self) {
+        let Some(store) = &self.derived else {
+            return;
+        };
+        let lanes = store.read();
+        let claimed: HashSet<DerivedLaneId> = self
+            .viewer_lanes
+            .read()
+            .iter()
+            .flat_map(|group| group.tracks.iter().map(|track| track.lane.clone()))
+            .collect();
+        for lane in lanes.iter() {
+            let lane_id = DerivedLaneId::new(lane.name.clone());
+            if claimed.contains(&lane_id) {
+                continue;
+            }
+            let badge = match &lane.data {
+                DerivedLaneData::Digital(_) => {
+                    ViewerLaneBadge::new("S", Color32::from_rgb(95, 175, 95))
+                }
+                DerivedLaneData::Annotations(_) | DerivedLaneData::IndexedAnnotations(_) => {
+                    ViewerLaneBadge::new("W", Color32::from_rgb(215, 140, 60))
+                }
+                DerivedLaneData::Markers(_) => {
+                    ViewerLaneBadge::new("T", Color32::from_rgb(230, 190, 80))
+                }
+            };
+            self.viewer_lanes.register(ViewerLaneGroup::singleton(
+                ViewerLaneGroupId::new(format!("default:{}", lane.name)),
+                lane.name.clone(),
+                badge,
+                lane_id,
+            ));
         }
     }
 
@@ -458,10 +480,20 @@ impl LogicAnalyzerViewer {
                 .iter()
                 .find(|channel| channel.index == *index)
                 .map(Cow::Borrowed),
-            RowKey::Derived(name) => {
+            RowKey::Derived(group_id) => {
                 let (start_ns, end_ns) = self.visible_window_ns();
                 let lanes = self.derived.as_ref()?.read();
-                let lane = lanes.iter().find(|lane| &lane.name == name)?;
+                let groups = self.viewer_lanes.read();
+                let group = groups.iter().find(|group| &group.id == group_id)?;
+                let lane = group.tracks.iter().find_map(|track| {
+                    lanes
+                        .iter()
+                        .find(|lane| lane.name == track.lane.as_str())
+                        .and_then(|lane| match lane.summary {
+                            LaneSummary::Digital(_) | LaneSummary::Markers(_) => Some(lane),
+                            LaneSummary::Annotations(_) | LaneSummary::IndexedAnnotations => None,
+                        })
+                })?;
                 match &lane.summary {
                     LaneSummary::Digital(summary) => Some(Cow::Owned(derived_digital_channel(
                         row, &lane.name, summary, start_ns, end_ns,
@@ -482,16 +514,22 @@ impl LogicAnalyzerViewer {
     /// reuse the same machinery, but there's no real high/low level behind
     /// that, only the gap between two events.
     pub(crate) fn is_event_row(&self, row: usize) -> bool {
-        let Some(RowKey::Derived(name)) = self.row_order.get(row) else {
+        let Some(RowKey::Derived(group_id)) = self.row_order.get(row) else {
             return false;
         };
         let Some(store) = &self.derived else {
             return false;
         };
-        store
-            .read()
-            .iter()
-            .any(|lane| &lane.name == name && matches!(lane.data, DerivedLaneData::Markers(_)))
+        let groups = self.viewer_lanes.read();
+        let Some(group) = groups.iter().find(|group| &group.id == group_id) else {
+            return false;
+        };
+        let lanes = store.read();
+        group.tracks.iter().any(|track| {
+            lanes.iter().any(|lane| {
+                lane.name == track.lane.as_str() && matches!(lane.data, DerivedLaneData::Markers(_))
+            })
+        })
     }
 }
 
@@ -916,7 +954,7 @@ mod tests {
     #[test]
     fn channel_at_row_follows_manual_reordering() {
         let mut viewer = viewer_with_derived();
-        let derived_key = RowKey::Derived("decoded.rx".to_string());
+        let derived_key = RowKey::Derived(ViewerLaneGroupId::new("default:decoded.rx"));
 
         // Drag the derived lane up to row 0, ahead of every real channel.
         viewer.move_row(&derived_key, 0);
@@ -939,8 +977,8 @@ mod tests {
         let expected: Vec<RowKey> = (0..10)
             .map(RowKey::Channel)
             .chain([
-                RowKey::Derived("decoded.rx".to_string()),
-                RowKey::Derived("decoded.words".to_string()),
+                RowKey::Derived(ViewerLaneGroupId::new("default:decoded.rx")),
+                RowKey::Derived(ViewerLaneGroupId::new("default:decoded.words")),
             ])
             .collect();
         assert_eq!(viewer.row_order, expected);
@@ -949,7 +987,7 @@ mod tests {
     #[test]
     fn move_row_interleaves_a_derived_lane_between_channels() {
         let mut viewer = viewer_with_derived();
-        let derived_key = RowKey::Derived("decoded.rx".to_string());
+        let derived_key = RowKey::Derived(ViewerLaneGroupId::new("default:decoded.rx"));
 
         // Drop the derived lane in between channel 2 and channel 3.
         viewer.move_row(&derived_key, 3);
@@ -965,8 +1003,14 @@ mod tests {
     fn ensure_row_order_drops_stale_rows_and_keeps_manual_order() {
         let mut viewer = viewer_with_derived();
         // User interleaves the two lanes with the first three channels.
-        viewer.move_row(&RowKey::Derived("decoded.rx".to_string()), 1);
-        viewer.move_row(&RowKey::Derived("decoded.words".to_string()), 3);
+        viewer.move_row(
+            &RowKey::Derived(ViewerLaneGroupId::new("default:decoded.rx")),
+            1,
+        );
+        viewer.move_row(
+            &RowKey::Derived(ViewerLaneGroupId::new("default:decoded.words")),
+            3,
+        );
 
         // Capture reopened with fewer channels; the run also restarted with
         // only one lane still registered.
@@ -986,7 +1030,7 @@ mod tests {
             vec![
                 RowKey::Channel(0),
                 RowKey::Channel(1),
-                RowKey::Derived("decoded.words".to_string()),
+                RowKey::Derived(ViewerLaneGroupId::new("default:decoded.words")),
             ]
         );
     }
@@ -998,9 +1042,12 @@ mod tests {
         viewer.set_row_name(&RowKey::Channel(0), "clk".to_string());
         assert_eq!(viewer.row_label(&RowKey::Channel(0)).unwrap().name, "clk");
 
-        let derived_key = RowKey::Derived("decoded.rx".to_string());
-        viewer.set_row_name(&derived_key, "uart.rx".to_string());
-        assert_eq!(viewer.row_label(&derived_key).unwrap().name, "uart.rx");
+        let derived_key = RowKey::Derived(ViewerLaneGroupId::new("default:decoded.rx"));
+        viewer.set_row_name(&derived_key, "decoded input".to_string());
+        assert_eq!(
+            viewer.row_label(&derived_key).unwrap().name,
+            "decoded input"
+        );
 
         // Clearing the override falls back to the original names.
         viewer.set_row_name(&RowKey::Channel(0), String::new());

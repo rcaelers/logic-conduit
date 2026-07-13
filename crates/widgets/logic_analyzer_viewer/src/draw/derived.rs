@@ -1,8 +1,11 @@
+use std::collections::HashMap;
+
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
 use signal_processing::nodes::sinks::MAX_ANNOTATION_NS;
 use signal_processing::{Annotation, AnnotationFold, ChunkedMipmap, Sample, WordPresenceBucket};
 
+use crate::lanes::AnnotationVisual;
 use crate::viewer::LogicAnalyzerViewer;
 
 #[derive(Clone, Copy)]
@@ -115,7 +118,7 @@ impl LogicAnalyzerViewer {
         row: DerivedRowGeometry,
         annotations: &[Annotation],
         summary: &ChunkedMipmap<Annotation, AnnotationFold>,
-        display_format: Option<&str>,
+        visuals: &HashMap<u64, AnnotationVisual>,
     ) {
         let band_color = Color32::from_rgb(215, 140, 60);
         let box_top = row.top + row.height * 0.12;
@@ -162,32 +165,7 @@ impl LogicAnalyzerViewer {
             box_bottom,
             annotations,
             annotations.last().map(|annotation| annotation.start_ns),
-            false,
-            display_format,
-        );
-    }
-
-    /// UART's bit-detail track uses binary labels while ordinary decoded
-    /// values retain the viewer's hexadecimal convention.
-    pub(crate) fn draw_derived_bit_annotations(
-        &self,
-        painter: &Painter,
-        wave_rect: Rect,
-        y_top: f32,
-        row_height: f32,
-        annotations: &[Annotation],
-        summary: &ChunkedMipmap<Annotation, AnnotationFold>,
-    ) {
-        let _ = summary;
-        self.draw_annotation_slice(
-            painter,
-            wave_rect,
-            y_top + row_height * 0.12,
-            y_top + row_height * 0.88,
-            annotations,
-            annotations.last().map(|annotation| annotation.start_ns),
-            true,
-            None,
+            visuals,
         );
     }
 
@@ -230,6 +208,7 @@ impl LogicAnalyzerViewer {
         row_height: f32,
         annotations: &[Annotation],
         last_timestamp_ns: Option<u64>,
+        visuals: &HashMap<u64, AnnotationVisual>,
     ) {
         self.draw_annotation_slice(
             painter,
@@ -238,8 +217,7 @@ impl LogicAnalyzerViewer {
             y_top + row_height * 0.88,
             annotations,
             last_timestamp_ns,
-            false,
-            None,
+            visuals,
         );
     }
 
@@ -252,8 +230,7 @@ impl LogicAnalyzerViewer {
         box_bottom: f32,
         annotations: &[Annotation],
         lane_last_timestamp_ns: Option<u64>,
-        bit_labels: bool,
-        display_format: Option<&str>,
+        visuals: &HashMap<u64, AnnotationVisual>,
     ) {
         let band_color = Color32::from_rgb(215, 140, 60);
         let (start_ns, end_ns) = self.visible_window_ns();
@@ -261,40 +238,14 @@ impl LogicAnalyzerViewer {
         let visible = &annotations[first..last];
 
         if visible.len() > wave_rect.width() as usize * 2 {
-            // Dense window: bucket words into pixel-column runs, but keep
-            // the decision *local* — a lone word renders as an exact value
-            // box like the sparse path (one 12k-word burst
-            // somewhere in view must not reduce every isolated word
-            // elsewhere to an anonymous tick). Only genuinely overlapping
-            // clusters — several words per pixel, where per-word values
-            // cannot exist at this zoom — collapse into a presence band;
-            // zooming in resolves them into value boxes.
+            // Dense windows are a bounded activity snapshot. Exact values
+            // and protocol formatting cannot be legible at this density, so
+            // every occupied run is rendered as a presence band. Zooming in
+            // produces a sparse frame with exact boxes and labels.
             let span_ns = (end_ns - start_ns).max(1);
             let width = wave_rect.width().max(1.0);
             let runs = dense_annotation_runs(visible, start_ns, span_ns, width as u32);
             for run in &runs {
-                if run.count == 1 {
-                    let global = first + run.first_index;
-                    let annotation = &visible[run.first_index];
-                    let is_last_ever = global == annotations.len() - 1
-                        && lane_last_timestamp_ns == Some(annotation.start_ns);
-                    let previous_duration_ns = (global > 0).then(|| {
-                        let previous = &annotations[global - 1];
-                        previous.end_ns.saturating_sub(previous.start_ns)
-                    });
-                    self.draw_annotation_box(
-                        painter,
-                        wave_rect,
-                        box_top,
-                        box_bottom,
-                        annotation,
-                        is_last_ever,
-                        previous_duration_ns,
-                        bit_labels,
-                        display_format,
-                    );
-                    continue;
-                }
                 let x0 = wave_rect.left() + run.start_column as f32;
                 let x1 = wave_rect.left() + (run.end_column + 1) as f32;
                 painter.rect_filled(
@@ -327,8 +278,7 @@ impl LogicAnalyzerViewer {
                 annotation,
                 is_last_ever,
                 previous_duration_ns,
-                bit_labels,
-                display_format,
+                visuals,
             );
         }
     }
@@ -345,36 +295,16 @@ impl LogicAnalyzerViewer {
         annotation: &Annotation,
         is_last_ever: bool,
         previous_duration_ns: Option<u64>,
-        bit_labels: bool,
-        display_format: Option<&str>,
+        visuals: &HashMap<u64, AnnotationVisual>,
     ) {
-        let is_error = annotation.value == u64::MAX - 2;
-        let box_color = if is_error {
-            Color32::from_rgb(92, 38, 38)
-        } else {
-            Color32::from_rgb(88, 58, 28)
-        };
-        let border = Stroke::new(
-            1.0,
-            if is_error {
-                Color32::from_rgb(235, 85, 85)
-            } else {
-                Color32::from_rgb(215, 140, 60)
-            },
-        );
         let effective_end = annotation_box_end(annotation, is_last_ever, previous_duration_ns);
         let x0 = self.ns_to_x(wave_rect, annotation.start_ns);
         let natural_x1 = self.ns_to_x(wave_rect, effective_end).max(x0 + 2.0);
-        let label = if bit_labels && annotation.value <= 1 {
-            annotation.value.to_string()
-        } else {
-            match annotation.value {
-                u64::MAX => "S".to_owned(),
-                value if value == u64::MAX - 1 => "T".to_owned(),
-                value if value == u64::MAX - 2 => "Error".to_owned(),
-                value => format_value(value, display_format),
-            }
-        };
+        let visual = visuals
+            .get(&annotation.value)
+            .cloned()
+            .unwrap_or_else(|| default_annotation_visual(annotation.value, None));
+        let label = visual.label;
         let label_width = annotation_label_width(&label);
         let rect = Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(natural_x1, box_bottom));
         // Keep the angled ends shallow and consistent. A large bevel turns
@@ -392,8 +322,8 @@ impl LogicAnalyzerViewer {
                 Pos2::new(rect.left() + bevel, rect.bottom()),
                 Pos2::new(rect.left(), rect.center().y),
             ],
-            box_color,
-            border,
+            visual.fill,
+            visual.border,
         ));
         if let Some(label_position) = annotation_label_position(rect, wave_rect, label_width) {
             painter.text(
@@ -461,6 +391,17 @@ impl LogicAnalyzerViewer {
                 Stroke::NONE,
             ));
         }
+    }
+}
+
+pub(super) fn default_annotation_visual(
+    value: u64,
+    display_format: Option<&str>,
+) -> AnnotationVisual {
+    AnnotationVisual {
+        label: format_value(value, display_format),
+        fill: Color32::from_rgb(88, 58, 28),
+        border: Stroke::new(1.0, Color32::from_rgb(215, 140, 60)),
     }
 }
 
@@ -565,7 +506,7 @@ fn annotation_label_position(rect: Rect, wave_rect: Rect, label_width: f32) -> O
 /// Annotation starts are ordered and instantaneous parallel words are closed
 /// at the next word's start, so at most the immediately preceding annotation
 /// can overlap the left edge of the visible window.
-fn visible_annotation_range(
+pub(super) fn visible_annotation_range(
     annotations: &[Annotation],
     start_ns: u64,
     end_ns: u64,

@@ -9,6 +9,12 @@ Public surface:
 
 ```rust
 pub use viewer::{ChannelSignal, LogicAnalyzerViewer};
+pub use lanes::{
+    AnnotationVisual, DerivedLaneId, ViewerLaneBadge, ViewerLaneFrame,
+    ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneRegistry, ViewerLaneRenderer,
+    ViewerLaneTrack, ViewerLaneTrackFrame, ViewerLaneTrackId,
+    ViewerOutputPresentation,
+};
 ```
 
 Capture/lane data types come from the `signal-processing` crate: `CaptureDataSource`,
@@ -82,6 +88,30 @@ Whatever the running pipeline pushes into the store appears as extra rows under 
 channels, repainted live: digital lanes (rendered like channels), annotation lanes (boxed
 decoded values), and marker lanes (event ticks). Swap in a fresh store per run to clear the
 previous run's lanes atomically; existing channel rows are never touched by a run.
+
+Without an explicit presentation registry, each payload becomes a default singleton row. Hosts
+that compile concrete node presentations pair the data store with a per-run registry:
+
+```rust
+use logic_analyzer_viewer::ViewerLaneRegistry;
+
+let presentations = ViewerLaneRegistry::new();
+viewer.set_viewer_lanes(presentations.clone());
+let mut compile_ctx = logic_analyzer_graph::compiler::CompileCtx::default();
+compile_ctx.viewer_lanes = presentations; // same registry used by Viewer builders
+```
+
+The registry contains explicit `ViewerLaneGroup` and `ViewerLaneTrack` objects. A group can combine
+several payload lanes in one displayed row and supplies a `ViewerLaneRenderer` for row height,
+annotation labels/styles, and snap-track selection. Concrete producer builders contribute
+`ViewerOutputPresentation` through `RuntimeBuilder::viewer_output_presentation`; the generic
+Viewer builder performs registration without inspecting node names, socket labels, or metadata
+values.
+
+Before invoking a renderer, the viewer prepares a bounded `ViewerLaneFrame` and releases the
+derived-lane lock. Sparse annotation frames contain exact visible values; dense frames become
+activity bands and skip per-value formatting. Renderer and plugin code therefore never executes
+while the runtime lane store is locked.
 
 ## Threading & repaint behavior
 

@@ -12,6 +12,7 @@ use signal_processing::{CaptureIndex, DerivedLanes};
 
 use crate::channel::LogicChannel;
 use crate::indexed_annotations::IndexedAnnotationCacheEntry;
+use crate::lanes::{ViewerLaneGroupId, ViewerLaneRegistry};
 use crate::types::{
     AnalyzerLayout, CaptureInfo, ColorProfile, IndexBuildProgress, PulseMeasurement, RowDragState,
     RowKey, RowRenameState, TimeCursor, Transition,
@@ -37,7 +38,7 @@ pub struct LogicAnalyzerViewer {
     pub(crate) row_order: Vec<RowKey>,
     pub(crate) row_drag: Option<RowDragState>,
     pub(crate) channel_names: HashMap<usize, String>,
-    pub(crate) derived_names: HashMap<String, String>,
+    pub(crate) derived_names: HashMap<ViewerLaneGroupId, String>,
     pub(crate) row_rename: Option<RowRenameState>,
     /// Synchronous sampler over the waveform index; present once the index
     /// build (which runs on a worker thread) has completed. Sampling the
@@ -71,6 +72,7 @@ pub struct LogicAnalyzerViewer {
     /// Lanes produced by Viewer nodes of the running pipeline, rendered as
     /// extra rows under the raw channels. Swapped wholesale on each run.
     pub(crate) derived: Option<DerivedLanes>,
+    pub(crate) viewer_lanes: ViewerLaneRegistry,
     pub(crate) indexed_annotation_cache: HashMap<String, IndexedAnnotationCacheEntry>,
 }
 
@@ -106,6 +108,7 @@ impl LogicAnalyzerViewer {
             drag_cursor: None,
             color_profile: ColorProfile::DsView,
             derived: None,
+            viewer_lanes: ViewerLaneRegistry::new(),
             indexed_annotation_cache: HashMap::new(),
         }
     }
@@ -118,6 +121,13 @@ impl LogicAnalyzerViewer {
     pub fn set_derived_lanes(&mut self, lanes: DerivedLanes) {
         self.derived = Some(lanes);
         self.indexed_annotation_cache.clear();
+    }
+
+    /// Replaces the explicit presentation registry paired with the current
+    /// derived-lane store. The registry may be populated by graph compilation
+    /// after this call; clones share the same per-run contents.
+    pub fn set_viewer_lanes(&mut self, lanes: ViewerLaneRegistry) {
+        self.viewer_lanes = lanes;
     }
 
     /// Replaces the raw channel rows with `signals` — the generic way for a

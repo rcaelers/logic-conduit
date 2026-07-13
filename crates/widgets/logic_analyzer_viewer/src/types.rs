@@ -2,6 +2,8 @@ use egui::{Color32, Pos2, Rect};
 
 use signal_processing::CaptureMetadata;
 
+use crate::lanes::ViewerLaneGroupId;
+
 /// Color profile for the viewer. DSView (Tango-based channel colors, bright
 /// traces) is the default; Classic is the viewer's original muted look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,7 +68,7 @@ impl ColorProfile {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum RowKey {
     Channel(usize),
-    Derived(String),
+    Derived(ViewerLaneGroupId),
 }
 
 pub(crate) struct RowRenameState {

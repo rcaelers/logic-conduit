@@ -2127,6 +2127,7 @@ dependencies = [
  "blake3",
  "crossbeam-channel",
  "egui",
+ "logic-analyzer-viewer",
  "node-graph",
  "serde",
  "serde_json",

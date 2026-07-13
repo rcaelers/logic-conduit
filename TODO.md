@@ -3,12 +3,6 @@
 ## Logic-analyzer viewer
 
 - Add global and per-lane height zoom, using modifier + scroll-wheel input.
-- Replace temporary UART name-based lane pairing with generic derived-lane
-  group/track metadata; see [Decoder View Lane Design](docs/DECODER_VIEW_LANE_DESIGN.md).
-- Move all concrete-node/protocol handling out of `logic_analyzer_viewer`,
-  the generic Viewer node, and generic compiler/node infrastructure. Keep it
-  in node-specific UI definitions/builders and `signal_processing` runtime nodes, passing
-  presentation requirements through the generic lane-group contract.
 - Support displaying multiple capture sources in the logic-analyzer viewer.
 - Let the viewer select which source is visible while the one-source display restriction
   remains.

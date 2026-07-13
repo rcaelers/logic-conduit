@@ -142,6 +142,8 @@ impl App {
         self.platform_prepare_run(&mut ctx);
         self.logic_analyzer
             .set_derived_lanes(ctx.derived_lanes.clone());
+        self.logic_analyzer
+            .set_viewer_lanes(ctx.viewer_lanes.clone());
 
         match compiler::start_app_run(self.node_graph.graph(), &self.builders, &mut ctx) {
             Ok(run) => {

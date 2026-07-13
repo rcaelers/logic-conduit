@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 
+use logic_analyzer_viewer::ViewerOutputPresentation;
 use node_graph::Socket;
 use signal_processing::nodes::decoders::{BitOrder, UartParity, UartStopBits};
 use signal_processing::{ProcessNode, Sample, Trigger, Word};
@@ -12,6 +13,14 @@ use crate::nodes;
 pub(super) struct UartDecoderBuilder;
 
 impl RuntimeBuilder for UartDecoderBuilder {
+    fn viewer_output_presentation(
+        &self,
+        socket: &Socket,
+        _state: &Value,
+    ) -> Option<ViewerOutputPresentation> {
+        crate::viewer_lanes::uart_output_presentation(socket.def_index)
+    }
+
     fn word_display_format(&self, socket: &Socket, state: &Value) -> Option<String> {
         if socket.def_index == 3 {
             parse_state::<nodes::UartDecoderState>(state)

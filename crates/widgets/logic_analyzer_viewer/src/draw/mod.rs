@@ -2,14 +2,19 @@ mod channels;
 pub(crate) mod derived;
 mod measurement;
 
+use std::collections::{HashMap, HashSet};
+
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, vec2};
 
 use signal_processing::{DerivedLaneData, LaneSummary};
 
-use self::derived::DerivedRowGeometry;
+use self::derived::{DerivedRowGeometry, default_annotation_visual, visible_annotation_range};
 use crate::cursor::{cursor_color, cursor_flag_geometry, cursor_flag_label};
 use crate::format::{badge_text_color, format_duration, format_time, nice_step};
 use crate::indexed_annotations::IndexedAnnotationSamples;
+use crate::lanes::{
+    AnnotationVisual, ViewerLaneFrame, ViewerLaneGroup, ViewerLaneTrackFrame, ViewerLaneTrackId,
+};
 use crate::types::{AnalyzerLayout, RowKey};
 use crate::viewer::LogicAnalyzerViewer;
 
@@ -215,129 +220,197 @@ impl LogicAnalyzerViewer {
                         trace,
                     );
                 }
-                RowKey::Derived(name) => {
+                RowKey::Derived(group_id) => {
                     let Some(store) = &self.derived else {
                         continue;
                     };
-                    let lanes = store.read();
-                    let Some(lane) = lanes.iter().find(|lane| &lane.name == name) else {
+                    let Some(group) = self
+                        .viewer_lanes
+                        .read()
+                        .iter()
+                        .find(|group| &group.id == group_id)
+                        .cloned()
+                    else {
                         continue;
                     };
-                    if let Some(data_name) = Self::uart_data_lane_name(name)
-                        && let Some(data_lane) = lanes.iter().find(|other| other.name == data_name)
-                        && let (
-                            DerivedLaneData::Annotations(bits),
-                            LaneSummary::Annotations(bits_summary),
-                            DerivedLaneData::Annotations(data),
-                            LaneSummary::Annotations(data_summary),
-                        ) = (
-                            &lane.data,
-                            &lane.summary,
-                            &data_lane.data,
-                            &data_lane.summary,
-                        )
+                    let (_frame, annotation_visuals) =
+                        self.prepare_viewer_lane_frame(&group, wave_rect);
+                    let empty_visuals = HashMap::new();
+                    let lanes = store.read();
+                    for (track, track_top, track_height) in group.track_rects(y_top, display_height)
                     {
-                        // UART protocol detail and frame annotations occupy
-                        // equal-height tracks under one lane label.
-                        let bit_height = display_height * 0.5;
-                        let data_height = bit_height;
-                        self.draw_derived_bit_annotations(
-                            &clip,
-                            wave_rect,
-                            y_top,
-                            bit_height,
-                            bits,
-                            bits_summary,
-                        );
-                        self.draw_derived_annotations(
-                            &clip,
-                            wave_rect,
-                            DerivedRowGeometry {
-                                top: y_top + bit_height,
-                                height: data_height,
-                            },
-                            data,
-                            data_summary,
-                            data_lane.word_display_format.as_deref(),
-                        );
-                        y_top += display_height;
-                        continue;
-                    }
-                    match &lane.data {
-                        DerivedLaneData::Digital(samples) => {
-                            let center_y = row_rect.center().y;
-                            clip.line_segment(
-                                [
-                                    Pos2::new(wave_rect.left(), center_y),
-                                    Pos2::new(wave_rect.right(), center_y),
-                                ],
-                                Stroke::new(1.0, grid),
-                            );
-                            self.draw_derived_digital(
-                                &clip,
-                                wave_rect,
-                                y_top,
-                                display_height,
-                                samples,
-                            );
-                        }
-                        DerivedLaneData::Annotations(annotations) => {
-                            let LaneSummary::Annotations(summary) = &lane.summary else {
-                                continue;
-                            };
-                            self.draw_derived_annotations(
-                                &clip,
-                                wave_rect,
-                                DerivedRowGeometry {
-                                    top: y_top,
-                                    height: display_height,
-                                },
-                                annotations,
-                                summary,
-                                lane.word_display_format.as_deref(),
-                            );
-                        }
-                        DerivedLaneData::IndexedAnnotations(_) => {
-                            let Some(cached) = self.indexed_annotation_cache.get(name) else {
-                                continue;
-                            };
-                            match &cached.samples {
-                                IndexedAnnotationSamples::Exact {
-                                    annotations,
-                                    last_timestamp_ns,
-                                } => self.draw_indexed_annotation_exact(
+                        let Some(lane) = lanes.iter().find(|lane| lane.name == track.lane.as_str())
+                        else {
+                            continue;
+                        };
+                        let visuals = annotation_visuals.get(&track.id).unwrap_or(&empty_visuals);
+                        match &lane.data {
+                            DerivedLaneData::Digital(samples) => {
+                                let center_y = track_top + track_height * 0.5;
+                                clip.line_segment(
+                                    [
+                                        Pos2::new(wave_rect.left(), center_y),
+                                        Pos2::new(wave_rect.right(), center_y),
+                                    ],
+                                    Stroke::new(1.0, grid),
+                                );
+                                self.draw_derived_digital(
                                     &clip,
                                     wave_rect,
-                                    y_top,
-                                    display_height,
+                                    track_top,
+                                    track_height,
+                                    samples,
+                                );
+                            }
+                            DerivedLaneData::Annotations(annotations) => {
+                                let LaneSummary::Annotations(summary) = &lane.summary else {
+                                    continue;
+                                };
+                                self.draw_derived_annotations(
+                                    &clip,
+                                    wave_rect,
+                                    DerivedRowGeometry {
+                                        top: track_top,
+                                        height: track_height,
+                                    },
                                     annotations,
-                                    *last_timestamp_ns,
-                                ),
-                                IndexedAnnotationSamples::Presence(buckets) => self
-                                    .draw_indexed_annotation_presence(
+                                    summary,
+                                    visuals,
+                                );
+                            }
+                            DerivedLaneData::IndexedAnnotations(_) => {
+                                let Some(cached) = self.indexed_annotation_cache.get(&lane.name)
+                                else {
+                                    continue;
+                                };
+                                match &cached.samples {
+                                    IndexedAnnotationSamples::Exact {
+                                        annotations,
+                                        last_timestamp_ns,
+                                    } => self.draw_indexed_annotation_exact(
                                         &clip,
                                         wave_rect,
-                                        y_top,
-                                        display_height,
-                                        buckets,
+                                        track_top,
+                                        track_height,
+                                        annotations,
+                                        *last_timestamp_ns,
+                                        visuals,
                                     ),
-                                IndexedAnnotationSamples::Error => {}
+                                    IndexedAnnotationSamples::Presence(buckets) => self
+                                        .draw_indexed_annotation_presence(
+                                            &clip,
+                                            wave_rect,
+                                            track_top,
+                                            track_height,
+                                            buckets,
+                                        ),
+                                    IndexedAnnotationSamples::Error => {}
+                                }
                             }
-                        }
-                        DerivedLaneData::Markers(markers) => {
-                            self.draw_derived_markers(
-                                &clip,
-                                wave_rect,
-                                y_top,
-                                display_height,
-                                markers,
-                            );
+                            DerivedLaneData::Markers(markers) => {
+                                self.draw_derived_markers(
+                                    &clip,
+                                    wave_rect,
+                                    track_top,
+                                    track_height,
+                                    markers,
+                                );
+                            }
                         }
                     }
                 }
             }
             y_top += display_height;
         }
+    }
+
+    /// Captures the bounded semantic inputs a concrete renderer may inspect,
+    /// releases `DerivedLanes`, and only then invokes renderer/plugin code.
+    fn prepare_viewer_lane_frame(
+        &self,
+        group: &ViewerLaneGroup,
+        wave_rect: Rect,
+    ) -> (
+        ViewerLaneFrame,
+        HashMap<ViewerLaneTrackId, HashMap<u64, AnnotationVisual>>,
+    ) {
+        let exact_limit = (wave_rect.width().max(1.0) as usize)
+            .saturating_mul(2)
+            .max(32);
+        let (start_ns, end_ns) = self.visible_window_ns();
+        let mut frame = ViewerLaneFrame::default();
+        let mut formats = HashMap::<ViewerLaneTrackId, Option<String>>::new();
+
+        if let Some(store) = &self.derived {
+            let lanes = store.read();
+            for track in &group.tracks {
+                let Some(lane) = lanes.iter().find(|lane| lane.name == track.lane.as_str()) else {
+                    continue;
+                };
+                let (values, dense) = match &lane.data {
+                    DerivedLaneData::Annotations(annotations) => {
+                        let (first, last) = visible_annotation_range(annotations, start_ns, end_ns);
+                        let visible = &annotations[first..last];
+                        if visible.len() > exact_limit {
+                            (Vec::new(), true)
+                        } else {
+                            (
+                                visible.iter().map(|annotation| annotation.value).collect(),
+                                false,
+                            )
+                        }
+                    }
+                    DerivedLaneData::IndexedAnnotations(_) => self
+                        .indexed_annotation_cache
+                        .get(&lane.name)
+                        .map_or((Vec::new(), true), |cached| match &cached.samples {
+                            IndexedAnnotationSamples::Exact { annotations, .. } => (
+                                annotations
+                                    .iter()
+                                    .map(|annotation| annotation.value)
+                                    .collect(),
+                                false,
+                            ),
+                            IndexedAnnotationSamples::Presence(_)
+                            | IndexedAnnotationSamples::Error => (Vec::new(), true),
+                        }),
+                    DerivedLaneData::Digital(_) | DerivedLaneData::Markers(_) => continue,
+                };
+                formats.insert(track.id.clone(), lane.word_display_format.clone());
+                frame.tracks.push(ViewerLaneTrackFrame {
+                    track: track.id.clone(),
+                    annotation_values: values,
+                    dense,
+                });
+            }
+        }
+
+        let mut visuals = HashMap::new();
+        for track_frame in &frame.tracks {
+            if track_frame.dense {
+                continue;
+            }
+            let format = formats
+                .get(&track_frame.track)
+                .and_then(|format| format.as_deref());
+            let mut seen = HashSet::new();
+            let track_visuals = track_frame
+                .annotation_values
+                .iter()
+                .copied()
+                .filter(|value| seen.insert(*value))
+                .map(|value| {
+                    let default = default_annotation_visual(value, format);
+                    let visual =
+                        group
+                            .renderer
+                            .annotation_visual(&track_frame.track, value, default);
+                    (value, visual)
+                })
+                .collect();
+            visuals.insert(track_frame.track.clone(), track_visuals);
+        }
+        (frame, visuals)
     }
 
     fn draw_cursors(
@@ -505,5 +578,128 @@ impl LogicAnalyzerViewer {
     pub(crate) fn x_to_time(&self, rect: Rect, x: f32) -> f64 {
         let t = ((x - rect.left()) / rect.width()).clamp(0.0, 1.0) as f64;
         self.visible_start_us + self.visible_span_us * t
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use signal_processing::{Annotation, DerivedLaneData, DerivedLanes};
+
+    use super::*;
+    use crate::lanes::{
+        DerivedLaneId, ViewerLaneBadge, ViewerLaneGroupId, ViewerLaneRenderer, ViewerLaneTrack,
+    };
+
+    struct ProbingRenderer {
+        lanes: DerivedLanes,
+        calls: AtomicUsize,
+    }
+
+    impl ViewerLaneRenderer for ProbingRenderer {
+        fn annotation_visual(
+            &self,
+            _track: &ViewerLaneTrackId,
+            _value: u64,
+            default: AnnotationVisual,
+        ) -> AnnotationVisual {
+            // This takes the store's write lock. The call completes only if
+            // frame preparation released its read lock before invoking us.
+            self.lanes
+                .register("renderer lock probe", DerivedLaneData::Markers(Vec::new()));
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            default
+        }
+    }
+
+    fn group(renderer: Arc<dyn ViewerLaneRenderer>) -> ViewerLaneGroup {
+        ViewerLaneGroup {
+            id: ViewerLaneGroupId::new("group"),
+            label: "Group".to_owned(),
+            badge: ViewerLaneBadge::new("W", Color32::WHITE),
+            tracks: vec![ViewerLaneTrack::new(
+                "words",
+                DerivedLaneId::new("words"),
+                1.0,
+            )],
+            renderer,
+        }
+    }
+
+    #[test]
+    fn sparse_frame_invokes_renderer_after_releasing_lane_lock() {
+        let lanes = DerivedLanes::new();
+        lanes.register(
+            "words",
+            DerivedLaneData::Annotations(vec![
+                Annotation {
+                    start_ns: 100,
+                    end_ns: 200,
+                    value: 1,
+                },
+                Annotation {
+                    start_ns: 300,
+                    end_ns: 400,
+                    value: 2,
+                },
+            ]),
+        );
+        let renderer = Arc::new(ProbingRenderer {
+            lanes: lanes.clone(),
+            calls: AtomicUsize::new(0),
+        });
+        let mut viewer = LogicAnalyzerViewer::new();
+        viewer.set_derived_lanes(lanes.clone());
+
+        let (frame, visuals) = viewer.prepare_viewer_lane_frame(
+            &group(renderer.clone()),
+            Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 30.0)),
+        );
+
+        assert_eq!(frame.tracks[0].annotation_values, [1, 2]);
+        assert!(!frame.tracks[0].dense);
+        assert_eq!(renderer.calls.load(Ordering::Relaxed), 2);
+        assert_eq!(visuals[&ViewerLaneTrackId::new("words")].len(), 2);
+        assert!(
+            lanes
+                .read()
+                .iter()
+                .any(|lane| lane.name == "renderer lock probe")
+        );
+    }
+
+    #[test]
+    fn dense_frame_is_bounded_activity_and_skips_value_formatter() {
+        let lanes = DerivedLanes::new();
+        lanes.register(
+            "words",
+            DerivedLaneData::Annotations(
+                (0..1_000)
+                    .map(|value| Annotation {
+                        start_ns: value * 100,
+                        end_ns: value * 100 + 50,
+                        value,
+                    })
+                    .collect(),
+            ),
+        );
+        let renderer = Arc::new(ProbingRenderer {
+            lanes: lanes.clone(),
+            calls: AtomicUsize::new(0),
+        });
+        let mut viewer = LogicAnalyzerViewer::new();
+        viewer.set_derived_lanes(lanes);
+
+        let (frame, visuals) = viewer.prepare_viewer_lane_frame(
+            &group(renderer.clone()),
+            Rect::from_min_size(Pos2::ZERO, egui::vec2(10.0, 30.0)),
+        );
+
+        assert!(frame.tracks[0].dense);
+        assert!(frame.tracks[0].annotation_values.is_empty());
+        assert!(visuals.is_empty());
+        assert_eq!(renderer.calls.load(Ordering::Relaxed), 0);
     }
 }

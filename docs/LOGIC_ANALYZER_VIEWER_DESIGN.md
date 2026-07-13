@@ -359,18 +359,34 @@ tick.
 
 ### Derived lanes
 
-`DerivedLanes` (defined in the `signal-processing` crate) maps lane name → `DerivedLaneData`:
+Derived display uses two per-run stores:
+
+- `DerivedLanes` in `signal-processing` maps stable storage keys to payloads, summaries, and
+  indexed query handles;
+- `ViewerLaneRegistry` in `logic-analyzer-viewer` maps explicit group and track identities to
+  those payloads and supplies protocol-neutral renderer objects.
+
+`DerivedLaneData` has these generic payload families:
 
 - `Digital(Vec<Sample>)` — rendered like a channel waveform;
 - `Annotations(Vec<Annotation>)` — `(start_ns, end_ns, label)` boxes (decoded words,
   formatted at render time);
 - `Markers(Vec<u64>)` — zero-width event ticks (triggers).
 
-Lanes are **uncapped** — a truncated decode is a wrong decode; backpressure, not dropping,
-is how a slow viewer is handled (see [PIPELINE_DESIGN.md](PIPELINE_DESIGN.md)). Rendering
-windows the raw `Vec` per frame via `partition_point`; when a digital window is denser than
-one edge per pixel, the renderer falls back to per-pixel bands (same truthfulness rule as
-capture channels). Hover/snap queries (`channel_at_row`) go through each lane's
+Every visible payload belongs to an explicit group. Ordinary payloads use default singleton
+groups; concrete producer builders can register compound groups and renderer objects through
+opaque `ViewerOutputPresentation` metadata. Row identity, labels, height, drawing, hit-testing,
+and snapping use group/track IDs rather than display names.
+
+Before concrete renderer code runs, the viewer prepares a bounded `ViewerLaneFrame` while holding
+the payload lock and then releases it. Sparse annotation frames contain exact values; dense frames
+contain activity only. Indexed queries likewise clone their handles before storage access. No
+renderer/plugin code or indexed I/O runs while `DerivedLanes` is locked.
+
+Lanes are **uncapped** — a truncated decode is a wrong decode; backpressure, not dropping, is how
+a slow viewer is handled (see [PIPELINE_DESIGN.md](PIPELINE_DESIGN.md)). Rendering windows raw
+vectors via `partition_point`; dense digital and annotation windows fall back to bounded
+per-pixel activity bands. Hover/snap queries (`channel_at_row`) go through each lane's
 `AppendOnlyMipmap` — an incremental, append-only multi-resolution summary built alongside
 the raw data by the same append calls — so hover cost stays bounded even when the visible
 window spans millions of entries.

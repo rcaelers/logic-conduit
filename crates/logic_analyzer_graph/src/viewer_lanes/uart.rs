@@ -1,0 +1,143 @@
+use std::sync::Arc;
+
+use egui::{Color32, Stroke};
+
+use logic_analyzer_viewer::{
+    AnnotationVisual, DerivedLaneId, ViewerLaneBadge, ViewerLaneGroup, ViewerLaneRenderer,
+    ViewerLaneTrackId, ViewerOutputPresentation,
+};
+
+const START: u64 = u64::MAX;
+const STOP: u64 = u64::MAX - 1;
+const ERROR: u64 = u64::MAX - 2;
+
+struct UartLaneRenderer;
+
+impl ViewerLaneRenderer for UartLaneRenderer {
+    fn row_height(&self, group: &ViewerLaneGroup, base_height: f32) -> f32 {
+        if group.tracks.len() > 1 {
+            base_height * 3.0
+        } else {
+            base_height
+        }
+    }
+
+    fn annotation_visual(
+        &self,
+        track: &ViewerLaneTrackId,
+        value: u64,
+        mut default: AnnotationVisual,
+    ) -> AnnotationVisual {
+        if track.as_str() == "bits" && value <= 1 {
+            default.label = value.to_string();
+        } else if track.as_str() == "frame" {
+            match value {
+                START => default.label = "S".to_owned(),
+                STOP => default.label = "T".to_owned(),
+                ERROR => {
+                    default.label = "Error".to_owned();
+                    default.fill = Color32::from_rgb(92, 38, 38);
+                    default.border = Stroke::new(1.0, Color32::from_rgb(235, 85, 85));
+                }
+                _ => {}
+            }
+        }
+        default
+    }
+
+    fn snap_lanes(&self, group: &ViewerLaneGroup, _pointer_fraction: f32) -> Vec<DerivedLaneId> {
+        group
+            .tracks
+            .iter()
+            .map(|track| track.lane.clone())
+            .collect()
+    }
+}
+
+pub(crate) fn uart_output_presentation(def_index: usize) -> Option<ViewerOutputPresentation> {
+    let renderer: Arc<dyn ViewerLaneRenderer> = Arc::new(UartLaneRenderer);
+    let badge = ViewerLaneBadge::new("W", Color32::from_rgb(215, 140, 60));
+    match def_index {
+        2 => Some(ViewerOutputPresentation::new(
+            "frame", "bits", 0, 1.0, badge, renderer,
+        )),
+        3 => Some(ViewerOutputPresentation::new(
+            "frame", "frame", 1, 1.0, badge, renderer,
+        )),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn visual(label: &str) -> AnnotationVisual {
+        AnnotationVisual {
+            label: label.to_owned(),
+            fill: Color32::BLACK,
+            border: Stroke::new(1.0, Color32::WHITE),
+        }
+    }
+
+    #[test]
+    fn uart_semantics_are_owned_by_the_uart_renderer() {
+        let renderer = UartLaneRenderer;
+        let bits = ViewerLaneTrackId::new("bits");
+        let frame = ViewerLaneTrackId::new("frame");
+
+        assert_eq!(
+            renderer.annotation_visual(&bits, 1, visual("0x1")).label,
+            "1"
+        );
+        assert_eq!(
+            renderer
+                .annotation_visual(&frame, START, visual("default"))
+                .label,
+            "S"
+        );
+        assert_eq!(
+            renderer
+                .annotation_visual(&frame, STOP, visual("default"))
+                .label,
+            "T"
+        );
+        let error = renderer.annotation_visual(&frame, ERROR, visual("default"));
+        assert_eq!(error.label, "Error");
+        assert_eq!(error.fill, Color32::from_rgb(92, 38, 38));
+    }
+
+    #[test]
+    fn only_uart_detail_outputs_join_the_compound_group() {
+        assert!(uart_output_presentation(0).is_none());
+        assert!(uart_output_presentation(1).is_none());
+        assert_eq!(uart_output_presentation(2).unwrap().track_key, "bits");
+        assert_eq!(uart_output_presentation(3).unwrap().track_key, "frame");
+    }
+
+    #[test]
+    fn partial_uart_group_keeps_default_height() {
+        let renderer: Arc<dyn ViewerLaneRenderer> = Arc::new(UartLaneRenderer);
+        let mut group = ViewerLaneGroup {
+            id: logic_analyzer_viewer::ViewerLaneGroupId::new("uart"),
+            label: "Serial".to_owned(),
+            badge: ViewerLaneBadge::new("W", Color32::WHITE),
+            tracks: vec![logic_analyzer_viewer::ViewerLaneTrack::new(
+                "frame",
+                DerivedLaneId::new("frame"),
+                1.0,
+            )],
+            renderer: Arc::clone(&renderer),
+        };
+
+        assert_eq!(renderer.row_height(&group, 30.0), 30.0);
+        group
+            .tracks
+            .push(logic_analyzer_viewer::ViewerLaneTrack::new(
+                "bits",
+                DerivedLaneId::new("bits"),
+                1.0,
+            ));
+        assert_eq!(renderer.row_height(&group, 30.0), 90.0);
+    }
+}

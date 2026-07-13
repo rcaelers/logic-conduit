@@ -18,6 +18,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use egui::{Color32, Pos2};
 use serde_json::Value;
 
+use logic_analyzer_viewer::{ViewerLaneRegistry, ViewerOutputPresentation};
 use node_graph::{
     Connection, GraphState, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId, SocketShape,
     VariadicInfo,
@@ -92,6 +93,7 @@ impl CompileError {
 #[derive(Default)]
 pub struct CompileCtx {
     pub derived_lanes: DerivedLanes,
+    pub viewer_lanes: ViewerLaneRegistry,
     /// Storage policy selected by the graph's source. Finite sources retain
     /// their complete timeline; continuous sources can explicitly choose a
     /// bounded rolling window.
@@ -107,7 +109,10 @@ pub struct CompileCtx {
 pub struct ResolvedInput {
     pub kind: PortKind,
     pub source: String,
+    pub source_node: NodeId,
+    pub source_node_title: String,
     pub word_display_format: Option<String>,
+    pub viewer_presentation: Option<ViewerOutputPresentation>,
 }
 
 /// Per input socket, keyed `(def_index, member_index)`. Keys are
@@ -168,6 +173,16 @@ pub trait RuntimeBuilder {
     /// Optional display metadata for a decoded-word output. Kept generic so
     /// the compiler never needs to identify a concrete decoder.
     fn word_display_format(&self, _socket: &Socket, _state: &Value) -> Option<String> {
+        None
+    }
+    /// Optional protocol-neutral presentation contract for this output when
+    /// it is connected to a Viewer. Generic lowering carries the value
+    /// opaquely; concrete producer builders own its semantics.
+    fn viewer_output_presentation(
+        &self,
+        _socket: &Socket,
+        _state: &Value,
+    ) -> Option<ViewerOutputPresentation> {
         None
     }
     /// Whether an unconnected input is a compile error (given the state:
@@ -688,8 +703,12 @@ pub fn lower(
             ResolvedInput {
                 kind,
                 source: format!("{}.{}", from_node.title, from_socket.name),
+                source_node: wire.from.node,
+                source_node_title: from_node.title.clone(),
                 word_display_format: from_builder
                     .word_display_format(from_socket, &from_node.state),
+                viewer_presentation: from_builder
+                    .viewer_output_presentation(from_socket, &from_node.state),
             },
         );
         edges.push(CompiledEdge {
@@ -1037,6 +1056,7 @@ pub struct LiveRun {
     /// title renames and in-place restarts.
     names: HashMap<NodeId, String>,
     lanes: DerivedLanes,
+    viewer_lanes: ViewerLaneRegistry,
     /// Set by [`Self::stop`]: the wind-down has been signalled but node
     /// threads may still be finishing their current `work()` call.
     stop_requested: bool,
@@ -1093,6 +1113,7 @@ pub fn start_live(
         compiled,
         names,
         lanes: ctx.derived_lanes.clone(),
+        viewer_lanes: ctx.viewer_lanes.clone(),
         stop_requested: false,
         cache_pruned,
         persistent_cache_directory: ctx.persistent_cache_directory.clone(),
@@ -1125,6 +1146,7 @@ impl LiveRun {
 
         let mut ctx = CompileCtx {
             derived_lanes: self.lanes.clone(),
+            viewer_lanes: self.viewer_lanes.clone(),
             viewer_retention: new.viewer_retention,
             viewer_word_caches: Vec::new(),
             persistent_cache_directory: self.persistent_cache_directory.clone(),
@@ -1641,7 +1663,7 @@ mod tests {
         };
         let lanes = second_ctx.derived_lanes.clone();
         let mut second = start_live(widget.graph(), &registry, &mut second_ctx).unwrap();
-        assert!(second.names.contains_key(&decoder_id));
+        assert!(!second.names.contains_key(&decoder_id));
         second.wait();
 
         let lanes = lanes.read();
@@ -1677,6 +1699,191 @@ mod tests {
         assert_eq!(lanes.len(), 2);
         assert_eq!(lanes[0].1.kind, PortKind::of::<Sample>());
         assert_eq!(lanes[1].1.kind, PortKind::of::<Word>());
+    }
+
+    #[test]
+    fn uart_viewer_tracks_carry_explicit_presentation_metadata() {
+        let compiled = lower(uart_demo_widget().graph(), &BuilderRegistry::standard()).unwrap();
+        let viewer = compiled
+            .nodes
+            .iter()
+            .find(|node| node.builder == "Viewer")
+            .unwrap();
+        let mut tracks = viewer
+            .resolved
+            .members(0)
+            .into_iter()
+            .filter_map(|(_, input)| {
+                input
+                    .viewer_presentation
+                    .as_ref()
+                    .map(|presentation| presentation.track_key.as_str())
+            })
+            .collect::<Vec<_>>();
+        tracks.sort_unstable();
+
+        // The demo connects only Data. Explicit grouping still produces a
+        // valid partial compound group rather than relying on a Bits lane
+        // being present or discoverable by name.
+        assert_eq!(tracks, ["frame"]);
+    }
+
+    #[test]
+    fn duplicate_and_renamed_decoders_keep_distinct_explicit_groups() {
+        let mut widget = uart_demo_widget();
+        let source = node_by_def(&widget, "UART Demo Source");
+        let first_decoder = node_by_def(&widget, "UART Decoder");
+        let viewer = node_by_def(&widget, "Viewer");
+        let second_decoder = widget
+            .add_node_at(nodes::UartDecoder::name(), Pos2::new(420.0, 420.0))
+            .unwrap();
+        for decoder in [first_decoder, second_decoder] {
+            widget.graph_mut().nodes.get_mut(&decoder).unwrap().title = "Duplicate title".into();
+        }
+        let connect = |widget: &mut NodeGraphWidget, from: (NodeId, &str), to: (NodeId, &str)| {
+            let from_index = output_index(widget, from.0, from.1);
+            let to_index = input_index(widget, to.0, to.1);
+            widget.graph_mut().add_connection(
+                SocketId {
+                    node: from.0,
+                    index: from_index,
+                    direction: SocketDirection::Output,
+                },
+                SocketId {
+                    node: to.0,
+                    index: to_index,
+                    direction: SocketDirection::Input,
+                },
+            );
+        };
+        connect(&mut widget, (source, "RX"), (second_decoder, "RX/TX"));
+        connect(&mut widget, (second_decoder, "Data"), (viewer, "In"));
+
+        let build_groups = |widget: &NodeGraphWidget| {
+            let builders = BuilderRegistry::standard();
+            let compiled = lower(widget.graph(), &builders).unwrap();
+            let viewer = compiled
+                .nodes
+                .iter()
+                .find(|node| node.builder == "Viewer")
+                .unwrap();
+            let mut ctx = CompileCtx::default();
+            builders
+                .get("Viewer")
+                .unwrap()
+                .build(
+                    &viewer.runtime_name,
+                    &viewer.state,
+                    &viewer.resolved,
+                    &mut ctx,
+                )
+                .unwrap();
+            let groups = ctx.viewer_lanes.read();
+            groups
+                .iter()
+                .filter(|group| {
+                    group
+                        .tracks
+                        .iter()
+                        .any(|track| track.id.as_str() == "frame")
+                })
+                .map(|group| (group.id.as_str().to_owned(), group.label.clone()))
+                .collect::<Vec<_>>()
+        };
+
+        let before = build_groups(&widget);
+        assert_eq!(before.len(), 2);
+        assert_ne!(before[0].0, before[1].0);
+        assert!(before.iter().all(|(_, label)| label == "Duplicate title"));
+
+        widget
+            .graph_mut()
+            .nodes
+            .get_mut(&first_decoder)
+            .unwrap()
+            .title = "Renamed decoder".into();
+        let after = build_groups(&widget);
+        assert_eq!(
+            before.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+            after.iter().map(|(id, _)| id).collect::<Vec<_>>()
+        );
+        assert!(after.iter().any(|(_, label)| label == "Renamed decoder"));
+    }
+
+    #[test]
+    fn plugin_builder_can_contribute_a_lane_renderer() {
+        use std::sync::Arc;
+
+        use logic_analyzer_viewer::{
+            DefaultViewerLaneRenderer, ViewerLaneBadge, ViewerLaneRenderer,
+            ViewerOutputPresentation,
+        };
+
+        struct PluginBuilder;
+        impl RuntimeBuilder for PluginBuilder {
+            fn accepted_kinds(&self, _: &Socket, _: &Value) -> Vec<PortKind> {
+                Vec::new()
+            }
+
+            fn offered_kinds(&self, _: &Socket, _: &Value) -> Vec<PortKind> {
+                Vec::new()
+            }
+
+            fn input_port(&self, _: &Socket, _: usize, _: &Value, _: PortKind) -> Option<String> {
+                None
+            }
+
+            fn output_port(&self, _: &Socket, _: &Value, _: PortKind) -> Option<String> {
+                None
+            }
+
+            fn viewer_output_presentation(
+                &self,
+                _: &Socket,
+                _: &Value,
+            ) -> Option<ViewerOutputPresentation> {
+                let renderer: Arc<dyn ViewerLaneRenderer> = Arc::new(DefaultViewerLaneRenderer);
+                Some(ViewerOutputPresentation::new(
+                    "plugin group",
+                    "plugin track",
+                    0,
+                    1.0,
+                    ViewerLaneBadge::new("P", Color32::WHITE),
+                    renderer,
+                ))
+            }
+
+            fn build(
+                &self,
+                _: &str,
+                _: &Value,
+                _: &ResolvedInputs,
+                _: &mut CompileCtx,
+            ) -> Result<Box<dyn ProcessNode>, String> {
+                Err("not needed by presentation registration test".into())
+            }
+        }
+
+        let mut node_types = nodes::build_registry();
+        let mut builders = BuilderRegistry::standard();
+        PluginContext::new(&mut node_types, &mut builders)
+            .register_builder("Plugin Presenter", Box::new(PluginBuilder));
+        let widget = uart_demo_widget();
+        let socket = &widget
+            .graph()
+            .nodes
+            .values()
+            .find(|node| node.def_name() == "UART Decoder")
+            .unwrap()
+            .outputs[3];
+        let presentation = builders
+            .get("Plugin Presenter")
+            .unwrap()
+            .viewer_output_presentation(socket, &Value::Null)
+            .unwrap();
+
+        assert_eq!(presentation.group_key, "plugin group");
+        assert_eq!(presentation.track_key, "plugin track");
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1763,7 +1970,10 @@ mod tests {
             ResolvedInput {
                 kind: PortKind::of::<TextSample>(),
                 source: "Formatter.Text".into(),
+                source_node: NodeId(1),
+                source_node_title: "Formatter".into(),
                 word_display_format: None,
+                viewer_presentation: None,
             },
         );
         let node = builder
