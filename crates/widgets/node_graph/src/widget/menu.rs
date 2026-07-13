@@ -761,42 +761,6 @@ impl<T: Clone> Menu<T> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{Menu, MenuEntry};
-
-    fn entries() -> Vec<MenuEntry<()>> {
-        vec![MenuEntry::submenu(
-            "Add",
-            vec![MenuEntry::submenu(
-                "Logic",
-                vec![MenuEntry::action("Buffer", ())],
-            )],
-        )]
-    }
-
-    #[test]
-    fn menu_column_path_uses_semantic_ancestry() {
-        let entries = entries();
-
-        assert_eq!(
-            Menu::<()>::entry_path(&entries, &[0, 0]),
-            vec!["Add".to_owned(), "Logic".to_owned()]
-        );
-    }
-
-    #[test]
-    fn menu_signature_changes_when_the_tree_changes() {
-        let first = entries();
-        let second = vec![MenuEntry::action("Delete", ())];
-
-        assert_ne!(
-            Menu::<()>::entries_signature(&first),
-            Menu::<()>::entries_signature(&second)
-        );
-    }
-}
-
 // ── PopupMenu ─────────────────────────────────────────────────────────────────
 
 /// Unified menu controller owning both a standalone popup (e.g. Shift+A) and
@@ -878,5 +842,41 @@ impl<T: Clone> PopupMenu<T> {
         }
 
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Menu, MenuEntry};
+
+    fn entries() -> Vec<MenuEntry<()>> {
+        vec![MenuEntry::submenu(
+            "Add",
+            vec![MenuEntry::submenu(
+                "Logic",
+                vec![MenuEntry::action("Buffer", ())],
+            )],
+        )]
+    }
+
+    #[test]
+    fn menu_column_path_uses_semantic_ancestry() {
+        let entries = entries();
+
+        assert_eq!(
+            Menu::<()>::entry_path(&entries, &[0, 0]),
+            vec!["Add".to_owned(), "Logic".to_owned()]
+        );
+    }
+
+    #[test]
+    fn menu_signature_changes_when_the_tree_changes() {
+        let first = entries();
+        let second = vec![MenuEntry::action("Delete", ())];
+
+        assert_ne!(
+            Menu::<()>::entries_signature(&first),
+            Menu::<()>::entries_signature(&second)
+        );
     }
 }

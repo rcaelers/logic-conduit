@@ -49,7 +49,7 @@ path = "crates/app/src/main.rs"
 # duplicate compilation's `#[cfg(feature = "example-plugin")]` check happy;
 # it's never enabled for this package.
 [features]
-example-plugin = []
+example-plugin = ["dep:example-plugin"]
 
 [dependencies]
 signal-processing = { path = "crates/signal_processing" }
@@ -66,6 +66,7 @@ eframe = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+example-plugin = { path = "plugins/example-plugin", optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -11,9 +11,6 @@ use super::sender::{ChannelMessage, OverflowPolicy, Sender, SharedSenders};
 /// Type-erased view of a [`SharedSenders<T>`] so the `PipelineManager` can
 /// own and rewire subscriber lists without knowing `T`.
 pub trait ErasedSharedSenders: Send + Sync {
-    /// Adds a subscriber channel; returns `(subscription id, boxed
-    /// crossbeam receiver)` suitable for `InputPort::from_type_erased`.
-    fn subscribe(&self, buffer: usize, policy: OverflowPolicy) -> (u64, Box<dyn Any + Send>);
     fn subscribe_with_label(
         &self,
         buffer: usize,
@@ -34,10 +31,6 @@ pub trait ErasedSharedSenders: Send + Sync {
 }
 
 impl<T: Clone + Send + Sync + 'static> ErasedSharedSenders for SharedSenders<T> {
-    fn subscribe(&self, buffer: usize, policy: OverflowPolicy) -> (u64, Box<dyn Any + Send>) {
-        let (id, rx) = SharedSenders::subscribe(self, buffer, policy);
-        (id, Box::new(rx) as Box<dyn Any + Send>)
-    }
     fn subscribe_with_label(
         &self,
         buffer: usize,

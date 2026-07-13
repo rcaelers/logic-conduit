@@ -436,11 +436,13 @@ impl NodeGraphWidget {
         self.draw_graph(
             ui,
             &painter,
-            content_rect,
-            origin,
-            pointer,
-            &layout,
-            hovered_socket,
+            render::GraphRenderContext {
+                rect: content_rect,
+                origin,
+                pointer,
+                layout: &layout,
+                hovered_socket,
+            },
         );
         self.show_socket_tooltip(&responses, hovered_socket);
         if let Some(panel_rect) = panel_rect {

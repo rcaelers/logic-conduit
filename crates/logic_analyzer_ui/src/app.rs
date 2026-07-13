@@ -295,6 +295,9 @@ impl App {
             // `selection_summary` ends up flush with the right edge.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(6.0);
+                if ui.small_button("About").clicked() {
+                    self.about.open();
+                }
                 ui.weak(self.node_graph.selection_summary());
                 ui.weak(format!("{}%", self.node_graph.zoom_percent()));
                 ui.separator();
@@ -333,43 +336,6 @@ fn install_fonts(ctx: &egui::Context) {
             .push(FONT_NAME.to_owned());
     }
     ctx.set_fonts(fonts);
-}
-
-#[cfg(test)]
-mod font_tests {
-    use super::{install_fonts, load_symbol_font};
-
-    #[test]
-    fn menu_icon_glyphs_are_available() {
-        assert!(
-            load_symbol_font().is_some(),
-            "missing platform symbol font; expected Apple Symbols on macOS, Segoe UI Symbol on Windows, or Noto Sans Symbols 2 on Linux"
-        );
-        let ctx = egui::Context::default();
-        install_fonts(&ctx);
-        #[cfg(debug_assertions)]
-        assert!(
-            ctx.style_of(egui::Theme::Dark)
-                .debug
-                .warn_if_rect_changes_id
-        );
-        // `set_fonts` only takes effect at the start of the *next* pass.
-        ctx.begin_pass(Default::default());
-        let _ = ctx.end_pass();
-        ctx.begin_pass(Default::default());
-        let font_id = egui::FontId::proportional(14.0);
-        ctx.fonts_mut(|fonts| {
-            const MENU_GLYPHS: &[char] = &['⇧', '⌘', '⌥', '⇪', '⏎', '↶', '↷', '⌧', '⎘', '⧉', '▣'];
-            for c in MENU_GLYPHS {
-                assert!(
-                    fonts.has_glyph(&font_id, *c),
-                    "missing glyph for {c:?} (U+{:04X})",
-                    *c as u32
-                );
-            }
-        });
-        let _ = ctx.end_pass();
-    }
 }
 
 impl eframe::App for App {
@@ -478,5 +444,42 @@ impl eframe::App for App {
         self.platform_after_ui(ui.ctx());
 
         self.toasts.show(ui.ctx());
+    }
+}
+
+#[cfg(test)]
+mod font_tests {
+    use super::{install_fonts, load_symbol_font};
+
+    #[test]
+    fn menu_icon_glyphs_are_available() {
+        assert!(
+            load_symbol_font().is_some(),
+            "missing platform symbol font; expected Apple Symbols on macOS, Segoe UI Symbol on Windows, or Noto Sans Symbols 2 on Linux"
+        );
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        #[cfg(debug_assertions)]
+        assert!(
+            ctx.style_of(egui::Theme::Dark)
+                .debug
+                .warn_if_rect_changes_id
+        );
+        // `set_fonts` only takes effect at the start of the *next* pass.
+        ctx.begin_pass(Default::default());
+        let _ = ctx.end_pass();
+        ctx.begin_pass(Default::default());
+        let font_id = egui::FontId::proportional(14.0);
+        ctx.fonts_mut(|fonts| {
+            const MENU_GLYPHS: &[char] = &['⇧', '⌘', '⌥', '⇪', '⏎', '↶', '↷', '⌧', '⎘', '⧉', '▣'];
+            for c in MENU_GLYPHS {
+                assert!(
+                    fonts.has_glyph(&font_id, *c),
+                    "missing glyph for {c:?} (U+{:04X})",
+                    *c as u32
+                );
+            }
+        });
+        let _ = ctx.end_pass();
     }
 }

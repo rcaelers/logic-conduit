@@ -2103,6 +2103,7 @@ dependencies = [
  "crossbeam-channel",
  "eframe",
  "egui",
+ "example-plugin",
  "logic-analyzer-graph",
  "logic-analyzer-ui",
  "memmap2",

@@ -28,6 +28,35 @@ use crate::runtime::{Annotation, MAX_ANNOTATION_NS, Word, instantaneous_word_end
 const MAX_PRESENCE_RUNS_PER_BLOCK: usize = 256;
 static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(1);
 
+fn intersecting_block_indices(
+    presence: &WordPresenceIndex,
+    start_ns: u64,
+    end_ns: u64,
+) -> Vec<usize> {
+    if start_ns > end_ns {
+        return Vec::new();
+    }
+    let leaves = &presence.levels[0];
+    let first = presence
+        .prefix_max_end_ns
+        .partition_point(|&prefix_end_ns| prefix_end_ns < start_ns);
+    let end = leaves.partition_point(|record| record.start_ns <= end_ns);
+    let mut blocks: Vec<_> = (first.min(end)..end)
+        .filter(|&index| leaves[index].end_ns >= start_ns)
+        .flat_map(|index| {
+            let record = leaves[index];
+            record.first_block
+                ..record
+                    .first_block
+                    .saturating_add(u64::from(record.block_count))
+        })
+        .filter_map(|block| usize::try_from(block).ok())
+        .collect();
+    blocks.sort_unstable();
+    blocks.dedup();
+    blocks
+}
+
 pub(crate) fn default_working_directory() -> PathBuf {
     std::env::temp_dir()
 }
@@ -313,7 +342,7 @@ impl IndexedAnnotationStore {
             .directory
             .partition_point(|entry| entry.first_timestamp_ns <= end_ns);
         let successor = (after_end < state.directory.len()).then_some(after_end);
-        let mut indices = state.presence.intersecting_block_indices(start_ns, end_ns);
+        let mut indices = intersecting_block_indices(&state.presence, start_ns, end_ns);
         indices.extend(previous_predecessor);
         indices.extend(predecessor);
         indices.extend(successor);
@@ -343,7 +372,7 @@ impl IndexedAnnotationStore {
             .directory
             .partition_point(|entry| entry.first_timestamp_ns <= upper);
         let successor = (after_upper < state.directory.len()).then_some(after_upper);
-        let mut indices = state.presence.intersecting_block_indices(lower, upper);
+        let mut indices = intersecting_block_indices(&state.presence, lower, upper);
         indices.extend(previous_predecessor);
         indices.extend(predecessor);
         indices.extend(successor);
@@ -1775,7 +1804,10 @@ mod tests {
         writer.finish().unwrap();
 
         assert_eq!(store.snapshot().metadata.committed_block_count, 1);
-        assert_eq!(store.shared.state.read().unwrap().presence.len(), 2);
+        assert_eq!(
+            store.shared.state.read().unwrap().presence.levels[0].len(),
+            2
+        );
         assert!(!cache_contains(store.shared.store_id, 0));
         let buckets = store.presence_window(0, 149_990, 100).unwrap();
         assert!(
@@ -1833,7 +1865,10 @@ mod tests {
             .unwrap()
             .expect("published cache");
         assert_eq!(reopened.snapshot().metadata.committed_block_count, 1);
-        assert_eq!(reopened.shared.state.read().unwrap().presence.len(), 2);
+        assert_eq!(
+            reopened.shared.state.read().unwrap().presence.levels[0].len(),
+            2
+        );
         let buckets = reopened.presence_window(0, 149_990, 100).unwrap();
         assert!(
             buckets

@@ -5,7 +5,7 @@ use egui::{Pos2, Rect, Vec2};
 
 use super::action::ActionEffect;
 use super::layout::GraphWidgetLayout;
-use super::menu::build_context_entries;
+use super::menu::{ContextMenuState, build_context_entries};
 use super::{NodeGraphWidget, minimap};
 use crate::model::{Connection, FrameId, NodeId, SocketDirection, SocketId};
 use crate::support::paint::{
@@ -1150,22 +1150,22 @@ impl NodeGraphWidget {
         if no_focus {
             let any_selected = self.graph.nodes.values().any(|node| node.selected)
                 || self.graph.frames.iter().any(|frame| frame.selected);
-            let shortcut_entries = build_context_entries(
-                &self.registry,
-                fallback_paste_pos,
-                pointer.unwrap_or(canvas_rect.center()),
-                None,
-                None,
-                self.graph.frames.iter().any(|frame| frame.selected),
-                false,
-                self.menu_collapsed_state(None),
-                self.menu_muted_state(None),
-                false,
+            let shortcut_entries = build_context_entries(ContextMenuState {
+                registry: &self.registry,
+                canvas_pos: fallback_paste_pos,
+                screen_pos: pointer.unwrap_or(canvas_rect.center()),
+                context_node: None,
+                context_frame: None,
+                any_frame_selected: self.graph.frames.iter().any(|frame| frame.selected),
+                node_hidden: false,
+                node_collapsed: self.menu_collapsed_state(None),
+                node_muted: self.menu_muted_state(None),
+                node_has_derived_cache: false,
                 any_selected,
-                self.can_paste_nodes(),
-                self.can_undo(),
-                self.can_redo(),
-            );
+                can_paste: self.can_paste_nodes(),
+                can_undo: self.can_undo(),
+                can_redo: self.can_redo(),
+            });
             if let Some(action) = dispatch_menu_shortcut(ui, &shortcut_entries) {
                 let effect = self.execute_action(action, ui.ctx(), pointer_canvas);
                 self.apply_effect(effect, pointer_canvas);
@@ -1236,22 +1236,22 @@ impl NodeGraphWidget {
             let any_selected = self.graph.nodes.values().any(|n| n.selected)
                 || self.graph.frames.iter().any(|frame| frame.selected);
             let can_paste = self.can_paste_nodes();
-            let entries = build_context_entries(
-                &self.registry,
+            let entries = build_context_entries(ContextMenuState {
+                registry: &self.registry,
                 canvas_pos,
-                context_screen_pos,
+                screen_pos: context_screen_pos,
                 context_node,
                 context_frame,
-                self.graph.frames.iter().any(|frame| frame.selected),
+                any_frame_selected: self.graph.frames.iter().any(|frame| frame.selected),
                 node_hidden,
                 node_collapsed,
                 node_muted,
                 node_has_derived_cache,
                 any_selected,
                 can_paste,
-                self.can_undo(),
-                self.can_redo(),
-            );
+                can_undo: self.can_undo(),
+                can_redo: self.can_redo(),
+            });
             self.menu.open_popup(context_screen_pos, entries);
         }
 

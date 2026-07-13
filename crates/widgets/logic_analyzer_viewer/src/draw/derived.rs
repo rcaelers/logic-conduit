@@ -4,6 +4,12 @@ use signal_processing::{Annotation, AnnotationFold, ChunkedMipmap, Sample, WordP
 
 use crate::viewer::LogicAnalyzerViewer;
 
+#[derive(Clone, Copy)]
+pub(super) struct DerivedRowGeometry {
+    pub top: f32,
+    pub height: f32,
+}
+
 impl LogicAnalyzerViewer {
     // ── Derived lanes ─────────────────────────────────────────────────
     //
@@ -101,19 +107,18 @@ impl LogicAnalyzerViewer {
         );
     }
 
-    pub(crate) fn draw_derived_annotations(
+    pub(super) fn draw_derived_annotations(
         &self,
         painter: &Painter,
         wave_rect: Rect,
-        y_top: f32,
-        row_height: f32,
+        row: DerivedRowGeometry,
         annotations: &[Annotation],
         summary: &ChunkedMipmap<Annotation, AnnotationFold>,
         display_format: Option<&str>,
     ) {
         let band_color = Color32::from_rgb(215, 140, 60);
-        let box_top = y_top + row_height * 0.12;
-        let box_bottom = y_top + row_height * 0.88;
+        let box_top = row.top + row.height * 0.12;
+        let box_bottom = row.top + row.height * 0.88;
         let (start_ns, end_ns) = self.visible_window_ns();
 
         // Bounded lanes retain exact values only for their newest window.
@@ -376,8 +381,7 @@ impl LogicAnalyzerViewer {
         // data boxes.
         let bevel = (rect.height() * 0.20)
             .min(rect.width() * 0.18)
-            .min(10.0)
-            .max(1.0);
+            .clamp(1.0, 10.0);
         painter.add(Shape::convex_polygon(
             vec![
                 Pos2::new(rect.left() + bevel, rect.top()),

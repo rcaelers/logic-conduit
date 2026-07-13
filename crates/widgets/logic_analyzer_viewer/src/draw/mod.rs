@@ -10,6 +10,7 @@ use crate::format::{badge_text_color, format_duration, format_time, nice_step};
 use crate::indexed_annotations::IndexedAnnotationSamples;
 use crate::types::{AnalyzerLayout, RowKey};
 use crate::viewer::LogicAnalyzerViewer;
+use derived::DerivedRowGeometry;
 
 impl LogicAnalyzerViewer {
     pub(crate) fn draw(
@@ -250,8 +251,10 @@ impl LogicAnalyzerViewer {
                         self.draw_derived_annotations(
                             &clip,
                             wave_rect,
-                            y_top + bit_height,
-                            data_height,
+                            DerivedRowGeometry {
+                                top: y_top + bit_height,
+                                height: data_height,
+                            },
                             data,
                             data_summary,
                             data_lane.word_display_format.as_deref(),
@@ -284,8 +287,10 @@ impl LogicAnalyzerViewer {
                             self.draw_derived_annotations(
                                 &clip,
                                 wave_rect,
-                                y_top,
-                                display_height,
+                                DerivedRowGeometry {
+                                    top: y_top,
+                                    height: display_height,
+                                },
                                 annotations,
                                 summary,
                                 lane.word_display_format.as_deref(),

@@ -2,8 +2,7 @@ use super::config::BlockCodecConfig;
 use super::crc32c::block_checksum;
 use super::format::{
     BLOCK_CHECKSUM_OFFSET, BLOCK_FLAG_HAS_DURATIONS, BLOCK_HEADER_SIZE,
-    DEFAULT_MAX_WORDS_PER_BLOCK, DEFAULT_RESTART_INTERVAL, RESTART_ENTRY_SIZE, RestartEntry,
-    WordBlockHeader,
+    DEFAULT_MAX_WORDS_PER_BLOCK, RESTART_ENTRY_SIZE, RestartEntry, WordBlockHeader,
 };
 use super::vlq::{decode_u64, encode_u64, encoded_len};
 use super::{CodecError, CodecResult};
@@ -188,33 +187,6 @@ pub struct DecodedWordRange {
     pub words: Vec<Word>,
     pub complete: bool,
     pub decoded_records: usize,
-}
-
-/// Finds the best restart entry for a query beginning at `timestamp_ns`.
-///
-/// When restart entries share the requested timestamp, this returns the
-/// first equal entry so decoding cannot skip earlier records at that time.
-/// Otherwise it returns the last entry before the requested timestamp.
-fn find_restart_for_timestamp(
-    restarts: &[RestartEntry],
-    timestamp_ns: u64,
-) -> Option<RestartEntry> {
-    let first_not_less = restarts.partition_point(|entry| entry.timestamp_ns < timestamp_ns);
-    if restarts
-        .get(first_not_less)
-        .is_some_and(|entry| entry.timestamp_ns == timestamp_ns)
-    {
-        return Some(restarts[first_not_less]);
-    }
-    first_not_less.checked_sub(1).map(|index| restarts[index])
-}
-
-fn encode_word_block(
-    sequence: u64,
-    words: &[Word],
-    output: &mut Vec<u8>,
-) -> CodecResult<EncodedBlockMetadata> {
-    encode_word_block_with_interval(sequence, words, DEFAULT_RESTART_INTERVAL, output)
 }
 
 fn encode_word_block_with_interval(
@@ -661,6 +633,32 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+
+    const DEFAULT_RESTART_INTERVAL: usize = 512;
+
+    fn encode_word_block(
+        sequence: u64,
+        words: &[Word],
+        output: &mut Vec<u8>,
+    ) -> CodecResult<EncodedBlockMetadata> {
+        encode_word_block_with_interval(sequence, words, DEFAULT_RESTART_INTERVAL, output)
+    }
+
+    /// Finds the first restart at an equal timestamp, or the last restart
+    /// before the requested timestamp.
+    fn find_restart_for_timestamp(
+        restarts: &[RestartEntry],
+        timestamp_ns: u64,
+    ) -> Option<RestartEntry> {
+        let first_not_less = restarts.partition_point(|entry| entry.timestamp_ns < timestamp_ns);
+        if restarts
+            .get(first_not_less)
+            .is_some_and(|entry| entry.timestamp_ns == timestamp_ns)
+        {
+            return Some(restarts[first_not_less]);
+        }
+        first_not_less.checked_sub(1).map(|index| restarts[index])
+    }
 
     fn round_trip(words: &[Word]) -> (EncodedBlockMetadata, Vec<u8>) {
         let mut bytes = Vec::new();

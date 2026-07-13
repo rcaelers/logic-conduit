@@ -8,18 +8,30 @@ use crate::support::paint::{
     SOCKET_RADIUS, WireEmphasis, draw_box_select, draw_connections, draw_frames, draw_grid,
     draw_knife_line, draw_wire, to_screen_rect,
 };
+use crate::widget::node::{NodeControlContext, NodeDrawContext};
+
+pub(super) struct GraphRenderContext<'a> {
+    pub rect: Rect,
+    pub origin: Pos2,
+    pub pointer: Option<Pos2>,
+    pub layout: &'a GraphWidgetLayout,
+    pub hovered_socket: Option<SocketId>,
+}
 
 impl NodeGraphWidget {
     pub(super) fn draw_graph(
         &mut self,
         ui: &mut egui::Ui,
         painter: &Painter,
-        rect: Rect,
-        origin: Pos2,
-        pointer: Option<Pos2>,
-        layout: &GraphWidgetLayout,
-        hovered_socket: Option<SocketId>,
+        context: GraphRenderContext<'_>,
     ) {
+        let GraphRenderContext {
+            rect,
+            origin,
+            pointer,
+            layout,
+            hovered_socket,
+        } = context;
         // `painter` is already clipped to `rect`, but the inline node
         // controls below (`show_controls`) place real egui widgets straight
         // on `ui` at absolute screen positions — unclipped, those bleed
@@ -202,12 +214,14 @@ impl NodeGraphWidget {
                     painter,
                     id,
                     node,
-                    &self.graph,
-                    badge,
-                    status,
-                    &self.registry,
-                    &self.view,
-                    origin,
+                    NodeDrawContext {
+                        graph: &self.graph,
+                        badge,
+                        status,
+                        registry: &self.registry,
+                        view: &self.view,
+                        origin,
+                    },
                 );
                 if let Some((source_id, connectable)) = &wire_drag_dim
                     && id != *source_id
@@ -238,9 +252,11 @@ impl NodeGraphWidget {
                         id,
                         node,
                         instance.as_mut(),
-                        &self.graph,
-                        &self.view,
-                        origin,
+                        NodeControlContext {
+                            graph: &self.graph,
+                            view: &self.view,
+                            origin,
+                        },
                     )
                 } else {
                     false

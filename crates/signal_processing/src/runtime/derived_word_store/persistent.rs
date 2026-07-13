@@ -193,7 +193,7 @@ pub(super) fn publish_index_and_manifest(
     let index_bytes = encode_index(
         config.cache_key,
         publication.directory,
-        publication.presence.leaf_records(),
+        &publication.presence.levels[0],
         publication.committed_word_count,
         publication.committed_data_len,
         publication.first_timestamp_ns,

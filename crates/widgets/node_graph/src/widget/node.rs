@@ -218,6 +218,21 @@ pub(crate) struct NodeWidget {
     layout: NodeLayout,
 }
 
+pub(crate) struct NodeDrawContext<'a> {
+    pub graph: &'a GraphState,
+    pub badge: Option<&'a NodeBadge>,
+    pub status: Option<&'a str>,
+    pub registry: &'a NodeTypeRegistry,
+    pub view: &'a ViewState,
+    pub origin: Pos2,
+}
+
+pub(crate) struct NodeControlContext<'a> {
+    pub graph: &'a GraphState,
+    pub view: &'a ViewState,
+    pub origin: Pos2,
+}
+
 impl NodeWidget {
     pub(crate) fn new(node: &Node) -> Self {
         Self {
@@ -255,13 +270,16 @@ impl NodeWidget {
         painter: &Painter,
         node_id: NodeId,
         node: &Node,
-        graph: &GraphState,
-        badge: Option<&NodeBadge>,
-        status: Option<&str>,
-        registry: &NodeTypeRegistry,
-        view: &ViewState,
-        origin: Pos2,
+        context: NodeDrawContext<'_>,
     ) {
+        let NodeDrawContext {
+            graph,
+            badge,
+            status,
+            registry,
+            view,
+            origin,
+        } = context;
         let l = &self.layout;
         let node_s = to_screen_rect(l.node_rect, view, origin);
 
@@ -459,10 +477,13 @@ impl NodeWidget {
         node_id: NodeId,
         node: &Node,
         instance: &mut dyn NodeInstance,
-        graph: &GraphState,
-        view: &ViewState,
-        origin: Pos2,
+        context: NodeControlContext<'_>,
     ) -> bool {
+        let NodeControlContext {
+            graph,
+            view,
+            origin,
+        } = context;
         let l = &self.layout;
         let node_screen_rect = to_screen_rect(l.node_rect, view, origin);
         let zoom = view.zoom;

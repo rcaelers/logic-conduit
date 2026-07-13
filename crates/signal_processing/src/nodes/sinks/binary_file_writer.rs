@@ -375,7 +375,7 @@ impl ProcessNode for BinaryFileWriter {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use crossbeam_channel::bounded;
 

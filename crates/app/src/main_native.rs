@@ -19,12 +19,12 @@ mod macos_menu {
         /// `refresh_recent_files` can update it in place as files are
         /// opened/saved during the session, instead of it only ever
         /// reflecting what was persisted as of the last launch.
-        static RECENT_FILES: RefCell<Vec<PathBuf>> = RefCell::new(Vec::new());
+        static RECENT_FILES: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
         /// The live "Open Recent" `NSMenu` and its items' target, kept
         /// around so `refresh_recent_files` can rebuild the submenu in
         /// place rather than only being able to set it once at `install()`.
         static RECENT_MENU: RefCell<Option<(Retained<NSMenu>, Retained<MenuHandler>)>> =
-            RefCell::new(None);
+            const { RefCell::new(None) };
     }
 
     define_class!(

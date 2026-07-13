@@ -14,10 +14,9 @@ pub struct WordSummaryRecord {
 /// A 64-way append-only mipmap whose leaves summarize occupied word runs.
 #[derive(Debug, Clone)]
 pub struct WordPresenceIndex {
-    levels: Vec<Vec<WordSummaryRecord>>,
-    total_word_count: u64,
+    pub(super) levels: Vec<Vec<WordSummaryRecord>>,
     extent_end_ns: Option<u64>,
-    prefix_max_end_ns: Vec<u64>,
+    pub(super) prefix_max_end_ns: Vec<u64>,
 }
 
 impl Default for WordPresenceIndex {
@@ -30,61 +29,18 @@ impl WordPresenceIndex {
     pub fn new() -> Self {
         Self {
             levels: vec![Vec::new()],
-            total_word_count: 0,
             extent_end_ns: None,
             prefix_max_end_ns: Vec::new(),
         }
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.levels.first().map_or(0, Vec::len)
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub(crate) fn total_word_count(&self) -> u64 {
-        self.total_word_count
     }
 
     pub fn extent_end_ns(&self) -> Option<u64> {
         self.extent_end_ns
     }
 
-    pub(super) fn leaf_records(&self) -> &[WordSummaryRecord] {
-        &self.levels[0]
-    }
-
-    pub(super) fn intersecting_block_indices(&self, start_ns: u64, end_ns: u64) -> Vec<usize> {
-        if start_ns > end_ns {
-            return Vec::new();
-        }
-        let leaves = &self.levels[0];
-        let first = self
-            .prefix_max_end_ns
-            .partition_point(|&prefix_end_ns| prefix_end_ns < start_ns);
-        let end = leaves.partition_point(|record| record.start_ns <= end_ns);
-        let mut blocks: Vec<_> = (first.min(end)..end)
-            .filter(|&index| leaves[index].end_ns >= start_ns)
-            .flat_map(|index| {
-                let record = leaves[index];
-                record.first_block
-                    ..record
-                        .first_block
-                        .saturating_add(u64::from(record.block_count))
-            })
-            .filter_map(|block| usize::try_from(block).ok())
-            .collect();
-        blocks.sort_unstable();
-        blocks.dedup();
-        blocks
-    }
-
     pub fn push(&mut self, record: WordSummaryRecord) {
         debug_assert!(record.word_count > 0);
         debug_assert!(record.start_ns <= record.end_ns);
-        self.total_word_count = self.total_word_count.saturating_add(record.word_count);
         self.extent_end_ns = Some(
             self.extent_end_ns
                 .map_or(record.end_ns, |end_ns| end_ns.max(record.end_ns)),
@@ -107,17 +63,6 @@ impl WordPresenceIndex {
             }
             self.levels[level].push(combined);
         }
-    }
-
-    pub(crate) fn presence_window(
-        &self,
-        start_ns: u64,
-        end_ns: u64,
-        target_buckets: usize,
-    ) -> Vec<WordPresenceBucket> {
-        let mut buckets = self.presence_window_all(start_ns, end_ns, target_buckets);
-        buckets.retain(|bucket| bucket.word_count > 0);
-        buckets
     }
 
     pub(super) fn presence_window_all(
@@ -289,7 +234,13 @@ mod tests {
         assert_eq!(index.level_len(0), FAN_OUT * FAN_OUT + 3);
         assert_eq!(index.level_len(1), FAN_OUT);
         assert_eq!(index.level_len(2), 1);
-        assert_eq!(index.total_word_count(), (FAN_OUT * FAN_OUT + 3) as u64);
+        assert_eq!(
+            index.levels[0]
+                .iter()
+                .map(|record| record.word_count)
+                .sum::<u64>(),
+            (FAN_OUT * FAN_OUT + 3) as u64
+        );
     }
 
     #[test]
@@ -297,7 +248,8 @@ mod tests {
         let mut index = WordPresenceIndex::new();
         index.push(point(0, 10, 1));
         index.push(point(1, 10_000, 1));
-        let buckets = index.presence_window(0, 10_009, 10);
+        let mut buckets = index.presence_window_all(0, 10_009, 10);
+        buckets.retain(|bucket| bucket.word_count > 0);
         assert_eq!(buckets.len(), 2);
         assert_eq!(buckets[0].start_ns, 0);
         assert_eq!(buckets[1].end_ns, 10_009);
@@ -315,7 +267,6 @@ mod tests {
         });
         index.push(point(1, 100, 1));
         assert_eq!(index.extent_end_ns(), Some(10_000));
-        assert_eq!(index.intersecting_block_indices(9_000, 9_500), vec![0]);
     }
 
     #[test]
@@ -339,6 +290,6 @@ mod tests {
         for block in 0..100_000u64 {
             index.push(point(block, block * 10, 64));
         }
-        assert!(index.presence_window(0, 1_000_000, 1_920).len() <= 1_920);
+        assert!(index.presence_window_all(0, 1_000_000, 1_920).len() <= 1_920);
     }
 }

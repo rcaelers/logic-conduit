@@ -10,7 +10,6 @@ pub const RESTART_ENTRY_SIZE: usize = 16;
 pub const BLOCK_CHECKSUM_OFFSET: usize = 64;
 
 pub const DEFAULT_MAX_WORDS_PER_BLOCK: usize = 32_768;
-pub const DEFAULT_RESTART_INTERVAL: usize = 512;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DataFileHeader {

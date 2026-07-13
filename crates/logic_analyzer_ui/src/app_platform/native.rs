@@ -90,8 +90,10 @@ pub fn dispatch_native_menu_command(command: NativeMenuCommand) {
 }
 
 #[cfg(target_os = "macos")]
-static RECENT_FILES_LISTENER: std::sync::OnceLock<Box<dyn Fn(&[PathBuf]) + Send + Sync>> =
-    std::sync::OnceLock::new();
+type RecentFilesListener = Box<dyn Fn(&[PathBuf]) + Send + Sync>;
+
+#[cfg(target_os = "macos")]
+static RECENT_FILES_LISTENER: std::sync::OnceLock<RecentFilesListener> = std::sync::OnceLock::new();
 
 #[cfg(target_os = "macos")]
 pub fn set_recent_files_listener(listener: impl Fn(&[PathBuf]) + Send + Sync + 'static) {

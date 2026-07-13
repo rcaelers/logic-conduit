@@ -38,6 +38,48 @@ pub struct SigrokFileSource {
     num_threads: usize,
 }
 
+struct ChannelStream {
+    samples: Arc<[u8]>,
+    unitsize: usize,
+    channel: usize,
+    total_samples: usize,
+    timestamp_step: u64,
+    sender: Sender<Sample>,
+    shutdown: Arc<AtomicBool>,
+    completed: Arc<AtomicUsize>,
+}
+
+impl ChannelStream {
+    fn run(self) {
+        let value_at = |sample| {
+            self.samples[sample * self.unitsize + self.channel / 8]
+                & (1 << (self.channel % 8))
+                != 0
+        };
+        let mut current = value_at(0);
+        if self.sender.send(Sample::new(current, 0)).is_ok() {
+            for sample in 1..self.total_samples {
+                if self.shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                let value = value_at(sample);
+                if value != current {
+                    current = value;
+                    if self
+                        .sender
+                        .send(Sample::new(value, sample as u64 * self.timestamp_step))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        self.sender.close();
+        self.completed.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Random-access reader for a sigrok v2 logic capture.
 pub struct SigrokCaptureReader {
     source: SigrokFileSource,
@@ -280,39 +322,6 @@ impl SigrokFileSource {
         &self.header
     }
 
-    fn stream_channel(
-        samples: Arc<[u8]>,
-        unitsize: usize,
-        channel: usize,
-        total_samples: usize,
-        timestamp_step: u64,
-        sender: Sender<Sample>,
-        shutdown: Arc<AtomicBool>,
-        completed: Arc<AtomicUsize>,
-    ) {
-        let value_at =
-            |sample| samples[sample * unitsize + channel / 8] & (1 << (channel % 8)) != 0;
-        let mut current = value_at(0);
-        if sender.send(Sample::new(current, 0)).is_ok() {
-            for sample in 1..total_samples {
-                if shutdown.load(Ordering::Relaxed) {
-                    break;
-                }
-                let value = value_at(sample);
-                if value != current {
-                    current = value;
-                    if sender
-                        .send(Sample::new(value, sample as u64 * timestamp_step))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            }
-        }
-        sender.close();
-        completed.fetch_add(1, Ordering::Relaxed);
-    }
 }
 
 impl ProcessNode for SigrokFileSource {
@@ -366,7 +375,7 @@ impl ProcessNode for SigrokFileSource {
                 let unitsize = self.unitsize;
                 let total_samples = self.header.total_samples as usize;
                 threads.push(std::thread::spawn(move || {
-                    Self::stream_channel(
+                    ChannelStream {
                         samples,
                         unitsize,
                         channel,
@@ -375,7 +384,8 @@ impl ProcessNode for SigrokFileSource {
                         sender,
                         shutdown,
                         completed,
-                    )
+                    }
+                    .run()
                 }));
             }
         }

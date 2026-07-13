@@ -98,12 +98,13 @@ impl AnnotationQuery for IndexedAnnotationStore {
         if target_buckets == 0 {
             return Err(AnnotationQueryError::ZeroBucketLimit);
         }
-        Ok(self
-            .state
-            .read()
-            .unwrap()
-            .presence
-            .presence_window(start_ns, end_ns, target_buckets))
+        let mut buckets = self.state.read().unwrap().presence.presence_window_all(
+            start_ns,
+            end_ns,
+            target_buckets,
+        );
+        buckets.retain(|bucket| bucket.word_count > 0);
+        Ok(buckets)
     }
 
     fn exact_window(

@@ -158,22 +158,40 @@ pub(super) fn build_empty_canvas_entries(
     entries
 }
 
-pub(super) fn build_context_entries(
-    registry: &NodeTypeRegistry,
-    canvas_pos: Pos2,
-    screen_pos: Pos2,
-    context_node: Option<crate::model::NodeId>,
-    context_frame: Option<FrameId>,
-    any_frame_selected: bool,
-    node_hidden: bool,
-    node_collapsed: bool,
-    node_muted: bool,
-    node_has_derived_cache: bool,
-    any_selected: bool,
-    can_paste: bool,
-    can_undo: bool,
-    can_redo: bool,
-) -> Vec<MenuEntry<GraphAction>> {
+pub(super) struct ContextMenuState<'a> {
+    pub registry: &'a NodeTypeRegistry,
+    pub canvas_pos: Pos2,
+    pub screen_pos: Pos2,
+    pub context_node: Option<crate::model::NodeId>,
+    pub context_frame: Option<FrameId>,
+    pub any_frame_selected: bool,
+    pub node_hidden: bool,
+    pub node_collapsed: bool,
+    pub node_muted: bool,
+    pub node_has_derived_cache: bool,
+    pub any_selected: bool,
+    pub can_paste: bool,
+    pub can_undo: bool,
+    pub can_redo: bool,
+}
+
+pub(super) fn build_context_entries(context: ContextMenuState<'_>) -> Vec<MenuEntry<GraphAction>> {
+    let ContextMenuState {
+        registry,
+        canvas_pos,
+        screen_pos,
+        context_node,
+        context_frame,
+        any_frame_selected,
+        node_hidden,
+        node_collapsed,
+        node_muted,
+        node_has_derived_cache,
+        any_selected,
+        can_paste,
+        can_undo,
+        can_redo,
+    } = context;
     if context_node.is_some() || any_selected {
         let hidden_chk = if node_hidden { "✓  " } else { "    " };
         let collapsed_chk = if node_collapsed { "✓  " } else { "    " };
