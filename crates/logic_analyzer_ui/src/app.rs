@@ -457,7 +457,7 @@ mod font_tests {
     fn menu_icon_glyphs_are_available() {
         assert!(
             !load_symbol_fonts().is_empty(),
-            "missing platform symbol font; expected Apple Symbols on macOS, Segoe UI Symbol on Windows, or Noto Sans Symbols and Noto Sans Symbols 2 on Linux"
+            "missing platform symbol font; expected Apple Symbols on macOS, Segoe UI Symbol on Windows, or Noto Sans Symbols, Symbols 2, and Math on Linux"
         );
         let ctx = egui::Context::default();
         install_fonts(&ctx);
