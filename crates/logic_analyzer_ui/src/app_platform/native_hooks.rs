@@ -512,7 +512,7 @@ impl App {
                 }
                 ui.menu_button("Open Recent", |ui| {
                     let existing: Vec<PathBuf> = self
-                        .recent_files
+                        .recent_files()
                         .iter()
                         .filter(|path| path.exists())
                         .cloned()
