@@ -30,4 +30,4 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
       - name: Check wasm UI and dependencies
-        run: cargo check -p dsl-ui --target wasm32-unknown-unknown
+        run: cargo check -p logic-analyzer-app --target wasm32-unknown-unknown
