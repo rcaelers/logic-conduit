@@ -42,4 +42,15 @@ See `docs/DECODER_VIEW_LANE_DESIGN.md` for the detailed viewer-lane decision.
   implementation boundary is not viable.
 
 See `docs/WASM_STORAGE_PLATFORM_DESIGN.md` for the derived-word-storage
-migration design and acceptance criteria.
+platform design and invariants.
+
+# Design documentation
+
+- Design documents describe the current architecture in present tense.
+- Treat unqualified design statements as implemented system behavior; do not
+  add implementation-status labels, completed rollout steps, resolved-problem
+  sections, or implementation history.
+- Put unimplemented ideas only in clearly labeled proposed-future sections and
+  track actionable work in `TODO.md`.
+- Use version control for historical context instead of preserving it in
+  current design documents.
