@@ -1,8 +1,9 @@
-pub(super) fn load_symbol_font() -> Option<egui::FontData> {
+pub(super) fn load_symbol_fonts() -> Vec<egui::FontData> {
     symbol_font_paths()
         .iter()
-        .find_map(|path| std::fs::read(path).ok())
+        .filter_map(|path| std::fs::read(path).ok())
         .map(egui::FontData::from_owned)
+        .collect()
 }
 
 #[cfg(target_os = "macos")]
@@ -19,9 +20,13 @@ fn symbol_font_paths() -> &'static [&'static str] {
 fn symbol_font_paths() -> &'static [&'static str] {
     &[
         "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf",
         "/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSansSymbols-Regular.ttf",
         "/usr/share/fonts/google-noto-sans-symbols2-fonts/NotoSansSymbols2-Regular.ttf",
+        "/usr/share/fonts/google-noto-sans-symbols-fonts/NotoSansSymbols-Regular.ttf",
         "/usr/local/share/NotoSansSymbols2-Regular.ttf",
+        "/usr/local/share/NotoSansSymbols-Regular.ttf",
     ]
 }
 

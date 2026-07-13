@@ -1,3 +1,3 @@
-pub(super) fn load_symbol_font() -> Option<egui::FontData> {
-    None
+pub(super) fn load_symbol_fonts() -> Vec<egui::FontData> {
+    Vec::new()
 }

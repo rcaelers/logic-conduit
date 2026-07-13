@@ -16,7 +16,7 @@ mod platform_hooks;
 #[cfg_attr(not(target_arch = "wasm32"), path = "app_platform/native_font.rs")]
 mod font_platform;
 
-use self::font_platform::load_symbol_font;
+use self::font_platform::load_symbol_fonts;
 
 pub struct App {
     node_graph: NodeGraphWidget,
@@ -322,20 +322,20 @@ fn format_count(items: u64) -> String {
     }
 }
 
-/// Adds the platform's native symbol font as a fallback for menu icon glyphs
+/// Adds the platform's native symbol fonts as fallbacks for menu icon glyphs
 /// that egui's bundled fonts don't cover.
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    if let Some(font_data) = load_symbol_font() {
-        const FONT_NAME: &str = "system-symbols";
+    for (index, font_data) in load_symbol_fonts().into_iter().enumerate() {
+        let font_name = format!("system-symbols-{index}");
         fonts
             .font_data
-            .insert(FONT_NAME.to_owned(), std::sync::Arc::new(font_data));
+            .insert(font_name.clone(), std::sync::Arc::new(font_data));
         fonts
             .families
             .get_mut(&egui::FontFamily::Proportional)
             .unwrap()
-            .push(FONT_NAME.to_owned());
+            .push(font_name);
     }
     ctx.set_fonts(fonts);
 }
@@ -451,13 +451,13 @@ impl eframe::App for App {
 
 #[cfg(test)]
 mod font_tests {
-    use super::{install_fonts, load_symbol_font};
+    use super::{install_fonts, load_symbol_fonts};
 
     #[test]
     fn menu_icon_glyphs_are_available() {
         assert!(
-            load_symbol_font().is_some(),
-            "missing platform symbol font; expected Apple Symbols on macOS, Segoe UI Symbol on Windows, or Noto Sans Symbols 2 on Linux"
+            !load_symbol_fonts().is_empty(),
+            "missing platform symbol font; expected Apple Symbols on macOS, Segoe UI Symbol on Windows, or Noto Sans Symbols and Noto Sans Symbols 2 on Linux"
         );
         let ctx = egui::Context::default();
         install_fonts(&ctx);
