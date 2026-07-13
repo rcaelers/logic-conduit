@@ -1,4 +1,5 @@
 use egui::Pos2;
+
 use signal_processing::CaptureWaveformSegment;
 
 use crate::channel::channels_from_window;

@@ -3,8 +3,9 @@
 //! `Text File Writer` downstream to actually persist anything; available on
 //! every target.
 
-use node_graph::Socket;
 use serde_json::Value;
+
+use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, TextSample, Word};
 
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};

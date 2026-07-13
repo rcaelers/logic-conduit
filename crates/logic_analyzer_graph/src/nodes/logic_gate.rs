@@ -1,8 +1,9 @@
 //! `Logic Gate` node.
 
 use egui::Color32;
-use node_graph::{EnumValue, InputDef, NodeBadge, NodeDef, OutputDef, PropDef, Socket};
 use serde::{Deserialize, Serialize};
+
+use node_graph::{EnumValue, InputDef, NodeBadge, NodeDef, OutputDef, PropDef, Socket};
 
 use super::{COLOR_LOGIC, Signal};
 

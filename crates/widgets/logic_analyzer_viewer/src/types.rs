@@ -1,4 +1,5 @@
 use egui::{Color32, Pos2, Rect};
+
 use signal_processing::CaptureMetadata;
 
 /// Color profile for the viewer. DSView (Tango-based channel colors, bright

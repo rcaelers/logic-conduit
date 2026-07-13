@@ -9,12 +9,12 @@ mod render;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use action::HotkeyRegistry;
 use egui::{Pos2, Sense, Ui};
-use interaction::{GraphResponses, InteractionState};
-use menu::MenuController;
-use panel::{PanelState, PanelTab};
 
+use self::action::HotkeyRegistry;
+use self::interaction::{GraphResponses, InteractionState};
+use self::menu::MenuController;
+use self::panel::{PanelState, PanelTab};
 use crate::model::{FrameId, GraphState, Node, NodeBadge, NodeId};
 use crate::runtime::{NodeInstance, NodeRuntime, NodeTypeRegistry};
 use crate::support::ViewState;

@@ -8,13 +8,14 @@
 use std::collections::VecDeque;
 
 use egui::Color32;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
 use logic_analyzer_graph::compiler::{
     CompileCtx, PortKind, PortValue, ResolvedInputs, RuntimeBuilder,
 };
 use logic_analyzer_graph::nodes::Signal;
 use node_graph::{InputDef, NodeDef, OutputDef, Socket, SocketDef, SocketShape};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use signal_processing::{
     InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, Sample, WorkError, WorkResult,
 };

@@ -1,10 +1,11 @@
 //! `File Writer` node.
 
 use egui::Color32;
+use serde::{Deserialize, Serialize};
+
 use node_graph::{
     BoolValue, EnumValue, FileValue, InputDef, NodeDef, OutputDef, PanelSection, PropDef,
 };
-use serde::{Deserialize, Serialize};
 
 use super::{COLOR_OUTPUT, TextSavePath, Words};
 

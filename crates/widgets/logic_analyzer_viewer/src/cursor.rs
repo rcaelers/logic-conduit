@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use egui::{Color32, CursorIcon, FontId, PointerButton, Pos2, Rect, Response, Ui};
+
 use signal_processing::{Annotation, AnnotationQuery, DerivedLaneData};
 
 use crate::draw::derived::annotation_box_end;

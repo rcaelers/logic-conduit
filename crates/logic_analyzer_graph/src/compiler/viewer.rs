@@ -2,8 +2,9 @@
 
 use std::collections::HashMap;
 
-use node_graph::Socket;
 use serde_json::Value;
+
+use node_graph::Socket;
 use signal_processing::{
     LiveStoreConfig, ProcessNode, Sample, Trigger, ViewerLaneKind, ViewerSink, Word,
 };

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 
 use egui::{FontId, Pos2, Rect, Sense, Ui, vec2};
+
 #[cfg(not(target_arch = "wasm32"))]
 use signal_processing::CaptureDataSource;
 use signal_processing::{CaptureIndex, DerivedLanes};

@@ -1,9 +1,10 @@
 //! `File Writer` builder — writes decoded words to a binary file. Native-only:
 //! no filesystem in the browser.
 
+use serde_json::Value;
+
 use signal_processing::{BinaryFileWriter, ProcessNode, TextSample, Word, WriteWidth};
 use node_graph::Socket;
-use serde_json::Value;
 
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;

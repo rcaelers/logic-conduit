@@ -1,8 +1,9 @@
 //! `String Formatter` node.
 
 use egui::Color32;
-use node_graph::{InputDef, NodeDef, OutputDef, PropDef, StringValue};
 use serde::{Deserialize, Serialize};
+
+use node_graph::{InputDef, NodeDef, OutputDef, PropDef, StringValue};
 
 use super::{COLOR_LOGIC, Number, Text};
 

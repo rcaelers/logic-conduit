@@ -1,8 +1,9 @@
 //! `Buffer` builder — see `crates/logic_analyzer_graph/src/nodes/buffer.rs` and
 //! the buffer policy in `docs/APP_DESIGN.md`.
 
-use node_graph::Socket;
 use serde_json::Value;
+
+use node_graph::Socket;
 use signal_processing::{
     BufferNode, NumberSample, ProcessNode, Sample, SampleBlock, TextSample, Trigger, Word,
 };

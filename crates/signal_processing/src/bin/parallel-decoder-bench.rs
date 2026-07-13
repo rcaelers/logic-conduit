@@ -14,6 +14,7 @@ mod native {
     use std::time::{Duration, Instant};
 
     use clap::{Parser, ValueEnum};
+
     use signal_processing::{
         CsPolarity, DecodedBlockCacheStats, DerivedLaneData, DerivedLanes, DslFileSource,
         InputPort, LiveStoreConfig, OutputPort, ParallelDecoder, ParallelInputStrategy,

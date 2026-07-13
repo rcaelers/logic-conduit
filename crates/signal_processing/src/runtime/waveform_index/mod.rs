@@ -5,7 +5,7 @@ mod types;
 
 pub use reader::IndexSampler;
 pub use types::CaptureIndexProgress;
-use types::SAMPLES_PER_L1_BIT;
+use self::types::SAMPLES_PER_L1_BIT;
 
 const EXACT_SCAN_BASE_MAX_SAMPLES: u64 = 4_096;
 

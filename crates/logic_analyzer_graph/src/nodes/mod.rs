@@ -16,6 +16,7 @@
 //! the graph but not runnable.
 
 use egui::Color32;
+
 use node_graph::{NodeDef, NodeTypeRegistry, SocketDef, SocketShape};
 
 mod binary_decoder;

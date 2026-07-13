@@ -5,7 +5,6 @@
 //! behavior are selected here as complete implementation files.
 
 pub(super) use super::{CodecError, backend, config, presence, query, state};
-
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) use super::{cache, codec, format, persistent};
 

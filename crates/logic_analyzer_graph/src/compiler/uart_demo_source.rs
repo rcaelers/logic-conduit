@@ -1,8 +1,9 @@
 //! `UART Demo Source` builder — generates a fixed UART byte sequence
 //! in-memory. Available on every target (no file/USB access needed).
 
-use node_graph::Socket;
 use serde_json::Value;
+
+use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample};
 
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};

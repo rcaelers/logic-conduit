@@ -3,11 +3,12 @@
 //! console-printer role a one-off example sink used to fill.
 
 use egui::Color32;
+use serde::{Deserialize, Serialize};
+
 use node_graph::{
     EnumValue, FileValue, InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef,
     StringValue,
 };
-use serde::{Deserialize, Serialize};
 
 use super::{COLOR_OUTPUT, TextSavePath, Words};
 

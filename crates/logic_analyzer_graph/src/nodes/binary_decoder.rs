@@ -1,8 +1,9 @@
 //! `Binary Decoder` node.
 
 use egui::Color32;
-use node_graph::{EnumValue, InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef};
 use serde::{Deserialize, Serialize};
+
+use node_graph::{EnumValue, InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef};
 
 use super::{COLOR_DECODERS, Signal, Words};
 

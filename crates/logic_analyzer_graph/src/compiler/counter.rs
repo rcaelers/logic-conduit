@@ -1,7 +1,8 @@
 //! `Counter` builder.
 
-use node_graph::Socket;
 use serde_json::Value;
+
+use node_graph::Socket;
 use signal_processing::{NumberSample, ProcessNode, Trigger, TriggerCounter};
 
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};

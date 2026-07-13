@@ -16,7 +16,7 @@ mod platform_hooks;
 #[cfg_attr(not(target_arch = "wasm32"), path = "app_platform/native_font.rs")]
 mod font_platform;
 
-use font_platform::load_symbol_font;
+use self::font_platform::load_symbol_font;
 
 pub struct App {
     node_graph: NodeGraphWidget,

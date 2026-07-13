@@ -12,6 +12,7 @@
 use std::collections::VecDeque;
 
 use clap::Parser;
+
 use signal_processing::nodes::decoders::{SpiDecoder, SpiMode};
 use signal_processing::{
     CaptureMode, ClockSource, DsLogicU3Pro16, InputPort, LogicCaptureConfig, LogicEncodingRequest,

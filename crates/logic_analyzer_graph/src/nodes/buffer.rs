@@ -6,10 +6,11 @@
 //! (see `crates/logic_analyzer_graph/src/compiler/buffer.rs`).
 
 use egui::Color32;
+use serde::{Deserialize, Serialize};
+
 use node_graph::{
     AnySocket, EnumValue, InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef,
 };
-use serde::{Deserialize, Serialize};
 
 use super::COLOR_LOGIC;
 

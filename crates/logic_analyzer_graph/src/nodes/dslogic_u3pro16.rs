@@ -3,11 +3,12 @@
 //! node is editable but not runnable.
 
 use egui::Color32;
+use serde::{Deserialize, Serialize};
+
 use node_graph::{
     BoolValue, EnumValue, FloatValue, InlineControl, InputDef, IntValue, NodeBadge, NodeDef,
     OutputDef, PanelSection, PropDef, Socket,
 };
-use serde::{Deserialize, Serialize};
 
 use super::{COLOR_SOURCES, Signal};
 

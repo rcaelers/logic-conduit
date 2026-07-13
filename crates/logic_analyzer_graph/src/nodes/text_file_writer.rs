@@ -2,6 +2,7 @@
 //! Recorder`'s CSV output. Native-only: no filesystem in the browser.
 
 use egui::Color32;
+
 use node_graph::{InputDef, NodeDef, OutputDef};
 
 use super::{COLOR_OUTPUT, Text};

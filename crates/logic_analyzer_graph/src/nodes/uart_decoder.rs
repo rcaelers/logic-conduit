@@ -1,10 +1,11 @@
 //! `UART Decoder` node (single line).
 
 use egui::Color32;
+use serde::{Deserialize, Serialize};
+
 use node_graph::{
     BoolValue, EnumValue, InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef, Socket,
 };
-use serde::{Deserialize, Serialize};
 
 use super::{COLOR_DECODERS, Signal, Trigger, Words};
 

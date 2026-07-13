@@ -25,10 +25,9 @@ std::cfg_select! {
     }
 }
 
-pub(crate) use platform::store;
-
 pub(crate) use backend::{AnnotationStoreBackend, AnnotationStoreWriterBackend};
 pub use config::{BlockCodecConfig, LiveStoreConfig, PersistentStoreConfig};
+pub(crate) use platform::store;
 pub use platform::*;
 pub use query::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,

@@ -1,8 +1,9 @@
 //! `Sigrok File Source` node — reads PulseView/sigrok v2 `.sr` captures.
 
 use egui::Color32;
-use node_graph::{FileValue, InputDef, IntValue, NodeDef, OutputDef, Socket};
 use serde::{Deserialize, Serialize};
+
+use node_graph::{FileValue, InputDef, IntValue, NodeDef, OutputDef, Socket};
 
 use super::{COLOR_SOURCES, Signal, TextOpenPath};
 

@@ -16,11 +16,12 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use egui::{Color32, Pos2};
+use serde_json::Value;
+
 use node_graph::{
     Connection, GraphState, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId, SocketShape,
     VariadicInfo,
 };
-use serde_json::Value;
 use signal_processing::{
     AppManager, DerivedLanes, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy,
     PersistentStoreConfig, ProcessNode, SampleBlock, ViewerRetention,

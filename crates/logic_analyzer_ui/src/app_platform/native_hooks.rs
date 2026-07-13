@@ -1,8 +1,7 @@
-use super::*;
 use std::path::PathBuf;
 
+use super::*;
 use crate::app_platform::{FileCommand, GuardedAction};
-
 #[cfg(target_os = "macos")]
 use crate::app_platform::{NativeMenuCommand, notify_recent_files_changed};
 

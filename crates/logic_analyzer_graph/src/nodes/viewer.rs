@@ -1,8 +1,9 @@
 //! `Viewer` node.
 
 use egui::Color32;
-use node_graph::{InputDef, NodeDef, OutputDef, PanelSection, PropDef, StringValue};
 use serde::{Deserialize, Serialize};
+
+use node_graph::{InputDef, NodeDef, OutputDef, PanelSection, PropDef, StringValue};
 
 use super::{COLOR_OUTPUT, Signal, Trigger, Words};
 

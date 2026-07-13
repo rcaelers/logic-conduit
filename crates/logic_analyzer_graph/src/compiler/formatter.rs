@@ -1,7 +1,8 @@
 //! `String Formatter` builder.
 
-use node_graph::Socket;
 use serde_json::Value;
+
+use node_graph::Socket;
 use signal_processing::{
     ConfigValue, NodeConfig, NumberSample, ProcessNode, TextFormatter, TextSample,
 };

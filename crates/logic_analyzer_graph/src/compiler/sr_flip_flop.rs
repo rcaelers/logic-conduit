@@ -1,7 +1,8 @@
 //! `SR Flip-Flop` builder.
 
-use node_graph::Socket;
 use serde_json::Value;
+
+use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SrLatch, Trigger};
 
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};

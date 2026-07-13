@@ -1,11 +1,12 @@
 //! `DSL File Source` builder — reads channels from a `.dsl` capture file.
 //! Native-only: no filesystem in the browser.
 
+use serde_json::Value;
+
 use signal_processing::{
     DEFAULT_VIEWER_MAX_ENTRIES, ProcessNode, Sample, SampleBlock, TextSample, ViewerRetention,
 };
 use node_graph::Socket;
-use serde_json::Value;
 
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;

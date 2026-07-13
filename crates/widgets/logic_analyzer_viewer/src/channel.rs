@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 
 use egui::{Color32, CursorIcon, PointerButton, Pos2, Rect, Response, Ui, vec2};
+
 use signal_processing::{
     AppendOnlyMipmap, CaptureMetadata, CaptureSampledWindow, CaptureWaveformSegment,
     DerivedLaneData, DigitalFold, LaneSummary, MarkerFold, MipmapRecord, Sample,

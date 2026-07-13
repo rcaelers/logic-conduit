@@ -1,8 +1,9 @@
 //! `Counter` node.
 
 use egui::Color32;
-use node_graph::{InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef};
 use serde::{Deserialize, Serialize};
+
+use node_graph::{InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef};
 
 use super::{COLOR_LOGIC, Number, Trigger};
 

@@ -5,12 +5,13 @@ mod macos_menu {
     use std::cell::RefCell;
     use std::path::PathBuf;
 
-    use logic_analyzer_ui::{NativeMenuCommand, dispatch_native_menu_command};
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
     use objc2::{ClassType, define_class, msg_send, sel};
     use objc2_app_kit::{NSApp, NSMenu, NSMenuItem};
     use objc2_foundation::{MainThreadMarker, NSObject, ns_string};
+
+    use logic_analyzer_ui::{NativeMenuCommand, dispatch_native_menu_command};
 
     thread_local! {
         /// "Open Recent" items dispatch through one shared `openRecent:`

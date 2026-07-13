@@ -3,14 +3,15 @@ pub(crate) mod derived;
 mod measurement;
 
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, vec2};
+
 use signal_processing::{DerivedLaneData, LaneSummary};
 
+use self::derived::DerivedRowGeometry;
 use crate::cursor::{cursor_color, cursor_flag_geometry, cursor_flag_label};
 use crate::format::{badge_text_color, format_duration, format_time, nice_step};
 use crate::indexed_annotations::IndexedAnnotationSamples;
 use crate::types::{AnalyzerLayout, RowKey};
 use crate::viewer::LogicAnalyzerViewer;
-use derived::DerivedRowGeometry;
 
 impl LogicAnalyzerViewer {
     pub(crate) fn draw(

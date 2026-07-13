@@ -1,8 +1,9 @@
 //! `UART Demo Source` node — generates a fixed UART byte sequence in-memory.
 
 use egui::Color32;
-use node_graph::{InputDef, IntValue, NodeDef, OutputDef, StringValue};
 use serde::{Deserialize, Serialize};
+
+use node_graph::{InputDef, IntValue, NodeDef, OutputDef, StringValue};
 
 use super::{COLOR_SOURCES, Signal};
 

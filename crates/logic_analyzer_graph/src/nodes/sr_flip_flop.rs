@@ -1,8 +1,9 @@
 //! `SR Flip-Flop` node.
 
 use egui::Color32;
-use node_graph::{BoolValue, InputDef, NodeDef, OutputDef, PanelSection, PropDef};
 use serde::{Deserialize, Serialize};
+
+use node_graph::{BoolValue, InputDef, NodeDef, OutputDef, PanelSection, PropDef};
 
 use super::{COLOR_LOGIC, Signal, Trigger};
 

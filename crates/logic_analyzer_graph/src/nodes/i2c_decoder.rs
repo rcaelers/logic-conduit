@@ -3,6 +3,7 @@
 //! runnable.
 
 use egui::Color32;
+
 use node_graph::{InputDef, NodeDef, OutputDef};
 
 use super::{COLOR_DECODERS, Signal, Words};

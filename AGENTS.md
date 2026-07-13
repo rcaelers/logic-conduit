@@ -54,3 +54,11 @@ platform design and invariants.
   track actionable work in `TODO.md`.
 - Use version control for historical context instead of preserving it in
   current design documents.
+
+# Rust imports
+
+- Group `use` statements in this order, separated by one blank line:
+  language crates (`std`, `core`, `alloc`), third-party crates, other crates
+  in this workspace, then the current crate (`crate`, `self`, `super`).
+- Run `scripts/sort_use_groups.rb` after adding or reorganizing imports;
+  ordinary `cargo fmt` preserves the workspace-specific split.

@@ -1,7 +1,8 @@
 //! `Binary Decoder` builder — parallel-bus word assembly from raw blocks.
 
-use node_graph::Socket;
 use serde_json::Value;
+
+use node_graph::Socket;
 use signal_processing::nodes::decoders::Endianness;
 use signal_processing::{
     CsPolarity, ParallelInputStrategy, ProcessNode, Sample, SampleBlock, StrobeMode, Word,

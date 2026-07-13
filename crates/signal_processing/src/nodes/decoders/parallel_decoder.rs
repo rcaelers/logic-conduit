@@ -28,7 +28,7 @@ use crate::runtime::{Receiver, WorkError};
 )]
 mod worker_backend;
 
-use worker_backend::ParallelStreamState;
+use self::worker_backend::ParallelStreamState;
 
 #[derive(Clone)]
 pub struct ParallelDecoderMetrics {

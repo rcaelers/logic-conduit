@@ -44,6 +44,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use crossbeam_channel::TryRecvError;
+use tracing::{debug, info};
+
 use signal_processing::nodes::decoders::{
     CsPolarity, ParallelDecoder, SpiDecoder, SpiMode, StrobeMode,
 };
@@ -51,7 +53,6 @@ use signal_processing::{
     DslFileSource, InputPort, OutputPort, Pipeline, PortDirection, PortSchema, ProcessNode, Sample,
     Word, WorkError, WorkResult,
 };
-use tracing::{debug, info};
 
 /// One complete TGCK cycle record for the CSV output.
 struct TgckRecord {

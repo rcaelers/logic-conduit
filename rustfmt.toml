@@ -1,6 +1,5 @@
-# Group standard-library, external, and current-crate imports automatically.
-# Rustfmt cannot distinguish workspace dependencies from third-party crates;
-# those are both classified as external imports.
+# Preserve the four groups produced by scripts/sort_use_groups.rb. Rustfmt
+# cannot distinguish workspace dependencies from third-party crates itself.
 edition = "2024"
 reorder_imports = true
 group_imports = "Preserve"
