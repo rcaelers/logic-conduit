@@ -9,26 +9,26 @@ version = "0.1.0"
 [workspace.dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
 crossbeam-channel = "0.5.16"
-eframe = { version = "0.35", features = ["persistence"] }
-egui = "0.35"
-lazy_static = "1.5"
+eframe = { version = "0.35.0", features = ["persistence"] }
+egui = "0.35.0"
+lazy_static = "1.5.0"
 libc = "0.2.186"
-log = "0.4"
+log = "0.4.33"
 memmap2 = "0.9.11"
-minifb = "0.28"
+minifb = "0.28.0"
 rfd = "0.17.2"
-rusb = "0.9"
+rusb = "0.9.4"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
-blake3 = "1"
+blake3 = "1.8.5"
 tempfile = "3.27.0"
-thiserror = "2.0"
-tracing = "0.1"
+thiserror = "2.0.18"
+tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 wasm-bindgen = "=0.2.126"
 wasm-bindgen-futures = "0.4.58"
 web-sys = { version = "0.3.85", features = ["HtmlCanvasElement"] }
-web-time = "1.1"
+web-time = "1.1.0"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [package]
