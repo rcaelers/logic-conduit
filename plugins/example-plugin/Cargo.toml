@@ -8,9 +8,9 @@ name = "example_plugin"
 path = "src/lib.rs"
 
 [dependencies]
-dsl = { path = "../../crates/dsl" }
-dsl-ui = { path = "../../crates/ui" }
-node-graph = { path = "../../crates/node_graph" }
+signal-processing = { path = "../../crates/signal_processing" }
+logic-analyzer-graph = { path = "../../crates/logic_analyzer_graph" }
+node-graph = { path = "../../crates/widgets/node_graph" }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

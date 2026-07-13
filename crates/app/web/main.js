@@ -1,9 +1,9 @@
 const buildVersion = document.currentScript?.dataset.buildVersion ?? `${Date.now()}`;
-const wasmModule = await import(`./pkg/dsl_app.js?v=${encodeURIComponent(buildVersion)}`);
+const wasmModule = await import(`./pkg/logic_analyzer_app.js?v=${encodeURIComponent(buildVersion)}`);
 const { default: init, WebHandle } = wasmModule;
 
 const loading = document.getElementById("loading");
-const canvas = document.getElementById("dsl-ui");
+const canvas = document.getElementById("logic-analyzer");
 
 try {
   await init(`./pkg/dsl_app_bg.wasm?v=${encodeURIComponent(buildVersion)}`);

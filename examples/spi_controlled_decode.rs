@@ -44,8 +44,10 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use crossbeam_channel::TryRecvError;
-use dsl::nodes::decoders::{CsPolarity, ParallelDecoder, SpiDecoder, SpiMode, StrobeMode};
-use dsl::{
+use signal_processing::nodes::decoders::{
+    CsPolarity, ParallelDecoder, SpiDecoder, SpiMode, StrobeMode,
+};
+use signal_processing::{
     DslFileSource, InputPort, OutputPort, Pipeline, PortDirection, PortSchema, ProcessNode, Sample,
     Word, WorkError, WorkResult,
 };
@@ -518,8 +520,8 @@ impl ProcessNode for ControlledParallelWriter {
         0 // Sink
     }
 
-    fn input_schema(&self) -> Vec<dsl::PortSchema> {
-        use dsl::{PortDirection, PortSchema};
+    fn input_schema(&self) -> Vec<signal_processing::PortSchema> {
+        use signal_processing::{PortDirection, PortSchema};
         vec![
             PortSchema::new::<Word>("parallel_words", 0, PortDirection::Input),
             PortSchema::new::<Sample>("enable_signal", 1, PortDirection::Input),
@@ -740,8 +742,8 @@ impl ProcessNode for StateMonitor {
         0 // Sink
     }
 
-    fn input_schema(&self) -> Vec<dsl::PortSchema> {
-        use dsl::{PortDirection, PortSchema, Sample};
+    fn input_schema(&self) -> Vec<signal_processing::PortSchema> {
+        use signal_processing::{PortDirection, PortSchema, Sample};
         vec![PortSchema::new::<Sample>(
             "enable_state",
             0,
@@ -790,8 +792,8 @@ impl ProcessNode for SpiMonitor {
         0 // Sink
     }
 
-    fn input_schema(&self) -> Vec<dsl::PortSchema> {
-        use dsl::{PortDirection, PortSchema};
+    fn input_schema(&self) -> Vec<signal_processing::PortSchema> {
+        use signal_processing::{PortDirection, PortSchema};
         vec![PortSchema::new::<Word>(
             "spi_transfers",
             0,

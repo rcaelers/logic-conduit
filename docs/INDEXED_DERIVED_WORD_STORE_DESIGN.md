@@ -7,14 +7,14 @@ Remaining validation, operability, optimization, and cleanup work is tracked in 
 
 Primary implementation areas:
 
-- `crates/dsl/src/runtime/derived_word_store/` (new)
-- `crates/dsl/src/nodes/sinks/viewer_sink.rs`
-- `crates/dsl/src/runtime/derived_index.rs`
-- `crates/logic_analyzer_viewer/src/draw/derived.rs`
-- `crates/logic_analyzer_viewer/src/cursor.rs`
-- `crates/logic_analyzer_viewer/src/channel.rs`
-- `crates/ui/src/compiler/viewer.rs`
-- `crates/ui/src/compiler/mod.rs`
+- `crates/signal_processing/src/runtime/derived_word_store/` (new)
+- `crates/signal_processing/src/nodes/sinks/viewer_sink.rs`
+- `crates/signal_processing/src/runtime/derived_index.rs`
+- `crates/widgets/logic_analyzer_viewer/src/draw/derived.rs`
+- `crates/widgets/logic_analyzer_viewer/src/cursor.rs`
+- `crates/widgets/logic_analyzer_viewer/src/channel.rs`
+- `crates/logic_analyzer_graph/src/compiler/viewer.rs`
+- `crates/logic_analyzer_graph/src/compiler/mod.rs`
 
 Related documents:
 
@@ -949,7 +949,7 @@ The opt-in full reference test must verify:
 
 ### Step 1: Format and codec module
 
-Status: implemented in `crates/dsl/src/runtime/derived_word_store/`.
+Status: implemented in `crates/signal_processing/src/runtime/derived_word_store/`.
 
 The implementation includes the fixed data/block headers, unsigned LEB128 codec, narrow value
 widths, sparse duration exceptions, restart entries, CRC32C validation, a reusable block builder,
@@ -974,7 +974,7 @@ Exit criteria:
 
 ### Step 2: Append-only live store
 
-Status: implemented in `crates/dsl/src/runtime/derived_word_store/store.rs`.
+Status: implemented in `crates/signal_processing/src/runtime/derived_word_store/store.rs`.
 
 The native implementation owns a temporary data file, appends bounded encoded blocks, publishes
 directory entries only after complete writes, exposes positional committed-block reads, maintains
@@ -999,7 +999,7 @@ Exit criteria:
 
 ### Step 3: Exact reader and decoded-block LRU
 
-Status: implemented in `crates/dsl/src/runtime/derived_word_store/{query,cache,store}.rs`.
+Status: implemented in `crates/signal_processing/src/runtime/derived_word_store/{query,cache,store}.rs`.
 
 Exact queries binary-search the committed directory, use restart-bounded cold decoding at window
 edges, merge the live hot tail, and return completeness plus store generation. Nearest-boundary
@@ -1025,7 +1025,7 @@ Exit criteria:
 
 ### Step 4: Presence/count mipmap
 
-Status: implemented in `crates/dsl/src/runtime/derived_word_store/presence.rs` and exposed through
+Status: implemented in `crates/signal_processing/src/runtime/derived_word_store/presence.rs` and exposed through
 `IndexedAnnotationStore`'s `AnnotationQuery` implementation.
 
 Every committed word block contributes one or more gap-aware occupied-run leaves. Complete groups
@@ -1047,7 +1047,7 @@ Exit criteria:
 
 ### Step 5: ViewerSink integration
 
-Status: implemented in `crates/dsl/src/nodes/sinks/viewer_sink.rs`.
+Status: implemented in `crates/signal_processing/src/nodes/sinks/viewer_sink.rs`.
 
 Native `ViewerSink` word lanes now create one `IndexedAnnotationWriter`, append each drained
 `Vec<Word>` directly, and publish an `IndexedAnnotationLane` containing the shared query handle,
@@ -1090,7 +1090,7 @@ Exit criteria:
 
 ### Step 6: Rendering and cursor integration
 
-Status: implemented in `crates/logic_analyzer_viewer/src/{indexed_annotations,draw,cursor,viewer}.rs`.
+Status: implemented in `crates/widgets/logic_analyzer_viewer/src/{indexed_annotations,draw,cursor,viewer}.rs`.
 
 The viewer owns a bounded per-lane viewport cache keyed by query identity, store generation,
 visible nanosecond range, and pixel width. Sampling clones only the lane name and query `Arc` while
@@ -1142,8 +1142,8 @@ Exit criteria:
 
 ### Step 7: Persistent publication and invalidation
 
-Status: implemented in `crates/dsl/src/runtime/derived_word_store/{persistent,store}.rs`,
-`crates/dsl/src/nodes/sinks/viewer_sink.rs`, and `crates/ui/src/compiler/`.
+Status: implemented in `crates/signal_processing/src/runtime/derived_word_store/{persistent,store}.rs`,
+`crates/signal_processing/src/nodes/sinks/viewer_sink.rs`, and `crates/logic_analyzer_graph/src/compiler/`.
 
 Completed stores publish immutable data and index files followed by a checksummed manifest. Reopen
 validates the full 256-bit key, format versions, file lengths, metadata checksums, and block

@@ -1,6 +1,6 @@
 # Node Graph Widget — API
 
-How to embed and extend the `node-graph` crate ([crates/node_graph](../crates/node_graph)).
+How to embed and extend the `node-graph` crate ([crates/widgets/node_graph](../crates/widgets/node_graph)).
 For the internal architecture see [NODE_GRAPH_DESIGN.md](NODE_GRAPH_DESIGN.md).
 
 Public surface (crate root re-exports):

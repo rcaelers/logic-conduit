@@ -13,7 +13,7 @@ command -v wasm-bindgen >/dev/null 2>&1 || {
 
 cargo build \
   --manifest-path "${ROOT_DIR}/Cargo.toml" \
-  --package dsl-app \
+  --package logic-analyzer-app \
   --target wasm32-unknown-unknown \
   --release
 
@@ -22,7 +22,7 @@ mkdir -p "${OUT_DIR}/pkg"
 cp "${ROOT_DIR}"/crates/app/web/* "${OUT_DIR}/"
 
 wasm-bindgen \
-  "${ROOT_DIR}/target/wasm32-unknown-unknown/release/dsl_app.wasm" \
+  "${ROOT_DIR}/target/wasm32-unknown-unknown/release/logic_analyzer_app.wasm" \
   --target web \
   --out-dir "${OUT_DIR}/pkg"
 

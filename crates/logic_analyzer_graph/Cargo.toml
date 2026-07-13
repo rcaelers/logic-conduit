@@ -1,0 +1,21 @@
+[package]
+name = "logic-analyzer-graph"
+version.workspace = true
+edition = "2024"
+authors = ["Rob Caelers <rob.caelers@gmail.com>"]
+
+[lib]
+name = "logic_analyzer_graph"
+path = "src/lib.rs"
+
+[dependencies]
+signal-processing = { path = "../signal_processing" }
+node-graph = { path = "../widgets/node_graph" }
+egui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+crossbeam-channel = { workspace = true }
+blake3 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -9,8 +9,8 @@ pub use pulse_measure::{PulseMeasure, PulseMeasureBuilder, PulseSocket, PulseWid
 
 /// Registers this plugin's payload type, node type, and builder — one
 /// consistent, chainable API instead of juggling three different registries
-/// by hand (see [`dsl_ui::compiler::PluginContext`]).
-pub fn register(ctx: &mut dsl_ui::compiler::PluginContext) {
+/// by hand (see [`logic_analyzer_graph::compiler::PluginContext`]).
+pub fn register(ctx: &mut logic_analyzer_graph::compiler::PluginContext) {
     ctx.register_payload::<PulseWidth>()
         .register_node::<PulseMeasure>()
         .register_builder("Pulse Measure", Box::new(PulseMeasureBuilder));

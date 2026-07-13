@@ -11,9 +11,9 @@ node type. They must not inspect node titles, output names such as `Bits` or
 
 Concrete node behavior belongs only in:
 
-- the node definition in `crates/ui/src/nodes/`;
-- its runtime builder in `crates/ui/src/compiler/`;
-- its runtime implementation in `crates/dsl/src/nodes/`.
+- the node definition in `crates/logic_analyzer_graph/src/nodes/`;
+- its runtime builder in `crates/logic_analyzer_graph/src/compiler/`;
+- its runtime implementation in `crates/signal_processing/src/nodes/`.
 
 The UI compiler may translate a node-specific display declaration into a
 generic viewer contract, but the rest of the compiler remains node-agnostic.

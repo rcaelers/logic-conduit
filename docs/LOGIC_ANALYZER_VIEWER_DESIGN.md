@@ -8,17 +8,17 @@ never invents edge positions it doesn't know).
 
 Implementation:
 
-- egui widget: [crates/logic_analyzer_viewer](../crates/logic_analyzer_viewer)
+- egui widget: [crates/widgets/logic_analyzer_viewer](../crates/widgets/logic_analyzer_viewer)
   (`viewer.rs`, `channel.rs`, `cursor.rs`, `draw/`, `input.rs`, `sampling.rs`, `worker.rs`)
-- Index build/query engine: [crates/dsl/src/runtime/waveform_index/](../crates/dsl/src/runtime/waveform_index)
+- Index build/query engine: [crates/signal_processing/src/runtime/waveform_index/](../crates/signal_processing/src/runtime/waveform_index)
   (`builder.rs`, `storage.rs`, `reader.rs`, `types.rs`)
-- Raw block decompression cache: [crates/dsl/src/runtime/raw_block_cache.rs](../crates/dsl/src/runtime/raw_block_cache.rs)
-- Capture reader / data source: [crates/dsl/src/nodes/dsl_file.rs](../crates/dsl/src/nodes/dsl_file.rs)
+- Raw block decompression cache: [crates/signal_processing/src/runtime/raw_block_cache.rs](../crates/signal_processing/src/runtime/raw_block_cache.rs)
+- Capture reader / data source: [crates/signal_processing/src/nodes/dsl_file.rs](../crates/signal_processing/src/nodes/dsl_file.rs)
   (`DslCaptureReader`, `DslFileCaptureDataSource`)
-- Common capture types / traits: [crates/dsl/src/runtime/capture.rs](../crates/dsl/src/runtime/capture.rs)
+- Common capture types / traits: [crates/signal_processing/src/runtime/capture.rs](../crates/signal_processing/src/runtime/capture.rs)
 - Derived-lane store and summary index:
-  [crates/dsl/src/nodes/sinks/viewer_sink.rs](../crates/dsl/src/nodes/sinks/viewer_sink.rs),
-  [crates/dsl/src/runtime/derived_index.rs](../crates/dsl/src/runtime/derived_index.rs)
+  [crates/signal_processing/src/nodes/sinks/viewer_sink.rs](../crates/signal_processing/src/nodes/sinks/viewer_sink.rs),
+  [crates/signal_processing/src/runtime/derived_index.rs](../crates/signal_processing/src/runtime/derived_index.rs)
 
 The widget's public API is documented in
 [LOGIC_ANALYZER_VIEWER_API.md](LOGIC_ANALYZER_VIEWER_API.md).
@@ -74,7 +74,7 @@ one channel.
   ├─ DslFileCaptureDataSource            (path, header, sidecar path, fingerprint = file size)
   │    └─ DslCaptureReader               (ZipArchive + small LRU of decompressed blocks)
   │
-  ├─ Waveform index (crates/dsl/src/runtime/waveform_index)
+  ├─ Waveform index (crates/signal_processing/src/runtime/waveform_index)
   │    ├─ IndexBuilder     — builds the sidecar `.dsl.idx` on worker threads
   │    ├─ IndexReader      — mmaps the sidecar, serves directory + leaf lookups
   │    └─ IndexSampler     — public query API: sampled_window() over a viewport
@@ -153,7 +153,7 @@ an otherwise-constant block) so no edge is lost at block boundaries.
 ## Sidecar Index File Format
 
 Magic `CAPIDX06`, built by `IndexWriter` / read by `IndexReader` in
-[storage.rs](../crates/dsl/src/runtime/waveform_index/storage.rs):
+[storage.rs](../crates/signal_processing/src/runtime/waveform_index/storage.rs):
 
 ```text
 ┌─────────────────────────────────────────────────────┐
@@ -208,7 +208,7 @@ it into place on `finish()`; a dropped, unfinished writer removes the temp file.
 
 ## Raw Block Cache (`.dsl.idx.raw`)
 
-[raw_block_cache.rs](../crates/dsl/src/runtime/raw_block_cache.rs) keeps a sparse sidecar with
+[raw_block_cache.rs](../crates/signal_processing/src/runtime/raw_block_cache.rs) keeps a sparse sidecar with
 one fixed-size slot per (channel, block), used only by the **exact** (deep-zoom / raw-scan)
 query path — it is not part of the mipmap index.
 
@@ -227,7 +227,7 @@ query path — it is not part of the mipmap index.
 
 ## Index Building
 
-`IndexBuilder::build` ([builder.rs](../crates/dsl/src/runtime/waveform_index/builder.rs)) runs
+`IndexBuilder::build` ([builder.rs](../crates/signal_processing/src/runtime/waveform_index/builder.rs)) runs
 on a background thread (spawned by the viewer's worker, see below):
 
 1. Enumerate every `(channel, block)` job (`total_probes × total_blocks`).

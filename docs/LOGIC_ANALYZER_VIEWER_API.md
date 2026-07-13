@@ -1,7 +1,7 @@
 # Logic Analyzer Viewer Widget — API
 
 How to embed the `logic-analyzer-viewer` crate
-([crates/logic_analyzer_viewer](../crates/logic_analyzer_viewer)). For internals (index,
+([crates/widgets/logic_analyzer_viewer](../crates/widgets/logic_analyzer_viewer)). For internals (index,
 sampling, rendering) see
 [LOGIC_ANALYZER_VIEWER_DESIGN.md](LOGIC_ANALYZER_VIEWER_DESIGN.md).
 
@@ -40,11 +40,11 @@ order spans all of them (user-reorderable by dragging labels).
 
 ```rust
 viewer.set_capture_path(path, |path| {
-    dsl::DslFileCaptureDataSource::open(path).map_err(|e| e.to_string())
+    signal_processing::DslFileCaptureDataSource::open(path).map_err(|e| e.to_string())
 });
 ```
 
-The viewer only knows the generic `dsl::CaptureDataSource` trait (`open_reader`,
+The viewer only knows the generic `signal_processing::CaptureDataSource` trait (`open_reader`,
 `metadata`, `fingerprint`, `index_path`, `display_name`); the `open` closure is the one
 place that knows what a path means. Calling it again with the same path is a no-op;
 a new path replaces the capture rows (derived lanes are untouched) and spawns a background
@@ -73,7 +73,7 @@ from these transitions.
 ### 3. Live pipeline output — `set_derived_lanes`
 
 ```rust
-let lanes = dsl::DerivedLanes::default();      // shared Arc<RwLock<…>> store
+let lanes = signal_processing::DerivedLanes::default();      // shared Arc<RwLock<…>> store
 viewer.set_derived_lanes(lanes.clone());       // viewer renders it live
 // hand `lanes` to the pipeline's ViewerSink nodes (the app's compiler does this)
 ```

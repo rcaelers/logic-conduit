@@ -12,8 +12,8 @@
 use std::collections::VecDeque;
 
 use clap::Parser;
-use dsl::nodes::decoders::{SpiDecoder, SpiMode};
-use dsl::{
+use signal_processing::nodes::decoders::{SpiDecoder, SpiMode};
+use signal_processing::{
     CaptureMode, ClockSource, DsLogicU3Pro16, InputPort, LogicCaptureConfig, LogicEncodingRequest,
     LogicTrigger, OutputPort, Pipeline, PortDirection, PortSchema, ProcessNode, Word, WorkError,
     WorkResult,

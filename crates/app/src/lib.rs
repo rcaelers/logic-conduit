@@ -25,7 +25,7 @@ impl WebHandle {
             .start(
                 canvas,
                 eframe::WebOptions::default(),
-                Box::new(|cc| Ok(Box::new(dsl_ui::App::new(cc)))),
+                Box::new(|cc| Ok(Box::new(logic_analyzer_ui::App::new(cc)))),
             )
             .await
     }

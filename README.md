@@ -112,7 +112,7 @@ cargo run --release --bin dsl-ui -- <graph.json>   # open a graph at startup
 
 # Logging via RUST_LOG (per-module filtering)
 RUST_LOG=info cargo run --release --bin dsl-ui
-RUST_LOG=info,dsl::nodes::decoders::spi_decoder=debug cargo run --release --bin dsl-ui
+RUST_LOG=info,signal_processing::nodes::decoders::spi_decoder=debug cargo run --release --bin dsl-ui
 ```
 
 If a pipeline appears stuck, the built-in watchdog logs which node is blocked on which
@@ -125,10 +125,12 @@ cargo build --release      # release strongly recommended for capture processing
 cargo test                 # workspace tests
 ```
 
-The repository is a Cargo workspace: `crates/dsl` (streaming engine, decoders, file/USB
-sources), `crates/node_graph` (reusable node editor widget), `crates/logic_analyzer_viewer`
-(waveform widget), `crates/ui` (application + graph compiler), `crates/app` (binary), and
-`plugins/example-plugin` (an example compile-time extension: build with
+The repository is a Cargo workspace: `crates/signal_processing` (streaming engine,
+decoders, file/USB sources), `crates/logic_analyzer_graph` (node catalog and graph
+compiler), `crates/widgets/node_graph` (reusable node editor widget),
+`crates/widgets/logic_analyzer_viewer` (waveform widget), `crates/logic_analyzer_ui`
+(application UI), `crates/app` (binary), and `plugins/example-plugin` (an example
+compile-time extension: build with
 `--features example-plugin`).
 
 Standalone examples of driving the engine from Rust live in [examples/](examples)

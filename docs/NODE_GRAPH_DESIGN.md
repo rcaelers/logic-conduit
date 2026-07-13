@@ -1,6 +1,6 @@
 # Node Graph Editor — Design
 
-Design of the `node-graph` crate ([crates/node_graph](../crates/node_graph)): a reusable,
+Design of the `node-graph` crate ([crates/widgets/node_graph](../crates/widgets/node_graph)): a reusable,
 Blender-style node editor widget for egui. The crate is UI-generic — it knows nothing about
 logic analyzers or pipelines; the application (see [APP_DESIGN.md](APP_DESIGN.md)) defines the
 node types and compiles the drawn graph into something executable.
@@ -13,7 +13,7 @@ For the widget's public API and how to define node types, see
 ## Layering
 
 ```text
-crates/node_graph/src
+crates/widgets/node_graph/src
 ├── model/     Serializable document: GraphState, Node, Socket, Connection, Frame
 ├── api/       Node-type definition API: NodeDef, InputDef/OutputDef, PropDef,
 │              SocketDef, InlineControl, builtin socket/value types

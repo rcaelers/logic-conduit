@@ -4,8 +4,8 @@
   infrastructure independent of concrete nodes and protocols. They must not
   branch on node names, port labels, or protocol-specific values (for example
   UART, `Bits`, `Data`, start/stop markers, SPI, or Binary Decoder).
-- Concrete behavior belongs in the corresponding node definition, its
-  node-specific UI builder, and its DSL runtime node.
+- Concrete behavior belongs in the corresponding `logic_analyzer_graph` node
+  definition/compiler builder and its `signal_processing` runtime node.
 - Pass protocol-specific presentation needs to generic infrastructure through
   explicit, generic metadata/contracts. Do not infer behavior from display
   names or use name-based special cases.
@@ -14,6 +14,16 @@
   generic viewer/compiler code.
 
 See `docs/DECODER_VIEW_LANE_DESIGN.md` for the detailed viewer-lane decision.
+
+# Crate boundaries
+
+- `signal_processing` is UI-independent runtime and processing infrastructure.
+- `logic_analyzer_graph` owns concrete graph nodes, compiler builders, graph
+  lowering, and plugin registration contracts.
+- `logic_analyzer_ui` composes the widgets and application services; it must not
+  contain concrete node definitions or runtime builders.
+- Reusable widgets live below `crates/widgets` and must remain independent of
+  concrete nodes and protocols.
 
 # Platform boundaries
 

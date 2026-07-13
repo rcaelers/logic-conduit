@@ -3,19 +3,21 @@
 //! example exercising every seam an out-of-tree plugin crate touches:
 //! a new runtime payload type ([`PulseWidth`]), a new compiler `PortValue`,
 //! a new graph `SocketDef`, a `NodeDef` reusing a host-crate socket type
-//! (`dsl_ui::nodes::Signal`), and a matching `RuntimeBuilder`.
+//! (`logic_analyzer_graph::nodes::Signal`), and a matching `RuntimeBuilder`.
 
 use std::collections::VecDeque;
 
-use dsl::{
-    InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, Sample, WorkError, WorkResult,
-};
-use dsl_ui::compiler::{CompileCtx, PortKind, PortValue, ResolvedInputs, RuntimeBuilder};
-use dsl_ui::nodes::Signal;
 use egui::Color32;
+use logic_analyzer_graph::compiler::{
+    CompileCtx, PortKind, PortValue, ResolvedInputs, RuntimeBuilder,
+};
+use logic_analyzer_graph::nodes::Signal;
 use node_graph::{InputDef, NodeDef, OutputDef, Socket, SocketDef, SocketShape};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use signal_processing::{
+    InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, Sample, WorkError, WorkResult,
+};
 
 // ── Runtime payload ──────────────────────────────────────────────────────────
 
@@ -29,7 +31,7 @@ pub struct PulseWidth {
 
 /// Open compiler-layer identity for `PulseWidth` — the plugin-authored
 /// equivalent of the built-in `impl PortValue for Sample` etc. in
-/// `dsl_ui::compiler::port_kind`. No edits to that file were needed.
+/// `logic_analyzer_graph::compiler::port_kind`. No edits to that file were needed.
 impl PortValue for PulseWidth {
     fn kind_name() -> &'static str {
         "Pulse"
@@ -39,7 +41,7 @@ impl PortValue for PulseWidth {
 // ── Graph socket type ────────────────────────────────────────────────────────
 
 /// Graph-side identity for [`PulseWidth`]. Same shape as the built-in
-/// socket types in `dsl_ui::nodes` (`Signal`, `Words`, ...), just defined in
+/// socket types in `logic_analyzer_graph::nodes` (`Signal`, `Words`, ...), just defined in
 /// this crate instead — no orphan-rule issue, no registration beyond this
 /// `impl`.
 pub struct PulseSocket;
@@ -182,15 +184,15 @@ impl ProcessNode for PulseMeasureNode {
 #[cfg(test)]
 mod tests {
     use crossbeam_channel::bounded;
-    use dsl::{ChannelMessage, Sender, Watchdog};
+    use signal_processing::{ChannelMessage, Sender, Watchdog};
 
     use super::*;
 
     #[test]
     fn register_populates_both_registries() {
         let mut nodes = node_graph::NodeTypeRegistry::new();
-        let mut builders = dsl_ui::compiler::BuilderRegistry::standard();
-        let mut ctx = dsl_ui::compiler::PluginContext::new(&mut nodes, &mut builders);
+        let mut builders = logic_analyzer_graph::compiler::BuilderRegistry::standard();
+        let mut ctx = logic_analyzer_graph::compiler::PluginContext::new(&mut nodes, &mut builders);
         crate::register(&mut ctx);
         assert_eq!(nodes.category_of("Pulse Measure"), Some("Plugin"));
     }

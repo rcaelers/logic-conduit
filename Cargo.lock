@@ -947,84 +947,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
-name = "dsl"
-version = "0.1.0"
-dependencies = [
- "clap",
- "crossbeam-channel",
- "lazy_static",
- "libc",
- "memmap2",
- "minifb",
- "rusb",
- "tempfile",
- "thiserror 2.0.18",
- "tracing",
- "tracing-subscriber",
- "web-time",
- "zip",
-]
-
-[[package]]
-name = "dsl-app"
-version = "0.1.0"
-dependencies = [
- "clap",
- "dsl-ui",
- "eframe",
- "egui",
- "example-plugin",
- "log",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "tracing-subscriber",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "dsl-examples"
-version = "0.1.0"
-dependencies = [
- "clap",
- "crossbeam-channel",
- "dsl",
- "dsl-ui",
- "eframe",
- "egui",
- "memmap2",
- "minifb",
- "node-graph",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "serde",
- "serde_json",
- "tempfile",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "dsl-ui"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "crossbeam-channel",
- "dsl",
- "eframe",
- "egui",
- "logic-analyzer-viewer",
- "node-graph",
- "rfd",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "ecolor"
 version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1296,12 +1218,12 @@ name = "example-plugin"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
- "dsl",
- "dsl-ui",
  "egui",
+ "logic-analyzer-graph",
  "node-graph",
  "serde",
  "serde_json",
+ "signal-processing",
 ]
 
 [[package]]
@@ -2155,11 +2077,85 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
+name = "logic-analyzer-app"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "eframe",
+ "egui",
+ "example-plugin",
+ "log",
+ "logic-analyzer-ui",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "tracing-subscriber",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "logic-analyzer-examples"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "crossbeam-channel",
+ "eframe",
+ "egui",
+ "logic-analyzer-graph",
+ "logic-analyzer-ui",
+ "memmap2",
+ "minifb",
+ "node-graph",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "serde",
+ "serde_json",
+ "signal-processing",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "logic-analyzer-graph"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "crossbeam-channel",
+ "egui",
+ "node-graph",
+ "serde",
+ "serde_json",
+ "signal-processing",
+ "tempfile",
+]
+
+[[package]]
+name = "logic-analyzer-ui"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "eframe",
+ "egui",
+ "logic-analyzer-graph",
+ "logic-analyzer-viewer",
+ "node-graph",
+ "rfd",
+ "serde",
+ "serde_json",
+ "signal-processing",
+ "tempfile",
+]
+
+[[package]]
 name = "logic-analyzer-viewer"
 version = "0.1.0"
 dependencies = [
- "dsl",
  "egui",
+ "signal-processing",
 ]
 
 [[package]]
@@ -3415,6 +3411,25 @@ checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
  "errno",
  "libc",
+]
+
+[[package]]
+name = "signal-processing"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "crossbeam-channel",
+ "lazy_static",
+ "libc",
+ "memmap2",
+ "minifb",
+ "rusb",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber",
+ "web-time",
+ "zip",
 ]
 
 [[package]]

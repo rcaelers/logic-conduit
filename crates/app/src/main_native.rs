@@ -5,7 +5,7 @@ mod macos_menu {
     use std::cell::RefCell;
     use std::path::PathBuf;
 
-    use dsl_ui::{NativeMenuCommand, dispatch_native_menu_command};
+    use logic_analyzer_ui::{NativeMenuCommand, dispatch_native_menu_command};
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
     use objc2::{ClassType, define_class, msg_send, sel};
@@ -189,7 +189,7 @@ mod macos_menu {
     }
 
     /// Rebuilds the native "Open Recent" submenu from the current app
-    /// state — registered with `dsl_ui::set_recent_files_listener` so it
+    /// state — registered with `logic_analyzer_ui::set_recent_files_listener` so it
     /// fires every time the recent-files list changes during the session,
     /// not just at startup. A no-op if `install()` hasn't run yet or this
     /// somehow gets called off the main thread.
@@ -309,7 +309,7 @@ mod macos_menu {
             }
         }
 
-        dsl_ui::set_recent_files_listener(refresh_recent_files);
+        logic_analyzer_ui::set_recent_files_listener(refresh_recent_files);
 
         // NSMenuItem keeps a weak target, so retain the target for the app
         // lifetime. `RECENT_MENU` already holds a clone, but the original
@@ -344,10 +344,14 @@ pub fn run() -> MainResult {
         "DSL Pipeline Editor",
         options,
         Box::new(move |cc| {
-            let app = dsl_ui::App::new_with_plugins_and_file(cc, args.file.as_deref(), |_ctx| {
-                #[cfg(feature = "example-plugin")]
-                example_plugin::register(_ctx);
-            });
+            let app = logic_analyzer_ui::App::new_with_plugins_and_file(
+                cc,
+                args.file.as_deref(),
+                |_ctx| {
+                    #[cfg(feature = "example-plugin")]
+                    example_plugin::register(_ctx);
+                },
+            );
             #[cfg(target_os = "macos")]
             macos_menu::install(app.recent_files());
             Ok(Box::new(app))

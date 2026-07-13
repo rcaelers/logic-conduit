@@ -2,8 +2,8 @@
 
 use std::collections::VecDeque;
 
-use dsl::nodes::decoders::{SpiDecoder, SpiMode};
-use dsl::{
+use signal_processing::nodes::decoders::{SpiDecoder, SpiMode};
+use signal_processing::{
     CaptureMode, ClockSource, DsLogicU3Pro16, InputPort, LogicCaptureConfig, LogicEncodingRequest,
     LogicTrigger, LogicTriggerStage, OutputPort, Pipeline, PortDirection, PortSchema, ProcessNode,
     Sample, TriggerCondition, Word, WorkError, WorkResult,

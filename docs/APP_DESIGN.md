@@ -1,16 +1,18 @@
 # Application & UI — Design
 
-Design of the desktop/wasm application: the `dsl-ui` crate
-([crates/ui](../crates/ui)) — application shell, node-type definitions, and the
-graph→pipeline compiler — and the thin `dsl-app` binary crate
+Design of the desktop/wasm application: the `logic-analyzer-ui` crate
+([crates/logic_analyzer_ui](../crates/logic_analyzer_ui)) — the application shell;
+the `logic-analyzer-graph` crate ([crates/logic_analyzer_graph](../crates/logic_analyzer_graph)) —
+node definitions and the graph→pipeline compiler; and the thin `logic-analyzer-app` binary crate
 ([crates/app](../crates/app)). Companion docs:
 [NODE_GRAPH_DESIGN.md](NODE_GRAPH_DESIGN.md) (the editor widget),
 [PIPELINE_DESIGN.md](PIPELINE_DESIGN.md) (the runtime it compiles into),
 [LOGIC_ANALYZER_VIEWER_DESIGN.md](LOGIC_ANALYZER_VIEWER_DESIGN.md) (the waveform view).
 
-Layering rule: `node_graph` stays UI-generic, `dsl` stays UI-free. **The compiler lives in
-the app layer** (`crates/ui/src/compiler/`) — the one place that knows both the UI node
-defs and the runtime nodes.
+Layering rule: `node_graph` stays UI-generic and `signal_processing` stays UI-free. The
+compiler lives in `logic-analyzer-graph` (`crates/logic_analyzer_graph/src/compiler/`) —
+the one place that knows both graph node definitions and runtime nodes. The application UI
+consumes that integration and must not contain concrete node/compiler implementations.
 
 ---
 
@@ -39,7 +41,8 @@ One window, split by a draggable horizontal splitter:
 - Every frame, the app checks the graph for a `DSL File Source` node and hands its file
   path to the viewer (`set_capture_path` with `DslFileCaptureDataSource::open`) — the one
   place that knows what a `.dsl` path means. The viewer itself is format-agnostic.
-- `dsl-app`/`dsl-ui` binary: clap CLI, `tracing_subscriber` with `RUST_LOG` env filter,
+- `logic-analyzer-app` binary (temporarily named `dsl-ui`): clap CLI,
+  `tracing_subscriber` with `RUST_LOG` env filter,
   eframe native window. On wasm the same `App` runs with a demo UART graph pre-populated
   and the cooperative scheduler (below).
 
@@ -74,7 +77,7 @@ shape; a new payload family gets a new hue; red is reserved for error feedback; 
 the wildcard. Colorblind robustness comes from the shape axis: hues that could collide
 never share a shape.
 
-## Node set (`crates/ui/src/nodes/`)
+## Node set (`crates/logic_analyzer_graph/src/nodes/`)
 
 Each UI node is a `node_graph::NodeDef` (sockets, props, panel sections, `on_update`
 visibility, badge) with a matching compiler builder (below). Placement rule: the node body
@@ -95,7 +98,7 @@ File Writer, TGCK Recorder, Viewer (variadic input accepting
 `nodes::populate_startup` builds the CCD capture graph programmatically (the shipped
 `graphs/ccd_pipeline.json`); `populate_uart_demo` is the wasm startup graph.
 
-## Graph → pipeline compiler (`crates/ui/src/compiler/`)
+## Graph → pipeline compiler (`crates/logic_analyzer_graph/src/compiler/`)
 
 ### Builders
 
@@ -117,8 +120,8 @@ pub trait RuntimeBuilder {
 ```
 
 `PortKind` is an open, `TypeId`-backed payload identity (`PortKind::of::<T: PortValue>()`,
-[port_kind.rs](../crates/ui/src/compiler/port_kind.rs)) — the compiler-layer analogue of
-`node_graph::SocketDef` and `dsl::register_type`, so plugin crates add payload types
+[port_kind.rs](../crates/logic_analyzer_graph/src/compiler/port_kind.rs)) — the compiler-layer analogue of
+`node_graph::SocketDef` and `signal_processing::register_type`, so plugin crates add payload types
 without editing any compiler file.
 
 **Kind negotiation** is per edge: `offered(producer) ∩ accepted(consumer)`; empty →
@@ -187,7 +190,7 @@ into the viewer so stale lanes vanish atomically.
 
 The correctness gate for the whole compile path is the golden test: the compiled startup
 graph must produce byte-identical output to the hand-written pipeline example on a real
-capture (`cargo test -p dsl-ui --release -- --ignored golden`), run through the live
+capture (`cargo test -p logic-analyzer-graph --release -- --ignored golden`), run through the live
 machinery.
 
 ## Plugins
@@ -196,9 +199,9 @@ Compile-time plugin crates extend all three layers through one hook:
 `App::new_with_plugins(cc, |ctx: &mut PluginContext| …)` where the context exposes
 `register_payload::<T>()` (runtime type registry + `PortValue`),
 `register_node::<T: NodeDef>()`, and `register_builder(name, Box<dyn RuntimeBuilder>)`.
-A plugin depends on `dsl-ui`, so the registration call lives in the *binary* crate that
-depends on both (`dsl-app`, behind the `example-plugin` cargo feature — the reverse
-dependency would be a cycle). [plugins/example-plugin](../plugins/example-plugin)
+A plugin depends on `logic-analyzer-graph`, so the registration call lives in the binary
+crate that depends on both (`logic-analyzer-app`, behind the `example-plugin` Cargo
+feature). [plugins/example-plugin](../plugins/example-plugin)
 demonstrates a new payload type, socket type, node def, and builder
 (`Pulse Measure`).
 

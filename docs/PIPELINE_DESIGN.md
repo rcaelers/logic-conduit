@@ -1,6 +1,6 @@
 # Pipeline Runtime — Design
 
-Design of the `dsl` crate ([crates/dsl](../crates/dsl)): the streaming engine that executes
+Design of the `dsl` crate ([crates/signal_processing](../crates/signal_processing)): the streaming engine that executes
 decode pipelines. It is UI-free — the node-graph editor and the graph→pipeline compiler
 live above it (see [APP_DESIGN.md](APP_DESIGN.md)).
 
@@ -29,7 +29,7 @@ Thread-per-node streaming with bounded channels:
 
 ### `ProcessNode`
 
-The single node trait ([runtime/node.rs](../crates/dsl/src/runtime/node.rs)). Sources have
+The single node trait ([runtime/node.rs](../crates/signal_processing/src/runtime/node.rs)). Sources have
 0 inputs, sinks 0 outputs, processors both.
 
 - `work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize>` —
@@ -45,8 +45,8 @@ The single node trait ([runtime/node.rs](../crates/dsl/src/runtime/node.rs)). So
 
 ### `Pipeline` (offline builder)
 
-[runtime/pipeline.rs](../crates/dsl/src/runtime/pipeline.rs) /
-[ports.rs](../crates/dsl/src/runtime/ports.rs): name-based graph construction —
+[runtime/pipeline.rs](../crates/signal_processing/src/runtime/pipeline.rs) /
+[ports.rs](../crates/signal_processing/src/runtime/ports.rs): name-based graph construction —
 `add_process("name", node)`, `connect("from", "port", "to", "port")` (or
 `connect_with_buffer(…, size)`), then `build()` validates names and port `TypeId`s, creates
 one bounded channel per edge via the **type registry** (`register_type::<T>()` — every
@@ -70,7 +70,7 @@ and viewer lanes aligned (including across live-edit rejoins).
 | `NumberSample` | level | Integer level change (counter output) |
 | `TextSample` | level | Text level change (formatter output / filename) |
 
-**The level-stream contract** ([runtime/events.rs](../crates/dsl/src/runtime/events.rs)):
+**The level-stream contract** ([runtime/events.rs](../crates/signal_processing/src/runtime/events.rs)):
 every low-rate stream is a *stepped level* — defined at every instant, transmitted as
 changes only. Every level producer emits its initial value at t=0 on its first `work()`
 call, and consumers hold the last received value. Consequently any node can always answer
@@ -99,7 +99,7 @@ worse than a slow one.
   inter-branch skew.
 - When a branch must be deliberately decoupled from a slower sibling (e.g. a decoder
   feeding both a file writer and the viewer), the mechanism is an explicit **`Buffer`
-  node** (`BufferNode<T>`, [nodes/logic/buffer.rs](../crates/dsl/src/nodes/logic/buffer.rs))
+  node** (`BufferNode<T>`, [nodes/logic/buffer.rs](../crates/signal_processing/src/nodes/logic/buffer.rs))
   with a user-visible, user-configured capacity — not a bigger invisible default.
 - `ViewerSink` drains its lanes in bounded batches, so a producer that outruns the viewer
   really does block on `send()` rather than the sink racing to keep the channel empty.
@@ -110,7 +110,7 @@ worse than a slow one.
 Live capture must keep running while the graph is edited. The offline `Pipeline::build`
 forgets its endpoints; the live path inverts ownership so partial change is possible.
 
-### `SharedSenders` ([runtime/sender.rs](../crates/dsl/src/runtime/sender.rs))
+### `SharedSenders` ([runtime/sender.rs](../crates/signal_processing/src/runtime/sender.rs))
 
 Two broadcast flavors coexist. Offline: static destination lists moved into threads. Live:
 a supervisor-owned subscriber list per output — a node thread exiting does *not* close
@@ -125,7 +125,7 @@ replays the last value (re-stamped) to late joiners. Each subscription carries a
   report it (`take_disconnected`) so the editor can badge the branch instead of silently
   corrupting a live capture.
 
-### `PipelineManager` ([runtime/manager.rs](../crates/dsl/src/runtime/manager.rs))
+### `PipelineManager` ([runtime/manager.rs](../crates/signal_processing/src/runtime/manager.rs))
 
 Owns, per running node: its thread, its state, a control channel, its output subscriber
 lists, and its input subscription ids. Operations, cheapest first:
@@ -146,7 +146,7 @@ lets sources snapshot complete subscriber lists before the first block. The mana
 accumulates per-node progress counters (items returned by `work()`, kept across
 restarts-in-place) that the UI draws in node headers.
 
-### `CooperativeManager` ([runtime/cooperative_manager.rs](../crates/dsl/src/runtime/cooperative_manager.rs))
+### `CooperativeManager` ([runtime/cooperative_manager.rs](../crates/signal_processing/src/runtime/cooperative_manager.rs))
 
 Single-threaded sibling for `wasm32` (no `std::thread`). Drives the same `NodeSpec`s and
 subscriber-list machinery — live add/remove/restart/reconfigure and sticky priming behave
@@ -189,18 +189,18 @@ filters per node type:
 
 ```bash
 RUST_LOG=info                                          # everything at info
-RUST_LOG=info,dsl::nodes::decoders::spi_decoder=debug  # one decoder at debug
-RUST_LOG=info,dsl::nodes=debug                         # all nodes at debug
+RUST_LOG=info,signal_processing::nodes::decoders::spi_decoder=debug  # one decoder at debug
+RUST_LOG=info,signal_processing::nodes=debug                         # all nodes at debug
 ```
 
-The **watchdog** ([runtime/watchdog.rs](../crates/dsl/src/runtime/watchdog.rs)) monitors
+The **watchdog** ([runtime/watchdog.rs](../crates/signal_processing/src/runtime/watchdog.rs)) monitors
 blocking channel operations transparently: enabled via `Pipeline::with_watchdog()` (and
 always on in the managed/live path), it wraps every port so `recv`/`send` register guarded
 operations, and reports any operation blocked longer than ~5 s with node name, port, and
 direction:
 
 ```text
-WARN dsl::runtime::watchdog: ⚠️  BLOCKED: [spi_decoder] recv on port 'clk' for 5.2s
+WARN signal_processing::runtime::watchdog: ⚠️  BLOCKED: [spi_decoder] recv on port 'clk' for 5.2s
 ```
 
 This pinpoints which node of a stalled pipeline is stuck, on which port — the safety net
