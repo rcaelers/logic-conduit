@@ -6,7 +6,9 @@ const loading = document.getElementById("loading");
 const canvas = document.getElementById("logic-analyzer");
 
 try {
-  await init(`./pkg/dsl_app_bg.wasm?v=${encodeURIComponent(buildVersion)}`);
+  const wasmUrl = new URL("./pkg/logic_analyzer_app_bg.wasm", import.meta.url);
+  wasmUrl.searchParams.set("v", buildVersion);
+  await init({ module_or_path: wasmUrl });
   const handle = new WebHandle();
   await handle.start(canvas);
   window.dslUi = handle;
