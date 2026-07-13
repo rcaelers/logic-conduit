@@ -9,10 +9,6 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 use web_time::Instant;
 
 use crate::runtime::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::runtime::derived_word_store::StoreResult;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::runtime::derived_word_store::codec::DecodedWordBlock;
 use crate::runtime::derived_word_store::{
     AnnotationQuery, AnnotationStoreBackend, AnnotationStoreMetadata, AnnotationStoreWriterBackend,
     IndexedAnnotationStore, IndexedAnnotationWriter, LiveStoreConfig, LiveStoreMetadata,
@@ -146,12 +142,11 @@ impl IndexedAnnotationLane {
         AnnotationStoreBackend::snapshot(&self.store).metadata
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn visit_committed_blocks(
-        &self,
-        visitor: impl FnMut(&DecodedWordBlock),
-    ) -> StoreResult<()> {
-        self.store.visit_committed_blocks(visitor)
+    /// Returns the platform-neutral indexed store handle. Native-only
+    /// diagnostics remain methods of the native store implementation rather
+    /// than becoming capabilities of a generic viewer lane.
+    pub fn store(&self) -> IndexedAnnotationStore {
+        self.store.clone()
     }
 }
 

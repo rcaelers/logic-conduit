@@ -611,7 +611,7 @@ mod native {
         let mut stats = OutputStats::default();
         let mut blocks = 0usize;
         let mut restarts = 0u64;
-        lane.visit_committed_blocks(|block| {
+        lane.store().visit_committed_blocks(|block| {
             blocks += 1;
             restarts += u64::from(block.header.restart_count);
             stats.extend_words(&block.words);

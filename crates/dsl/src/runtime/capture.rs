@@ -3,6 +3,10 @@ use std::sync::Arc;
 
 use crate::Result;
 
+#[cfg_attr(target_arch = "wasm32", path = "capture_backing_wasm.rs")]
+#[cfg_attr(not(target_arch = "wasm32"), path = "capture_backing_native.rs")]
+mod capture_backing;
+
 #[derive(Debug, Clone)]
 pub struct CaptureMetadata {
     /// Total number of probes/channels.
@@ -161,29 +165,42 @@ pub trait CaptureSource {
 /// clone the backing `Arc`.
 #[derive(Clone)]
 pub struct BlockData {
-    backing: Arc<BlockBacking>,
+    backing: Arc<dyn BlockBacking>,
     offset: usize,
     len: usize,
 }
 
-enum BlockBacking {
-    Owned(Vec<u8>),
-    Shared(Arc<[u8]>),
-    #[cfg(not(target_arch = "wasm32"))]
-    Mapped(Arc<memmap2::Mmap>),
+trait BlockBacking: Send + Sync {
+    fn bytes(&self) -> &[u8];
+
+    fn shares_backing(&self, _other: &dyn BlockBacking) -> bool {
+        false
+    }
+}
+
+struct OwnedBlockBacking(Vec<u8>);
+
+impl BlockBacking for OwnedBlockBacking {
+    fn bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+struct SharedBlockBacking(Arc<[u8]>);
+
+impl BlockBacking for SharedBlockBacking {
+    fn bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn shares_backing(&self, other: &dyn BlockBacking) -> bool {
+        !self.bytes().is_empty()
+            && self.bytes().as_ptr() == other.bytes().as_ptr()
+            && self.bytes().len() == other.bytes().len()
+    }
 }
 
 impl BlockData {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn mapped(map: Arc<memmap2::Mmap>, offset: usize, len: usize) -> Self {
-        debug_assert!(offset.saturating_add(len) <= map.len());
-        Self {
-            backing: Arc::new(BlockBacking::Mapped(map)),
-            offset,
-            len,
-        }
-    }
-
     /// Creates a view into this backing allocation without copying bytes.
     pub fn slice(&self, offset: usize, len: usize) -> Option<Self> {
         let end = offset.checked_add(len)?;
@@ -202,21 +219,11 @@ impl BlockData {
         if Arc::ptr_eq(&self.backing, &other.backing) {
             return true;
         }
-        match (self.backing.as_ref(), other.backing.as_ref()) {
-            (BlockBacking::Shared(left), BlockBacking::Shared(right)) => Arc::ptr_eq(left, right),
-            #[cfg(not(target_arch = "wasm32"))]
-            (BlockBacking::Mapped(left), BlockBacking::Mapped(right)) => Arc::ptr_eq(left, right),
-            _ => false,
-        }
+        self.backing.shares_backing(other.backing.as_ref())
     }
 
     fn backing_bytes(&self) -> &[u8] {
-        match self.backing.as_ref() {
-            BlockBacking::Owned(data) => data,
-            BlockBacking::Shared(data) => data,
-            #[cfg(not(target_arch = "wasm32"))]
-            BlockBacking::Mapped(map) => map,
-        }
+        self.backing.bytes()
     }
 }
 
@@ -241,7 +248,7 @@ impl From<Arc<[u8]>> for BlockData {
     fn from(data: Arc<[u8]>) -> Self {
         let len = data.len();
         Self {
-            backing: Arc::new(BlockBacking::Shared(data)),
+            backing: Arc::new(SharedBlockBacking(data)),
             offset: 0,
             len,
         }
@@ -252,7 +259,7 @@ impl From<Vec<u8>> for BlockData {
     fn from(data: Vec<u8>) -> Self {
         let len = data.len();
         Self {
-            backing: Arc::new(BlockBacking::Owned(data)),
+            backing: Arc::new(OwnedBlockBacking(data)),
             offset: 0,
             len,
         }
