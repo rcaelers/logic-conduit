@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use node_graph::{InputDef, NodeDef, OutputDef, PropDef, StringValue};
 
-use super::{COLOR_LOGIC, Number, Text};
+use super::registry::{COLOR_LOGIC, Number, Text};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StringFormatterState {

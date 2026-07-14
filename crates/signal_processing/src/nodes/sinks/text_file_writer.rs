@@ -22,9 +22,10 @@ use std::path::PathBuf;
 
 use tracing::{debug, info, warn};
 
+use crate::runtime::errors::{WorkError, WorkResult};
 use crate::runtime::events::TextSample;
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
-use crate::runtime::ports::{PortDirection, PortSchema};
+use crate::runtime::node::ProcessNode;
+use crate::runtime::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 
 /// Sink appending [`TextSample`] lines to files named by another
 /// [`TextSample`] level.

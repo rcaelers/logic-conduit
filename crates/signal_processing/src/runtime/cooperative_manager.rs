@@ -54,7 +54,8 @@ use crossbeam_channel::Receiver as CrossbeamReceiver;
 use super::errors::WorkError;
 use super::events::{NumberSample, TextSample, Trigger, Word};
 use super::manager::{DisconnectEvent, InputSub, NodeSpec};
-use super::node::{ConfigOutcome, InputPort, NodeConfig, OutputPort, ProcessNode};
+use super::node::{ConfigOutcome, NodeConfig, ProcessNode};
+use super::ports::{InputPort, OutputPort};
 use super::sample::{Sample, SampleBlock};
 use super::sender::ChannelMessage;
 use super::type_registry::{ErasedSharedSenders, TYPE_REGISTRY};
@@ -583,8 +584,9 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+    use crate::runtime::errors::WorkResult;
     use crate::runtime::events::NumberSample;
-    use crate::runtime::node::{ConfigValue, WorkResult};
+    use crate::runtime::node::ConfigValue;
     use crate::runtime::ports::{PortDirection, PortSchema};
 
     /// Emits `NumberSample { value: i, start_time_ns: i }` for i in 0..max, one

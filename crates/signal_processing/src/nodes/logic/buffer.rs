@@ -8,8 +8,9 @@
 
 use std::collections::VecDeque;
 
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
-use crate::runtime::ports::{PortDirection, PortSchema};
+use crate::runtime::errors::{WorkError, WorkResult};
+use crate::runtime::node::ProcessNode;
+use crate::runtime::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 
 /// Relays every item it receives, unchanged, from `in` to `out`. Generic
 /// over any payload type flowing through a compiled pipeline edge — the

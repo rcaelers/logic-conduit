@@ -3,7 +3,7 @@
 //! Small composable nodes that turn decoded word streams into control levels
 //! (see `docs/PIPELINE_DESIGN.md`):
 //!
-//! - [`WordMatcher`] — word stream → [`Trigger`](crate::runtime::Trigger)
+//! - [`WordMatcher`] — word stream → [`Trigger`](crate::runtime::events::Trigger)
 //!   events on pattern match
 //! - [`SrLatch`] — set/reset triggers → boolean level
 //! - [`LogicGate`] — N boolean levels → boolean level (AND/OR/… per

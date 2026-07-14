@@ -20,9 +20,10 @@ use std::path::PathBuf;
 
 use tracing::{debug, info, warn};
 
+use crate::runtime::errors::{WorkError, WorkResult};
 use crate::runtime::events::{TextSample, Word};
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
-use crate::runtime::ports::{PortDirection, PortSchema};
+use crate::runtime::node::ProcessNode;
+use crate::runtime::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 
 /// How a word's value is rendered in the CSV `value` column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

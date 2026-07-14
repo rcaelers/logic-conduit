@@ -1,4 +1,4 @@
-use super::{CodecError, CodecResult};
+use super::errors::{CodecError, CodecResult};
 
 pub const FORMAT_VERSION: u32 = 1;
 pub const DATA_MAGIC: &[u8; 8] = b"DWRDDAT1";

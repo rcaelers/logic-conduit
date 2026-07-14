@@ -108,7 +108,7 @@ impl DecodedBlockCache {
 
 fn decoded_block_bytes(block: &DecodedWordBlock) -> usize {
     size_of::<DecodedWordBlock>()
-        + block.words.capacity() * size_of::<crate::runtime::Word>()
+        + block.words.capacity() * size_of::<crate::runtime::events::Word>()
         + block.restarts.capacity() * size_of::<RestartEntry>()
 }
 
@@ -160,7 +160,7 @@ pub(super) fn cache_contains(store_id: u64, sequence: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::Word;
+    use crate::runtime::events::Word;
     use crate::runtime::derived_word_store::format::WordBlockHeader;
 
     fn block(sequence: u64, words: usize) -> Arc<DecodedWordBlock> {

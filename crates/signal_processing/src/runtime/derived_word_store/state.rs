@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::runtime::Word;
+use crate::runtime::events::Word;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreStatus {

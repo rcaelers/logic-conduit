@@ -4,9 +4,10 @@ use std::collections::VecDeque;
 
 use tracing::debug;
 
+use crate::runtime::errors::{WorkError, WorkResult};
 use crate::runtime::events::{NumberSample, Trigger};
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
-use crate::runtime::ports::{PortDirection, PortSchema};
+use crate::runtime::node::ProcessNode;
+use crate::runtime::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 
 /// Counts triggers into a [`NumberSample`] level: `start` at t=0, then
 /// `start + n*step` after the n-th trigger.

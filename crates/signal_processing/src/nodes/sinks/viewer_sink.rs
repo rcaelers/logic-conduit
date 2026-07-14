@@ -14,9 +14,10 @@ use crate::runtime::derived_word_store::{
     IndexedAnnotationStore, IndexedAnnotationWriter, LiveStoreConfig, LiveStoreMetadata,
     StoreStatus,
 };
+use crate::runtime::errors::{WorkError, WorkResult};
 use crate::runtime::events::{Annotation, Trigger, Word};
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
-use crate::runtime::ports::{PortDirection, PortSchema};
+use crate::runtime::node::ProcessNode;
+use crate::runtime::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 use crate::runtime::sample::Sample;
 
 #[derive(Clone, Default)]
@@ -69,7 +70,7 @@ impl ViewerSinkMetrics {
     }
 }
 
-pub use crate::runtime::MAX_ANNOTATION_NS;
+pub use crate::runtime::events::MAX_ANNOTATION_NS;
 /// Suggested per-lane limit for continuous sources that explicitly select
 /// rolling in-memory exact-detail retention. Native indexed word lanes do
 /// not use this limit because their complete exact history is disk-backed.
@@ -404,7 +405,7 @@ impl DerivedLanes {
             if let Some(previous) = annotations.last_mut()
                 && previous.end_ns == previous.start_ns
             {
-                previous.end_ns = crate::runtime::instantaneous_word_end_ns(
+                previous.end_ns = crate::runtime::events::instantaneous_word_end_ns(
                     previous_start_ns,
                     previous.start_ns,
                     start_ns,
@@ -811,7 +812,7 @@ mod tests {
     use crossbeam_channel::bounded;
 
     use super::*;
-    use crate::runtime::OutputPort as OutPort;
+    use crate::runtime::ports::OutputPort as OutPort;
     use crate::runtime::sender::ChannelMessage;
     use crate::runtime::watchdog::Watchdog;
 

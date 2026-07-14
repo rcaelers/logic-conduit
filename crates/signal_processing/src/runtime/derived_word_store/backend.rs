@@ -4,7 +4,7 @@
 use super::query::AnnotationQuery;
 use super::state::LiveStoreSnapshot;
 use super::store::StoreResult;
-use crate::runtime::Word;
+use crate::runtime::events::Word;
 
 pub(crate) trait AnnotationStoreBackend:
     AnnotationQuery + Clone + Send + Sync + 'static

@@ -48,17 +48,14 @@ std::cfg_select! {
             CaptureMode, ClockEdge, ClockSource, LogicAnalyzer, LogicAnalyzerError,
             LogicAnalyzerInfo, LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig,
             LogicChunk, LogicEncoding, LogicEncodingRequest, LogicTrigger, LogicTriggerStage,
-            TriggerCondition, TriggerLogic,
+            TriggerCondition, TriggerLogic, DsLogicU3Pro16Source,
         };
         pub use sigrok_file::{
             SigrokCaptureReader, SigrokChunkedCaptureReader, SigrokFileCaptureDataSource,
             SigrokFileSource,
         };
-
-        /// Convenient name for the production DSLogic source node.
-        pub type DsLogicU3Pro16Source = LogicAnalyzerSource<DsLogicU3Pro16<RusbTransport>>;
     }
 }
 
 // Re-export Sample from runtime
-pub use crate::runtime::Sample;
+pub use crate::runtime::sample::Sample;

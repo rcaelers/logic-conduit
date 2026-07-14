@@ -6,7 +6,7 @@ use egui::Color32;
 
 use node_graph::{InputDef, NodeDef, OutputDef};
 
-use super::{COLOR_DECODERS, Signal, Words};
+use super::registry::{COLOR_DECODERS, Signal, Words};
 
 pub struct I2cDecoder;
 impl NodeDef for I2cDecoder {

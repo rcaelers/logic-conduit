@@ -6,7 +6,7 @@ use node_graph::{
     StringValue,
 };
 
-use super::{COLOR_LOGIC, Signal, Trigger, Words};
+use super::registry::{COLOR_LOGIC, Signal, Trigger, Words};
 
 pub const MATCH_OPS: &[&str] = &["==", "≠", "<", "≤", ">", "≥"];
 

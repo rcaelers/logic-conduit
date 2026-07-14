@@ -7,7 +7,7 @@ use super::storage::IndexWriter;
 use super::types::{
     BlockIndex, BlockLevels, CaptureIndexProgress, SAMPLES_PER_L1_BIT, bit, set_bit,
 };
-use crate::runtime::{BlockCaptureSource, CaptureDataSource, CaptureMetadata, packed_bit};
+use crate::runtime::capture::{BlockCaptureSource, CaptureDataSource, CaptureMetadata, packed_bit};
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, Copy)]
@@ -384,9 +384,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{
-        BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureMetadata, CaptureSource,
-    };
+    use crate::runtime::capture::{BlockCaptureSource, CaptureDataSource, CaptureFingerprint, CaptureMetadata, CaptureSource};
 
     #[derive(Clone)]
     struct TestSource;
@@ -432,7 +430,7 @@ mod tests {
             &mut self,
             _channel: usize,
             _block: u64,
-        ) -> Result<crate::runtime::BlockData> {
+        ) -> Result<crate::runtime::capture::BlockData> {
             unreachable!("builder helper tests do not read blocks")
         }
     }

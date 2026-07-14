@@ -2,9 +2,10 @@
 
 use std::collections::VecDeque;
 
+use crate::runtime::errors::{WorkError, WorkResult};
 use crate::runtime::events::{NumberSample, TextSample};
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
-use crate::runtime::ports::{PortDirection, PortSchema};
+use crate::runtime::node::ProcessNode;
+use crate::runtime::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 
 /// Substitutes value placeholders in `template`:
 ///

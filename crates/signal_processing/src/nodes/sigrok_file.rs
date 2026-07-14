@@ -14,12 +14,13 @@ use std::thread::JoinHandle;
 
 use zip::ZipArchive;
 
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
+use crate::runtime::errors::{WorkError, WorkResult};
+use crate::runtime::node::{ProcessNode};
+use crate::runtime::ports::{InputPort, OutputPort};
 use crate::runtime::ports::{PortDirection, PortSchema};
 use crate::runtime::sample::Sample;
-use crate::runtime::{
-    BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureSource, Sender,
-};
+use crate::runtime::capture::{BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureSource};
+use crate::runtime::sender::{Sender};
 use crate::{DslHeader, Error, Result};
 
 /// A PulseView/sigrok v2 session source.  Sigrok stores complete sample words

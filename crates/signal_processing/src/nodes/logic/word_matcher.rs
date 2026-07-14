@@ -4,9 +4,10 @@ use std::collections::VecDeque;
 
 use tracing::debug;
 
+use crate::runtime::errors::{WorkError, WorkResult};
 use crate::runtime::events::{Trigger, Word};
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
-use crate::runtime::ports::{PortDirection, PortSchema};
+use crate::runtime::node::ProcessNode;
+use crate::runtime::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 use crate::runtime::sample::Sample;
 
 /// Comparison applied between the masked word and the masked pattern.

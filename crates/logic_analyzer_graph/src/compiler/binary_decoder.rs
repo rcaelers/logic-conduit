@@ -8,7 +8,8 @@ use signal_processing::{
     CsPolarity, ParallelInputStrategy, ProcessNode, Sample, SampleBlock, StrobeMode, Word,
 };
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use super::graph::{CompileCtx, ResolvedInputs, RuntimeBuilder, parse_state};
+use super::port_kind::PortKind;
 use crate::nodes;
 
 pub(super) struct BinaryDecoderBuilder;

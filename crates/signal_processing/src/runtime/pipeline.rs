@@ -8,8 +8,8 @@ use tracing::{debug, info};
 
 use super::edge_query::EdgeQuery;
 use super::errors::ConnectionError;
-use super::node::{InputPort, InputProtocolCandidate, OutputPort, ProcessNode};
-use super::ports::PortSchema;
+use super::node::{InputProtocolCandidate, ProcessNode};
+use super::ports::{InputPort, OutputPort, PortSchema};
 use super::protocol::ProtocolKind;
 use super::sample::SampleBlock;
 use super::sample_kind;
@@ -595,8 +595,8 @@ mod tests {
         }
         fn work(
             &mut self,
-            _inputs: &[crate::runtime::node::InputPort],
-            _outputs: &[crate::runtime::node::OutputPort],
+            _inputs: &[crate::runtime::ports::InputPort],
+            _outputs: &[crate::runtime::ports::OutputPort],
         ) -> crate::runtime::errors::WorkResult<usize> {
             Ok(0)
         }
@@ -625,8 +625,8 @@ mod tests {
         }
         fn work(
             &mut self,
-            _inputs: &[crate::runtime::node::InputPort],
-            _outputs: &[crate::runtime::node::OutputPort],
+            _inputs: &[crate::runtime::ports::InputPort],
+            _outputs: &[crate::runtime::ports::OutputPort],
         ) -> crate::runtime::errors::WorkResult<usize> {
             Ok(0)
         }
@@ -659,8 +659,8 @@ mod tests {
         }
         fn work(
             &mut self,
-            _inputs: &[crate::runtime::node::InputPort],
-            _outputs: &[crate::runtime::node::OutputPort],
+            _inputs: &[crate::runtime::ports::InputPort],
+            _outputs: &[crate::runtime::ports::OutputPort],
         ) -> crate::runtime::errors::WorkResult<usize> {
             Ok(0)
         }

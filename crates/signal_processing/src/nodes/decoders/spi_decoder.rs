@@ -23,11 +23,13 @@ use std::sync::Arc;
 use tracing::{debug, trace};
 
 use super::types::{BitOrder, CsPolarity, SpiMode};
-use crate::runtime::Receiver;
 use crate::runtime::edge_query::EdgeQuery;
+use crate::runtime::errors::{WorkError, WorkResult};
 use crate::runtime::events::Word;
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
+use crate::runtime::node::ProcessNode;
+use crate::runtime::ports::{InputPort, OutputPort};
 use crate::runtime::protocol::ProtocolKind;
+use crate::runtime::receiver::Receiver;
 use crate::runtime::sample::Sample;
 
 /// SPI decoder node

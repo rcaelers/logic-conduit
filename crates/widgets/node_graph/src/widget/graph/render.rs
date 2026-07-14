@@ -2,7 +2,8 @@ use egui::{Color32, CornerRadius, Painter, Pos2, Rect, RichText, Stroke, Vec2};
 
 use super::interaction::{GraphResponses, InteractionState};
 use super::layout::GraphWidgetLayout;
-use super::{NodeGraphWidget, minimap};
+use super::minimap;
+use super::widget::NodeGraphWidget;
 use crate::model::{NodeId, Socket, SocketDirection, SocketId};
 use crate::support::paint::{
     SOCKET_RADIUS, WireEmphasis, draw_box_select, draw_connections, draw_frames, draw_grid,

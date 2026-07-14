@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use node_graph::{BoolValue, InputDef, NodeDef, OutputDef, PanelSection, PropDef};
 
-use super::{COLOR_LOGIC, Signal, Trigger};
+use super::registry::{COLOR_LOGIC, Signal, Trigger};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SrFlipFlopState {

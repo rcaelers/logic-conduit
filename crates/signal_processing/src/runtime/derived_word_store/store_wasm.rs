@@ -7,15 +7,15 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use super::CodecError;
-use super::config::{LiveStoreConfig, PersistentStoreConfig};
-use super::presence::{WordPresenceIndex, WordSummaryRecord};
-use super::query::{
+use super::super::super::config::{LiveStoreConfig, PersistentStoreConfig};
+use super::super::super::errors::CodecError;
+use super::super::super::presence::{WordPresenceIndex, WordSummaryRecord};
+use super::super::super::query::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
     ExactAnnotationWindow, WordPresenceBucket,
 };
-use super::state::{LiveStoreMetadata, LiveStoreSnapshot, StoreStatus};
-use crate::runtime::{Annotation, Word};
+use super::super::super::state::{LiveStoreMetadata, LiveStoreSnapshot, StoreStatus};
+use crate::runtime::events::{Annotation, Word};
 
 pub(crate) fn default_working_directory() -> PathBuf {
     PathBuf::new()
@@ -274,13 +274,13 @@ fn ensure_live(state: &MemoryState) -> StoreResult<()> {
     }
 }
 
-impl super::backend::AnnotationStoreBackend for IndexedAnnotationStore {
+impl super::super::super::backend::AnnotationStoreBackend for IndexedAnnotationStore {
     fn snapshot(&self) -> LiveStoreSnapshot {
         IndexedAnnotationStore::snapshot(self)
     }
 }
 
-impl super::backend::AnnotationStoreWriterBackend for IndexedAnnotationWriter {
+impl super::super::super::backend::AnnotationStoreWriterBackend for IndexedAnnotationWriter {
     fn append_batch(&mut self, words: &[Word]) -> StoreResult<()> {
         IndexedAnnotationWriter::append_batch(self, words)
     }

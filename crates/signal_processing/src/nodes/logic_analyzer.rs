@@ -12,11 +12,18 @@ use std::thread::JoinHandle;
 
 use thiserror::Error;
 
-use crate::runtime::Sender;
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
+use crate::runtime::sender::Sender;
+use crate::runtime::errors::{WorkError, WorkResult};
+use crate::runtime::node::{ProcessNode};
+use crate::runtime::ports::{InputPort, OutputPort};
 use crate::runtime::ports::{PortDirection, PortSchema};
 use crate::runtime::sample::{Sample, SampleBlock};
 use crate::runtime::sample_kind::SampleKind;
+
+use super::dslogic_u3pro16::{DsLogicU3Pro16, RusbTransport};
+
+/// Convenient name for the production DSLogic source node.
+pub type DsLogicU3Pro16Source = LogicAnalyzerSource<DsLogicU3Pro16<RusbTransport>>;
 
 /// Static capabilities exposed by a logic-analyzer driver.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -9,7 +9,8 @@ use std::path::Path;
 use signal_processing::PersistentStoreConfig;
 use node_graph::{GraphState, NodeId};
 
-use super::{BuilderRegistry, CompileError, CompiledGraph};
+use super::errors::CompileError;
+use super::graph::{BuilderRegistry, CompiledGraph};
 
 pub(super) fn assign_viewer_caches(_compiled: &mut CompiledGraph) {}
 

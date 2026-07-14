@@ -6,7 +6,8 @@ use serde_json::Value;
 use signal_processing::{CsvValueFormat, CsvWordWriter, ProcessNode, TextSample, Word};
 use node_graph::Socket;
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use super::graph::{CompileCtx, ResolvedInputs, RuntimeBuilder, parse_state};
+use super::port_kind::PortKind;
 use crate::nodes;
 
 pub(super) struct CsvWriterBuilder;

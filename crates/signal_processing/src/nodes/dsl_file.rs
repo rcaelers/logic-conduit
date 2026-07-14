@@ -19,13 +19,16 @@ use tracing::{debug, info, warn};
 use zip::ZipArchive;
 
 use crate::runtime::events::TextSample;
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkResult};
+use crate::runtime::errors::{WorkResult};
+use crate::runtime::node::{ProcessNode};
+use crate::runtime::ports::{InputPort, OutputPort};
 use crate::runtime::sample::{Sample, SampleBlock};
-use crate::runtime::{
-    BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureIndexProgress,
-    CaptureSource, CaptureTransition, DslHeader, DslSampledWindow, EdgeQuery, IndexSampler,
-    ProtocolKind, SampleKind, Sender,
-};
+use crate::runtime::capture::{BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureSource, CaptureTransition, DslHeader, DslSampledWindow};
+use crate::runtime::edge_query::{EdgeQuery};
+use crate::runtime::protocol::{ProtocolKind};
+use crate::runtime::sample_kind::{SampleKind};
+use crate::runtime::sender::{Sender};
+use crate::runtime::waveform_index::{CaptureIndexProgress, IndexSampler};
 use crate::{Error, Result};
 
 const DEFAULT_BLOCK_CACHE_WINDOWS: usize = 2;
@@ -1016,7 +1019,7 @@ impl ProcessNode for DslFileSource {
     }
 
     fn work(&mut self, _inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
-        use crate::runtime::node::WorkError;
+        use crate::runtime::errors::WorkError;
 
         if self.threads_spawned {
             // Already started - this shouldn't be called again for self-threading nodes
@@ -1251,7 +1254,7 @@ impl ProcessNode for DeferredDslFileSource {
     }
 
     fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
-        use crate::runtime::node::WorkError;
+        use crate::runtime::errors::WorkError;
 
         if self.inner.is_some() {
             return Err(WorkError::NodeError(
@@ -1376,8 +1379,8 @@ mod tests {
     fn deferred_source_reports_unopenable_file() {
         use crossbeam_channel::bounded;
 
-        use crate::runtime::TextSample;
-        use crate::runtime::node::WorkError;
+        use crate::runtime::events::TextSample;
+        use crate::runtime::errors::WorkError;
         use crate::runtime::sender::ChannelMessage;
         use crate::runtime::watchdog::Watchdog;
 
@@ -1409,8 +1412,8 @@ mod tests {
     fn deferred_source_shuts_down_on_closed_filename_channel() {
         use crossbeam_channel::bounded;
 
-        use crate::runtime::TextSample;
-        use crate::runtime::node::WorkError;
+        use crate::runtime::events::TextSample;
+        use crate::runtime::errors::WorkError;
         use crate::runtime::sender::ChannelMessage;
         use crate::runtime::watchdog::Watchdog;
 
@@ -1435,7 +1438,8 @@ mod tests {
     fn deferred_source_streams_the_named_file() {
         use std::sync::{Arc, Mutex};
 
-        use crate::runtime::{Pipeline, TextSample};
+        use crate::runtime::events::{TextSample};
+use crate::runtime::pipeline::{Pipeline};
 
         let path = std::path::Path::new("_captures/wipneus5.dsl");
         if !path.exists() {
@@ -1467,7 +1471,7 @@ mod tests {
                 )]
             }
             fn work(&mut self, _: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
-                use crate::runtime::node::WorkError;
+                use crate::runtime::errors::WorkError;
                 if self.sent {
                     return Err(WorkError::Shutdown);
                 }
@@ -1498,7 +1502,7 @@ mod tests {
                 vec![PortSchema::new::<Sample>("in", 0, PortDirection::Input)]
             }
             fn work(&mut self, inputs: &[InputPort], _: &[OutputPort]) -> WorkResult<usize> {
-                use crate::runtime::node::WorkError;
+                use crate::runtime::errors::WorkError;
                 let mut buffer = std::collections::VecDeque::new();
                 let mut input = inputs
                     .first()

@@ -30,8 +30,8 @@
 
 use node_graph::{NodeDef, NodeTypeRegistry};
 
+use super::graph::{BuilderRegistry, RuntimeBuilder};
 use super::port_kind::PortValue;
-use super::{BuilderRegistry, RuntimeBuilder};
 
 /// Everything a plugin's `register(ctx: &mut PluginContext)` needs, in one
 /// place.

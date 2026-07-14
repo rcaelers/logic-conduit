@@ -13,13 +13,13 @@ use tracing::debug;
 use super::types::{CsPolarity, Endianness, ParallelInputStrategy, StrobeMode};
 use crate::runtime::capture::CaptureTransition;
 use crate::runtime::edge_query::EdgeQuery;
+use crate::runtime::errors::{WorkError, WorkResult};
 use crate::runtime::events::Word;
-use crate::runtime::node::{
-    InputPort, InputProtocolCandidate, OutputPort, ProcessNode, WorkResult,
-};
+use crate::runtime::node::{InputProtocolCandidate, ProcessNode};
+use crate::runtime::ports::{InputPort, OutputPort};
 use crate::runtime::protocol::ProtocolKind;
+use crate::runtime::receiver::Receiver;
 use crate::runtime::sample::{Sample, SampleBlock};
-use crate::runtime::{Receiver, WorkError};
 
 #[cfg_attr(target_arch = "wasm32", path = "parallel_decoder/sequential_worker.rs")]
 #[cfg_attr(
@@ -1828,7 +1828,7 @@ mod tests {
         let wd = Watchdog::new();
         let sample_count = 2 * ParallelDecoder::STREAM_SAMPLES_PER_CALL + 10;
         let backing: Arc<[u8]> = Arc::from(vec![0u8; sample_count.div_ceil(8)].into_boxed_slice());
-        let shared_backing = crate::runtime::BlockData::from(backing);
+        let shared_backing = crate::runtime::capture::BlockData::from(backing);
         let strobe = SampleBlock::new(shared_backing.clone(), 0, sample_count, 1);
         let inputs = [
             block_input(&wd, strobe, "strobe"),

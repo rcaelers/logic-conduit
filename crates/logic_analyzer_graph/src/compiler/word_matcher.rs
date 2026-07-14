@@ -9,7 +9,8 @@ use signal_processing::{
     ConfigValue, MatchOp, NodeConfig, ProcessNode, Sample, Trigger, TriggerAt, Word, WordMatcher,
 };
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_hex, parse_state};
+use super::graph::{CompileCtx, ResolvedInputs, RuntimeBuilder, parse_hex, parse_state};
+use super::port_kind::PortKind;
 use crate::nodes;
 
 pub(super) struct WordMatcherBuilder;

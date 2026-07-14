@@ -9,7 +9,7 @@ use egui::{
     UiBuilder, Vec2,
 };
 
-use super::NodeGraphWidget;
+use super::widget::NodeGraphWidget;
 use crate::model::{NodeId, NodeKind};
 
 const PANEL_MIN_WIDTH: f32 = 220.0;

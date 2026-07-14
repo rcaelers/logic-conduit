@@ -7,7 +7,7 @@ use node_graph::{
     BoolValue, EnumValue, InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef, Socket,
 };
 
-use super::{COLOR_DECODERS, Signal, Trigger, Words};
+use super::registry::{COLOR_DECODERS, Signal, Trigger, Words};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UartDecoderState {

@@ -67,7 +67,7 @@ use memmap2::Mmap;
 use super::types::{
     BlockIndex, DIR_ENTRY_SIZE, HEADER_SIZE, IndexHeader, L1_WORDS, L2_WORDS, MAGIC, RootDirEntry,
 };
-use crate::runtime::CaptureMetadata;
+use crate::runtime::capture::CaptureMetadata;
 use crate::{Error, Result};
 
 // Leaf chunks are read zero-copy as native u64 words from the mapped file.

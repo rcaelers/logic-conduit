@@ -1,4 +1,4 @@
-use super::{CodecError, CodecResult};
+use super::errors::{CodecError, CodecResult};
 
 /// Encodes an unsigned integer using canonical unsigned LEB128.
 pub fn encode_u64(mut value: u64, output: &mut Vec<u8>) {

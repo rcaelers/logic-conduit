@@ -7,23 +7,23 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use memmap2::{Mmap, MmapOptions};
 
-use super::CodecError;
-use super::cache::{cache_block, cached_block};
-use super::codec::{
+use super::super::super::cache::{cache_block, cached_block};
+use super::super::super::codec::{
     DecodedWordBlock, PushResult, WordBlockBuilder, decode_word_block, decode_word_block_range,
 };
-use super::config::{LiveStoreConfig, PersistentStoreConfig};
-use super::format::{
+use super::super::super::config::{LiveStoreConfig, PersistentStoreConfig};
+use super::super::super::errors::CodecError;
+use super::super::super::format::{
     BLOCK_FLAG_HAS_DURATIONS, BlockDirectoryEntry, DATA_HEADER_SIZE, DataFileHeader,
     WordBlockHeader,
 };
-use super::presence::{WordPresenceIndex, WordSummaryRecord};
-use super::query::{
+use super::super::super::presence::{WordPresenceIndex, WordSummaryRecord};
+use super::super::super::query::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
     ExactAnnotationWindow, WordPresenceBucket,
 };
-use super::state::{LiveStoreMetadata, LiveStoreSnapshot, StoreStatus};
-use crate::runtime::{Annotation, MAX_ANNOTATION_NS, Word, instantaneous_word_end_ns};
+use super::super::super::state::{LiveStoreMetadata, LiveStoreSnapshot, StoreStatus};
+use crate::runtime::events::{Annotation, MAX_ANNOTATION_NS, Word, instantaneous_word_end_ns};
 
 const MAX_PRESENCE_RUNS_PER_BLOCK: usize = 256;
 static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(1);
@@ -170,10 +170,10 @@ impl IndexedAnnotationStore {
     pub fn open_persistent(
         config: &PersistentStoreConfig,
     ) -> StoreResult<Option<IndexedAnnotationStore>> {
-        let Some(index) = super::persistent::open(config)? else {
+        let Some(index) = super::super::super::persistent::open(config)? else {
             return Ok(None);
         };
-        let data_path = super::persistent::data_path(config);
+        let data_path = super::super::super::persistent::data_path(config);
         let file = File::open(&data_path)?;
         // SAFETY: publication makes the data file immutable before the
         // manifest becomes discoverable, and validation above checked its
@@ -968,9 +968,9 @@ impl IndexedAnnotationWriter {
         if let Some(persistent) = self.persistence.clone() {
             let (index_tmp, manifest_tmp) = {
                 let state = self.shared.state.read().unwrap();
-                super::persistent::publish_index_and_manifest(
+                super::super::super::persistent::publish_index_and_manifest(
                     &persistent,
-                    super::persistent::Publication {
+                    super::super::super::persistent::Publication {
                         directory: &state.directory,
                         presence: &state.presence,
                         committed_word_count: state.committed_word_count,
@@ -984,13 +984,13 @@ impl IndexedAnnotationWriter {
             let mut backend = self.shared.read_backend.write().unwrap();
             *backend = ReadBackend::Closed;
             drop(self.file.take());
-            super::persistent::finish_publication(
+            super::super::super::persistent::finish_publication(
                 &persistent,
                 &self.shared.path,
                 &index_tmp,
                 &manifest_tmp,
             )?;
-            let final_path = super::persistent::data_path(&persistent);
+            let final_path = super::super::super::persistent::data_path(&persistent);
             let final_file = File::open(final_path)?;
             // SAFETY: the synchronized data and index files were renamed
             // before the manifest, and no later writer can mutate them.
@@ -1084,13 +1084,13 @@ impl IndexedAnnotationWriter {
     }
 }
 
-impl super::backend::AnnotationStoreBackend for IndexedAnnotationStore {
+impl super::super::super::backend::AnnotationStoreBackend for IndexedAnnotationStore {
     fn snapshot(&self) -> LiveStoreSnapshot {
         IndexedAnnotationStore::snapshot(self)
     }
 }
 
-impl super::backend::AnnotationStoreWriterBackend for IndexedAnnotationWriter {
+impl super::super::super::backend::AnnotationStoreWriterBackend for IndexedAnnotationWriter {
     fn append_batch(&mut self, words: &[Word]) -> StoreResult<()> {
         IndexedAnnotationWriter::append_batch(self, words)
     }
@@ -1263,10 +1263,10 @@ mod tests {
         writer.append_batch(&words).unwrap();
         writer.finish().unwrap();
 
-        assert!(super::super::persistent::data_path(&persistent).is_file());
+        assert!(super::super::super::super::persistent::data_path(&persistent).is_file());
         assert!(
-            super::super::persistent::cache_directory(&persistent)
-                .join(super::super::persistent::MANIFEST_FILE_NAME)
+            super::super::super::super::persistent::cache_directory(&persistent)
+                .join(super::super::super::super::persistent::MANIFEST_FILE_NAME)
                 .is_file()
         );
         drop((writer, live_store));
@@ -1310,9 +1310,9 @@ mod tests {
         writer.append(Word::new(1, 10)).unwrap();
         writer.finish().unwrap();
         drop((writer, store));
-        let cache_directory = super::super::persistent::cache_directory(&persistent);
+        let cache_directory = super::super::super::super::persistent::cache_directory(&persistent);
         std::fs::write(
-            cache_directory.join(super::super::persistent::MANIFEST_FILE_NAME),
+            cache_directory.join(super::super::super::super::persistent::MANIFEST_FILE_NAME),
             b"corrupt",
         )
         .unwrap();
@@ -1330,8 +1330,9 @@ mod tests {
         writer.append(Word::new(1, 10)).unwrap();
         writer.finish().unwrap();
         drop((writer, store));
-        let cache_directory = super::super::persistent::cache_directory(&persistent);
-        let index_path = cache_directory.join(super::super::persistent::INDEX_FILE_NAME);
+        let cache_directory = super::super::super::super::persistent::cache_directory(&persistent);
+        let index_path =
+            cache_directory.join(super::super::super::super::persistent::INDEX_FILE_NAME);
         let mut index = std::fs::read(&index_path).unwrap();
         index[32] ^= 0x80;
         std::fs::write(index_path, index).unwrap();
@@ -1355,7 +1356,7 @@ mod tests {
         let stale = directory.path().join("abandoned.tmp");
         std::fs::write(&stale, b"partial").unwrap();
 
-        let stats = super::super::persistent::cleanup_cache(
+        let stats = super::super::super::super::persistent::cleanup_cache(
             directory.path(),
             0,
             std::slice::from_ref(&second_key),
@@ -1366,14 +1367,14 @@ mod tests {
         assert_eq!(stats.removed_entries, 1);
         assert!(!stale.exists());
         assert!(
-            !super::super::persistent::cache_directory(&PersistentStoreConfig::new(
+            !super::super::super::super::persistent::cache_directory(&PersistentStoreConfig::new(
                 directory.path(),
                 first_key,
             ))
             .exists()
         );
         assert!(
-            super::super::persistent::cache_directory(&PersistentStoreConfig::new(
+            super::super::super::super::persistent::cache_directory(&PersistentStoreConfig::new(
                 directory.path(),
                 second_key,
             ))
@@ -1395,13 +1396,13 @@ mod tests {
             drop((writer, store));
         }
 
-        let stats = super::super::persistent::clear_cache_entry(&first).unwrap();
+        let stats = super::super::super::super::persistent::clear_cache_entry(&first).unwrap();
         assert_eq!(stats.removed_entries, 1);
         assert!(stats.removed_bytes > 0);
-        assert!(!super::super::persistent::cache_directory(&first).exists());
-        assert!(super::super::persistent::cache_directory(&second).exists());
+        assert!(!super::super::super::super::persistent::cache_directory(&first).exists());
+        assert!(super::super::super::super::persistent::cache_directory(&second).exists());
         assert_eq!(
-            super::super::persistent::clear_cache_entry(&first)
+            super::super::super::super::persistent::clear_cache_entry(&first)
                 .unwrap()
                 .removed_entries,
             0
@@ -1526,7 +1527,8 @@ mod tests {
             .write(true)
             .open(store.temp_path())
             .unwrap();
-        let payload_offset = entry.data_offset + super::super::format::BLOCK_HEADER_SIZE as u64;
+        let payload_offset =
+            entry.data_offset + super::super::super::super::format::BLOCK_HEADER_SIZE as u64;
         file.seek(SeekFrom::Start(payload_offset)).unwrap();
         let mut byte = [0];
         file.read_exact(&mut byte).unwrap();

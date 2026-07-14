@@ -8,7 +8,8 @@ use serde_json::Value;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, TextSample, Word};
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
+use super::graph::{CompileCtx, ResolvedInputs, RuntimeBuilder};
+use super::port_kind::PortKind;
 
 pub(super) struct TgckRecorderBuilder;
 

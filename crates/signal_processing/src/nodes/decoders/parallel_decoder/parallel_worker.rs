@@ -330,8 +330,8 @@ mod tests {
     use crossbeam_channel::bounded;
 
     use super::*;
-    use crate::runtime::Scheduler;
     use crate::runtime::node::ProcessNode;
+    use crate::runtime::scheduler::Scheduler;
     use crate::runtime::sender::{ChannelMessage, Sender};
     use crate::runtime::watchdog::Watchdog;
 

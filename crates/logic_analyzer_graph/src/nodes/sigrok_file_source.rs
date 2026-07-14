@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use node_graph::{FileValue, InputDef, IntValue, NodeDef, OutputDef, Socket};
 
-use super::{COLOR_SOURCES, Signal, TextOpenPath};
+use super::registry::{COLOR_SOURCES, Signal, TextOpenPath};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SigrokFileSourceState {

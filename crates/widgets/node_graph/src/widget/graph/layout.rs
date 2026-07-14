@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use egui::{Pos2, Rect};
 
-use super::NodeGraphWidget;
+use super::widget::NodeGraphWidget;
 use crate::model::{FrameId, NodeId, SocketDirection, SocketId};
 use crate::support::paint::{SOCKET_RADIUS, to_screen_rect};
 use crate::widget::node::NodeWidget;

@@ -4,7 +4,7 @@ use egui::Color32;
 
 use node_graph::{InputDef, NodeDef, OutputDef};
 
-use super::{COLOR_OUTPUT, Signal, Text, Words};
+use super::registry::{COLOR_OUTPUT, Signal, Text, Words};
 
 pub struct TgckRecorder;
 impl NodeDef for TgckRecorder {

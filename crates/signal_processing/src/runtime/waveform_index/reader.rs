@@ -7,11 +7,7 @@ use super::types::{
     CaptureIndexProgress, SAMPLES_PER_L1_BIT, SAMPLES_PER_L2_BIT, SAMPLES_PER_L3_BIT, bit,
 };
 use crate::runtime::raw_block_cache::RawBlockCache;
-use crate::runtime::{
-    BlockCaptureSource, BlockData, CaptureDataSource, CaptureIndex, CaptureMetadata,
-    CaptureSampledChannel, CaptureSampledWindow, CaptureTransition, CaptureWaveformSegment,
-    packed_bit,
-};
+use crate::runtime::capture::{BlockCaptureSource, BlockData, CaptureDataSource, CaptureIndex, CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow, CaptureTransition, CaptureWaveformSegment, packed_bit};
 use crate::{Error, Result};
 
 #[derive(Clone, Copy)]

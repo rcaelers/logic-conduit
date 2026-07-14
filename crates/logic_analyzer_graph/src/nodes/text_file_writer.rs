@@ -5,7 +5,7 @@ use egui::Color32;
 
 use node_graph::{InputDef, NodeDef, OutputDef};
 
-use super::{COLOR_OUTPUT, Text};
+use super::registry::{COLOR_OUTPUT, Text};
 
 pub struct TextFileWriter;
 impl NodeDef for TextFileWriter {

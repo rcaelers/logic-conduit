@@ -5,7 +5,8 @@ use serde_json::Value;
 use node_graph::Socket;
 use signal_processing::{GateOp, LogicGate, ProcessNode, Sample};
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use super::graph::{CompileCtx, ResolvedInputs, RuntimeBuilder, parse_state};
+use super::port_kind::PortKind;
 use crate::nodes;
 
 pub(super) struct LogicGateBuilder;

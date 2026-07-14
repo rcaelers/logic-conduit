@@ -6,8 +6,9 @@ use std::sync::Arc;
 use tracing::{debug, warn};
 
 use crate::runtime::edge_query::EdgeQuery;
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
-use crate::runtime::ports::{PortDirection, PortSchema};
+use crate::runtime::errors::{WorkError, WorkResult};
+use crate::runtime::node::ProcessNode;
+use crate::runtime::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 use crate::runtime::protocol::ProtocolKind;
 use crate::runtime::sample::Sample;
 

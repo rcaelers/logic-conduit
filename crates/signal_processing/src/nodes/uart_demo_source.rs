@@ -1,5 +1,6 @@
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
-use crate::runtime::ports::{PortDirection, PortSchema};
+use crate::runtime::errors::{WorkError, WorkResult};
+use crate::runtime::node::ProcessNode;
+use crate::runtime::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 use crate::runtime::sample::Sample;
 
 /// In-memory UART source for demos and tests.

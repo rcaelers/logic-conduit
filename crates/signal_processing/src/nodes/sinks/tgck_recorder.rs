@@ -22,9 +22,10 @@ use std::path::PathBuf;
 
 use tracing::{debug, warn};
 
+use crate::runtime::errors::{WorkError, WorkResult};
 use crate::runtime::events::{TextSample, Word};
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
-use crate::runtime::ports::{PortDirection, PortSchema};
+use crate::runtime::node::ProcessNode;
+use crate::runtime::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 
 /// One complete TGCK cycle, positioned within the current capture window.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -395,13 +396,13 @@ mod tests {
             ],
             outputs: vec![
                 OutputPort::new_with_watchdog(
-                    crate::runtime::Sender::new(vec![rows_tx]),
+                    crate::runtime::sender::Sender::new(vec![rows_tx]),
                     &wd,
                     "tgck",
                     "rows",
                 ),
                 OutputPort::new_with_watchdog(
-                    crate::runtime::Sender::new(vec![filename_tx]),
+                    crate::runtime::sender::Sender::new(vec![filename_tx]),
                     &wd,
                     "tgck",
                     "filename",
@@ -476,13 +477,13 @@ mod tests {
         ];
         let outputs = vec![
             OutputPort::new_with_watchdog(
-                crate::runtime::Sender::new(vec![rows_tx]),
+                crate::runtime::sender::Sender::new(vec![rows_tx]),
                 &wd,
                 "tgck",
                 "rows",
             ),
             OutputPort::new_with_watchdog(
-                crate::runtime::Sender::new(vec![filename_tx]),
+                crate::runtime::sender::Sender::new(vec![filename_tx]),
                 &wd,
                 "tgck",
                 "filename",

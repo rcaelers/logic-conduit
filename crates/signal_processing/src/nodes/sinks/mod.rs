@@ -16,4 +16,4 @@ pub use viewer_sink::{
     ViewerRetention, ViewerSink, ViewerSinkMetrics, ViewerSinkMetricsSnapshot,
 };
 
-pub use crate::runtime::Annotation;
+pub use crate::runtime::events::Annotation;

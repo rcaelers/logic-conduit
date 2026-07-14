@@ -6,7 +6,8 @@ use serde_json::Value;
 use signal_processing::{ProcessNode, TextFileWriter, TextSample};
 use node_graph::Socket;
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
+use super::graph::{CompileCtx, ResolvedInputs, RuntimeBuilder};
+use super::port_kind::PortKind;
 
 pub(super) struct TextFileWriterBuilder;
 

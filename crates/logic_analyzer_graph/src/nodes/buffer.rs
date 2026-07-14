@@ -12,7 +12,7 @@ use node_graph::{
     AnySocket, EnumValue, InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef,
 };
 
-use super::COLOR_LOGIC;
+use super::registry::COLOR_LOGIC;
 
 /// Which built-in payload kind flows through a given `Buffer` instance —
 /// order matches the dropdown and `crates/logic_analyzer_graph/src/compiler/buffer.rs`'s

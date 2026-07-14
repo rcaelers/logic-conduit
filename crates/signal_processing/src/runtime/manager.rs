@@ -29,10 +29,8 @@ use std::thread::JoinHandle;
 use tracing::{debug, error, info};
 
 use super::edge_query::EdgeQuery;
-use super::node::{
-    ConfigOutcome, InputPort, InputProtocolCandidate, NodeConfig, OutputPort, ProcessNode,
-};
-use super::ports::PortSchema;
+use super::node::{ConfigOutcome, InputProtocolCandidate, NodeConfig, ProcessNode};
+use super::ports::{InputPort, OutputPort, PortSchema};
 use super::protocol::ProtocolKind;
 use super::sample_kind::{self, SampleKind};
 use super::sender::OverflowPolicy;
@@ -867,8 +865,9 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::runtime::errors::WorkResult;
     use crate::runtime::events::NumberSample;
-    use crate::runtime::node::{ConfigValue, WorkResult};
+    use crate::runtime::node::ConfigValue;
     use crate::runtime::ports::{PortDirection, PortSchema};
 
     /// Emits `NumberSample { value: i, start_time_ns: i }` for i in 0..max,

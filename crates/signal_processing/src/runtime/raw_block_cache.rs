@@ -27,7 +27,7 @@ use std::sync::Arc;
 use memmap2::{Mmap, MmapOptions};
 
 use crate::Result;
-use crate::runtime::{BlockData, CaptureMetadata};
+use crate::runtime::capture::{BlockData, CaptureMetadata};
 
 const MAGIC: &[u8; 8] = b"CAPRAW01";
 const VERSION: u32 = 1;

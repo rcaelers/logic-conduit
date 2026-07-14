@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use node_graph::{InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef};
 
-use super::{COLOR_LOGIC, Number, Trigger};
+use super::registry::{COLOR_LOGIC, Number, Trigger};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CounterState {

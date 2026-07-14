@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use node_graph::{EnumValue, InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef};
 
-use super::{COLOR_DECODERS, Signal, Words};
+use super::registry::{COLOR_DECODERS, Signal, Words};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BinaryDecoderState {

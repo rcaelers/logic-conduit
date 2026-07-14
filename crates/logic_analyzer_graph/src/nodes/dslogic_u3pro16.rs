@@ -10,7 +10,7 @@ use node_graph::{
     OutputDef, PanelSection, PropDef, Socket,
 };
 
-use super::{COLOR_SOURCES, Signal};
+use super::registry::{COLOR_SOURCES, Signal};
 
 /// Selectable sample rates; the stream-mode channel-count constraint limits
 /// which are reachable.

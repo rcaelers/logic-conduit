@@ -5,8 +5,8 @@ use super::format::{
     DEFAULT_MAX_WORDS_PER_BLOCK, RESTART_ENTRY_SIZE, RestartEntry, WordBlockHeader,
 };
 use super::vlq::{decode_u64, encode_u64, encoded_len};
-use super::{CodecError, CodecResult};
-use crate::runtime::Word;
+use super::errors::{CodecError, CodecResult};
+use crate::runtime::events::Word;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushResult {

@@ -10,10 +10,11 @@ use std::collections::VecDeque;
 use tracing::{debug, trace};
 
 use super::types::BitOrder;
-use crate::runtime::Receiver;
+use crate::runtime::errors::{WorkError, WorkResult};
 use crate::runtime::events::{Trigger, Word};
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
-use crate::runtime::ports::{PortDirection, PortSchema};
+use crate::runtime::node::ProcessNode;
+use crate::runtime::ports::{InputPort, OutputPort, PortDirection, PortSchema};
+use crate::runtime::receiver::Receiver;
 use crate::runtime::sample::Sample;
 
 /// UART parity mode

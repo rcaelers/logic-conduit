@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use node_graph::{InputDef, IntValue, NodeDef, OutputDef, StringValue};
 
-use super::{COLOR_SOURCES, Signal};
+use super::registry::{COLOR_SOURCES, Signal};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UartDemoSourceState {

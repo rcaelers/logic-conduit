@@ -10,7 +10,7 @@ use node_graph::{
     StringValue,
 };
 
-use super::{COLOR_OUTPUT, TextSavePath, Words};
+use super::registry::{COLOR_OUTPUT, TextSavePath, Words};
 
 /// Empty save-dialog picker, shown inline on the `Filename` socket while it
 /// is unconnected; a connected filename stream always wins.

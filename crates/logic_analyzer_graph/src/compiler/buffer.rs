@@ -8,7 +8,8 @@ use signal_processing::{
     BufferNode, NumberSample, ProcessNode, Sample, SampleBlock, TextSample, Trigger, Word,
 };
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use super::graph::{CompileCtx, ResolvedInputs, RuntimeBuilder, parse_state};
+use super::port_kind::PortKind;
 use crate::nodes;
 
 /// Maps a `BufferState.kind` selection (see `nodes::buffer::KIND_LABELS`) to

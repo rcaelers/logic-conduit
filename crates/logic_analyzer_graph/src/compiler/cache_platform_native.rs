@@ -11,10 +11,11 @@ use signal_processing::{
 };
 use node_graph::{GraphState, NodeId};
 
-use super::{
-    BuilderRegistry, CompileError, CompiledEdge, CompiledGraph, PortKind, RuntimeBuilder,
-    compiled_node,
+use super::errors::CompileError;
+use super::graph::{
+    BuilderRegistry, CompiledEdge, CompiledGraph, RuntimeBuilder, compiled_node,
 };
+use super::port_kind::PortKind;
 
 const DERIVED_CACHE_ABI_VERSION: u32 = 2;
 

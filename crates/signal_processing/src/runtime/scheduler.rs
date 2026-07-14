@@ -245,7 +245,8 @@ mod tests {
     use crossbeam_channel::bounded;
 
     use super::*;
-    use crate::runtime::node::{ProcessNode, WorkError, WorkResult};
+    use crate::runtime::errors::{WorkError, WorkResult};
+    use crate::runtime::node::ProcessNode;
     use crate::runtime::sender::ChannelMessage;
 
     struct TestSource {
@@ -334,11 +335,11 @@ mod tests {
         };
 
         // Create test watchdog
-        let watchdog = crate::runtime::Watchdog::new();
+        let watchdog = crate::runtime::watchdog::Watchdog::new();
 
         // Source has 0 inputs, 1 output
         let source_outputs = vec![OutputPort::new_with_watchdog(
-            crate::runtime::Sender::new(vec![tx]),
+            crate::runtime::sender::Sender::new(vec![tx]),
             &watchdog,
             "test_source",
             "output",

@@ -487,8 +487,8 @@ mod tests {
     use super::*;
 
     // Helper to create a test watchdog
-    fn test_watchdog() -> crate::runtime::Watchdog {
-        crate::runtime::Watchdog::new()
+    fn test_watchdog() -> crate::runtime::watchdog::Watchdog {
+        crate::runtime::watchdog::Watchdog::new()
     }
 
     // ── Receiver tests ───────────────────────────────────────────

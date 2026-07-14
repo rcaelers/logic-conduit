@@ -1,4 +1,4 @@
-use crate::runtime::Annotation;
+use crate::runtime::events::Annotation;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnnotationStoreMetadata {

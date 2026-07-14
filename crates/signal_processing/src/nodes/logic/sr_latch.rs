@@ -4,9 +4,10 @@ use std::collections::VecDeque;
 
 use tracing::{debug, warn};
 
+use crate::runtime::errors::{WorkError, WorkResult};
 use crate::runtime::events::Trigger;
-use crate::runtime::node::{InputPort, OutputPort, ProcessNode, WorkError, WorkResult};
-use crate::runtime::ports::{PortDirection, PortSchema};
+use crate::runtime::node::ProcessNode;
+use crate::runtime::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 use crate::runtime::receiver::ReceiverSelector;
 use crate::runtime::sample::Sample;
 

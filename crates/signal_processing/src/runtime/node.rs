@@ -3,13 +3,11 @@
 //! Defines the ProcessNode trait that all streaming nodes must implement.
 //! Nodes actively process data when work() is called by the scheduler.
 
-// Re-export error types for backward compatibility
 use std::sync::Arc;
 
 use super::edge_query::EdgeQuery;
-pub use super::errors::{WorkError, WorkResult};
-// Re-export port types (now defined in ports module)
-pub use super::ports::{InputPort, OutputPort};
+use super::errors::WorkResult;
+use super::ports::{InputPort, OutputPort};
 use super::protocol::ProtocolKind;
 
 #[derive(Clone)]

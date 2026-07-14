@@ -6,7 +6,8 @@ use egui::{Pos2, Rect, Vec2};
 use super::action::ActionEffect;
 use super::layout::GraphWidgetLayout;
 use super::menu::{ContextMenuState, build_context_entries};
-use super::{NodeGraphWidget, minimap};
+use super::minimap;
+use super::widget::NodeGraphWidget;
 use crate::model::{Connection, FrameId, NodeId, SocketDirection, SocketId};
 use crate::support::paint::{
     bezier_wire_distance, bezier_wire_intersects_rect, wire_intersects_knife,
