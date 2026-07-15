@@ -12,7 +12,8 @@ use logic_analyzer_viewer::{
 };
 use node_graph::Socket;
 use signal_processing::{
-    LiveStoreConfig, ProcessNode, Sample, Trigger, ViewerLaneKind, ViewerSink, Word,
+    LiveStoreConfig, NumberSample, ProcessNode, Sample, TextSample, Trigger, ViewerLaneKind,
+    ViewerSink, Word,
 };
 
 use crate::compiler::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
@@ -38,6 +39,8 @@ impl RuntimeBuilder for ViewerBuilder {
             PortKind::of::<Sample>(),
             PortKind::of::<Word>(),
             PortKind::of::<Trigger>(),
+            PortKind::of::<NumberSample>(),
+            PortKind::of::<TextSample>(),
         ]
     }
     fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
@@ -109,6 +112,10 @@ impl RuntimeBuilder for ViewerBuilder {
                 sink
             } else if input.kind == PortKind::of::<Trigger>() {
                 sink.with_lane(ViewerLaneKind::Trigger, lane_name.clone())
+            } else if input.kind == PortKind::of::<NumberSample>() {
+                sink.with_lane(ViewerLaneKind::Number, lane_name.clone())
+            } else if input.kind == PortKind::of::<TextSample>() {
+                sink.with_lane(ViewerLaneKind::Text, lane_name.clone())
             } else {
                 return Err(format!("viewer cannot display {:?}", input.kind));
             };
@@ -143,6 +150,10 @@ impl RuntimeBuilder for ViewerBuilder {
                     ViewerLaneBadge::new("S", Color32::from_rgb(95, 175, 95))
                 } else if input.kind == PortKind::of::<Word>() {
                     ViewerLaneBadge::new("W", Color32::from_rgb(215, 140, 60))
+                } else if input.kind == PortKind::of::<NumberSample>() {
+                    ViewerLaneBadge::new("N", Color32::from_rgb(95, 145, 210))
+                } else if input.kind == PortKind::of::<TextSample>() {
+                    ViewerLaneBadge::new("TXT", Color32::from_rgb(215, 150, 170))
                 } else {
                     ViewerLaneBadge::new("T", Color32::from_rgb(230, 190, 80))
                 };

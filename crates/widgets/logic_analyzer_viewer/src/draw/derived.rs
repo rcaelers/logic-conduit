@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
 use signal_processing::events::MAX_ANNOTATION_NS;
-use signal_processing::{Annotation, AnnotationFold, ChunkedMipmap, Sample, WordPresenceBucket};
+use signal_processing::{
+    Annotation, AnnotationFold, ChunkedMipmap, Sample, ViewerValue, WordPresenceBucket,
+};
 
 use crate::lanes::AnnotationVisual;
 use crate::viewer::LogicAnalyzerViewer;
@@ -109,6 +111,75 @@ impl LogicAnalyzerViewer {
             ],
             stroke,
         );
+    }
+
+    pub(crate) fn draw_derived_values(
+        &self,
+        painter: &Painter,
+        wave_rect: Rect,
+        y_top: f32,
+        row_height: f32,
+        values: &[ViewerValue],
+        color: Color32,
+    ) {
+        if values.is_empty() {
+            return;
+        }
+        let (start_ns, end_ns) = self.visible_window_ns();
+        let first_change = values.partition_point(|value| value.start_time_ns < start_ns);
+        let first = first_change.saturating_sub(1);
+        let last = values.partition_point(|value| value.start_time_ns <= end_ns);
+        if first >= last {
+            return;
+        }
+
+        let box_top = y_top + row_height * 0.12;
+        let box_bottom = y_top + row_height * 0.88;
+        if last - first > wave_rect.width().max(1.0) as usize * 2 {
+            let x0 = self
+                .ns_to_x(wave_rect, values[first].start_time_ns.max(start_ns))
+                .max(wave_rect.left());
+            painter.rect_filled(
+                Rect::from_min_max(
+                    Pos2::new(x0, box_top),
+                    Pos2::new(wave_rect.right(), box_bottom),
+                ),
+                0.0,
+                color,
+            );
+            return;
+        }
+
+        for index in first..last {
+            let value = &values[index];
+            let segment_start = value.start_time_ns.max(start_ns);
+            let segment_end = values
+                .get(index + 1)
+                .map_or(end_ns, |next| next.start_time_ns)
+                .min(end_ns);
+            if segment_end < segment_start {
+                continue;
+            }
+            let x0 = self.ns_to_x(wave_rect, segment_start).max(wave_rect.left());
+            let x1 = self
+                .ns_to_x(wave_rect, segment_end)
+                .max(x0 + 2.0)
+                .min(wave_rect.right());
+            let rect = Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(x1, box_bottom));
+            painter.rect_filled(rect, 2.0, color.linear_multiply(0.35));
+            painter.rect_stroke(rect, 2.0, Stroke::new(1.2, color), egui::StrokeKind::Inside);
+            if let Some(position) =
+                annotation_label_position(rect, wave_rect, annotation_label_width(&value.value))
+            {
+                painter.text(
+                    position,
+                    Align2::CENTER_CENTER,
+                    &value.value,
+                    FontId::monospace(12.0),
+                    Color32::WHITE,
+                );
+            }
+        }
     }
 
     pub(super) fn draw_derived_annotations(

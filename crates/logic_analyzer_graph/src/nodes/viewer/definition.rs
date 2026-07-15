@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use node_graph::{InputDef, NodeDef, OutputDef, PanelSection, PropDef, StringValue};
 
-use crate::nodes::registry::{COLOR_OUTPUT, Signal, Trigger, Words};
+use crate::nodes::registry::{COLOR_OUTPUT, Number, Signal, Text, Trigger, Words};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ViewerState {
@@ -28,11 +28,14 @@ impl NodeDef for Viewer {
 
     fn inputs() -> Vec<InputDef<Self::State>> {
         // A lane renders whatever it is fed: raw/derived signals as
-        // waveforms, words as annotation boxes, triggers as markers.
+        // waveforms, words as annotation boxes, triggers as markers, and
+        // number/text levels as labeled spans.
         vec![
             InputDef::new::<Signal>("In")
                 .accepts::<Words>()
                 .accepts::<Trigger>()
+                .accepts::<Number>()
+                .accepts::<Text>()
                 .variadic(16),
         ]
     }

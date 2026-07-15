@@ -456,6 +456,9 @@ impl LogicAnalyzerViewer {
                     indexed.metadata().extent_end_ns
                 }
                 signal_processing::DerivedLaneData::Markers(markers) => markers.last().copied(),
+                signal_processing::DerivedLaneData::Values(values) => {
+                    values.values.last().map(|value| value.start_time_ns)
+                }
             })
             .max()
             .unwrap_or(0);

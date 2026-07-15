@@ -418,7 +418,12 @@ fn with_auto_view_sink(graph: &GraphState) -> GraphState {
             type_name: "Signal".to_owned(),
             color: Color32::from_rgb(0, 205, 160),
             shape: SocketShape::Circle,
-            allowed: vec!["Words".to_owned(), "Trigger".to_owned()],
+            allowed: vec![
+                "Words".to_owned(),
+                "Trigger".to_owned(),
+                "Number".to_owned(),
+                "Text".to_owned(),
+            ],
             resolved_type: None,
             def_index: 0,
             variadic: Some(VariadicInfo {
@@ -1350,6 +1355,60 @@ mod tests {
         let lanes = auto_view.resolved.members(0);
         assert_eq!(lanes.len(), 1);
         assert_eq!(lanes[0].1.source, format!("{source_title}.RX"));
+    }
+
+    #[test]
+    fn counter_and_formatter_outputs_can_be_watched() {
+        use signal_processing::{NumberSample, TextSample};
+
+        let mut widget = NodeGraphWidget::new(nodes::build_registry());
+        nodes::populate_binary_decoder_demo(&mut widget);
+        for definition in [nodes::Counter::name(), nodes::StringFormatter::name()] {
+            let node = widget
+                .graph_mut()
+                .nodes
+                .values_mut()
+                .find(|node| node.def_name() == definition)
+                .unwrap_or_else(|| panic!("missing {definition}"));
+            node.outputs[0].show_in_view = true;
+        }
+
+        let compiled = lower(widget.graph(), &BuilderRegistry::standard())
+            .unwrap_or_else(|errors| panic!("lower failed: {errors:?}"));
+        let viewer = compiled
+            .nodes
+            .iter()
+            .find(|node| node.builder == "Viewer")
+            .expect("synthetic viewer");
+        let kinds: Vec<_> = viewer
+            .resolved
+            .members(0)
+            .into_iter()
+            .map(|(_, input)| input.kind)
+            .collect();
+        assert!(kinds.contains(&PortKind::of::<NumberSample>()));
+        assert!(kinds.contains(&PortKind::of::<TextSample>()));
+
+        let mut ctx = CompileCtx::default();
+        let derived = ctx.derived_lanes.clone();
+        let mut run = start_live(widget.graph(), &BuilderRegistry::standard(), &mut ctx)
+            .expect("watched value levels should run");
+        run.wait();
+        let lanes = derived.read();
+        for (suffix, expected_kind) in [
+            (".Count", signal_processing::ViewerValueKind::Number),
+            (".Text", signal_processing::ViewerValueKind::Text),
+        ] {
+            let lane = lanes
+                .iter()
+                .find(|lane| lane.name.ends_with(suffix))
+                .unwrap_or_else(|| panic!("missing {suffix} viewer lane"));
+            let signal_processing::DerivedLaneData::Values(values) = &lane.data else {
+                panic!("{suffix} should be a value lane");
+            };
+            assert_eq!(values.kind, expected_kind);
+            assert!(values.values.len() > 1, "{suffix} should contain changes");
+        }
     }
 
     #[test]

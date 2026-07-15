@@ -89,7 +89,8 @@ pub use scheduler::{Scheduler, StopHandle};
 pub use sender::{ChannelMessage, OverflowPolicy, Sender, SharedSenders};
 pub use viewer_sink::{
     AnnotationFold, DEFAULT_VIEWER_MAX_ENTRIES, DerivedLane, DerivedLaneData, DerivedLanes,
-    DigitalFold, IndexedAnnotationLane, LaneSummary, MarkerFold, ViewerLaneKind, ViewerRetention,
-    ViewerSink, ViewerSinkMetrics, ViewerSinkMetricsSnapshot,
+    DigitalFold, IndexedAnnotationLane, LaneSummary, MarkerFold, ValueFold, ViewerLaneKind,
+    ViewerRetention, ViewerSink, ViewerSinkMetrics, ViewerSinkMetricsSnapshot, ViewerValue,
+    ViewerValueKind, ViewerValueLane,
 };
 pub use watchdog::Watchdog;

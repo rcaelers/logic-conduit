@@ -15,7 +15,7 @@ use crate::derived_word_store::{
     StoreStatus,
 };
 use crate::errors::{WorkError, WorkResult};
-use crate::events::{Annotation, Trigger, Word};
+use crate::events::{Annotation, NumberSample, TextSample, Trigger, Word};
 use crate::node::ProcessNode;
 use crate::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 use crate::sample::Sample;
@@ -112,6 +112,26 @@ pub enum DerivedLaneData {
     IndexedAnnotations(IndexedAnnotationLane),
     /// Zero-width event markers (trigger timestamps, ns).
     Markers(Vec<u64>),
+    /// Labeled level values, each valid until the following entry.
+    Values(ViewerValueLane),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewerValueKind {
+    Number,
+    Text,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewerValue {
+    pub value: String,
+    pub start_time_ns: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewerValueLane {
+    pub kind: ViewerValueKind,
+    pub values: Vec<ViewerValue>,
 }
 
 #[derive(Clone)]
@@ -234,6 +254,27 @@ impl LaneFold<u64> for MarkerFold {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ValueFold;
+impl LaneFold<ViewerValue> for ValueFold {
+    fn leaf(entry: &ViewerValue) -> MipmapRecord {
+        MipmapRecord {
+            start_ns: entry.start_time_ns,
+            end_ns: entry.start_time_ns,
+            count: 1,
+            level_hint: None,
+        }
+    }
+    fn combine(records: &[MipmapRecord]) -> MipmapRecord {
+        MipmapRecord {
+            start_ns: records[0].start_ns,
+            end_ns: records[records.len() - 1].end_ns,
+            count: records.iter().map(|record| record.count).sum(),
+            level_hint: None,
+        }
+    }
+}
+
 /// The multi-resolution index kept alongside an in-memory lane's raw data.
 /// Indexed annotations own their presence index behind the query handle, so
 /// their summary variant is only a lane-kind marker.
@@ -243,6 +284,7 @@ pub enum LaneSummary {
     Annotations(ChunkedMipmap<Annotation, AnnotationFold>),
     IndexedAnnotations,
     Markers(AppendOnlyMipmap<u64, MarkerFold>),
+    Values(AppendOnlyMipmap<ViewerValue, ValueFold>),
 }
 
 impl LaneSummary {
@@ -277,6 +319,11 @@ impl LaneSummary {
                 let mut summary = AppendOnlyMipmap::new();
                 summary.extend(markers);
                 Self::Markers(summary)
+            }
+            DerivedLaneData::Values(values) => {
+                let mut summary = AppendOnlyMipmap::new();
+                summary.extend(&values.values);
+                Self::Values(summary)
             }
         }
     }
@@ -315,6 +362,12 @@ impl DerivedLanes {
             let replace =
                 std::mem::discriminant(&lanes[index].data) != std::mem::discriminant(&data);
             let replace = replace || matches!(data, DerivedLaneData::IndexedAnnotations(_));
+            let replace = replace
+                || matches!(
+                    (&lanes[index].data, &data),
+                    (DerivedLaneData::Values(current), DerivedLaneData::Values(next))
+                        if current.kind != next.kind
+                );
             if replace {
                 lanes[index].summary = LaneSummary::matching(&data);
                 lanes[index].data = data;
@@ -451,24 +504,52 @@ impl DerivedLanes {
             markers.drain(..markers.len() - target);
         }
     }
+
+    fn append_value_batch_retained(
+        &self,
+        lane: usize,
+        values: impl IntoIterator<Item = ViewerValue>,
+        retention: ViewerRetention,
+    ) {
+        let mut lanes = self.inner.write().unwrap();
+        let Some(lane) = lanes.get_mut(lane) else {
+            return;
+        };
+        let (DerivedLaneData::Values(existing), LaneSummary::Values(summary)) =
+            (&mut lane.data, &mut lane.summary)
+        else {
+            return;
+        };
+        for value in values {
+            summary.push(&value);
+            existing.values.push(value);
+        }
+        if let Some(target) = retention.trim_target(existing.values.len()) {
+            existing.values.drain(..existing.values.len() - target);
+        }
+    }
 }
 
-/// The three shapes a viewer lane's data can take
+/// The generic shapes a viewer lane's data can take
 /// (`docs/LOGIC_ANALYZER_VIEWER_DESIGN.md`) — every decoder's output reduces to
 /// one of these, so the viewer itself never needs to know which decoder
-/// produced a lane: a level stream (`Signal`), a stream of decoded values
-/// (`Words`, i.e. [`Word`]), or a stream of instantaneous events (`Trigger`).
+/// produced a lane: a boolean level (`Signal`), decoded values (`Words`, i.e.
+/// [`Word`]), instantaneous events (`Trigger`), or labeled number/text levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewerLaneKind {
     Signal,
     Words,
     Trigger,
+    Number,
+    Text,
 }
 
 enum LaneBuffer {
     Signal(VecDeque<Sample>),
     Words(VecDeque<Word>),
     Trigger(VecDeque<Trigger>),
+    Number(VecDeque<NumberSample>),
+    Text(VecDeque<TextSample>),
 }
 
 struct Lane {
@@ -589,11 +670,28 @@ impl ViewerSink {
             }
             ViewerLaneKind::Words => (DerivedLaneData::Annotations(Vec::new()), None, false),
             ViewerLaneKind::Trigger => (DerivedLaneData::Markers(Vec::new()), None, false),
+            ViewerLaneKind::Number | ViewerLaneKind::Text => {
+                let kind = if kind == ViewerLaneKind::Number {
+                    ViewerValueKind::Number
+                } else {
+                    ViewerValueKind::Text
+                };
+                (
+                    DerivedLaneData::Values(ViewerValueLane {
+                        kind,
+                        values: Vec::new(),
+                    }),
+                    None,
+                    false,
+                )
+            }
         };
         let buffer = match kind {
             ViewerLaneKind::Signal => LaneBuffer::Signal(VecDeque::new()),
             ViewerLaneKind::Words => LaneBuffer::Words(VecDeque::new()),
             ViewerLaneKind::Trigger => LaneBuffer::Trigger(VecDeque::new()),
+            ViewerLaneKind::Number => LaneBuffer::Number(VecDeque::new()),
+            ViewerLaneKind::Text => LaneBuffer::Text(VecDeque::new()),
         };
         let store_index = self.store.register(name, data);
         self.lanes.push(Lane {
@@ -657,6 +755,12 @@ impl ProcessNode for ViewerSink {
                     }
                     ViewerLaneKind::Trigger => {
                         PortSchema::new::<Trigger>(name, index, PortDirection::Input)
+                    }
+                    ViewerLaneKind::Number => {
+                        PortSchema::new::<NumberSample>(name, index, PortDirection::Input)
+                    }
+                    ViewerLaneKind::Text => {
+                        PortSchema::new::<TextSample>(name, index, PortDirection::Input)
                     }
                 }
             })
@@ -762,6 +866,42 @@ impl ProcessNode for ViewerSink {
                         store.append_marker_batch_retained(
                             lane.store_index,
                             batch.into_iter().map(|item| item.timestamp_ns),
+                            self.retention,
+                        );
+                        if let (Some(metrics), Some(started)) = (&metrics, append_started) {
+                            metrics.record_append(started);
+                        }
+                    }
+                }
+                LaneBuffer::Number(buffer) => {
+                    let batch = drain_batch!(NumberSample, buffer);
+                    progress += batch.len();
+                    if !batch.is_empty() {
+                        let append_started = metrics.as_ref().map(|_| Instant::now());
+                        store.append_value_batch_retained(
+                            lane.store_index,
+                            batch.into_iter().map(|sample| ViewerValue {
+                                value: sample.value.to_string(),
+                                start_time_ns: sample.start_time_ns,
+                            }),
+                            self.retention,
+                        );
+                        if let (Some(metrics), Some(started)) = (&metrics, append_started) {
+                            metrics.record_append(started);
+                        }
+                    }
+                }
+                LaneBuffer::Text(buffer) => {
+                    let batch = drain_batch!(TextSample, buffer);
+                    progress += batch.len();
+                    if !batch.is_empty() {
+                        let append_started = metrics.as_ref().map(|_| Instant::now());
+                        store.append_value_batch_retained(
+                            lane.store_index,
+                            batch.into_iter().map(|sample| ViewerValue {
+                                value: sample.value,
+                                start_time_ns: sample.start_time_ns,
+                            }),
                             self.retention,
                         );
                         if let (Some(metrics), Some(started)) = (&metrics, append_started) {
@@ -932,6 +1072,68 @@ mod tests {
             DerivedLaneData::Markers(markers) => assert_eq!(markers.as_slice(), &[42]),
             other => panic!("expected marker lane, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn lanes_collect_number_and_text_levels() {
+        let store = DerivedLanes::new();
+        let mut sink = ViewerSink::new(store.clone())
+            .with_lane(ViewerLaneKind::Number, "counter.count")
+            .with_lane(ViewerLaneKind::Text, "formatter.text");
+
+        let wd = Watchdog::new();
+        let (number_tx, number_rx) = bounded::<ChannelMessage<NumberSample>>(16);
+        number_tx
+            .send(ChannelMessage::Sample(NumberSample::new(-2, 0)))
+            .unwrap();
+        number_tx
+            .send(ChannelMessage::Sample(NumberSample::new(3, 500)))
+            .unwrap();
+        drop(number_tx);
+
+        let (text_tx, text_rx) = bounded::<ChannelMessage<TextSample>>(16);
+        text_tx
+            .send(ChannelMessage::Sample(TextSample::new("Window 03", 500)))
+            .unwrap();
+        drop(text_tx);
+
+        run_sink(
+            &mut sink,
+            vec![
+                InputPort::new_with_watchdog(number_rx, &wd, "viewer", "in0"),
+                InputPort::new_with_watchdog(text_rx, &wd, "viewer", "in1"),
+            ],
+        );
+
+        let lanes = store.read();
+        let DerivedLaneData::Values(numbers) = &lanes[0].data else {
+            panic!("expected number values");
+        };
+        assert_eq!(numbers.kind, ViewerValueKind::Number);
+        assert_eq!(
+            numbers.values,
+            [
+                ViewerValue {
+                    value: "-2".to_owned(),
+                    start_time_ns: 0,
+                },
+                ViewerValue {
+                    value: "3".to_owned(),
+                    start_time_ns: 500,
+                },
+            ]
+        );
+        let DerivedLaneData::Values(text) = &lanes[1].data else {
+            panic!("expected text values");
+        };
+        assert_eq!(text.kind, ViewerValueKind::Text);
+        assert_eq!(
+            text.values,
+            [ViewerValue {
+                value: "Window 03".to_owned(),
+                start_time_ns: 500,
+            }]
+        );
     }
 
     #[test]

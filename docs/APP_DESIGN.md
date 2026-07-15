@@ -105,7 +105,7 @@ Logic: Word Matcher, SR Flip-Flop, Logic Gate (op enum retitles the node; NOT ca
 variadic group at one), Buffer, Counter, String Formatter. Sinks: File Writer (inline save
 dialog while `Filename` is unconnected; a connected text stream hides it and wins), Text
 File Writer, TGCK Recorder, Viewer (variadic input accepting
-`Signal | Words | Trigger`).
+`Signal | Words | Trigger | Number | Text`).
 
 `nodes::populate_startup` builds the CCD capture graph programmatically (the shipped
 `graphs/spi_controlled_decode.json`). The wasm app loads

@@ -314,6 +314,24 @@ impl LogicAnalyzerViewer {
                                     markers,
                                 );
                             }
+                            DerivedLaneData::Values(values) => {
+                                let color = match values.kind {
+                                    signal_processing::ViewerValueKind::Number => {
+                                        Color32::from_rgb(95, 145, 210)
+                                    }
+                                    signal_processing::ViewerValueKind::Text => {
+                                        Color32::from_rgb(215, 150, 170)
+                                    }
+                                };
+                                self.draw_derived_values(
+                                    &clip,
+                                    wave_rect,
+                                    track_top,
+                                    track_height,
+                                    &values.values,
+                                    color,
+                                );
+                            }
                         }
                     }
                 }
@@ -372,7 +390,9 @@ impl LogicAnalyzerViewer {
                             IndexedAnnotationSamples::Presence(_)
                             | IndexedAnnotationSamples::Error => (Vec::new(), true),
                         }),
-                    DerivedLaneData::Digital(_) | DerivedLaneData::Markers(_) => continue,
+                    DerivedLaneData::Digital(_)
+                    | DerivedLaneData::Markers(_)
+                    | DerivedLaneData::Values(_) => continue,
                 };
                 formats.insert(track.id.clone(), lane.word_display_format.clone());
                 frame.tracks.push(ViewerLaneTrackFrame {

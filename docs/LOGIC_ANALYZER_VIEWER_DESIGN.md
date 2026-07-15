@@ -37,7 +37,7 @@ The viewer renders three independent kinds of rows:
    (`set_channels`), used for demo signals and any host-provided data.
 3. **Derived lanes** — a shared `DerivedLanes` store (`Arc<RwLock<…>>`) that running
    pipeline `Viewer` nodes push into (`set_derived_lanes`); rendered live as digital,
-   annotation (boxed value), or marker rows beneath the channels.
+   annotation (boxed word), marker, or labeled number/text level rows beneath the channels.
 
 A single `row_order: Vec<RowKey>` is the only source of truth for display order across all
 row kinds, reconciled every frame (stale rows dropped, new ones appended) before any

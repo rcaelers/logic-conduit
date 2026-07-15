@@ -436,6 +436,14 @@ impl LogicAnalyzerViewer {
                 DerivedLaneData::Markers(_) => {
                     ViewerLaneBadge::new("T", Color32::from_rgb(230, 190, 80))
                 }
+                DerivedLaneData::Values(values) => match values.kind {
+                    signal_processing::ViewerValueKind::Number => {
+                        ViewerLaneBadge::new("N", Color32::from_rgb(95, 145, 210))
+                    }
+                    signal_processing::ViewerValueKind::Text => {
+                        ViewerLaneBadge::new("TXT", Color32::from_rgb(215, 150, 170))
+                    }
+                },
             };
             self.viewer_lanes.register(ViewerLaneGroup::singleton(
                 ViewerLaneGroupId::new(format!("default:{}", lane.name)),
@@ -491,7 +499,9 @@ impl LogicAnalyzerViewer {
                         .find(|lane| lane.name == track.lane.as_str())
                         .and_then(|lane| match lane.summary {
                             LaneSummary::Digital(_) | LaneSummary::Markers(_) => Some(lane),
-                            LaneSummary::Annotations(_) | LaneSummary::IndexedAnnotations => None,
+                            LaneSummary::Annotations(_)
+                            | LaneSummary::IndexedAnnotations
+                            | LaneSummary::Values(_) => None,
                         })
                 })?;
                 match &lane.summary {
@@ -504,6 +514,7 @@ impl LogicAnalyzerViewer {
                     // No boolean level to measure or toggle to snap to.
                     LaneSummary::Annotations(_) => None,
                     LaneSummary::IndexedAnnotations => None,
+                    LaneSummary::Values(_) => None,
                 }
             }
         }
