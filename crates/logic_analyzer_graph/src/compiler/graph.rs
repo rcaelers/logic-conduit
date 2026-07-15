@@ -28,16 +28,11 @@ use signal_processing::{
     PersistentStoreConfig, ProcessNode, SampleBlock, ViewerRetention,
 };
 
+use super::cache_platform;
 use super::errors::{ApplyError, CompileError};
 #[cfg(test)]
 use super::plugin::PluginContext;
 use super::port_kind::PortKind;
-use super::{
-    binary_decoder, buffer, cache_platform, counter, formatter, logic_gate, spi_decoder,
-    sr_flip_flop, tgck_recorder, uart_decoder, uart_demo_source, viewer, word_matcher,
-};
-#[cfg(not(target_arch = "wasm32"))]
-use super::{csv_writer, file_source, file_writer, sigrok_file_source, text_file_writer};
 
 /// Shared resources handed to builders. A fresh `DerivedLanes` store per
 /// run makes stale viewer lanes vanish atomically on re-run.
@@ -171,66 +166,7 @@ pub struct BuilderRegistry(HashMap<String, Box<dyn RuntimeBuilder>>);
 
 impl BuilderRegistry {
     pub fn standard() -> Self {
-        let mut builders: HashMap<String, Box<dyn RuntimeBuilder>> = HashMap::new();
-        std::cfg_select! {
-            target_arch = "wasm32" => {}
-            _ => {
-                builders.insert(
-                    "DSL File Source".into(),
-                    Box::new(file_source::FileSourceBuilder),
-                );
-                builders.insert(
-                    "Sigrok File Source".into(),
-                    Box::new(sigrok_file_source::SigrokFileSourceBuilder),
-                );
-                builders.insert(
-                    "File Writer".into(),
-                    Box::new(file_writer::FileWriterBuilder),
-                );
-                builders.insert(
-                    "Text File Writer".into(),
-                    Box::new(text_file_writer::TextFileWriterBuilder),
-                );
-                builders.insert("CSV Writer".into(), Box::new(csv_writer::CsvWriterBuilder));
-            }
-        }
-        builders.insert(
-            "UART Demo Source".into(),
-            Box::new(uart_demo_source::UartDemoSourceBuilder),
-        );
-        builders.insert(
-            "SPI Decoder".into(),
-            Box::new(spi_decoder::SpiDecoderBuilder),
-        );
-        builders.insert(
-            "UART Decoder".into(),
-            Box::new(uart_decoder::UartDecoderBuilder),
-        );
-        builders.insert(
-            "Binary Decoder".into(),
-            Box::new(binary_decoder::BinaryDecoderBuilder),
-        );
-        builders.insert(
-            "Word Matcher".into(),
-            Box::new(word_matcher::WordMatcherBuilder),
-        );
-        builders.insert(
-            "SR Flip-Flop".into(),
-            Box::new(sr_flip_flop::SrFlipFlopBuilder),
-        );
-        builders.insert("Logic Gate".into(), Box::new(logic_gate::LogicGateBuilder));
-        builders.insert("Buffer".into(), Box::new(buffer::BufferBuilder));
-        builders.insert("Counter".into(), Box::new(counter::CounterBuilder));
-        builders.insert(
-            "String Formatter".into(),
-            Box::new(formatter::FormatterBuilder),
-        );
-        builders.insert(
-            "TGCK Recorder".into(),
-            Box::new(tgck_recorder::TgckRecorderBuilder),
-        );
-        builders.insert("Viewer".into(), Box::new(viewer::ViewerBuilder));
-        Self(builders)
+        Self(crate::nodes::standard_builders())
     }
 
     /// Adds (or overwrites) one builder, keyed the same way `standard()`
@@ -251,11 +187,11 @@ impl BuilderRegistry {
     }
 }
 
-pub(super) fn parse_state<T: serde::de::DeserializeOwned>(state: &Value) -> Result<T, String> {
+pub(crate) fn parse_state<T: serde::de::DeserializeOwned>(state: &Value) -> Result<T, String> {
     serde_json::from_value(state.clone()).map_err(|e| format!("invalid node state: {e}"))
 }
 
-pub(super) fn parse_hex(text: &str) -> Result<u64, String> {
+pub(crate) fn parse_hex(text: &str) -> Result<u64, String> {
     let trimmed = text.trim();
     let digits = trimmed
         .strip_prefix("0x")
@@ -1234,9 +1170,9 @@ pub fn start_app_run(
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use node_graph::{NodeDef, NodeGraphWidget};
     #[cfg(not(target_arch = "wasm32"))]
-    use signal_processing::BinaryFileWriter;
+    use logic_analyzer_processing::BinaryFileWriter;
+    use node_graph::{NodeDef, NodeGraphWidget};
     use signal_processing::{ConfigValue, Pipeline, Sample, Trigger, Word};
 
     use super::*;
@@ -1873,7 +1809,7 @@ mod tests {
     fn file_source_with_wired_filename_builds_deferred_source() {
         use signal_processing::TextSample;
 
-        use crate::compiler::file_source::FileSourceBuilder;
+        use crate::nodes::FileSourceBuilder;
 
         let builder = FileSourceBuilder;
         let state = serde_json::to_value(nodes::DslFileSourceState {
@@ -2342,17 +2278,16 @@ mod tests {
     /// `examples/spi_graph_decode.rs` (itself verified against the original
     /// `spi_controlled_decode.rs`).
     fn run_reference(capture: &Path, out_dir: &Path) {
-        use signal_processing::nodes::decoders::{
+        use logic_analyzer_processing::nodes::decoders::{
             CsPolarity, ParallelDecoder, SpiDecoder, SpiMode, StrobeMode,
         };
-        use signal_processing::{SrLatch, TextFormatter, TriggerCounter, WordMatcher};
+        use logic_analyzer_processing::{
+            DslFileSource, SrLatch, TextFormatter, TriggerCounter, WordMatcher,
+        };
 
         let mut pipeline = Pipeline::new().with_default_buffer_size(10_000_000);
         pipeline
-            .add_process(
-                "source",
-                signal_processing::DslFileSource::new(capture, 11).unwrap(),
-            )
+            .add_process("source", DslFileSource::new(capture, 11).unwrap())
             .unwrap();
         pipeline
             .add_process("spi", SpiDecoder::new(SpiMode::Mode0, 24, true, false))

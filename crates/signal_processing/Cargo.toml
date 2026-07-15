@@ -3,7 +3,7 @@ name = "signal-processing"
 version.workspace = true
 edition = "2024"
 authors = ["Rob Caelers <rob.caelers@gmail.com>"]
-description = "Streaming signal-processing runtime, capture sources, and protocol decoders"
+description = "UI-independent streaming runtime and generic signal-processing infrastructure"
 readme = "README.md"
 repository = "https://github.com/rcaelers/dsl_loader"
 license = "MIT"
@@ -15,17 +15,13 @@ path = "src/lib.rs"
 [dependencies]
 zip = { workspace = true }
 thiserror = { workspace = true }
-clap = { workspace = true }
 crossbeam-channel = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 lazy_static = { workspace = true }
 web-time = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 memmap2 = { workspace = true }
-minifb = { workspace = true }
-rusb = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

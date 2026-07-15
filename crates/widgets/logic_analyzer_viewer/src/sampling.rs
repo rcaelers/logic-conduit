@@ -104,7 +104,7 @@ impl LogicAnalyzerViewer {
         // Derived lanes (wherever they've been dragged to among the rows)
         // always measure from `channel.transitions` as already resolved by
         // `channel_at_row` — a bounded query against the lane's own
-        // multi-resolution summary (`runtime::derived_index`), not the raw
+        // multi-resolution summary (`derived_index`), not the raw
         // `CaptureIndex` real channels use, so there's no further exact
         // refinement to fall through to below. A loaded capture's own
         // channels do take that index path, since even at zoom levels

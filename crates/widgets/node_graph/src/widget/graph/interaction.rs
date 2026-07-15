@@ -9,9 +9,7 @@ use super::menu::{ContextMenuState, build_context_entries};
 use super::minimap;
 use super::widget::NodeGraphWidget;
 use crate::model::{Connection, FrameId, NodeId, SocketDirection, SocketId};
-use crate::support::paint::{
-    bezier_wire_distance, bezier_wire_intersects_rect, wire_intersects_knife,
-};
+use crate::support::{bezier_wire_distance, bezier_wire_intersects_rect, wire_intersects_knife};
 use crate::widget::menu::dispatch_menu_shortcut;
 use crate::widget::node::NodeWidget;
 

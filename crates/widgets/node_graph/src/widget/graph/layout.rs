@@ -4,7 +4,7 @@ use egui::{Pos2, Rect};
 
 use super::widget::NodeGraphWidget;
 use crate::model::{FrameId, NodeId, SocketDirection, SocketId};
-use crate::support::paint::{SOCKET_RADIUS, to_screen_rect};
+use crate::support::{SOCKET_RADIUS, to_screen_rect};
 use crate::widget::node::NodeWidget;
 
 const SOCKET_HIT_PADDING: f32 = 5.0;

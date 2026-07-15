@@ -5,7 +5,7 @@
   branch on node names, port labels, or protocol-specific values (for example
   UART, `Bits`, `Data`, start/stop markers, SPI, or Binary Decoder).
 - Concrete behavior belongs in the corresponding `logic_analyzer_graph` node
-  definition/compiler builder and its `signal_processing` runtime node.
+  feature and its `logic_analyzer_processing` runtime node.
 - Pass protocol-specific presentation needs to generic infrastructure through
   explicit, generic metadata/contracts. Do not infer behavior from display
   names or use name-based special cases.
@@ -17,7 +17,10 @@ See `docs/DECODER_VIEW_LANE_DESIGN.md` for the detailed viewer-lane decision.
 
 # Crate boundaries
 
-- `signal_processing` is UI-independent runtime and processing infrastructure.
+- `signal_processing` is UI-independent generic runtime, capture, and derived-data
+  infrastructure.
+- `logic_analyzer_processing` owns UI-independent concrete capture sources,
+  protocol decoders, processing nodes, and sinks.
 - `logic_analyzer_graph` owns concrete graph nodes, compiler builders, graph
   lowering, and plugin registration contracts.
 - `logic_analyzer_ui` composes the widgets and application services; it must not

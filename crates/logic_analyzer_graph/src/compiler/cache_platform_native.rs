@@ -5,11 +5,11 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use signal_processing::{
-    CaptureDataSource, DslFileCaptureDataSource, IndexedAnnotationStore, PersistentStoreConfig,
-    Word,
-};
+use logic_analyzer_processing::DslFileCaptureDataSource;
 use node_graph::{GraphState, NodeId};
+use signal_processing::{
+    CaptureDataSource, IndexedAnnotationStore, PersistentStoreConfig, Word,
+};
 
 use super::errors::CompileError;
 use super::graph::{

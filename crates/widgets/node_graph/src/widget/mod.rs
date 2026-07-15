@@ -1,5 +1,5 @@
 mod graph;
-pub(crate) mod menu;
-pub(crate) mod node;
+mod menu;
+mod node;
 
 pub use graph::{GraphPanelTab, GraphUiPrefs, NodeGraphWidget};

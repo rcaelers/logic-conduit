@@ -4,7 +4,7 @@ use egui::{Color32, CursorIcon, FontId, PointerButton, Pos2, Rect, Response, Ui}
 
 use signal_processing::{Annotation, AnnotationQuery, DerivedLaneData};
 
-use crate::draw::derived::annotation_box_end;
+use crate::draw::annotation_box_end;
 use crate::types::{AnalyzerLayout, CursorInput, RowKey, TimeCursor, Transition};
 use crate::viewer::LogicAnalyzerViewer;
 

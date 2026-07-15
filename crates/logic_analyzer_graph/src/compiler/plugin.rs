@@ -23,7 +23,7 @@
 //!   `impl PortValue for T`; `PortKind::of::<T>()` computes identity fresh
 //!   from `TypeId::of::<T>()` every call, nothing to precompute or cache.
 //!   [`Self::register_payload`] is a *different* concern: it registers `T`
-//!   with `signal_processing::runtime`'s channel machinery (how to create/wrap a
+//!   with `signal_processing`'s channel machinery (how to create/wrap a
 //!   `crossbeam` channel of `T`) — that one's a real, TypeId-keyed runtime
 //!   registry and does need the call, `T: PortValue` is just a convenient
 //!   bound (identical to what the runtime registry itself requires).

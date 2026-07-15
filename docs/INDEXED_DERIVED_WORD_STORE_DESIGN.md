@@ -6,12 +6,12 @@ time windows, presence summaries for overview rendering, and bounded decoded-blo
 
 Primary code locations:
 
-- `crates/signal_processing/src/runtime/derived_word_store/`;
-- `crates/signal_processing/src/nodes/sinks/viewer_sink.rs`;
+- `crates/signal_processing/src/derived_word_store/`;
+- `crates/signal_processing/src/viewer_sink.rs`;
 - `crates/widgets/logic_analyzer_viewer/src/draw/derived.rs`;
 - `crates/widgets/logic_analyzer_viewer/src/cursor.rs`;
 - `crates/widgets/logic_analyzer_viewer/src/channel.rs`;
-- `crates/logic_analyzer_graph/src/compiler/viewer.rs`.
+- `crates/logic_analyzer_graph/src/nodes/viewer/builder.rs`.
 
 Related documents:
 

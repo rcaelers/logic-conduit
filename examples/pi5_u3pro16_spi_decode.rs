@@ -2,11 +2,13 @@
 
 use std::collections::VecDeque;
 
-use signal_processing::nodes::decoders::{SpiDecoder, SpiMode};
+use logic_analyzer_processing::{
+    CaptureMode, ClockSource, DsLogicU3Pro16, LogicCaptureConfig, LogicEncodingRequest,
+    LogicTrigger, LogicTriggerStage, SpiDecoder, SpiMode, TriggerCondition,
+};
 use signal_processing::{
-    CaptureMode, ClockSource, DsLogicU3Pro16, InputPort, LogicCaptureConfig, LogicEncodingRequest,
-    LogicTrigger, LogicTriggerStage, OutputPort, Pipeline, PortDirection, PortSchema, ProcessNode,
-    Sample, TriggerCondition, Word, WorkError, WorkResult,
+    InputPort, OutputPort, Pipeline, PortDirection, PortSchema, ProcessNode, Sample, Word,
+    WorkError, WorkResult,
 };
 
 const SAMPLE_RATE_HZ: u64 = 1_000_000;

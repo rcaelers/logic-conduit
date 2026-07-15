@@ -1,5 +1,6 @@
 mod binary_decoder;
 mod buffer;
+mod catalog;
 mod counter;
 mod dslogic_u3pro16;
 mod file_source;
@@ -27,9 +28,12 @@ std::cfg_select! {
 
 pub use binary_decoder::{BinaryDecoder, BinaryDecoderState};
 pub use buffer::{Buffer, BufferState};
+pub(crate) use catalog::standard_builders;
 pub use counter::{Counter, CounterState};
 pub use dslogic_u3pro16::DsLogicU3Pro16;
 pub use file_source::DslFileSource;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) use file_source::FileSourceBuilder;
 pub use file_writer::FileWriter;
 pub use formatter::{StringFormatter, StringFormatterState};
 pub use i2c_decoder::I2cDecoder;

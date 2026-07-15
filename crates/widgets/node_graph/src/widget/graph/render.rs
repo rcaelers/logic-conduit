@@ -5,7 +5,7 @@ use super::layout::GraphWidgetLayout;
 use super::minimap;
 use super::widget::NodeGraphWidget;
 use crate::model::{NodeId, Socket, SocketDirection, SocketId};
-use crate::support::paint::{
+use crate::support::{
     SOCKET_RADIUS, WireEmphasis, draw_box_select, draw_connections, draw_frames, draw_grid,
     draw_knife_line, draw_wire, to_screen_rect,
 };

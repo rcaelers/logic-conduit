@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/app", "crates/logic_analyzer_graph", "crates/logic_analyzer_ui", "crates/signal_processing", "crates/widgets/logic_analyzer_viewer", "crates/widgets/node_graph", "plugins/example-plugin"]
+members = [".", "crates/app", "crates/logic_analyzer_graph", "crates/logic_analyzer_processing", "crates/logic_analyzer_ui", "crates/signal_processing", "crates/widgets/logic_analyzer_viewer", "crates/widgets/node_graph", "plugins/example-plugin"]
 default-members = ["."]
 resolver = "2"
 
@@ -53,6 +53,7 @@ example-plugin = ["dep:example-plugin"]
 
 [dependencies]
 signal-processing = { path = "crates/signal_processing" }
+logic-analyzer-processing = { path = "crates/logic_analyzer_processing" }
 logic-analyzer-graph = { path = "crates/logic_analyzer_graph" }
 logic-analyzer-ui = { path = "crates/logic_analyzer_ui" }
 clap = { workspace = true }

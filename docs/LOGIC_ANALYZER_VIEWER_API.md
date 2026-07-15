@@ -46,7 +46,7 @@ order spans all of them (user-reorderable by dragging labels).
 
 ```rust
 viewer.set_capture_path(path, |path| {
-    signal_processing::DslFileCaptureDataSource::open(path).map_err(|e| e.to_string())
+    logic_analyzer_processing::DslFileCaptureDataSource::open(path).map_err(|e| e.to_string())
 });
 ```
 

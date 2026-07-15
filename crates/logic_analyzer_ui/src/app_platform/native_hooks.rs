@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use logic_analyzer_processing::{DslFileCaptureDataSource, SigrokFileCaptureDataSource};
+
 use super::*;
 use crate::app_platform::{FileCommand, GuardedAction};
 #[cfg(target_os = "macos")]
@@ -131,14 +133,12 @@ impl App {
         match nodes::capture_file_source(self.node_graph.graph()) {
             Some(nodes::CaptureFileSource::Dsl(file)) => {
                 self.logic_analyzer.set_capture_path(file, |path| {
-                    signal_processing::DslFileCaptureDataSource::open(path)
-                        .map_err(|e| e.to_string())
+                    DslFileCaptureDataSource::open(path).map_err(|e| e.to_string())
                 })
             }
             Some(nodes::CaptureFileSource::Sigrok(file)) => {
                 self.logic_analyzer.set_capture_path(file, |path| {
-                    signal_processing::SigrokFileCaptureDataSource::open(path)
-                        .map_err(|e| e.to_string())
+                    SigrokFileCaptureDataSource::open(path).map_err(|e| e.to_string())
                 })
             }
             None => self.logic_analyzer.clear_capture(),

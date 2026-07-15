@@ -8,10 +8,9 @@ Generic layers do not contain decoder-specific behavior.
 independent of UART, SPI, Binary Decoder, and all other concrete node types. Protocol behavior
 belongs in:
 
-- the node definition in `crates/logic_analyzer_graph/src/nodes/`;
-- its UI/runtime builder in `crates/logic_analyzer_graph/src/compiler/`;
-- its viewer-lane adapter in `crates/logic_analyzer_graph/src/viewer_lanes/`;
-- its runtime implementation in `crates/signal_processing/src/nodes/`.
+- its feature directory in `crates/logic_analyzer_graph/src/nodes/`, which groups
+  `definition.rs`, `builder.rs`, and protocol-specific presentation when needed;
+- its runtime implementation in `crates/logic_analyzer_processing/src/nodes/`.
 
 `signal_processing` remains UI-independent. It stores timestamped lane payloads and indexes, but
 does not depend on egui or on a viewer renderer. `logic_analyzer_ui` only composes the graph and
@@ -39,21 +38,23 @@ The reusable contract lives in `logic_analyzer_viewer`, because that crate owns 
 system, drawing primitives, interaction model, and data-query integration. The contract is
 public and protocol-neutral.
 
-Concrete implementations live under:
+Concrete implementations live with their node feature:
 
 ```text
-crates/logic_analyzer_graph/src/viewer_lanes/
+crates/logic_analyzer_graph/src/nodes/uart_decoder/
+  definition.rs
+  builder.rs
+  presentation.rs
   mod.rs
-  uart.rs
 ```
 
 `logic_analyzer_graph` depends on `logic_analyzer_viewer` and constructs these implementations.
 This dependency direction does not form a cycle: the viewer depends only on generic runtime
 data in `signal_processing`, while the graph crate depends on both.
 
-The name `viewer_lanes` is preferred to `derived`. “Derived lane” already means runtime data in
-`signal_processing`; a viewer-lane adapter describes presentation and interaction rather than
-owning another kind of derived data.
+A presentation module describes viewing and interaction rather than owning another kind of
+derived data. Keeping it beside the definition and builder makes the complete concrete feature
+discoverable in one directory.
 
 ### Two separate per-run stores
 

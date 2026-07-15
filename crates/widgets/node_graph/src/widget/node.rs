@@ -5,8 +5,7 @@ use crate::model::{
     SocketShape,
 };
 use crate::runtime::{NodeInstance, NodeTypeRegistry};
-use crate::support::paint::{draw_wire_dashed, to_screen_rect};
-use crate::support::view::ViewState;
+use crate::support::{ViewState, draw_wire_dashed, to_screen_rect};
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 

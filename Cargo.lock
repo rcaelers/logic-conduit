@@ -2105,6 +2105,7 @@ dependencies = [
  "egui",
  "example-plugin",
  "logic-analyzer-graph",
+ "logic-analyzer-processing",
  "logic-analyzer-ui",
  "memmap2",
  "minifb",
@@ -2127,12 +2128,29 @@ dependencies = [
  "blake3",
  "crossbeam-channel",
  "egui",
+ "logic-analyzer-processing",
  "logic-analyzer-viewer",
  "node-graph",
  "serde",
  "serde_json",
  "signal-processing",
  "tempfile",
+]
+
+[[package]]
+name = "logic-analyzer-processing"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "crossbeam-channel",
+ "libc",
+ "rusb",
+ "signal-processing",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber",
+ "zip",
 ]
 
 [[package]]
@@ -2143,6 +2161,7 @@ dependencies = [
  "eframe",
  "egui",
  "logic-analyzer-graph",
+ "logic-analyzer-processing",
  "logic-analyzer-viewer",
  "node-graph",
  "rfd",
@@ -3419,17 +3438,13 @@ dependencies = [
 name = "signal-processing"
 version = "0.1.0"
 dependencies = [
- "clap",
  "crossbeam-channel",
  "lazy_static",
  "libc",
  "memmap2",
- "minifb",
- "rusb",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
- "tracing-subscriber",
  "web-time",
  "zip",
 ]

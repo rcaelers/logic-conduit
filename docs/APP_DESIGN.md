@@ -9,9 +9,10 @@ node definitions and the graph→pipeline compiler; and the thin `logic-analyzer
 [PIPELINE_DESIGN.md](PIPELINE_DESIGN.md) (the runtime it compiles into),
 [LOGIC_ANALYZER_VIEWER_DESIGN.md](LOGIC_ANALYZER_VIEWER_DESIGN.md) (the waveform view).
 
-Layering rule: `node_graph` stays UI-generic and `signal_processing` stays UI-free. The
-compiler lives in `logic-analyzer-graph` (`crates/logic_analyzer_graph/src/compiler/`) —
-the one place that knows both graph node definitions and runtime nodes. The application UI
+Layering rule: `node_graph` stays UI-generic, `signal_processing` stays generic and UI-free, and
+`logic_analyzer_processing` owns concrete UI-independent runtime nodes. Concrete feature
+integration lives under `logic-analyzer-graph/src/nodes/<feature>/`; shared lowering remains in
+`logic-analyzer-graph/src/compiler/`. The application UI
 consumes that integration and must not contain concrete node/compiler implementations.
 
 ---
@@ -88,8 +89,8 @@ never share a shape.
 
 ## Node set (`crates/logic_analyzer_graph/src/nodes/`)
 
-Each UI node is a `node_graph::NodeDef` (sockets, props, panel sections, `on_update`
-visibility, badge) with a matching compiler builder (below). Placement rule: the node body
+Each executable feature directory groups a `node_graph::NodeDef` in `definition.rs` with its
+`RuntimeBuilder` in `builder.rs` and optional presentation metadata. Placement rule: the node body
 carries sockets and the controls someone tweaks while reading the graph (matcher pattern,
 gate op, template); everything else goes to the properties panel (SPI CPOL/CPHA/bit order,
 writer options, device settings).
@@ -107,11 +108,12 @@ File Writer, TGCK Recorder, Viewer (variadic input accepting
 `nodes::populate_startup` builds the CCD capture graph programmatically (the shipped
 `graphs/ccd_pipeline.json`); `populate_uart_demo` is the wasm startup graph.
 
-## Graph → pipeline compiler (`crates/logic_analyzer_graph/src/compiler/`)
+## Graph → pipeline compiler
 
 ### Builders
 
-Every executable node type registers a `RuntimeBuilder` keyed by its `NodeDef::name()`:
+Every executable node type registers its feature-local `RuntimeBuilder` in `nodes/catalog.rs`,
+keyed by its `NodeDef::name()`. Generic lowering and runtime reconciliation live in `compiler/`:
 
 ```rust
 pub trait RuntimeBuilder {

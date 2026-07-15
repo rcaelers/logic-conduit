@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
-use signal_processing::nodes::sinks::MAX_ANNOTATION_NS;
+use signal_processing::events::MAX_ANNOTATION_NS;
 use signal_processing::{Annotation, AnnotationFold, ChunkedMipmap, Sample, WordPresenceBucket};
 
 use crate::lanes::AnnotationVisual;
