@@ -36,7 +36,7 @@ pub(super) struct PanelState {
 impl Default for PanelState {
     fn default() -> Self {
         Self {
-            active_tab: None,
+            active_tab: Some(PanelTab::Node),
             width: 300.0,
         }
     }

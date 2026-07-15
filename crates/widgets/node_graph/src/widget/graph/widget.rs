@@ -498,7 +498,21 @@ impl NodeGraphWidget {
 mod tests {
     use egui::{Pos2, Rect};
 
-    use super::graph_pointer;
+    use super::{GraphPanelTab, GraphUiPrefs, NodeGraphWidget, graph_pointer};
+    use crate::runtime::NodeTypeRegistry;
+
+    #[test]
+    fn node_panel_is_open_by_default_and_restored_preferences_win() {
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        assert_eq!(widget.ui_prefs().panel_tab, Some(GraphPanelTab::Node));
+
+        widget.set_ui_prefs(GraphUiPrefs {
+            panel_width: 280.0,
+            panel_tab: None,
+            minimap_visible: true,
+        });
+        assert_eq!(widget.ui_prefs().panel_tab, None);
+    }
 
     #[test]
     fn floating_panel_blocks_graph_pointer_only_inside_its_bounds() {
