@@ -360,6 +360,12 @@ impl GraphState {
             .any(|connection| connection.to == socket)
     }
 
+    pub fn is_output_connected(&self, socket: SocketId) -> bool {
+        self.connections
+            .iter()
+            .any(|connection| connection.from == socket)
+    }
+
     pub fn sorted_node_ids(&self) -> Vec<NodeId> {
         let mut ids: Vec<NodeId> = self.nodes.keys().copied().collect();
         ids.sort_by_key(|id| id.0);
@@ -452,7 +458,9 @@ mod tests {
 
         let from = sid(src, 0, SocketDirection::Output);
         let to = sid(dst, 0, SocketDirection::Input);
+        assert!(!graph.is_output_connected(from));
         graph.add_connection(from, to);
+        assert!(graph.is_output_connected(from));
         assert_eq!(
             graph.nodes[&dst].inputs[0].resolved_type.as_deref(),
             Some("Float")
@@ -460,6 +468,7 @@ mod tests {
         assert_eq!(graph.nodes[&dst].inputs[0].effective_type(), "Float");
 
         assert!(graph.disconnect_input(to));
+        assert!(!graph.is_output_connected(from));
         assert_eq!(graph.nodes[&dst].inputs[0].resolved_type, None);
         assert_eq!(graph.nodes[&dst].inputs[0].effective_type(), "Signal");
     }

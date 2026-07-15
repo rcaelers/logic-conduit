@@ -382,7 +382,17 @@ impl NodeWidget {
                     continue;
                 };
                 let (color, shape) = registry.socket_display(sock);
-                draw_socket(painter, s(pos), sz(SOCKET_RADIUS), shape, color);
+                let socket_pos = s(pos);
+                draw_socket(painter, socket_pos, sz(SOCKET_RADIUS), shape, color);
+                draw_view_indicator_for_output(
+                    painter,
+                    graph,
+                    node_id,
+                    i,
+                    sock.show_in_view,
+                    socket_pos,
+                    view.zoom,
+                );
             }
 
             for (i, sock) in node.inputs.iter().enumerate() {
@@ -423,6 +433,15 @@ impl NodeWidget {
             let sp = s(pos);
             let (color, shape) = registry.socket_display(sock);
             draw_socket(painter, sp, sz(SOCKET_RADIUS), shape, color);
+            draw_view_indicator_for_output(
+                painter,
+                graph,
+                node_id,
+                i,
+                sock.show_in_view,
+                sp,
+                view.zoom,
+            );
             if !sock.has_control {
                 painter.text(
                     Pos2::new(sp.x - sz(SOCKET_RADIUS + 4.0), sp.y),
@@ -735,6 +754,51 @@ fn draw_socket(painter: &Painter, pos: Pos2, radius: f32, shape: SocketShape, co
             painter.add(egui::Shape::convex_polygon(pts, color, outline_stroke));
         }
     }
+}
+
+fn draw_view_indicator_for_output(
+    painter: &Painter,
+    graph: &GraphState,
+    node_id: NodeId,
+    output_index: usize,
+    show_in_view: bool,
+    socket_pos: Pos2,
+    zoom: f32,
+) {
+    if !show_in_view {
+        return;
+    }
+    let socket = SocketId {
+        node: node_id,
+        index: output_index,
+        direction: SocketDirection::Output,
+    };
+    let connected = graph.is_output_connected(socket);
+    let scale = zoom.clamp(0.65, 1.25);
+    let center = Pos2::new(
+        socket_pos.x + 13.0 * scale,
+        socket_pos.y - if connected { 8.0 * scale } else { 0.0 },
+    );
+    draw_view_indicator(painter, center, scale);
+}
+
+fn draw_view_indicator(painter: &Painter, center: Pos2, scale: f32) {
+    let half_width = 6.0 * scale;
+    let half_height = 3.7 * scale;
+    let points = vec![
+        Pos2::new(center.x - half_width, center.y),
+        Pos2::new(center.x - half_width * 0.45, center.y - half_height),
+        Pos2::new(center.x + half_width * 0.45, center.y - half_height),
+        Pos2::new(center.x + half_width, center.y),
+        Pos2::new(center.x + half_width * 0.45, center.y + half_height),
+        Pos2::new(center.x - half_width * 0.45, center.y + half_height),
+    ];
+    painter.add(egui::Shape::convex_polygon(
+        points,
+        Color32::from_black_alpha(210),
+        Stroke::new(1.2 * scale, Color32::from_rgb(190, 225, 205)),
+    ));
+    painter.circle_filled(center, 1.65 * scale, Color32::from_rgb(110, 205, 145));
 }
 
 fn socket_outline_color(color: Color32) -> Color32 {
