@@ -16,7 +16,7 @@
 /// Longest inferred display span for an instantaneous word when no recent
 /// cadence is available. Prevents sparse word events from painting a value
 /// continuously across an unrelated or gated-off interval.
-pub const MAX_ANNOTATION_NS: u64 = 1_000_000;
+pub const MAX_ANNOTATION_NS: u64 = 100_000_000;
 
 /// Returns the visual end of an instantaneous word with a known successor.
 ///

@@ -67,18 +67,29 @@ fn backend_contract_rejects_out_of_order_words() {
 
 #[test]
 fn backend_contract_sparse_instantaneous_words_leave_gaps_empty() {
+    const WORD_PERIOD_NS: u64 = 24_000_000;
     let (mut writer, store) = IndexedAnnotationWriter::create(config()).unwrap();
     writer
         .append_batch(&[
-            Word::new(1, 1_000),
-            Word::new(2, 1_100),
-            Word::new(3, 10_001_100),
+            Word::new(1, 1_000_000_000),
+            Word::new(2, 1_000_000_000 + WORD_PERIOD_NS),
+            Word::new(3, 1_000_000_000 + WORD_PERIOD_NS * 2),
+            Word::new(4, 6_000_000_000),
         ])
         .unwrap();
 
-    let exact = store.exact_window(0, 20_000_000, 10).unwrap();
-    assert_eq!(exact.annotations[0].end_ns, 1_100);
-    assert_eq!(exact.annotations[1].end_ns, 1_200);
-    assert!(exact.annotations[1].end_ns < exact.annotations[2].start_ns);
-    assert_eq!(store.nearest_boundary(1_199, 2).unwrap(), Some(1_200));
+    let exact = store.exact_window(0, 10_000_000_000, 10).unwrap();
+    assert_eq!(exact.annotations[0].end_ns, exact.annotations[1].start_ns);
+    assert_eq!(exact.annotations[1].end_ns, exact.annotations[2].start_ns);
+    assert_eq!(
+        exact.annotations[2].end_ns,
+        exact.annotations[2].start_ns + WORD_PERIOD_NS
+    );
+    assert!(exact.annotations[2].end_ns < exact.annotations[3].start_ns);
+    assert_eq!(
+        store
+            .nearest_boundary(exact.annotations[2].end_ns - 1, 2)
+            .unwrap(),
+        Some(exact.annotations[2].end_ns)
+    );
 }
