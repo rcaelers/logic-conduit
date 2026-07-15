@@ -93,11 +93,10 @@ impl ProcessNode for UartDemoSource {
             .and_then(|port| port.get::<Sample>())
             .ok_or_else(|| WorkError::NodeError("Missing rx output".to_string()))?;
         let samples = self.samples();
-        for sample in &samples {
-            output.send(*sample)?;
-        }
+        let count = samples.len();
+        output.send_batch(samples)?;
         self.emitted = true;
-        Ok(samples.len())
+        Ok(count)
     }
 }
 

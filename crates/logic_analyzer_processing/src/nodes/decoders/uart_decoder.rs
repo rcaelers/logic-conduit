@@ -317,13 +317,18 @@ impl ProcessNode for UartDecoder {
         }
         if let Some(bits_out) = bits_out {
             let bit_duration = bit_ns.round() as u64;
-            for (index, bit) in bits.into_iter().enumerate() {
-                bits_out.send(Word::spanning(
-                    u64::from(bit),
-                    t0 + ((1.0 + index as f64) * bit_ns).round() as u64,
-                    bit_duration,
-                ))?;
-            }
+            let annotations = bits
+                .into_iter()
+                .enumerate()
+                .map(|(index, bit)| {
+                    Word::spanning(
+                        u64::from(bit),
+                        t0 + ((1.0 + index as f64) * bit_ns).round() as u64,
+                        bit_duration,
+                    )
+                })
+                .collect();
+            bits_out.send_batch(annotations)?;
         }
         // The word spans its whole frame: start edge through the stop bits.
         if let Some(words_out) = words_out {
@@ -335,19 +340,22 @@ impl ProcessNode for UartDecoder {
         }
         if let Some(frame_out) = frame_out {
             let bit_duration = bit_ns.round() as u64;
-            frame_out.send(Word::spanning(u64::MAX, t0, bit_duration))?;
-            frame_out.send(Word::spanning(
-                if frame_error { u64::MAX - 2 } else { value },
-                t0 + bit_duration,
-                bit_duration * data_bits as u64,
-            ))?;
+            let mut annotations = vec![
+                Word::spanning(u64::MAX, t0, bit_duration),
+                Word::spanning(
+                    if frame_error { u64::MAX - 2 } else { value },
+                    t0 + bit_duration,
+                    bit_duration * data_bits as u64,
+                ),
+            ];
             if stop_bits.bits() > 0.0 {
-                frame_out.send(Word::spanning(
+                annotations.push(Word::spanning(
                     u64::MAX - 1,
                     t0 + bit_duration * (data_bits as u64 + 1),
                     (stop_bits.bits() * bit_ns).round() as u64,
-                ))?;
+                ));
             }
+            frame_out.send_batch(annotations)?;
         }
         self.finished = rx.is_shutdown();
         Ok(1)

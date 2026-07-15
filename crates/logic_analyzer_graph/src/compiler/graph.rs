@@ -1170,7 +1170,9 @@ mod tests {
 
     use logic_analyzer_processing::BinaryFileWriter;
     use node_graph::{NodeDef, NodeGraphWidget};
-    use signal_processing::{ConfigValue, Pipeline, Sample, Trigger, Word};
+    use signal_processing::{
+        ConfigValue, CooperativeManager, NodeSpec, Pipeline, Sample, Trigger, Word,
+    };
 
     use super::*;
     use crate::nodes;
@@ -1564,6 +1566,54 @@ mod tests {
         assert_eq!(lanes.len(), 2);
         assert_eq!(lanes[0].1.kind, PortKind::of::<Sample>());
         assert_eq!(lanes[1].1.kind, PortKind::of::<Word>());
+    }
+
+    #[test]
+    fn uart_bits_view_completes_under_cooperative_runner() {
+        let mut widget = uart_demo_widget();
+        let decoder = node_by_def(&widget, "UART Decoder");
+        let bits = output_index(&widget, decoder, "Bits");
+        widget.graph_mut().nodes.get_mut(&decoder).unwrap().outputs[bits].show_in_view = true;
+
+        let registry = BuilderRegistry::standard();
+        let compiled = lower(widget.graph(), &registry).unwrap();
+        assert!(
+            compiled
+                .edges
+                .iter()
+                .any(|edge| edge.from == (decoder, "bits".to_owned()))
+        );
+        let mut manager = CooperativeManager::new();
+        let mut names = HashMap::new();
+        let mut ctx = CompileCtx::default();
+
+        for id in topo_order(&compiled) {
+            let node = compiled_node(&compiled, id);
+            let builder = registry.get(&node.builder).unwrap();
+            ctx.viewer_word_caches.clone_from(&node.viewer_word_caches);
+            let process = builder
+                .build(&node.runtime_name, &node.state, &node.resolved, &mut ctx)
+                .unwrap();
+            let inputs = input_subs(&compiled, id, process.as_ref(), &names).unwrap();
+            manager
+                .add_node_deferred(NodeSpec {
+                    name: node.runtime_name.clone(),
+                    node: process,
+                    inputs,
+                })
+                .unwrap();
+            names.insert(id, node.runtime_name.clone());
+        }
+
+        manager.start_all_deferred().unwrap();
+        for _ in 0..100 {
+            manager.pump(256);
+            if manager.is_finished() {
+                break;
+            }
+        }
+
+        assert!(manager.is_finished());
     }
 
     #[test]

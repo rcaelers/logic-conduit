@@ -167,7 +167,14 @@ impl<T: Clone + Send> SharedSenders<T> {
         let mut inner = self.inner.lock().unwrap();
         inner.closed = true;
         for subscriber in inner.subscribers.drain(..) {
-            let _ = subscriber.tx.send(ChannelMessage::EndOfStream);
+            // Completion must never wait for capacity. In particular, the
+            // cooperative wasm runner calls this on its only thread, where a
+            // blocking send to a full channel would prevent the consumer
+            // from ever draining that channel. When the EOS envelope does
+            // not fit, dropping the final sender is equivalent: receivers
+            // first drain the queued values, then observe disconnection as
+            // `WorkError::Shutdown`.
+            let _ = subscriber.tx.try_send(ChannelMessage::EndOfStream);
         }
     }
 
@@ -689,6 +696,20 @@ mod shared_tests {
 
         let (_, late) = shared.subscribe(8, OverflowPolicy::Block);
         assert!(matches!(late.recv(), Ok(ChannelMessage::EndOfStream)));
+    }
+
+    #[test]
+    fn close_does_not_block_when_subscriber_is_full() {
+        let shared = SharedSenders::<Sample>::new(false);
+        let sender = Sender::from_shared(shared.clone());
+        let (_, rx) = shared.subscribe(1, OverflowPolicy::Block);
+        let sample = Sample::new(true, 42);
+
+        sender.send(sample).unwrap();
+        shared.close();
+
+        assert!(matches!(rx.recv(), Ok(ChannelMessage::Sample(value)) if value == sample));
+        assert!(rx.recv().is_err(), "disconnect after queued values is EOS");
     }
 
     #[test]
