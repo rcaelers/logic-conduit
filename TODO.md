@@ -11,6 +11,58 @@
 - Display live-source snapshots in the viewer through the same `CaptureDataSource` boundary
   used by file captures.
 
+### Plugin-extensible viewer payloads
+
+`ViewerLaneKind`, `ViewerValueKind`, `DerivedLaneData`, `LaneBuffer`, the synthetic Viewer
+socket, and `ViewerBuilder` currently form a closed list of payloads the viewer understands.
+Number and text viewing may remain as the temporary implementation, but the viewer must become
+open to plugin-defined socket and value types. A plugin-defined camera frame, for example, must
+be able to register timestamp extraction, storage/sampling, a thumbnail lane, and its default
+presentation without editing a generic crate.
+
+- Write the viewer-payload extension design before changing the implementation. Preserve the
+  existing crate boundaries, platform-neutral API, bounded rendering rules, and the invariant
+  that plugin code is never called while a derived-lane lock is held.
+- Add a viewer-payload registry keyed by the existing open `PortKind`/payload `TypeId`. Extend
+  `PluginContext` with one registration operation that associates a plugin payload type with
+  its typed ingest factory, timeline semantics, storage/query adapter, default badge/group, and
+  renderer. Registration must compose with `register_payload::<T>()`; adding a type must not
+  require a match arm in `logic_analyzer_graph`, `signal_processing`, or
+  `logic_analyzer_viewer`.
+- Replace the Viewer's hardcoded accepted-kind list and the synthetic socket's type-name list
+  with registry-driven negotiation or a true viewable-payload wildcard. Keep unsupported output
+  types out of the View panel, and report a clear compile error if a saved or explicitly wired
+  graph requests viewing for a payload whose adapter is unavailable.
+- Replace `ViewerLaneKind`/`LaneBuffer` dispatch with an object-safe lane-ingest boundary created
+  by a typed registration factory. The factory must still construct the correctly typed runtime
+  `PortSchema` and drain the corresponding `InputPort`, while the generic `ViewerSink` only
+  schedules lanes, applies backpressure/retention policy, and publishes progress.
+- Replace the closed `DerivedLaneData` and `ViewerValueKind` representation with registered lane
+  data/query handles. Separate typed append state from immutable UI snapshots so arbitrary
+  values do not require conversion to strings or integers. Each adapter supplies timestamp/span
+  extraction, timeline extent, bounded visible-window sampling, dense/activity fallback, and an
+  optional indexed or custom storage capability.
+- Generalize `ViewerLaneFrame` and `ViewerLaneRenderer` beyond word-style annotation formatting.
+  A renderer must receive a bounded, type-safe-or-contract-checked snapshot plus a restricted
+  drawing context containing row geometry, clipping, time transforms, theme information, and
+  interaction hooks. This must support custom content such as camera thumbnails without giving
+  plugins access to `LogicAnalyzerViewer` internals or locked runtime storage.
+- Retain reusable built-in adapters for digital signals, words, triggers, numbers, and text, but
+  register them through the same public mechanism plugins use. Default singleton presentation,
+  cursor snapping, timeline fitting, row activity, retention, and native/wasm behavior must be
+  capabilities of the registered adapter rather than exhaustive matches over built-in variants.
+- Define saved-graph compatibility for Viewer sockets and `show_in_view` outputs. Migrate legacy
+  built-in lanes explicitly, preserve their visual behavior, and show a user-visible warning for
+  missing plugin payload/presentation registrations.
+- Add an example plugin payload such as `CameraFrame { timestamp_ns, image }` with a custom socket,
+  source node, bounded in-memory sampler, and thumbnail renderer. Use it as the end-to-end proof
+  that a new value type is viewable through both an explicit Viewer connection and the View panel
+  without modifying generic source files.
+- Add architecture and contract tests covering plugin registration, duplicate/missing adapters,
+  typed channel construction, auto-view negotiation, retention and dense snapshots, timeline
+  extent, renderer lock release, native/wasm compilation, and removal of hardcoded built-in type
+  checks from the generic viewer path.
+
 Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN.md) and [Pipeline Design](docs/PIPELINE_DESIGN.md).
 
 ## Capture sources
