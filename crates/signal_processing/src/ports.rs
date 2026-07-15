@@ -19,6 +19,18 @@ pub enum PortDirection {
     Output,
 }
 
+/// How much streamed input a node needs before one `work()` call is safe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StreamReadiness {
+    /// One queued item (or end-of-stream) is sufficient.
+    #[default]
+    Item,
+    /// The finite producer must finish before the consumer starts. This is
+    /// for block-oriented nodes that perform unbounded lookahead on an
+    /// auxiliary stream during one `work()` call.
+    Complete,
+}
+
 /// Schema describing a port's metadata
 #[derive(Debug, Clone)]
 pub struct PortSchema {
@@ -41,6 +53,9 @@ pub struct PortSchema {
     /// `type_id`, so there's no separate "accepted kinds" concept to
     /// declare on the consuming side.
     pub sample_kinds: Vec<SampleKind>,
+    /// Cooperative scheduling requirement for this input. Threaded runners
+    /// can block independently and therefore do not need to consult it.
+    pub stream_readiness: StreamReadiness,
 }
 
 impl PortSchema {
@@ -57,6 +72,7 @@ impl PortSchema {
             direction,
             protocols: vec![ProtocolKind::Stream],
             sample_kinds: Vec::new(),
+            stream_readiness: StreamReadiness::Item,
         }
     }
 
@@ -70,6 +86,13 @@ impl PortSchema {
     /// preferred first.
     pub fn with_sample_kinds(mut self, sample_kinds: Vec<SampleKind>) -> Self {
         self.sample_kinds = sample_kinds;
+        self
+    }
+
+    /// Requires a finite streamed producer to close before this input is
+    /// considered ready by a cooperative runner.
+    pub fn with_complete_stream(mut self) -> Self {
+        self.stream_readiness = StreamReadiness::Complete;
         self
     }
 }

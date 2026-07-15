@@ -2,6 +2,7 @@ mod binary_decoder;
 mod buffer;
 mod catalog;
 mod counter;
+mod demo_capture_source;
 mod file_source;
 mod file_writer;
 mod formatter;
@@ -47,6 +48,7 @@ pub use binary_decoder::{BinaryDecoder, BinaryDecoderState};
 pub use buffer::{Buffer, BufferState};
 pub(crate) use catalog::standard_builders;
 pub use counter::{Counter, CounterState};
+pub use demo_capture_source::{CapturePreviewSignal, DemoCaptureSource, DemoCaptureSourceState};
 pub use file_source::{DslFileSource, DslFileSourceState};
 pub use file_writer::{FileWriter, FileWriterState};
 pub use formatter::{StringFormatter, StringFormatterState};
@@ -60,3 +62,12 @@ pub use uart_decoder::{UartDecoder, UartDecoderState, selected_baud_rate};
 pub use uart_demo_source::{UartDemoSource, UartDemoSourceState};
 pub use viewer::{Viewer, ViewerState};
 pub use word_matcher::{WordMatcher, WordMatcherState, default_match_op, default_trigger_at};
+
+/// Finds an in-memory raw-capture preview supplied by a concrete source node.
+pub fn capture_preview(
+    graph: &node_graph::GraphState,
+) -> Option<(node_graph::NodeId, Vec<CapturePreviewSignal>)> {
+    graph.nodes.iter().find_map(|(&id, node)| {
+        demo_capture_source::capture_preview(node).map(|preview| (id, preview))
+    })
+}

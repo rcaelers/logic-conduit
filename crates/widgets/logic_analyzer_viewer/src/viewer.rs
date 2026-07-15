@@ -145,6 +145,28 @@ impl LogicAnalyzerViewer {
         self.ensure_row_order();
     }
 
+    /// Replaces the raw channel rows for a finite in-memory capture and fits
+    /// the initial view to its full duration. This is the memory-backed
+    /// counterpart of [`Self::set_capture_path`].
+    pub fn set_channels_with_duration(&mut self, signals: Vec<ChannelSignal>, duration_us: f64) {
+        self.capture_path = None;
+        self.capture_info = None;
+        self.channel_names.clear();
+        self.row_rename = None;
+        self.sampler = None;
+        self.sampled_key = None;
+        self.worker_responses = None;
+        self.index_progress = None;
+        self.cursors.clear();
+        self.drag_cursor = None;
+        self.hover_measurement = None;
+        self.set_channels(signals);
+        self.visible_start_us = 0.0;
+        self.visible_span_us = duration_us.max(1.0);
+        self.fit_to_capture = true;
+        self.status = "In-memory capture ready".to_owned();
+    }
+
     /// `open` constructs the capture-specific [`CaptureDataSource`] for
     /// `path` — the viewer only knows the generic trait, not which concrete
     /// source (file format, live capture, …) produced it.

@@ -48,6 +48,24 @@ pub struct App {
 }
 
 impl App {
+    fn set_capture_preview(&mut self, signals: Vec<nodes::CapturePreviewSignal>) {
+        let duration_us = signals
+            .iter()
+            .flat_map(|signal| signal.transitions.last().map(|(time, _)| *time))
+            .fold(1.0_f64, f64::max);
+        let channels = signals
+            .into_iter()
+            .map(|signal| logic_analyzer_viewer::ChannelSignal {
+                index: signal.index,
+                name: signal.name,
+                initial: signal.initial,
+                transitions: signal.transitions,
+            })
+            .collect();
+        self.logic_analyzer
+            .set_channels_with_duration(channels, duration_us);
+    }
+
     pub fn new(cc: &eframe::CreationContext) -> Self {
         Self::new_with_plugins(cc, |_ctx| {})
     }

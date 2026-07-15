@@ -108,7 +108,9 @@ File Writer, TGCK Recorder, Viewer (variadic input accepting
 `Signal | Words | Trigger`).
 
 `nodes::populate_startup` builds the CCD capture graph programmatically (the shipped
-`graphs/spi_controlled_decode.json`); `populate_uart_demo` is the wasm startup graph.
+`graphs/spi_controlled_decode.json`). The wasm app loads
+`graphs/wasm_decoder_demo.json`, a self-contained one-minute SPI-controlled
+parallel-bus capture backed by `Demo Capture Source`.
 
 ## Graph → pipeline compiler
 

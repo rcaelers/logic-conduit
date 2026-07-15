@@ -132,16 +132,28 @@ impl App {
     pub(super) fn platform_sync_capture(&mut self) {
         match nodes::capture_file_source(self.node_graph.graph()) {
             Some(nodes::CaptureFileSource::Dsl(file)) => {
+                self.platform.preview_source = None;
                 self.logic_analyzer.set_capture_path(file, |path| {
                     DslFileCaptureDataSource::open(path).map_err(|e| e.to_string())
                 })
             }
             Some(nodes::CaptureFileSource::Sigrok(file)) => {
+                self.platform.preview_source = None;
                 self.logic_analyzer.set_capture_path(file, |path| {
                     SigrokFileCaptureDataSource::open(path).map_err(|e| e.to_string())
                 })
             }
-            None => self.logic_analyzer.clear_capture(),
+            None => match nodes::capture_preview(self.node_graph.graph()) {
+                Some((source, signals)) if self.platform.preview_source != Some(source) => {
+                    self.platform.preview_source = Some(source);
+                    self.set_capture_preview(signals);
+                }
+                Some(_) => {}
+                None => {
+                    self.platform.preview_source = None;
+                    self.logic_analyzer.clear_capture();
+                }
+            },
         }
     }
 

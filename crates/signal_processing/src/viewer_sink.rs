@@ -630,6 +630,10 @@ impl ProcessNode for ViewerSink {
         !self.lanes.is_empty() && self.lanes.iter().all(|lane| lane.eos)
     }
 
+    fn input_scheduling(&self) -> crate::node::InputScheduling {
+        crate::node::InputScheduling::Any
+    }
+
     fn num_inputs(&self) -> usize {
         self.lanes.len()
     }

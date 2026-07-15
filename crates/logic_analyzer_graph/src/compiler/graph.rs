@@ -1189,6 +1189,52 @@ mod tests {
         widget
     }
 
+    fn binary_decoder_demo_widget() -> NodeGraphWidget {
+        let mut widget = NodeGraphWidget::new(nodes::build_registry());
+        nodes::populate_binary_decoder_demo(&mut widget);
+        widget
+    }
+
+    fn run_cooperatively(widget: &NodeGraphWidget) -> (CompiledGraph, Vec<(String, u64)>) {
+        let registry = BuilderRegistry::standard();
+        let compiled = lower(widget.graph(), &registry).unwrap();
+        let mut manager = CooperativeManager::new();
+        let mut names = HashMap::new();
+        let mut ctx = CompileCtx::default();
+
+        for id in topo_order(&compiled) {
+            let node = compiled_node(&compiled, id);
+            let builder = registry.get(&node.builder).unwrap();
+            ctx.viewer_word_caches.clone_from(&node.viewer_word_caches);
+            let process = builder
+                .build(&node.runtime_name, &node.state, &node.resolved, &mut ctx)
+                .unwrap();
+            let inputs = input_subs(&compiled, id, process.as_ref(), &names).unwrap();
+            manager
+                .add_node_deferred(NodeSpec {
+                    name: node.runtime_name.clone(),
+                    node: process,
+                    inputs,
+                })
+                .unwrap();
+            names.insert(id, node.runtime_name.clone());
+        }
+
+        manager.start_all_deferred().unwrap();
+        for _ in 0..1_000 {
+            manager.pump(256);
+            if manager.is_finished() {
+                break;
+            }
+        }
+        assert!(
+            manager.is_finished(),
+            "unfinished: {:?}",
+            manager.progress()
+        );
+        (compiled, manager.progress())
+    }
+
     #[test]
     fn startup_graph_lowers() {
         let widget = startup_widget();
@@ -1575,45 +1621,36 @@ mod tests {
         let bits = output_index(&widget, decoder, "Bits");
         widget.graph_mut().nodes.get_mut(&decoder).unwrap().outputs[bits].show_in_view = true;
 
-        let registry = BuilderRegistry::standard();
-        let compiled = lower(widget.graph(), &registry).unwrap();
+        let (compiled, _) = run_cooperatively(&widget);
         assert!(
             compiled
                 .edges
                 .iter()
                 .any(|edge| edge.from == (decoder, "bits".to_owned()))
         );
-        let mut manager = CooperativeManager::new();
-        let mut names = HashMap::new();
-        let mut ctx = CompileCtx::default();
+    }
 
-        for id in topo_order(&compiled) {
-            let node = compiled_node(&compiled, id);
-            let builder = registry.get(&node.builder).unwrap();
-            ctx.viewer_word_caches.clone_from(&node.viewer_word_caches);
-            let process = builder
-                .build(&node.runtime_name, &node.state, &node.resolved, &mut ctx)
-                .unwrap();
-            let inputs = input_subs(&compiled, id, process.as_ref(), &names).unwrap();
-            manager
-                .add_node_deferred(NodeSpec {
-                    name: node.runtime_name.clone(),
-                    node: process,
-                    inputs,
-                })
-                .unwrap();
-            names.insert(id, node.runtime_name.clone());
-        }
+    #[test]
+    fn binary_decoder_demo_decodes_both_protocols_cooperatively() {
+        let widget = binary_decoder_demo_widget();
+        let (compiled, progress) = run_cooperatively(&widget);
+        let items_for = |builder_name: &str| {
+            let runtime_name = &compiled
+                .nodes
+                .iter()
+                .find(|node| node.builder == builder_name)
+                .unwrap()
+                .runtime_name;
+            progress
+                .iter()
+                .find(|(name, _)| name == runtime_name)
+                .unwrap()
+                .1
+        };
 
-        manager.start_all_deferred().unwrap();
-        for _ in 0..100 {
-            manager.pump(256);
-            if manager.is_finished() {
-                break;
-            }
-        }
-
-        assert!(manager.is_finished());
+        assert_eq!(items_for("Demo Capture Source"), 60_000);
+        assert_eq!(items_for("SPI Decoder"), 60);
+        assert_eq!(items_for("Binary Decoder"), 96);
     }
 
     #[test]

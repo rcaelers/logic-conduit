@@ -1,10 +1,12 @@
 //! Concrete processing nodes used by logic-analyzer graphs.
 
 pub mod decoders;
+mod demo_capture_source;
 pub mod logic;
 pub mod sinks;
 mod uart_demo_source;
 
+pub use demo_capture_source::DemoCaptureSource;
 pub use uart_demo_source::UartDemoSource;
 
 std::cfg_select! {

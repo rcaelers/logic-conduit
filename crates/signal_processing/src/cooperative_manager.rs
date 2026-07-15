@@ -54,8 +54,8 @@ use crossbeam_channel::Receiver as CrossbeamReceiver;
 use super::errors::WorkError;
 use super::events::{NumberSample, TextSample, Trigger, Word};
 use super::manager::{DisconnectEvent, InputSub, NodeSpec};
-use super::node::{ConfigOutcome, NodeConfig, ProcessNode};
-use super::ports::{InputPort, OutputPort};
+use super::node::{ConfigOutcome, InputScheduling, NodeConfig, ProcessNode};
+use super::ports::{InputPort, OutputPort, StreamReadiness};
 use super::sample::{Sample, SampleBlock};
 use super::sender::ChannelMessage;
 use super::type_registry::{ErasedSharedSenders, TYPE_REGISTRY};
@@ -103,18 +103,34 @@ enum Probe {
 }
 
 impl Probe {
+    fn producer_closed(&self) -> bool {
+        match self {
+            Self::Disconnected => true,
+            Self::Sample(_, closed)
+            | Self::SampleBlock(_, closed)
+            | Self::Word(_, closed)
+            | Self::Trigger(_, closed)
+            | Self::Number(_, closed)
+            | Self::Text(_, closed) => closed.load(Ordering::Acquire),
+        }
+    }
+
     /// True when calling `work()` will not block: a message (possibly the
     /// end-of-stream sentinel) is already queued, or the producer has
     /// finished (so any further wait would be forever).
-    fn is_ready(&self) -> bool {
+    fn is_ready(&self, readiness: StreamReadiness) -> bool {
+        let ready = |rx_empty: bool, closed: &AtomicBool| match readiness {
+            StreamReadiness::Item => !rx_empty || closed.load(Ordering::Acquire),
+            StreamReadiness::Complete => closed.load(Ordering::Acquire),
+        };
         match self {
             Self::Disconnected => true,
-            Self::Sample(rx, closed) => !rx.is_empty() || closed.load(Ordering::Acquire),
-            Self::SampleBlock(rx, closed) => !rx.is_empty() || closed.load(Ordering::Acquire),
-            Self::Word(rx, closed) => !rx.is_empty() || closed.load(Ordering::Acquire),
-            Self::Trigger(rx, closed) => !rx.is_empty() || closed.load(Ordering::Acquire),
-            Self::Number(rx, closed) => !rx.is_empty() || closed.load(Ordering::Acquire),
-            Self::Text(rx, closed) => !rx.is_empty() || closed.load(Ordering::Acquire),
+            Self::Sample(rx, closed) => ready(rx.is_empty(), closed),
+            Self::SampleBlock(rx, closed) => ready(rx.is_empty(), closed),
+            Self::Word(rx, closed) => ready(rx.is_empty(), closed),
+            Self::Trigger(rx, closed) => ready(rx.is_empty(), closed),
+            Self::Number(rx, closed) => ready(rx.is_empty(), closed),
+            Self::Text(rx, closed) => ready(rx.is_empty(), closed),
         }
     }
 }
@@ -161,6 +177,8 @@ struct CooperativeNode {
     inputs: Vec<InputPort>,
     outputs: Vec<OutputPort>,
     probes: Vec<Probe>,
+    input_readiness: Vec<StreamReadiness>,
+    input_scheduling: InputScheduling,
     output_lists: HashMap<String, OutputList>,
     input_subs: Vec<(String, String, u64)>,
     items: u64,
@@ -199,7 +217,12 @@ impl CooperativeManager {
         }
         let NodeSpec { name, node, inputs } = spec;
 
+        let input_scheduling = node.input_scheduling();
         let input_schemas = node.input_schema();
+        let input_readiness = input_schemas
+            .iter()
+            .map(|schema| schema.stream_readiness)
+            .collect();
         let output_schemas = node.output_schema();
         if inputs.len() != input_schemas.len() {
             return Err(format!(
@@ -289,6 +312,8 @@ impl CooperativeManager {
                 inputs: input_ports,
                 outputs: output_ports,
                 probes,
+                input_readiness,
+                input_scheduling,
                 output_lists,
                 input_subs,
                 items: 0,
@@ -351,7 +376,12 @@ impl CooperativeManager {
             .ok_or_else(|| format!("node '{name}' not running"))?;
         self.detach(&old);
 
+        let input_scheduling = node.input_scheduling();
         let input_schemas = node.input_schema();
+        let input_readiness = input_schemas
+            .iter()
+            .map(|schema| schema.stream_readiness)
+            .collect();
         if inputs.len() != input_schemas.len() {
             return Err(format!(
                 "node '{name}': {} input specs for {} ports",
@@ -420,6 +450,8 @@ impl CooperativeManager {
                 inputs: input_ports,
                 outputs: output_ports,
                 probes,
+                input_readiness,
+                input_scheduling,
                 output_lists: old.output_lists,
                 input_subs,
                 items: old.items,
@@ -505,7 +537,28 @@ impl CooperativeManager {
                 if node.done {
                     continue;
                 }
-                if !node.probes.iter().all(Probe::is_ready) {
+                let ready = node
+                    .probes
+                    .iter()
+                    .zip(&node.input_readiness)
+                    .map(|(probe, readiness)| probe.is_ready(*readiness));
+                let inputs_ready = match node.input_scheduling {
+                    InputScheduling::All => ready.clone().all(|ready| ready),
+                    InputScheduling::Any => {
+                        // A closed input alone is not enough to call a
+                        // multiplexing node while another producer remains
+                        // live: the node can consume that input's EOS and
+                        // then block selecting the still-empty live input.
+                        // Once every producer is closed, one final call is
+                        // safe and lets the node drain/observe shutdown.
+                        let all_closed = node.probes.iter().all(Probe::producer_closed);
+                        all_closed
+                            || ready
+                                .zip(&node.probes)
+                                .any(|(ready, probe)| ready && !probe.producer_closed())
+                    }
+                };
+                if !inputs_ready {
                     continue;
                 }
                 // Symmetric with the input-side check above: a node whose

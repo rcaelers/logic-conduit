@@ -22,6 +22,7 @@ use node_graph::{NodeDef, NodeTypeRegistry, SocketDef, SocketShape};
 use super::binary_decoder::{self, BinaryDecoder, BinaryDecoderState};
 use super::buffer::Buffer;
 use super::counter::Counter;
+use super::demo_capture_source::DemoCaptureSource;
 use super::file_source::DslFileSource;
 use super::file_writer::FileWriter;
 use super::formatter::StringFormatter;
@@ -156,6 +157,7 @@ pub(super) const COLOR_OUTPUT: Color32 = Color32::from_rgb(160, 80, 60);
 pub fn build_registry() -> NodeTypeRegistry {
     let mut registry = NodeTypeRegistry::new();
     super::registry_platform::register_nodes(&mut registry);
+    registry.register::<DemoCaptureSource>();
     registry.register::<UartDemoSource>();
     registry.register::<SpiDecoder>();
     registry.register::<UartDecoder>();
@@ -214,6 +216,109 @@ fn connect(
         direction: node_graph::SocketDirection::Input,
     };
     widget.graph_mut().add_connection(from_socket, to_socket);
+}
+
+#[cfg(test)]
+fn build_binary_decoder_demo(widget: &mut node_graph::NodeGraphWidget) {
+    use egui::Pos2;
+    use node_graph::{BoolValue, EnumValue, IntValue, StringValue};
+
+    let add = |widget: &mut node_graph::NodeGraphWidget, name: &str, x: f32, y: f32| {
+        widget
+            .add_node_at(name, Pos2::new(x, y))
+            .unwrap_or_else(|| panic!("unknown node type '{name}'"))
+    };
+
+    let source = add(widget, DemoCaptureSource::name(), 40.0, 300.0);
+    let spi = add(widget, SpiDecoder::name(), 360.0, 80.0);
+    let start = add(widget, WordMatcher::name(), 680.0, 40.0);
+    let stop = add(widget, WordMatcher::name(), 680.0, 230.0);
+    let counter = add(widget, Counter::name(), 960.0, 40.0);
+    let latch = add(widget, SrFlipFlop::name(), 960.0, 230.0);
+    let formatter = add(widget, StringFormatter::name(), 1240.0, 40.0);
+    let gate = add(widget, LogicGate::name(), 1198.4297, 592.2656);
+    let decoder = add(widget, BinaryDecoder::name(), 1520.0, 300.0);
+
+    widget.set_node_state(
+        spi,
+        serde_json::to_value(SpiDecoderState {
+            word_size: IntValue::new(8, 1, 64),
+            cpol: EnumValue::new(0, &["0", "1"]),
+            cpha: EnumValue::new(0, &["0", "1"]),
+            bit_order: EnumValue::new(0, &["MSB first", "LSB first"]),
+            cs_polarity: EnumValue::new(0, &["Active low", "Active high", "Disabled"]),
+            has_miso: BoolValue::new(true),
+        })
+        .unwrap(),
+    );
+    let matcher_state = |pattern: &str| {
+        serde_json::to_value(WordMatcherState {
+            pattern: StringValue::new(pattern),
+            mask: StringValue::new("0xFF"),
+            op: default_match_op(),
+            trigger_at: default_trigger_at(),
+            pulse_output: BoolValue::new(false),
+        })
+        .unwrap()
+    };
+    widget.set_node_state(start, matcher_state("0x9A"));
+    widget.set_node_state(stop, matcher_state("0xDE"));
+
+    let mut formatter_state = StringFormatter::state();
+    formatter_state.template.value = "Window {n:02}".to_owned();
+    widget.set_node_state(formatter, serde_json::to_value(formatter_state).unwrap());
+
+    let mut decoder_state = BinaryDecoder::state();
+    decoder_state.input_strategy.select("Packed stream");
+    widget.set_node_state(decoder, serde_json::to_value(decoder_state).unwrap());
+
+    for (id, title) in [
+        (source, "Demo"),
+        (start, "Match Start 0x9A"),
+        (stop, "Match Stop 0xDE"),
+        (gate, "Parallel Enable Gate"),
+        (decoder, "Parallel Decoder"),
+    ] {
+        widget.graph_mut().nodes.get_mut(&id).unwrap().title = title.to_owned();
+    }
+
+    connect(widget, (source, "Ch 7"), (spi, "CLK"));
+    connect(widget, (source, "Ch 6"), (spi, "MOSI"));
+    connect(widget, (source, "Ch 5"), (spi, "MISO"));
+    connect(widget, (source, "Ch 8"), (spi, "CS#"));
+    connect(widget, (spi, "MOSI Words"), (start, "Words"));
+    connect(widget, (spi, "MOSI Words"), (stop, "Words"));
+    connect(widget, (start, "Match"), (latch, "Set"));
+    connect(widget, (stop, "Match"), (latch, "Reset"));
+    connect(widget, (start, "Match"), (counter, "Trigger"));
+    connect(widget, (counter, "Count"), (formatter, "Value"));
+
+    connect(widget, (source, "Ch 8"), (gate, "In"));
+    connect(widget, (latch, "Q"), (gate, "In"));
+    connect(widget, (gate, "Out"), (decoder, "Enable"));
+    connect(widget, (source, "Ch 10"), (decoder, "Clock"));
+    for bit in 0..8 {
+        connect(widget, (source, &format!("Ch {bit}")), (decoder, "D"));
+    }
+    for (node, output) in [
+        (latch, "Q"),
+        (gate, "Out"),
+        (start, "Match"),
+        (stop, "Match"),
+        (spi, "MOSI Words"),
+        (spi, "MISO Words"),
+        (decoder, "Words"),
+    ] {
+        let output = output_index(widget, node, output);
+        widget.graph_mut().nodes.get_mut(&node).unwrap().outputs[output].show_in_view = true;
+    }
+}
+
+/// Loads the self-contained controlled-decoder graph used by the web app.
+pub fn populate_binary_decoder_demo(widget: &mut node_graph::NodeGraphWidget) {
+    let graph = serde_json::from_str(include_str!("../../../../graphs/wasm_decoder_demo.json"))
+        .expect("checked-in wasm decoder demo graph is valid");
+    widget.set_graph(graph);
 }
 
 /// Builds the CCD analysis pipeline (`graphs/spi_controlled_decode.json`) as the
@@ -503,6 +608,64 @@ mod tests {
             saved["connections"].as_array().map_or(0, Vec::len),
             generated["connections"].as_array().map_or(0, Vec::len)
         );
+    }
+
+    #[test]
+    fn checked_in_wasm_demo_matches_builder_and_lowers() {
+        use crate::compiler::{BuilderRegistry, lower};
+
+        let saved: node_graph::GraphState =
+            serde_json::from_str(include_str!("../../../../graphs/wasm_decoder_demo.json"))
+                .expect("checked-in wasm demo should be valid JSON");
+        let mut generated = NodeGraphWidget::new(build_registry());
+        build_binary_decoder_demo(&mut generated);
+
+        let without_positions = |mut graph: serde_json::Value| {
+            for node in graph["nodes"].as_object_mut().unwrap().values_mut() {
+                node.as_object_mut().unwrap().remove("pos");
+            }
+            graph
+        };
+        assert_eq!(
+            without_positions(serde_json::to_value(&saved).unwrap()),
+            without_positions(serde_json::to_value(generated.graph()).unwrap())
+        );
+
+        let mut loaded = NodeGraphWidget::new(build_registry());
+        loaded.set_graph(saved);
+        assert!(
+            loaded
+                .graph()
+                .nodes
+                .values()
+                .all(|node| node.type_name != Viewer::name())
+        );
+        assert_eq!(
+            loaded
+                .graph()
+                .nodes
+                .values()
+                .flat_map(|node| &node.outputs)
+                .filter(|output| output.show_in_view)
+                .count(),
+            7
+        );
+        let (_, preview) = crate::nodes::capture_preview(loaded.graph())
+            .expect("demo source should provide a pre-run capture preview");
+        assert_eq!(preview.len(), 10);
+        assert_eq!(preview.first().unwrap().name, "Ch 0");
+        assert_eq!(preview.last().unwrap().name, "Ch 10");
+        assert_eq!(
+            preview.last().unwrap().transitions.last().unwrap().0,
+            59_999_000.0
+        );
+        let compiled = lower(loaded.graph(), &BuilderRegistry::standard())
+            .expect("wasm demo should lower cleanly");
+        // Counter/formatter are retained in the editable graph to mirror the
+        // native controlled pipeline's window-naming branch. With no wasm
+        // filesystem writer sink, lowering correctly prunes that dead branch.
+        assert_eq!(loaded.graph().nodes.len(), 9);
+        assert_eq!(compiled.nodes.len(), 8);
     }
 
     #[test]

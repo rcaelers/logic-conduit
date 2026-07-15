@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use super::binary_decoder::BinaryDecoderBuilder;
 use super::buffer::BufferBuilder;
 use super::counter::CounterBuilder;
+use super::demo_capture_source::DemoCaptureSourceBuilder;
 use super::formatter::FormatterBuilder;
 use super::logic_gate::LogicGateBuilder;
 use super::spi_decoder::SpiDecoderBuilder;
@@ -21,6 +22,10 @@ pub(crate) fn standard_builders() -> HashMap<String, Box<dyn RuntimeBuilder>> {
 
     super::registry_platform::register_builders(&mut builders);
 
+    builders.insert(
+        "Demo Capture Source".into(),
+        Box::new(DemoCaptureSourceBuilder),
+    );
     builders.insert("UART Demo Source".into(), Box::new(UartDemoSourceBuilder));
     builders.insert("SPI Decoder".into(), Box::new(SpiDecoderBuilder));
     builders.insert("UART Decoder".into(), Box::new(UartDecoderBuilder));

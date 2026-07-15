@@ -41,6 +41,18 @@ pub enum ConfigOutcome {
     NeedsRestart,
 }
 
+/// Which connected inputs must be ready before a cooperative scheduler may
+/// call a node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InputScheduling {
+    /// Every input is consumed together or may be read during the call.
+    #[default]
+    All,
+    /// The node multiplexes inputs and can make progress from any one of
+    /// them without waiting for the others.
+    Any,
+}
+
 /// A processing node that transforms data
 /// - Sources have 0 inputs and N outputs
 /// - Sinks have N inputs and 0 outputs
@@ -59,6 +71,14 @@ pub trait ProcessNode: Send {
     /// If false (default), the scheduler will call work() repeatedly in a loop.
     fn is_self_threading(&self) -> bool {
         false
+    }
+
+    /// Declares whether `work()` requires all inputs or can multiplex any
+    /// ready input. Threaded runners may block inside `work()` and ignore
+    /// this; cooperative runners use it to avoid both blocking and needless
+    /// head-of-line stalls.
+    fn input_scheduling(&self) -> InputScheduling {
+        InputScheduling::All
     }
 
     /// Number of input ports this node requires
@@ -163,6 +183,9 @@ impl ProcessNode for Box<dyn ProcessNode> {
     }
     fn is_self_threading(&self) -> bool {
         (**self).is_self_threading()
+    }
+    fn input_scheduling(&self) -> InputScheduling {
+        (**self).input_scheduling()
     }
     fn num_inputs(&self) -> usize {
         (**self).num_inputs()

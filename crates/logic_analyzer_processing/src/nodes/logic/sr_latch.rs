@@ -54,6 +54,10 @@ impl ProcessNode for SrLatch {
         &self.name
     }
 
+    fn input_scheduling(&self) -> signal_processing::node::InputScheduling {
+        signal_processing::node::InputScheduling::Any
+    }
+
     fn num_inputs(&self) -> usize {
         2
     }

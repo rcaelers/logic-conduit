@@ -1,12 +1,19 @@
-pub(crate) struct PlatformState;
+pub(crate) struct PlatformState {
+    pub(crate) preview_source: Option<node_graph::NodeId>,
+}
 
 impl PlatformState {
     pub(crate) fn restore(
         _cc: &eframe::CreationContext,
         widget: &mut node_graph::NodeGraphWidget,
     ) -> (Self, f32) {
-        logic_analyzer_graph::nodes::populate_uart_demo(widget);
-        (Self, 0.42)
+        logic_analyzer_graph::nodes::populate_binary_decoder_demo(widget);
+        (
+            Self {
+                preview_source: None,
+            },
+            0.34,
+        )
     }
 
     pub(crate) fn recent_files(&self) -> &[std::path::PathBuf] {

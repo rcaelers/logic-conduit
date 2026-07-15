@@ -295,7 +295,8 @@ impl ProcessNode for ParallelDecoder {
                 1 + self.num_data_bits + 1,
                 PortDirection::Input,
             )
-            .with_protocols(vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream]),
+            .with_protocols(vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream])
+            .with_complete_stream(),
         );
 
         schemas

@@ -2,7 +2,6 @@
 
 pub mod nodes;
 
-pub use nodes::UartDemoSource;
 pub use nodes::decoders::{
     CsPolarity, ParallelDecoder, ParallelDecoderMetrics, ParallelDecoderMetricsSnapshot,
     ParallelInputStrategy, SpiDecoder, SpiMode, StrobeMode,
@@ -12,6 +11,7 @@ pub use nodes::logic::{
     WordMatcher,
 };
 pub use nodes::sinks::TgckRecorder;
+pub use nodes::{DemoCaptureSource, UartDemoSource};
 
 std::cfg_select! {
     target_arch = "wasm32" => {}

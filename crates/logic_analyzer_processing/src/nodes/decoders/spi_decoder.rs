@@ -377,6 +377,8 @@ impl SpiDecoder {
 
         // ── 4. Collect words from CLK within the CS window ───────────────
         let mut words_emitted: usize = 0;
+        let mut mosi_batch = Vec::new();
+        let mut miso_batch = Vec::new();
         let mut clk_position = cs_active_start;
 
         'word_loop: loop {
@@ -443,13 +445,20 @@ impl SpiDecoder {
                     miso_word,
                     timestamp as f64 / 1_000_000_000.0
                 );
-                if let Some(ref output) = mosi_output {
-                    output.send(Word::spanning(mosi_word, timestamp, duration))?;
+                if mosi_output.is_some() {
+                    mosi_batch.push(Word::spanning(mosi_word, timestamp, duration));
                 }
-                if let Some(ref output) = miso_output {
-                    output.send(Word::spanning(miso_word, timestamp, duration))?;
+                if miso_output.is_some() {
+                    miso_batch.push(Word::spanning(miso_word, timestamp, duration));
                 }
             }
+        }
+
+        if let Some(output) = mosi_output {
+            output.send_batch(mosi_batch)?;
+        }
+        if let Some(output) = miso_output {
+            output.send_batch(miso_batch)?;
         }
 
         self.tx_count += words_emitted as u64;
@@ -576,6 +585,8 @@ impl SpiDecoder {
 
         // ── 4. Collect words from CLK within the CS window ───────────────
         let mut words_emitted: usize = 0;
+        let mut mosi_batch = Vec::new();
+        let mut miso_batch = Vec::new();
 
         'word_loop: loop {
             let mut mosi_word: u64 = 0;
@@ -589,7 +600,11 @@ impl SpiDecoder {
             // CLK sampling edge arrives. CS is already fully consumed;
             // we use cs_inactive_time for bounds.
             loop {
-                let edge = clk.recv()?;
+                let edge = match clk.recv() {
+                    Ok(edge) => edge,
+                    Err(WorkError::Shutdown) => break 'word_loop,
+                    Err(error) => return Err(error),
+                };
 
                 // CLK edge past CS window → transaction is over
                 if edge.start_time_ns >= cs_inactive_time {
@@ -682,13 +697,20 @@ impl SpiDecoder {
                     miso_word,
                     timestamp as f64 / 1_000_000_000.0
                 );
-                if let Some(ref output) = mosi_output {
-                    output.send(Word::spanning(mosi_word, timestamp, duration))?;
+                if mosi_output.is_some() {
+                    mosi_batch.push(Word::spanning(mosi_word, timestamp, duration));
                 }
-                if let Some(ref output) = miso_output {
-                    output.send(Word::spanning(miso_word, timestamp, duration))?;
+                if miso_output.is_some() {
+                    miso_batch.push(Word::spanning(miso_word, timestamp, duration));
                 }
             }
+        }
+
+        if let Some(output) = mosi_output {
+            output.send_batch(mosi_batch)?;
+        }
+        if let Some(output) = miso_output {
+            output.send_batch(miso_batch)?;
         }
 
         // Write back mutable state
@@ -803,9 +825,10 @@ mod tests {
 
         let collect = |rx: crossbeam_channel::Receiver<ChannelMessage<Word>>| -> Vec<Word> {
             rx.try_iter()
-                .filter_map(|m| match m {
-                    ChannelMessage::Sample(w) => Some(w),
-                    _ => None,
+                .flat_map(|message| match message {
+                    ChannelMessage::Sample(word) => vec![word],
+                    ChannelMessage::Batch(words) => words,
+                    ChannelMessage::EndOfStream => vec![],
                 })
                 .collect()
         };
