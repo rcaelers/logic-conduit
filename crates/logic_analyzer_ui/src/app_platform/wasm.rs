@@ -12,7 +12,9 @@ impl PlatformState {
             Self {
                 preview_source: None,
             },
-            0.34,
+            // Four additional 30px waveform rows on a typical browser
+            // viewport, so all demo-derived lanes remain visible after Run.
+            0.50,
         )
     }
 
