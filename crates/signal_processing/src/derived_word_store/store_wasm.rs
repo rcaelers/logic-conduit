@@ -15,7 +15,7 @@ use super::super::super::query::{
     ExactAnnotationWindow, WordPresenceBucket,
 };
 use super::super::super::state::{LiveStoreMetadata, LiveStoreSnapshot, StoreStatus};
-use crate::events::{Annotation, Word};
+use crate::events::{Annotation, Word, instantaneous_word_end_ns};
 
 pub(crate) fn default_working_directory() -> PathBuf {
     PathBuf::new()
@@ -125,10 +125,15 @@ impl AnnotationQuery for IndexedAnnotationStore {
             let annotation_end = if word.duration_ns > 0 {
                 word.timestamp_ns.saturating_add(word.duration_ns)
             } else {
-                state
-                    .words
-                    .get(index + 1)
-                    .map_or(word.timestamp_ns, |next| next.timestamp_ns)
+                state.words.get(index + 1).map_or(word.timestamp_ns, |next| {
+                    instantaneous_word_end_ns(
+                        index
+                            .checked_sub(1)
+                            .map(|previous| state.words[previous].timestamp_ns),
+                        word.timestamp_ns,
+                        next.timestamp_ns,
+                    )
+                })
             };
             if word.timestamp_ns <= end_ns && annotation_end >= start_ns {
                 if annotations.len() == max_words {
@@ -161,11 +166,22 @@ impl AnnotationQuery for IndexedAnnotationStore {
         Ok(state
             .words
             .iter()
-            .flat_map(|word| {
-                [
-                    word.timestamp_ns,
-                    word.timestamp_ns.saturating_add(word.duration_ns),
-                ]
+            .enumerate()
+            .flat_map(|(index, word)| {
+                let end_ns = if word.duration_ns > 0 {
+                    word.timestamp_ns.saturating_add(word.duration_ns)
+                } else {
+                    state.words.get(index + 1).map_or(word.timestamp_ns, |next| {
+                        instantaneous_word_end_ns(
+                            index
+                                .checked_sub(1)
+                                .map(|previous| state.words[previous].timestamp_ns),
+                            word.timestamp_ns,
+                            next.timestamp_ns,
+                        )
+                    })
+                };
+                [word.timestamp_ns, end_ns]
             })
             .filter(|candidate| candidate.abs_diff(timestamp_ns) <= max_distance_ns)
             .min_by_key(|candidate| candidate.abs_diff(timestamp_ns)))
