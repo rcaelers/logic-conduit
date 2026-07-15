@@ -23,7 +23,7 @@ use super::super::super::query::{
     ExactAnnotationWindow, WordPresenceBucket,
 };
 use super::super::super::state::{LiveStoreMetadata, LiveStoreSnapshot, StoreStatus};
-use crate::events::{Annotation, MAX_ANNOTATION_NS, Word, instantaneous_word_end_ns};
+use crate::events::{Annotation, Word, instantaneous_word_end_ns};
 
 const MAX_PRESENCE_RUNS_PER_BLOCK: usize = 256;
 static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(1);
@@ -1102,29 +1102,12 @@ impl super::super::super::backend::AnnotationStoreWriterBackend for IndexedAnnot
 
 fn word_presence_summaries(block: u64, words: &[Word]) -> Vec<WordSummaryRecord> {
     let mut summaries: Vec<WordSummaryRecord> = Vec::new();
-    for (index, word) in words.iter().enumerate() {
-        let end_ns = if word.duration_ns != 0 {
-            word.timestamp_ns.saturating_add(word.duration_ns)
-        } else if let Some(next) = words.get(index + 1) {
-            instantaneous_word_end_ns(
-                index
-                    .checked_sub(1)
-                    .map(|previous| words[previous].timestamp_ns),
-                word.timestamp_ns,
-                next.timestamp_ns,
-            )
-        } else {
-            let inferred_period = index
-                .checked_sub(1)
-                .map(|previous| {
-                    word.timestamp_ns
-                        .saturating_sub(words[previous].timestamp_ns)
-                })
-                .filter(|period| *period > 0)
-                .unwrap_or(0)
-                .min(MAX_ANNOTATION_NS);
-            word.timestamp_ns.saturating_add(inferred_period)
-        };
+    for word in words {
+        // Presence indexes actual data extents. Cadence-based widths are a
+        // rendering concern for exact instantaneous words; applying them
+        // here would turn sparse point events into continuous activity and
+        // could erase real inactive gaps during summary coalescing.
+        let end_ns = word.timestamp_ns.saturating_add(word.duration_ns);
 
         if let Some(current) = summaries.last_mut()
             && word.timestamp_ns <= current.end_ns
