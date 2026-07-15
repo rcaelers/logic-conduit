@@ -16,13 +16,12 @@
 //!
 //! Multi-input merge semantics differ by stream kind:
 //!
-//! - **Trigger inputs** ([`SrLatch`]) merge *event-driven*: process whichever
-//!   input has data, ordering only the items available at that moment. A
-//!   strict merge would starve — a trigger stream carries no "nothing
-//!   happened" information, so a set edge could not be emitted until the
-//!   *next* reset arrived. Out-of-order arrivals are clamped + logged
-//!   (set/reset derive from the same word stream, so their skew is
-//!   protocol-scale).
+//! - **Trigger inputs** ([`SrLatch`]) merge in strict timestamp order. Each
+//!   input must provide its next event or close before the latch advances;
+//!   this prevents independent matcher threads from applying a later Set
+//!   before an earlier Reset. Consequently, a live sparse branch can delay
+//!   the other branch until its next event; finite decode pipelines close
+//!   both streams and remain exact.
 //! - **Level inputs** ([`LogicGate`]) merge in *strict timestamp order*,
 //!   blocking on the input whose next edge is unknown. Levels make this safe
 //!   (each input either advances or closes) and it is required for

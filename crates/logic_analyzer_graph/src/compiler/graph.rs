@@ -1654,6 +1654,36 @@ mod tests {
     }
 
     #[test]
+    fn binary_decoder_demo_latch_follows_every_start_stop_pair() {
+        let widget = binary_decoder_demo_widget();
+        let mut ctx = CompileCtx::default();
+        let lanes = ctx.derived_lanes.clone();
+        let mut run = start_live(widget.graph(), &BuilderRegistry::standard(), &mut ctx).unwrap();
+        run.wait();
+
+        let lanes = lanes.read();
+        let q = lanes
+            .iter()
+            .find(|lane| lane.name == "SR Flip-Flop.Q")
+            .expect("latch output should be visible");
+        let signal_processing::DerivedLaneData::Digital(samples) = &q.data else {
+            panic!("latch output should be a digital lane");
+        };
+        assert_eq!(samples.len(), 25);
+        assert!(
+            samples
+                .iter()
+                .enumerate()
+                .all(|(index, sample)| sample.value == !index.is_multiple_of(2))
+        );
+        assert!(
+            samples
+                .windows(2)
+                .all(|pair| pair[0].start_time_ns <= pair[1].start_time_ns)
+        );
+    }
+
+    #[test]
     fn uart_viewer_tracks_carry_explicit_presentation_metadata() {
         let compiled = lower(uart_demo_widget().graph(), &BuilderRegistry::standard()).unwrap();
         let viewer = compiled

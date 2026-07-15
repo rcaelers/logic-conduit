@@ -8,7 +8,6 @@ use signal_processing::errors::{WorkError, WorkResult};
 use signal_processing::events::Trigger;
 use signal_processing::node::ProcessNode;
 use signal_processing::ports::{InputPort, OutputPort, PortDirection, PortSchema};
-use signal_processing::receiver::ReceiverSelector;
 use signal_processing::sample::Sample;
 
 /// Set/reset latch over [`Trigger`] streams.
@@ -16,10 +15,9 @@ use signal_processing::sample::Sample;
 /// Inputs: `set` (0), `reset` (1) — `Trigger`
 /// Output: `q` — `Sample` level
 ///
-/// Event-driven (module docs): processes whichever input has data; items
-/// available at the same moment are applied in `(timestamp, input)` order,
-/// so a set and a reset at the same instant net to reset. The initial state
-/// is emitted at t=0.
+/// The two ordered input streams are merged strictly by timestamp. Reset has
+/// the higher input index, so a set and reset at the same instant net to
+/// reset. The initial state is emitted at t=0.
 pub struct SrLatch {
     name: String,
     initial: bool,
@@ -28,6 +26,8 @@ pub struct SrLatch {
     last_emit_ts: u64,
     set_buffer: VecDeque<Trigger>,
     reset_buffer: VecDeque<Trigger>,
+    heads: [Option<Trigger>; 2],
+    eos: [bool; 2],
 }
 
 impl SrLatch {
@@ -40,6 +40,8 @@ impl SrLatch {
             last_emit_ts: 0,
             set_buffer: VecDeque::new(),
             reset_buffer: VecDeque::new(),
+            heads: [None, None],
+            eos: [false, false],
         }
     }
 
@@ -52,10 +54,6 @@ impl SrLatch {
 impl ProcessNode for SrLatch {
     fn name(&self) -> &str {
         &self.name
-    }
-
-    fn input_scheduling(&self) -> signal_processing::node::InputScheduling {
-        signal_processing::node::InputScheduling::Any
     }
 
     fn num_inputs(&self) -> usize {
@@ -99,42 +97,53 @@ impl ProcessNode for SrLatch {
             receivers.push(receiver);
         }
 
-        // Block for one item, then drain whatever else is immediately
-        // available so simultaneous items are applied deterministically.
-        let first = ReceiverSelector::new(&mut receivers).select()?;
-        let mut batch = vec![first];
+        // A head (or EOS) from every stream is required before choosing the
+        // globally earliest event. Without this, scheduler/thread skew can
+        // apply a later Set before an earlier Reset from the sibling branch.
         for (index, receiver) in receivers.iter_mut().enumerate() {
-            while let Ok(trigger) = receiver.try_recv() {
-                batch.push((index, trigger));
-            }
-        }
-        // (timestamp, input index): reset (1) sorts after set (0) at ties.
-        batch.sort_by_key(|(index, trigger)| (trigger.timestamp_ns, *index));
-
-        let mut emitted = 0;
-        for (index, trigger) in batch {
-            let new_state = index == 0;
-            if new_state == self.state {
+            if self.heads[index].is_some() || self.eos[index] {
                 continue;
             }
-            let mut ts = trigger.timestamp_ns;
-            if ts < self.last_emit_ts {
-                warn!(
-                    "[{}] out-of-order {} at {}ns clamped to {}ns",
-                    self.name,
-                    if new_state { "set" } else { "reset" },
-                    ts,
-                    self.last_emit_ts
-                );
-                ts = self.last_emit_ts;
+            match receiver.recv() {
+                Ok(trigger) => self.heads[index] = Some(trigger),
+                Err(WorkError::Shutdown) => self.eos[index] = true,
+                Err(error) => return Err(error),
             }
-            self.state = new_state;
-            self.last_emit_ts = ts;
-            debug!("[{}] q={} at {}ns", self.name, self.state, ts);
-            output.send(Sample::new(self.state, ts))?;
-            emitted += 1;
         }
-        Ok(emitted)
+
+        // (timestamp, input index): set (0) is applied before reset (1) at
+        // ties, leaving reset as the net state.
+        let next = self
+            .heads
+            .iter()
+            .enumerate()
+            .filter_map(|(index, trigger)| trigger.map(|trigger| (index, trigger)))
+            .min_by_key(|(index, trigger)| (trigger.timestamp_ns, *index));
+        let Some((index, trigger)) = next else {
+            return Err(WorkError::Shutdown);
+        };
+        self.heads[index] = None;
+
+        let new_state = index == 0;
+        if new_state == self.state {
+            return Ok(0);
+        }
+        let mut ts = trigger.timestamp_ns;
+        if ts < self.last_emit_ts {
+            warn!(
+                "[{}] out-of-order {} at {}ns clamped to {}ns",
+                self.name,
+                if new_state { "set" } else { "reset" },
+                ts,
+                self.last_emit_ts
+            );
+            ts = self.last_emit_ts;
+        }
+        self.state = new_state;
+        self.last_emit_ts = ts;
+        debug!("[{}] q={} at {}ns", self.name, self.state, ts);
+        output.send(Sample::new(self.state, ts))?;
+        Ok(1)
     }
 }
 
