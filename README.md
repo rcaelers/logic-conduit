@@ -27,7 +27,7 @@ they run.
 cargo run --release --bin dsl-ui
 
 # Or open a graph directly
-cargo run --release --bin dsl-ui -- graphs/ccd_pipeline.json
+cargo run --release --bin dsl-ui -- graphs/spi_controlled_decode.json
 ```
 
 The editor starts with an empty graph. Use **File ▸ Load** (`⌘O`/`Ctrl+O`) to open a saved
@@ -103,7 +103,7 @@ traces, decoded-word boxes, and trigger markers.
 A typical trigger-and-capture graph: decode SPI commands, match start/stop words, drive an
 SR flip-flop that gates a parallel-bus decoder, count captures into generated filenames,
 and write each start/stop window to its own file — see
-[graphs/ccd_pipeline.json](graphs/ccd_pipeline.json).
+[graphs/spi_controlled_decode.json](graphs/spi_controlled_decode.json).
 
 ## Command line & logging
 
@@ -130,16 +130,20 @@ The repository is a Cargo workspace: `crates/signal_processing` (generic streami
 `crates/logic_analyzer_graph` (node catalog and graph compiler),
 `crates/widgets/node_graph` (reusable node editor widget),
 `crates/widgets/logic_analyzer_viewer` (waveform widget), `crates/logic_analyzer_ui`
-(application UI), `crates/app` (binary), and `plugins/example-plugin` (an example
+(application UI), `crates/app_native` (desktop binary), `crates/app_web`
+(browser entry point), and `plugins/example-plugin` (an example
 compile-time extension: build with
 `--features example-plugin`).
 
-Standalone examples of driving the engine from Rust live in [examples/](examples)
-(e.g. `spi_graph_decode.rs`, `u3pro16_spi_decode.rs`):
+Loadable pipeline examples live in [graphs/](graphs). They include file-backed
+SPI processing and direct DSLogic U3Pro16 capture graphs:
 
 ```bash
-cargo run --release --example spi_graph_decode -- --file capture.dsl
+cargo run --release --bin dsl-ui -- graphs/spi_controlled_decode.json
 ```
+
+The sole standalone Rust example is `ccd_viewer`, a native framebuffer utility
+for inspecting captured CCD image data rather than a processing pipeline.
 
 ## Documentation
 

@@ -284,7 +284,7 @@ impl ProcessNode for CsvWordWriter {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
     use crossbeam_channel::bounded;
     use signal_processing::sender::ChannelMessage;

@@ -200,12 +200,11 @@ impl LogicAnalyzerViewer {
         }
     }
 
-    pub(crate) fn draw_indexed_annotation_exact(
+    pub(super) fn draw_indexed_annotation_exact(
         &self,
         painter: &Painter,
         wave_rect: Rect,
-        y_top: f32,
-        row_height: f32,
+        geometry: DerivedRowGeometry,
         annotations: &[Annotation],
         last_timestamp_ns: Option<u64>,
         visuals: &HashMap<u64, AnnotationVisual>,
@@ -213,8 +212,8 @@ impl LogicAnalyzerViewer {
         self.draw_annotation_slice(
             painter,
             wave_rect,
-            y_top + row_height * 0.12,
-            y_top + row_height * 0.88,
+            geometry.top + geometry.height * 0.12,
+            geometry.top + geometry.height * 0.88,
             annotations,
             last_timestamp_ns,
             visuals,

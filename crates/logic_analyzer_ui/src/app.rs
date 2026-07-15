@@ -8,13 +8,20 @@ use crate::about::AboutWindow;
 use crate::demo_signals;
 use crate::toast::Toasts;
 
-#[cfg_attr(target_arch = "wasm32", path = "app_platform/wasm_hooks.rs")]
-#[cfg_attr(not(target_arch = "wasm32"), path = "app_platform/native_hooks.rs")]
-mod platform_hooks;
-
-#[cfg_attr(target_arch = "wasm32", path = "app_platform/wasm_font.rs")]
-#[cfg_attr(not(target_arch = "wasm32"), path = "app_platform/native_font.rs")]
-mod font_platform;
+std::cfg_select! {
+    target_arch = "wasm32" => {
+        #[path = "app_platform/wasm_font.rs"]
+        mod font_platform;
+        #[path = "app_platform/wasm_hooks.rs"]
+        mod platform_hooks;
+    }
+    _ => {
+        #[path = "app_platform/native_font.rs"]
+        mod font_platform;
+        #[path = "app_platform/native_hooks.rs"]
+        mod platform_hooks;
+    }
+}
 
 use self::font_platform::load_symbol_fonts;
 
@@ -54,7 +61,7 @@ impl App {
 
     /// Like [`Self::new`], but first runs `register_plugins` against a
     /// [`compiler::PluginContext`] wrapping the freshly built registries.
-    /// This is the hook a downstream crate (e.g. `logic-analyzer-app`) uses to link in
+    /// This is the hook a downstream crate (e.g. `logic-analyzer-app-native`) uses to link in
     /// compile-time plugin crates — `logic-analyzer-ui` itself never depends on any
     /// plugin (a plugin depends on `logic-analyzer-graph`, so the reverse would be a
     /// dependency cycle), so the actual `example_plugin::register(...)`

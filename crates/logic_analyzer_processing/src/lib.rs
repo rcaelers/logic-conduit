@@ -11,9 +11,7 @@ pub use nodes::logic::{
     BufferNode, GateOp, LogicGate, MatchOp, SrLatch, TextFormatter, TriggerAt, TriggerCounter,
     WordMatcher,
 };
-pub use nodes::sinks::{
-    BinaryFileWriter, CsvValueFormat, CsvWordWriter, TextFileWriter, TgckRecorder, WriteWidth,
-};
+pub use nodes::sinks::TgckRecorder;
 
 std::cfg_select! {
     target_arch = "wasm32" => {}
@@ -28,6 +26,9 @@ std::cfg_select! {
             SigrokFileCaptureDataSource, SigrokFileSource, TriggerCondition, TriggerLogic,
             UsbTransport, open_dsl_chunked_capture, open_dsl_chunked_capture_with_progress,
             open_sigrok_chunked_capture,
+        };
+        pub use nodes::sinks::{
+            BinaryFileWriter, CsvValueFormat, CsvWordWriter, TextFileWriter, WriteWidth,
         };
     }
 }

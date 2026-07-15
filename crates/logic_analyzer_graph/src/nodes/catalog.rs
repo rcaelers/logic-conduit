@@ -19,22 +19,7 @@ use crate::compiler::RuntimeBuilder;
 pub(crate) fn standard_builders() -> HashMap<String, Box<dyn RuntimeBuilder>> {
     let mut builders: HashMap<String, Box<dyn RuntimeBuilder>> = HashMap::new();
 
-    std::cfg_select! {
-        target_arch = "wasm32" => {}
-        _ => {
-            use super::{
-                csv_writer::CsvWriterBuilder, file_source::FileSourceBuilder,
-                file_writer::FileWriterBuilder, sigrok_file_source::SigrokFileSourceBuilder,
-                text_file_writer::TextFileWriterBuilder,
-            };
-
-            builders.insert("DSL File Source".into(), Box::new(FileSourceBuilder));
-            builders.insert("Sigrok File Source".into(), Box::new(SigrokFileSourceBuilder));
-            builders.insert("File Writer".into(), Box::new(FileWriterBuilder));
-            builders.insert("Text File Writer".into(), Box::new(TextFileWriterBuilder));
-            builders.insert("CSV Writer".into(), Box::new(CsvWriterBuilder));
-        }
-    }
+    super::registry_platform::register_builders(&mut builders);
 
     builders.insert("UART Demo Source".into(), Box::new(UartDemoSourceBuilder));
     builders.insert("SPI Decoder".into(), Box::new(SpiDecoderBuilder));

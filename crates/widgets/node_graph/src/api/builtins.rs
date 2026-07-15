@@ -419,30 +419,13 @@ impl InlineControl for FileValue {
                         .hint_text(label)
                         .desired_width((rect.width() - button_width - 6.0).max(24.0)),
                 );
-                // No native file dialog in the browser; show the button
-                // disabled rather than a click that silently does nothing.
-                let can_browse = !cfg!(target_arch = "wasm32");
-                if ui.add_enabled(can_browse, egui::Button::new("…")).clicked() {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        let mut dialog = rfd::FileDialog::new();
-                        if !self.dialog_title.is_empty() {
-                            dialog = dialog.set_title(&self.dialog_title);
-                        }
-                        for filter in &self.filters {
-                            let extensions: Vec<&str> =
-                                filter.extensions.iter().map(String::as_str).collect();
-                            dialog = dialog.add_filter(&filter.name, &extensions);
-                        }
-                        let picked = if self.save {
-                            dialog.save_file()
-                        } else {
-                            dialog.pick_file()
-                        };
-                        if let Some(path) = picked {
-                            self.value = path.display().to_string();
-                        }
-                    }
+                if ui
+                    .add_enabled(super::file_dialog::AVAILABLE, egui::Button::new("…"))
+                    .clicked()
+                    && let Some(path) =
+                        super::file_dialog::pick(&self.dialog_title, &self.filters, self.save)
+                {
+                    self.value = path;
                 }
             },
         );

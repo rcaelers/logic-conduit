@@ -3,9 +3,16 @@ use std::sync::Arc;
 
 use crate::Result;
 
-#[cfg_attr(target_arch = "wasm32", path = "capture_backing_wasm.rs")]
-#[cfg_attr(not(target_arch = "wasm32"), path = "capture_backing_native.rs")]
-mod capture_backing;
+std::cfg_select! {
+    target_arch = "wasm32" => {
+        #[path = "capture_backing_wasm.rs"]
+        mod capture_backing;
+    }
+    _ => {
+        #[path = "capture_backing_native.rs"]
+        mod capture_backing;
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct CaptureMetadata {

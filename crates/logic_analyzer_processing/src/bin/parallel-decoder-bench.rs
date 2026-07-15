@@ -1,15 +1,15 @@
 //! Parallel decoder benchmark.
 
-#[cfg(target_arch = "wasm32")]
-fn main() {}
+std::cfg_select! {
+    target_arch = "wasm32" => {
+        fn main() {}
+    }
+    _ => {
+        fn main() -> Result<(), Box<dyn std::error::Error>> {
+            native::main()
+        }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    native::main()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-mod native {
+        mod native {
     use std::collections::VecDeque;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
@@ -1153,6 +1153,8 @@ mod native {
             assert_eq!(indexed.fingerprint, auto.fingerprint);
             assert_eq!(auto.selected_protocol, "packed-stream");
             assert!(auto.max_outstanding > 0);
+        }
+    }
         }
     }
 }

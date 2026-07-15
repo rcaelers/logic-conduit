@@ -3,8 +3,8 @@
 Design of the desktop/wasm application: the `logic-analyzer-ui` crate
 ([crates/logic_analyzer_ui](../crates/logic_analyzer_ui)) — the application shell;
 the `logic-analyzer-graph` crate ([crates/logic_analyzer_graph](../crates/logic_analyzer_graph)) —
-node definitions and the graph→pipeline compiler; and the thin `logic-analyzer-app` binary crate
-([crates/app](../crates/app)). Companion docs:
+node definitions and the graph→pipeline compiler; and the thin native and web application crates
+([crates/app_native](../crates/app_native), [crates/app_web](../crates/app_web)). Companion docs:
 [NODE_GRAPH_DESIGN.md](NODE_GRAPH_DESIGN.md) (the editor widget),
 [PIPELINE_DESIGN.md](PIPELINE_DESIGN.md) (the runtime it compiles into),
 [LOGIC_ANALYZER_VIEWER_DESIGN.md](LOGIC_ANALYZER_VIEWER_DESIGN.md) (the waveform view).
@@ -17,7 +17,7 @@ consumes that integration and must not contain concrete node/compiler implementa
 
 ---
 
-## Application shell (`app.rs`, `crates/app`)
+## Application shells (`crates/app_native`, `crates/app_web`)
 
 One window, split by a draggable horizontal splitter:
 
@@ -37,15 +37,17 @@ One window, split by a draggable horizontal splitter:
   registry (`compiler::BuilderRegistry::standard()`), runs plugin registration hooks, and
   installs a platform symbol font (menu glyphs).
 - Graphs are saved/loaded as the editor's JSON document (`⌘O` / `⌘S` / `⇧⌘S`); the binary
-  accepts a graph file argument (`dsl-ui graphs/ccd_pipeline.json`). Example graphs live in
+  accepts a graph file argument (`dsl-ui graphs/spi_controlled_decode.json`). Example graphs live in
   [graphs/](../graphs).
 - Every frame, the app checks the graph for a `DSL File Source` node and hands its file
   path to the viewer (`set_capture_path` with `DslFileCaptureDataSource::open`) — the one
   place that knows what a `.dsl` path means. The viewer itself is format-agnostic.
-- `logic-analyzer-app` binary (temporarily named `dsl-ui`): clap CLI,
+- `logic-analyzer-app-native` binary (named `dsl-ui`): clap CLI,
   `tracing_subscriber` with `RUST_LOG` env filter,
-  eframe native window. On wasm the same `App` runs with a demo UART graph pre-populated
-  and the cooperative scheduler (below).
+  and an eframe native window.
+- `logic-analyzer-app-web` exports the wasm-bindgen `WebHandle` used by the browser shell.
+  It runs the shared `App` with a demo UART graph pre-populated and the cooperative
+  scheduler (below).
 - File commands include New, Open, Open Recent, Save, and Save As. Destructive actions over
   an unsaved graph share one save/discard/cancel guard; recent paths are deduplicated and
   persisted.
@@ -106,7 +108,7 @@ File Writer, TGCK Recorder, Viewer (variadic input accepting
 `Signal | Words | Trigger`).
 
 `nodes::populate_startup` builds the CCD capture graph programmatically (the shipped
-`graphs/ccd_pipeline.json`); `populate_uart_demo` is the wasm startup graph.
+`graphs/spi_controlled_decode.json`); `populate_uart_demo` is the wasm startup graph.
 
 ## Graph → pipeline compiler
 
@@ -211,7 +213,7 @@ Compile-time plugin crates extend all three layers through one hook:
 `register_payload::<T>()` (runtime type registry + `PortValue`),
 `register_node::<T: NodeDef>()`, and `register_builder(name, Box<dyn RuntimeBuilder>)`.
 A plugin depends on `logic-analyzer-graph`, so the registration call lives in the binary
-crate that depends on both (`logic-analyzer-app`, behind the `example-plugin` Cargo
+crate that depends on both (`logic-analyzer-app-native`, behind the `example-plugin` Cargo
 feature). [plugins/example-plugin](../plugins/example-plugin)
 demonstrates a new payload type, socket type, node def, and builder
 (`Pulse Measure`).

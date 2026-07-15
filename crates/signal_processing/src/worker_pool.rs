@@ -5,6 +5,10 @@ use crossbeam_channel::{Sender, bounded};
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("shared worker pool has stopped")]
+pub struct WorkerPoolStopped;
+
 pub struct WorkerPool {
     sender: Sender<Job>,
     workers: usize,
@@ -37,8 +41,13 @@ impl WorkerPool {
         self.workers
     }
 
-    pub fn spawn(&self, job: impl FnOnce() + Send + 'static) -> Result<(), ()> {
-        self.sender.send(Box::new(job)).map_err(|_| ())
+    pub fn spawn(
+        &self,
+        job: impl FnOnce() + Send + 'static,
+    ) -> Result<(), WorkerPoolStopped> {
+        self.sender
+            .send(Box::new(job))
+            .map_err(|_| WorkerPoolStopped)
     }
 }
 

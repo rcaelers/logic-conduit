@@ -242,9 +242,7 @@ fn work_parallel(
                 };
                 let _ = completion.send(result);
             })
-            .map_err(|()| {
-                WorkError::NodeError("Shared fragment worker pool stopped".to_string())
-            })?;
+            .map_err(|_| WorkError::NodeError("Shared fragment worker pool stopped".to_string()))?;
 
         blocks.parallel.in_flight += 1;
         blocks.next_sequence += 1;

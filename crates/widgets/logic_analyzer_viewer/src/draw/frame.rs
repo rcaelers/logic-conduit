@@ -286,8 +286,10 @@ impl LogicAnalyzerViewer {
                                     } => self.draw_indexed_annotation_exact(
                                         &clip,
                                         wave_rect,
-                                        track_top,
-                                        track_height,
+                                        DerivedRowGeometry {
+                                            top: track_top,
+                                            height: track_height,
+                                        },
                                         annotations,
                                         *last_timestamp_ns,
                                         visuals,

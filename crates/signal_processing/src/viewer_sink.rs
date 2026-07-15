@@ -346,11 +346,6 @@ impl DerivedLanes {
     /// once per `ViewerSink::work()` invocation per lane, rather than once
     /// per item, so a burst of decoded entries doesn't take (and contend
     /// the UI thread's `read()` for) the lock once per item.
-    #[cfg(test)]
-    fn append_digital_batch(&self, lane: usize, samples: impl IntoIterator<Item = Sample>) {
-        self.append_digital_batch_retained(lane, samples, ViewerRetention::Unlimited);
-    }
-
     fn append_digital_batch_retained(
         &self,
         lane: usize,
@@ -376,11 +371,6 @@ impl DerivedLanes {
     }
 
     /// Items are `(start_ns, duration_ns, value)` — [`Word`]'s shape.
-    #[cfg(test)]
-    fn append_word_batch(&self, lane: usize, words: impl IntoIterator<Item = (u64, u64, u64)>) {
-        self.append_word_batch_retained(lane, words, ViewerRetention::Unlimited);
-    }
-
     fn append_word_batch_retained(
         &self,
         lane: usize,
@@ -436,11 +426,6 @@ impl DerivedLanes {
         if let Some(target) = retention.trim_target(annotations.len()) {
             annotations.drain(..annotations.len() - target);
         }
-    }
-
-    #[cfg(test)]
-    fn append_marker_batch(&self, lane: usize, timestamps: impl IntoIterator<Item = u64>) {
-        self.append_marker_batch_retained(lane, timestamps, ViewerRetention::Unlimited);
     }
 
     fn append_marker_batch_retained(
@@ -806,7 +791,7 @@ impl ProcessNode for ViewerSink {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use crossbeam_channel::bounded;
 
@@ -814,6 +799,41 @@ mod tests {
     use crate::ports::OutputPort as OutPort;
     use crate::sender::ChannelMessage;
     use crate::watchdog::Watchdog;
+
+    trait TestAppendBatches {
+        fn append_digital_batch<I>(&self, lane: usize, samples: I)
+        where
+            I: IntoIterator<Item = Sample>;
+        fn append_word_batch<I>(&self, lane: usize, words: I)
+        where
+            I: IntoIterator<Item = (u64, u64, u64)>;
+        fn append_marker_batch<I>(&self, lane: usize, timestamps: I)
+        where
+            I: IntoIterator<Item = u64>;
+    }
+
+    impl TestAppendBatches for DerivedLanes {
+        fn append_digital_batch<I>(&self, lane: usize, samples: I)
+        where
+            I: IntoIterator<Item = Sample>,
+        {
+            self.append_digital_batch_retained(lane, samples, ViewerRetention::Unlimited);
+        }
+
+        fn append_word_batch<I>(&self, lane: usize, words: I)
+        where
+            I: IntoIterator<Item = (u64, u64, u64)>,
+        {
+            self.append_word_batch_retained(lane, words, ViewerRetention::Unlimited);
+        }
+
+        fn append_marker_batch<I>(&self, lane: usize, timestamps: I)
+        where
+            I: IntoIterator<Item = u64>,
+        {
+            self.append_marker_batch_retained(lane, timestamps, ViewerRetention::Unlimited);
+        }
+    }
 
     fn run_sink(sink: &mut ViewerSink, inputs: Vec<InputPort>) {
         let outputs: Vec<OutPort> = vec![];
@@ -1165,7 +1185,6 @@ mod tests {
         assert_eq!(summary.sampled_window(0, 1_000, 10)[0].start_ns, 0);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn indexed_store_creation_failure_falls_back_to_in_memory_annotations() {
         let store = DerivedLanes::new();
@@ -1185,7 +1204,6 @@ mod tests {
         ));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn indexed_lane_preserves_a_batch_larger_than_one_sink_drain() {
         let directory = tempfile::tempdir().unwrap();
@@ -1228,7 +1246,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn indexed_lane_failure_does_not_stop_other_viewer_lanes() {
         let directory = tempfile::tempdir().unwrap();
@@ -1275,7 +1292,6 @@ mod tests {
         ));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn registering_a_new_indexed_writer_replaces_the_published_query_handle() {
         let directory = tempfile::tempdir().unwrap();
@@ -1309,7 +1325,6 @@ mod tests {
         assert_eq!(indexed.status(), StoreStatus::Cancelled);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn viewer_reopens_persistent_lane_and_does_not_rewrite_incoming_words() {
         let directory = tempfile::tempdir().unwrap();

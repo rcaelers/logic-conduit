@@ -4,9 +4,16 @@
 //! the parent module. Native filesystem/mmap behavior and wasm in-memory
 //! behavior are selected here as complete implementation files.
 
-#[cfg_attr(target_arch = "wasm32", path = "wasm.rs")]
-#[cfg_attr(not(target_arch = "wasm32"), path = "native.rs")]
-mod imp;
+std::cfg_select! {
+    target_arch = "wasm32" => {
+        #[path = "wasm.rs"]
+        mod imp;
+    }
+    _ => {
+        #[path = "native.rs"]
+        mod imp;
+    }
+}
 
 pub(crate) use imp::store;
 pub use imp::*;

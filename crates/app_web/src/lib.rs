@@ -1,14 +1,13 @@
-#[cfg(target_arch = "wasm32")]
+#![cfg(target_arch = "wasm32")]
+
 use wasm_bindgen::prelude::*;
 
-#[cfg(target_arch = "wasm32")]
 #[derive(Clone)]
 #[wasm_bindgen]
 pub struct WebHandle {
     runner: eframe::WebRunner,
 }
 
-#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl WebHandle {
     #[wasm_bindgen(constructor)]
@@ -36,7 +35,6 @@ impl WebHandle {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
 impl Default for WebHandle {
     fn default() -> Self {
         Self::new()

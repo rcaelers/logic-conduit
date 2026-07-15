@@ -22,12 +22,16 @@ use signal_processing::sample::{Sample, SampleBlock};
 
 use super::types::{CsPolarity, Endianness, ParallelInputStrategy, StrobeMode};
 
-#[cfg_attr(target_arch = "wasm32", path = "parallel_decoder/sequential_worker.rs")]
-#[cfg_attr(
-    not(target_arch = "wasm32"),
-    path = "parallel_decoder/parallel_worker.rs"
-)]
-mod worker_backend;
+std::cfg_select! {
+    target_arch = "wasm32" => {
+        #[path = "parallel_decoder/sequential_worker.rs"]
+        mod worker_backend;
+    }
+    _ => {
+        #[path = "parallel_decoder/parallel_worker.rs"]
+        mod worker_backend;
+    }
+}
 
 use self::worker_backend::ParallelStreamState;
 

@@ -682,6 +682,9 @@ pub(crate) fn channels_from_window(
         .collect()
 }
 
+// Used by the native capture worker; the web worker implements the same
+// platform contract without constructing file-backed placeholder channels.
+#[allow(dead_code)]
 pub(crate) fn placeholder_channels(header: &CaptureMetadata) -> Vec<LogicChannel> {
     let channel_count = header.total_probes.min(16);
     (0..channel_count)

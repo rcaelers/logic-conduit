@@ -37,6 +37,8 @@ std::cfg_select! {
     target_arch = "wasm32" => {
         #[path = "idle_wasm.rs"]
         mod idle;
+
+        pub type AppManager = CooperativeManager;
     }
     _ => {
         #[path = "idle_native.rs"]
@@ -44,6 +46,14 @@ std::cfg_select! {
         mod raw_block_cache;
         pub mod waveform_index;
         pub mod worker_pool;
+
+        pub type AppManager = PipelineManager;
+        pub use derived_word_store::{
+            DecodedBlockCacheStats, cleanup_cache, clear_cache, clear_cache_entry,
+            configure_decoded_block_cache, decoded_block_cache_stats, default_cache_directory,
+            reset_decoded_block_cache_stats,
+        };
+        pub use waveform_index::{CaptureIndexProgress, IndexSampler, exact_window_sample_limit};
     }
 }
 
@@ -83,24 +93,3 @@ pub use viewer_sink::{
     ViewerSink, ViewerSinkMetrics, ViewerSinkMetricsSnapshot,
 };
 pub use watchdog::Watchdog;
-
-std::cfg_select! {
-    target_arch = "wasm32" => {
-        pub type AppManager = CooperativeManager;
-    }
-    _ => {
-        pub type AppManager = PipelineManager;
-    }
-}
-
-std::cfg_select! {
-    target_arch = "wasm32" => {}
-    _ => {
-        pub use derived_word_store::{
-            DecodedBlockCacheStats, cleanup_cache, clear_cache, clear_cache_entry,
-            configure_decoded_block_cache, decoded_block_cache_stats, default_cache_directory,
-            reset_decoded_block_cache_stats,
-        };
-        pub use waveform_index::{CaptureIndexProgress, IndexSampler, exact_window_sample_limit};
-    }
-}

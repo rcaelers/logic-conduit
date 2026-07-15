@@ -1,14 +1,10 @@
 use std::collections::HashMap;
-#[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc::{self, Receiver};
 
 use egui::{FontId, Pos2, Rect, Sense, Ui, vec2};
 
-#[cfg(not(target_arch = "wasm32"))]
-use signal_processing::CaptureDataSource;
-use signal_processing::{CaptureIndex, DerivedLanes};
+use signal_processing::{CaptureDataSource, CaptureIndex, DerivedLanes};
 
 use crate::channel::LogicChannel;
 use crate::indexed_annotations::IndexedAnnotationCacheEntry;
@@ -56,10 +52,8 @@ pub struct LogicAnalyzerViewer {
     pub(crate) hover_measurement: Option<PulseMeasurement>,
     pub(crate) visible_start_us: f64,
     pub(crate) visible_span_us: f64,
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) capture_path: Option<PathBuf>,
     pub(crate) capture_info: Option<CaptureInfo>,
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) worker_responses: Option<Receiver<crate::worker::WorkerResponse>>,
     pub(crate) status: String,
     pub(crate) index_progress: Option<IndexBuildProgress>,
@@ -96,10 +90,8 @@ impl LogicAnalyzerViewer {
             hover_measurement: None,
             visible_start_us: 0.0,
             visible_span_us: DEFAULT_VISIBLE_SPAN_US,
-            #[cfg(not(target_arch = "wasm32"))]
             capture_path: None,
             capture_info: None,
-            #[cfg(not(target_arch = "wasm32"))]
             worker_responses: None,
             status: "No capture loaded".to_string(),
             index_progress: None,
@@ -156,7 +148,6 @@ impl LogicAnalyzerViewer {
     /// `open` constructs the capture-specific [`CaptureDataSource`] for
     /// `path` — the viewer only knows the generic trait, not which concrete
     /// source (file format, live capture, …) produced it.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_capture_path<S: CaptureDataSource>(
         &mut self,
         path: impl AsRef<Path>,
@@ -217,7 +208,6 @@ impl LogicAnalyzerViewer {
     }
 
     /// Clear a capture when no file-backed source remains in the graph.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn clear_capture(&mut self) {
         self.capture_path = None;
         self.capture_info = None;
@@ -243,7 +233,6 @@ impl LogicAnalyzerViewer {
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         let painter = ui.painter_at(rect);
 
-        #[cfg(not(target_arch = "wasm32"))]
         self.process_worker_responses();
         // Reconciles `row_order` against the current channels and derived
         // lanes (drops stale rows, appends new ones) before anything this
@@ -290,17 +279,14 @@ impl LogicAnalyzerViewer {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(50));
         }
-        #[cfg(not(target_arch = "wasm32"))]
+        if self.capture_path.is_some() && self.capture_info.is_none() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(16));
+        } else if self.index_progress.is_some()
+            || (self.capture_info.is_some() && self.sampler.is_none())
         {
-            if self.capture_path.is_some() && self.capture_info.is_none() {
-                ui.ctx()
-                    .request_repaint_after(std::time::Duration::from_millis(16));
-            } else if self.index_progress.is_some()
-                || (self.capture_info.is_some() && self.sampler.is_none())
-            {
-                ui.ctx()
-                    .request_repaint_after(std::time::Duration::from_millis(100));
-            }
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
 

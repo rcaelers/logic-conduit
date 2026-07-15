@@ -69,8 +69,8 @@ use super::watchdog::Watchdog;
 /// (the `Sample`/`SampleBlock` port-unification work `PipelineManager`
 /// has): the only two producers that ever declare more than one
 /// `SampleKind` — `DslFileSource` and `LogicAnalyzerSource` — are both
-/// `#[cfg(not(target_arch = "wasm32"))]`-gated, i.e. unreachable from
-/// this (wasm-only) manager by construction. A connection here still
+/// excluded from the cooperative platform, i.e. unreachable from this
+/// manager by construction. A connection here still
 /// requires an exact `TypeId` match, which is correct as long as that
 /// stays true — if a wasm-reachable node ever needs to negotiate
 /// `SampleKind`, mirror `manager.rs`'s `build_output_lists`/

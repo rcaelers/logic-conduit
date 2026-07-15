@@ -30,8 +30,6 @@ use signal_processing::{
 
 use super::cache_platform;
 use super::errors::{ApplyError, CompileError};
-#[cfg(test)]
-use super::plugin::PluginContext;
 use super::port_kind::PortKind;
 
 /// Shared resources handed to builders. A fresh `DerivedLanes` store per
@@ -1166,11 +1164,10 @@ pub fn start_app_run(
     start_live(graph, registry, ctx)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use std::path::{Path, PathBuf};
 
-    #[cfg(not(target_arch = "wasm32"))]
     use logic_analyzer_processing::BinaryFileWriter;
     use node_graph::{NodeDef, NodeGraphWidget};
     use signal_processing::{ConfigValue, Pipeline, Sample, Trigger, Word};
@@ -1345,7 +1342,6 @@ mod tests {
         assert_eq!(viewer_id(&first), viewer_id(&second));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn persistent_word_keys(compiled: &CompiledGraph) -> Vec<[u8; 32]> {
         compiled
             .nodes
@@ -1355,7 +1351,6 @@ mod tests {
             .collect()
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn persistent_viewer_key_is_stable_but_decoder_configuration_invalidates_it() {
         let mut widget = uart_demo_widget();
@@ -1381,7 +1376,6 @@ mod tests {
         assert_ne!(first_keys, persistent_word_keys(&changed));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn cache_inventory_maps_a_lane_to_its_viewer_and_upstream_nodes() {
         let widget = uart_demo_widget();
@@ -1421,7 +1415,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn persistent_viewer_key_includes_variadic_member_order() {
         let compiled = lower(uart_demo_widget().graph(), &BuilderRegistry::standard()).unwrap();
@@ -1441,7 +1434,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn capture_file_identity_changes_when_source_file_changes() {
         use std::io::Write;
@@ -1462,7 +1454,6 @@ mod tests {
         assert_ne!(first, second);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn persistent_cache_hit_prunes_decoder_used_only_by_cached_viewer_lane() {
         use signal_processing::{IndexedAnnotationWriter, LiveStoreConfig};
@@ -1510,7 +1501,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn second_live_run_reuses_persistent_words_without_starting_decoder() {
         let directory = tempfile::tempdir().unwrap();
@@ -1741,7 +1731,7 @@ mod tests {
 
         let mut node_types = nodes::build_registry();
         let mut builders = BuilderRegistry::standard();
-        PluginContext::new(&mut node_types, &mut builders)
+        crate::compiler::PluginContext::new(&mut node_types, &mut builders)
             .register_builder("Plugin Presenter", Box::new(PluginBuilder));
         let widget = uart_demo_widget();
         let socket = &widget
@@ -1761,7 +1751,6 @@ mod tests {
         assert_eq!(presentation.track_key, "plugin track");
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn file_source_bounds_exact_viewer_entries() {
         let widget = startup_widget();
@@ -2276,7 +2265,7 @@ mod tests {
 
     /// Reference pipeline: the byte-exact Phase-1 wiring of
     /// `examples/spi_graph_decode.rs` (itself verified against the original
-    /// `spi_controlled_decode.rs`).
+    /// `graphs/spi_controlled_decode.json`).
     fn run_reference(capture: &Path, out_dir: &Path) {
         use logic_analyzer_processing::nodes::decoders::{
             CsPolarity, ParallelDecoder, SpiDecoder, SpiMode, StrobeMode,

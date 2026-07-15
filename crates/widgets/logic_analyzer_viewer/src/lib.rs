@@ -1,5 +1,3 @@
-#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
-
 #[cfg(test)]
 mod architecture_tests;
 mod channel;
@@ -12,8 +10,15 @@ mod lanes;
 mod sampling;
 mod types;
 mod viewer;
-#[cfg(not(target_arch = "wasm32"))]
-mod worker;
+std::cfg_select! {
+    target_arch = "wasm32" => {
+        #[path = "worker_wasm.rs"]
+        mod worker;
+    }
+    _ => {
+        mod worker;
+    }
+}
 
 pub use lanes::{
     AnnotationVisual, DefaultViewerLaneRenderer, DerivedLaneId, ViewerLaneBadge, ViewerLaneFrame,

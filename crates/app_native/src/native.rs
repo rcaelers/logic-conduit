@@ -369,10 +369,11 @@ mod tests {
         let empty = Args::try_parse_from(["dsl-ui"]).unwrap();
         assert!(empty.file.is_none());
 
-        let with_file = Args::try_parse_from(["dsl-ui", "examples/ccd_pipeline.json"]).unwrap();
+        let with_file =
+            Args::try_parse_from(["dsl-ui", "graphs/spi_controlled_decode.json"]).unwrap();
         assert_eq!(
             with_file.file.as_deref(),
-            Some(std::path::Path::new("examples/ccd_pipeline.json"))
+            Some(std::path::Path::new("graphs/spi_controlled_decode.json"))
         );
     }
 }

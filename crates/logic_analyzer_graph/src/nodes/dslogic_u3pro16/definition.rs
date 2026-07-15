@@ -1,6 +1,4 @@
-//! `DSLogic U3Pro16` graph-node definition — USB hardware capture source. No matching
-//! `compiler` builder exists yet (there is no runtime driver wired up); the
-//! node is editable but not runnable.
+//! `DSLogic U3Pro16` graph-node definition — native USB hardware capture source.
 
 use egui::Color32;
 use serde::{Deserialize, Serialize};

@@ -1,0 +1,752 @@
+{
+  "connections": [
+    {
+      "from": {
+        "direction": "Output",
+        "index": 1,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 1
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 2,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 1,
+        "node": 1
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 3,
+        "node": 1
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 2
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 1
+      },
+      "to": {
+        "direction": "Input",
+        "index": 1,
+        "node": 2
+      }
+    }
+  ],
+  "frames": [],
+  "next_frame_id": 0,
+  "next_id": 3,
+  "nodes": {
+    "0": {
+      "collapsed": false,
+      "header_color": [
+        100,
+        75,
+        140,
+        255
+      ],
+      "id": 0,
+      "inputs": [],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 0,
+          "has_control": false,
+          "hidden": false,
+          "name": "Ch 0",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": true
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 1,
+          "has_control": false,
+          "hidden": false,
+          "name": "Ch 1",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": true
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 2,
+          "has_control": false,
+          "hidden": false,
+          "name": "Ch 2",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": true
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 3,
+          "has_control": false,
+          "hidden": false,
+          "name": "Ch 3",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": false
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 4,
+          "has_control": false,
+          "hidden": false,
+          "name": "Ch 4",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": false
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 5,
+          "has_control": false,
+          "hidden": false,
+          "name": "Ch 5",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": false
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 6,
+          "has_control": false,
+          "hidden": false,
+          "name": "Ch 6",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": false
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 7,
+          "has_control": false,
+          "hidden": false,
+          "name": "Ch 7",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": false
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 8,
+          "has_control": false,
+          "hidden": false,
+          "name": "Ch 8",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": false
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 9,
+          "has_control": false,
+          "hidden": false,
+          "name": "Ch 9",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": false
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 10,
+          "has_control": false,
+          "hidden": false,
+          "name": "Ch 10",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": false
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 11,
+          "has_control": false,
+          "hidden": false,
+          "name": "Ch 11",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": false
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 12,
+          "has_control": false,
+          "hidden": false,
+          "name": "Ch 12",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": false
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 13,
+          "has_control": false,
+          "hidden": false,
+          "name": "Ch 13",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": false
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 14,
+          "has_control": false,
+          "hidden": false,
+          "name": "Ch 14",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": false
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 15,
+          "has_control": false,
+          "hidden": false,
+          "name": "Ch 15",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": false
+        }
+      ],
+      "pos": {
+        "x": 40.0,
+        "y": 180.0
+      },
+      "selected": false,
+      "state": {
+        "channels": {
+          "enabled": [
+            true,
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ]
+        },
+        "clock_edge": {
+          "value": "Rising",
+          "variants": [
+            "Rising",
+            "Falling"
+          ]
+        },
+        "duration_ms": {
+          "max": 60000,
+          "min": 1,
+          "value":  5000
+        },
+        "ext_clock": {
+          "value": false
+        },
+        "filter": {
+          "value": false
+        },
+        "mode": {
+          "value": "Buffer",
+          "variants": [
+            "Stream",
+            "Buffer"
+          ]
+        },
+        "rle": {
+          "value": false
+        },
+        "sample_rate": {
+          "value": "1 MHz",
+          "variants": [
+            "1 MHz",
+            "2 MHz",
+            "5 MHz",
+            "10 MHz",
+            "20 MHz",
+            "25 MHz",
+            "50 MHz",
+            "100 MHz",
+            "125 MHz",
+            "250 MHz",
+            "500 MHz",
+            "1 GHz"
+          ]
+        },
+        "summary": {
+          "text": "3 ch @ 100 MHz · 1.0 V"
+        },
+        "threshold": {
+          "max": 5.0,
+          "min": 0.0,
+          "speed": 0.05000000074505806,
+          "value":  1.649999976158142
+        }
+      },
+      "title": "DSLogic U3Pro16",
+      "type_name": "DSLogic U3Pro16"
+    },
+    "1": {
+      "collapsed": false,
+      "header_color": [
+        60,
+        100,
+        160,
+        255
+      ],
+      "id": 1,
+      "inputs": [
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 0,
+          "has_control": false,
+          "hidden": false,
+          "name": "CLK",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": true
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 1,
+          "has_control": false,
+          "hidden": false,
+          "name": "MOSI",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": true
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 2,
+          "has_control": false,
+          "hidden": false,
+          "name": "MISO",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": false
+        },
+        {
+          "allowed": [],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 3,
+          "has_control": false,
+          "hidden": false,
+          "name": "CS#",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": null,
+          "visible": true
+        }
+      ],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [
+        {
+          "allowed": [],
+          "color": [
+            215,
+            140,
+            60,
+            255
+          ],
+          "def_index": 0,
+          "has_control": false,
+          "hidden": false,
+          "name": "MOSI Words",
+          "resolved_type": null,
+          "shape": "Diamond",
+          "show_in_view": false,
+          "type_name": "Words",
+          "variadic": null,
+          "visible": true
+        },
+        {
+          "allowed": [],
+          "color": [
+            215,
+            140,
+            60,
+            255
+          ],
+          "def_index": 1,
+          "has_control": false,
+          "hidden": false,
+          "name": "MISO Words",
+          "resolved_type": null,
+          "shape": "Diamond",
+          "show_in_view": false,
+          "type_name": "Words",
+          "variadic": null,
+          "visible": false
+        }
+      ],
+      "pos": {
+        "x": 380.0,
+        "y": 180.0
+      },
+      "selected": false,
+      "state": {
+        "bit_order": {
+          "value": "MSB first",
+          "variants": [
+            "MSB first",
+            "LSB first"
+          ]
+        },
+        "cpha": {
+          "value": "0",
+          "variants": [
+            "0",
+            "1"
+          ]
+        },
+        "cpol": {
+          "value": "0",
+          "variants": [
+            "0",
+            "1"
+          ]
+        },
+        "cs_polarity": {
+          "value": "Active low",
+          "variants": [
+            "Active low",
+            "Active high",
+            "Disabled"
+          ]
+        },
+        "has_miso": {
+          "value": false
+        },
+        "word_size": {
+          "max": 64,
+          "min": 1,
+          "value": 8
+        }
+      },
+      "title": "SPI Decoder",
+      "type_name": "SPI Decoder"
+    },
+    "2": {
+      "collapsed": false,
+      "header_color": [
+        160,
+        80,
+        60,
+        255
+      ],
+      "id": 2,
+      "inputs": [
+        {
+          "allowed": [
+            "Words",
+            "Trigger"
+          ],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 0,
+          "has_control": false,
+          "hidden": false,
+          "name": "In 1",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": {
+            "base": "In",
+            "max": 16,
+            "placeholder": false
+          },
+          "visible": true
+        },
+        {
+          "allowed": [
+            "Words",
+            "Trigger"
+          ],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 0,
+          "has_control": false,
+          "hidden": false,
+          "name": "In 2",
+          "resolved_type": "Words",
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": {
+            "base": "In",
+            "max": 16,
+            "placeholder": false
+          },
+          "visible": true
+        },
+        {
+          "allowed": [
+            "Words",
+            "Trigger"
+          ],
+          "color": [
+            0,
+            205,
+            160,
+            255
+          ],
+          "def_index": 0,
+          "has_control": false,
+          "hidden": false,
+          "name": "In",
+          "resolved_type": null,
+          "shape": "Circle",
+          "show_in_view": false,
+          "type_name": "Signal",
+          "variadic": {
+            "base": "In",
+            "max": 16,
+            "placeholder": true
+          },
+          "visible": true
+        }
+      ],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [],
+      "pos": {
+        "x": 700.0,
+        "y": 180.0
+      },
+      "selected": false,
+      "state": {
+        "label": {
+          "value": ""
+        }
+      },
+      "title": "Viewer",
+      "type_name": "Viewer"
+    }
+  }
+}

@@ -1,6 +1,6 @@
 [workspace]
-members = [".", "crates/app", "crates/logic_analyzer_graph", "crates/logic_analyzer_processing", "crates/logic_analyzer_ui", "crates/signal_processing", "crates/widgets/logic_analyzer_viewer", "crates/widgets/node_graph", "plugins/example-plugin"]
-default-members = ["."]
+members = [".", "crates/app_native", "crates/app_web", "crates/logic_analyzer_graph", "crates/logic_analyzer_processing", "crates/logic_analyzer_ui", "crates/signal_processing", "crates/widgets/logic_analyzer_viewer", "crates/widgets/node_graph", "plugins/example-plugin"]
+default-members = ["crates/app_native"]
 resolver = "2"
 
 [workspace.package]
@@ -37,45 +37,18 @@ version.workspace = true
 edition = "2024"
 publish = false
 autobins = false
-default-run = "dsl-ui"
+autoexamples = false
 
-[[bin]]
-name = "dsl-ui"
-path = "crates/app/src/main.rs"
-
-# This bin target compiles `crates/app/src/main.rs` again under the root
-# package's own identity (separate from `logic-analyzer-app`'s own `[[bin]]` of the
-# same name/path) — declaring the feature name here just keeps that
-# duplicate compilation's `#[cfg(feature = "example-plugin")]` check happy;
-# it's never enabled for this package.
-[features]
-example-plugin = ["dep:example-plugin"]
+# The graph-based examples live in graphs/. This is the sole standalone Rust
+# example because it is a native framebuffer utility rather than a pipeline.
+[[example]]
+name = "ccd_viewer"
+path = "examples/ccd_viewer.rs"
 
 [dependencies]
-signal-processing = { path = "crates/signal_processing" }
-logic-analyzer-processing = { path = "crates/logic_analyzer_processing" }
-logic-analyzer-graph = { path = "crates/logic_analyzer_graph" }
-logic-analyzer-ui = { path = "crates/logic_analyzer_ui" }
 clap = { workspace = true }
-crossbeam-channel = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 memmap2 = { workspace = true }
 minifb = { workspace = true }
-node-graph = { path = "crates/widgets/node_graph" }
-eframe = { workspace = true }
-egui = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-example-plugin = { path = "plugins/example-plugin", optional = true }
-
-[dev-dependencies]
-tempfile = { workspace = true }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSMenu", "NSMenuItem"] }
-objc2-foundation = { version = "0.3", features = ["NSString"] }
 
 [profile.release]
 debug = true

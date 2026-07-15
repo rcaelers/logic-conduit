@@ -1,38 +1,25 @@
 [package]
-name = "logic-analyzer-app"
+name = "logic-analyzer-app-native"
 version.workspace = true
 edition = "2024"
 authors = ["Rob Caelers <rob.caelers@gmail.com>"]
-
-[lib]
-name = "logic_analyzer_app"
-path = "src/lib.rs"
-crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "dsl-ui"
 path = "src/main.rs"
 
 [dependencies]
-logic-analyzer-ui = { path = "../logic_analyzer_ui" }
+clap = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
-log = { workspace = true }
+logic-analyzer-ui = { path = "../logic_analyzer_ui" }
+tracing-subscriber = { workspace = true }
 example-plugin = { path = "../../plugins/example-plugin", optional = true }
 
 [features]
 example-plugin = ["dep:example-plugin"]
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-clap = { workspace = true }
-tracing-subscriber = { workspace = true }
-
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSMenu", "NSMenuItem"] }
 objc2-foundation = { version = "0.3", features = ["NSString"] }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = { workspace = true }
-wasm-bindgen-futures = { workspace = true }
-web-sys = { workspace = true }

@@ -2,6 +2,16 @@ mod builtins;
 mod control;
 mod node;
 mod socket;
+std::cfg_select! {
+    target_arch = "wasm32" => {
+        #[path = "file_dialog_web.rs"]
+        mod file_dialog;
+    }
+    _ => {
+        #[path = "file_dialog_native.rs"]
+        mod file_dialog;
+    }
+}
 
 pub use builtins::{
     AnySocket, BoolSocket, BoolValue, EnumValue, FileSocket, FileValue, FloatSocket, FloatValue,

@@ -2077,19 +2077,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
-name = "logic-analyzer-app"
+name = "logic-analyzer-app-native"
 version = "0.1.0"
 dependencies = [
  "clap",
  "eframe",
  "egui",
  "example-plugin",
- "log",
  "logic-analyzer-ui",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "logic-analyzer-app-web"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "log",
+ "logic-analyzer-ui",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -2100,25 +2108,8 @@ name = "logic-analyzer-examples"
 version = "0.1.0"
 dependencies = [
  "clap",
- "crossbeam-channel",
- "eframe",
- "egui",
- "example-plugin",
- "logic-analyzer-graph",
- "logic-analyzer-processing",
- "logic-analyzer-ui",
  "memmap2",
  "minifb",
- "node-graph",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "serde",
- "serde_json",
- "signal-processing",
- "tempfile",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
