@@ -420,7 +420,12 @@ impl VerticalPanelLayout {
             } else {
                 PanelControlIcon::Minimize
             };
-            if panel_control_button(ui, visibility_icon, "Show or hide this panel").clicked() {
+            let visibility_tooltip = if geometry.minimized {
+                "Restore panel"
+            } else {
+                "Minimize panel"
+            };
+            if panel_control_button(ui, visibility_icon, visibility_tooltip).clicked() {
                 action = Some(if geometry.minimized {
                     PanelAction::RestorePanel
                 } else {
@@ -432,7 +437,12 @@ impl VerticalPanelLayout {
             } else {
                 PanelControlIcon::Maximize
             };
-            if panel_control_button(ui, maximize_icon, "Maximize or restore this panel").clicked() {
+            let maximize_tooltip = if geometry.maximized {
+                "Restore panel layout"
+            } else {
+                "Maximize panel"
+            };
+            if panel_control_button(ui, maximize_icon, maximize_tooltip).clicked() {
                 action = Some(if geometry.maximized {
                     PanelAction::RestoreMaximized
                 } else {
