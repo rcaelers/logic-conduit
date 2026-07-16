@@ -6,7 +6,7 @@ use signal_processing::{DerivedLaneData, LaneSummary};
 
 use super::derived::{DerivedRowGeometry, default_annotation_visual, visible_annotation_range};
 use crate::cursor::{cursor_color, cursor_flag_geometry, cursor_flag_label};
-use crate::format::{badge_text_color, format_duration, format_time, nice_step};
+use crate::format::{badge_text_color, format_time, nice_step};
 use crate::indexed_annotations::IndexedAnnotationSamples;
 use crate::lanes::{
     AnnotationVisual, ViewerLaneFrame, ViewerLaneGroup, ViewerLaneTrackFrame, ViewerLaneTrackId,
@@ -22,13 +22,15 @@ impl LogicAnalyzerViewer {
         pointer: Option<Pos2>,
         active_cursor: Option<usize>,
     ) {
-        let rect = Rect::from_min_max(layout.header_rect.min, layout.wave_rect.right_bottom());
+        let rect = Rect::from_min_max(
+            Pos2::new(layout.labels_rect.left(), layout.ruler_rect.top()),
+            layout.wave_rect.right_bottom(),
+        );
         if rect.width() <= 1.0 || rect.height() <= 1.0 {
             return;
         }
 
         let background = Color32::from_rgb(22, 22, 22);
-        let panel = Color32::from_rgb(30, 30, 30);
         let grid = Color32::from_rgb(52, 52, 52);
         let grid_minor = Color32::from_rgb(38, 38, 38);
         let text = Color32::from_rgb(205, 205, 205);
@@ -36,48 +38,10 @@ impl LogicAnalyzerViewer {
 
         painter.rect_filled(rect, 0.0, background);
 
-        let header_rect = layout.header_rect;
         let ruler_rect = layout.ruler_rect;
         let labels_rect = layout.labels_rect;
         let wave_rect = layout.wave_rect;
         let row_height = layout.row_height;
-
-        painter.rect_filled(header_rect, 0.0, panel);
-        painter.text(
-            header_rect.left_center() + vec2(10.0, 0.0),
-            Align2::LEFT_CENTER,
-            "Logic Analyzer Viewer",
-            egui::FontId::proportional(13.0),
-            text,
-        );
-        painter.text(
-            // Leave room for the color-profile selector at the far right.
-            header_rect.right_center() - vec2(120.0, 0.0),
-            Align2::RIGHT_CENTER,
-            format!(
-                "{} channels · {} span · {}",
-                self.channels.len(),
-                format_duration(self.visible_span_us),
-                self.status
-            ),
-            egui::FontId::proportional(11.0),
-            muted,
-        );
-        if let Some(progress) = self.index_progress {
-            let progress_rect = Rect::from_min_max(
-                Pos2::new(header_rect.left(), header_rect.bottom() - 3.0),
-                header_rect.right_bottom(),
-            );
-            painter.rect_filled(progress_rect, 0.0, Color32::from_rgb(45, 45, 45));
-            let fill_rect = Rect::from_min_max(
-                progress_rect.left_top(),
-                Pos2::new(
-                    progress_rect.left() + progress_rect.width() * progress.fraction(),
-                    progress_rect.bottom(),
-                ),
-            );
-            painter.rect_filled(fill_rect, 0.0, Color32::from_rgb(75, 145, 210));
-        }
 
         painter.rect_filled(labels_rect, 0.0, Color32::from_rgb(25, 25, 25));
         painter.line_segment(

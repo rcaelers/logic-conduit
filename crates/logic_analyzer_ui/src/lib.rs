@@ -1,6 +1,7 @@
 mod about;
 mod app;
 mod app_platform;
+mod application_config;
 mod demo_signals;
 mod input_binding_config;
 mod toast;
@@ -13,6 +14,10 @@ pub use app_platform::{
     NativeMenuCommand, dispatch_native_menu_command, set_recent_files_listener,
 };
 use input_bindings::InputBindings;
+
+pub fn application_config_path() -> Option<std::path::PathBuf> {
+    application_config::path()
+}
 
 pub fn application_input_bindings() -> &'static InputBindings {
     static BINDINGS: OnceLock<InputBindings> = OnceLock::new();

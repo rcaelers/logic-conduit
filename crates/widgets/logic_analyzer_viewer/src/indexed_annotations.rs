@@ -110,7 +110,6 @@ mod tests {
     fn layout(width: f32) -> AnalyzerLayout {
         let empty = Rect::NOTHING;
         AnalyzerLayout {
-            header_rect: empty,
             ruler_rect: empty,
             labels_rect: empty,
             wave_rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(width, 30.0)),

@@ -7,21 +7,12 @@ use crate::lanes::ViewerLaneGroupId;
 /// Color profile for the viewer. DSView (Tango-based channel colors, bright
 /// traces) is the default; Classic is the viewer's original muted look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ColorProfile {
+pub enum ColorProfile {
     DsView,
     Classic,
 }
 
 impl ColorProfile {
-    pub(crate) const ALL: [Self; 2] = [Self::DsView, Self::Classic];
-
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Self::DsView => "DSView",
-            Self::Classic => "Classic",
-        }
-    }
-
     pub(crate) fn channel_color(self, index: usize) -> Color32 {
         const DSVIEW: [Color32; 8] = [
             Color32::from_rgb(80, 80, 80),   // grey
@@ -91,7 +82,6 @@ pub(crate) struct RowLabel {
 
 #[derive(Clone, Copy)]
 pub(crate) struct AnalyzerLayout {
-    pub(crate) header_rect: Rect,
     pub(crate) ruler_rect: Rect,
     pub(crate) labels_rect: Rect,
     pub(crate) wave_rect: Rect,

@@ -25,4 +25,5 @@ pub use lanes::{
     ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneRegistry, ViewerLaneRenderer, ViewerLaneTrack,
     ViewerLaneTrackFrame, ViewerLaneTrackId, ViewerOutputPresentation,
 };
+pub use types::ColorProfile;
 pub use viewer::{ChannelSignal, LogicAnalyzerViewer};

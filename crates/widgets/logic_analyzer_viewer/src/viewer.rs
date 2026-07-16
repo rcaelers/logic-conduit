@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 
-use egui::{FontId, Pos2, Rect, Sense, Ui, vec2};
+use egui::{FontId, Pos2, Rect, Sense, Ui};
 
 use input_bindings::InputBindings;
 use signal_processing::{CaptureDataSource, CaptureIndex, DerivedLanes};
@@ -116,6 +116,23 @@ impl LogicAnalyzerViewer {
 
     pub fn set_input_bindings(&mut self, input_bindings: Arc<InputBindings>) {
         self.input_bindings = input_bindings;
+    }
+
+    pub fn set_color_profile(&mut self, color_profile: ColorProfile) {
+        self.color_profile = color_profile;
+    }
+
+    pub fn status_summary(&self) -> String {
+        format!(
+            "{} channels · {} span · {}",
+            self.channels.len(),
+            crate::format::format_duration(self.visible_span_us),
+            self.status
+        )
+    }
+
+    pub fn index_progress_fraction(&self) -> Option<f32> {
+        self.index_progress.map(IndexBuildProgress::fraction)
     }
 
     pub fn hovered_input_context(&self) -> &'static str {
@@ -339,7 +356,6 @@ impl LogicAnalyzerViewer {
         };
         self.sample_hover_measurement(layout, hover_pointer);
         self.draw(&painter, layout, hover_pointer, cursor_input.active);
-        self.show_profile_selector(ui, rect);
         self.show_row_rename(ui.ctx());
         if self.has_live_indexed_annotations() {
             ui.ctx()
@@ -356,28 +372,7 @@ impl LogicAnalyzerViewer {
         }
     }
 
-    /// Color-profile combo box, overlaid on the right end of the header bar.
-    fn show_profile_selector(&mut self, ui: &mut Ui, rect: Rect) {
-        let combo_rect = Rect::from_min_size(
-            Pos2::new(rect.right() - 112.0, rect.top() + 3.0),
-            vec2(104.0, 20.0),
-        );
-        if combo_rect.left() <= rect.left() {
-            return;
-        }
-        let mut combo_ui = ui.new_child(egui::UiBuilder::new().max_rect(combo_rect));
-        egui::ComboBox::from_id_salt("logic_analyzer_color_profile")
-            .selected_text(self.color_profile.name())
-            .width(100.0)
-            .show_ui(&mut combo_ui, |ui| {
-                for profile in ColorProfile::ALL {
-                    ui.selectable_value(&mut self.color_profile, profile, profile.name());
-                }
-            });
-    }
-
     pub(crate) fn layout(&self, ui: &Ui, rect: Rect) -> AnalyzerLayout {
-        let title_height = 26.0;
         let ruler_height = 34.0;
         let row_height = 30.0;
         let label_pad = 12.0;
@@ -424,25 +419,20 @@ impl LogicAnalyzerViewer {
             label_pad + name_col_width + name_badge_gap + badge_width + label_right_pad;
         let left_width = desired_left_width.max(72.0).min(rect.width().max(0.0));
 
-        let header_rect = Rect::from_min_size(rect.min, vec2(rect.width(), title_height));
         let ruler_rect = Rect::from_min_max(
-            Pos2::new(rect.left() + left_width, rect.top() + title_height),
-            Pos2::new(rect.right(), rect.top() + title_height + ruler_height),
+            Pos2::new(rect.left() + left_width, rect.top()),
+            Pos2::new(rect.right(), rect.top() + ruler_height),
         );
         let labels_rect = Rect::from_min_max(
-            Pos2::new(rect.left(), rect.top() + title_height + ruler_height),
+            Pos2::new(rect.left(), rect.top() + ruler_height),
             Pos2::new(rect.left() + left_width, rect.bottom()),
         );
         let wave_rect = Rect::from_min_max(
-            Pos2::new(
-                rect.left() + left_width,
-                rect.top() + title_height + ruler_height,
-            ),
+            Pos2::new(rect.left() + left_width, rect.top() + ruler_height),
             rect.max,
         );
 
         AnalyzerLayout {
-            header_rect,
             ruler_rect,
             labels_rect,
             wave_rect,

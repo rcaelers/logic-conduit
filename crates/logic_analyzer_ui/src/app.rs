@@ -127,6 +127,13 @@ impl App {
             crate::app_platform::PlatformState::restore(cc, &mut widget);
         let mut logic_analyzer = LogicAnalyzerViewer::new();
         logic_analyzer.set_input_bindings(input_bindings.clone());
+        let application_config = crate::application_config::load();
+        logic_analyzer.set_color_profile(
+            application_config
+                .logic_analyzer_viewer
+                .color_profile
+                .into(),
+        );
         logic_analyzer.set_channels(demo_signals::channels());
         Self {
             node_graph: widget,
@@ -168,6 +175,18 @@ impl App {
             },
             true,
         ));
+    }
+
+    fn show_logic_analyzer_status(&self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.label(egui::RichText::new(self.logic_analyzer.status_summary()).weak());
+        if let Some(progress) = self.logic_analyzer.index_progress_fraction() {
+            ui.add(
+                egui::ProgressBar::new(progress)
+                    .desired_width(64.0)
+                    .show_percentage(),
+            );
+        }
     }
 
     fn start_run(&mut self) {
@@ -584,6 +603,9 @@ impl eframe::App for App {
             STATUS_BAR_HEIGHT,
             &specs,
             |slot, panel_ui| match slot {
+                PanelSlot::TitleBar("logic_analyzer") => {
+                    self.show_logic_analyzer_status(panel_ui);
+                }
                 PanelSlot::TitleBar("node_graph") => self.show_run_controls(panel_ui),
                 PanelSlot::Body("logic_analyzer") => self.logic_analyzer.show(panel_ui),
                 PanelSlot::Body("node_graph") => {
