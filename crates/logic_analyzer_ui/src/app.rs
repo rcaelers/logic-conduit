@@ -105,6 +105,10 @@ impl App {
         cc: &eframe::CreationContext,
         register_plugins: impl FnOnce(&mut compiler::PluginContext),
     ) -> Self {
+        // The graph canvas and its custom widgets use a dark palette. Do not
+        // inherit a light OS/browser preference for the surrounding egui
+        // controls, or their dark foreground text becomes unreadable there.
+        cc.egui_ctx.set_theme(egui::Theme::Dark);
         install_fonts(&cc.egui_ctx);
         let mut registry = nodes::build_registry();
         let mut builders = compiler::BuilderRegistry::standard();
