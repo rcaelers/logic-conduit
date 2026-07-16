@@ -28,41 +28,66 @@ pub struct VariadicInfo {
 /// A socket on a node instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Socket {
+    #[serde(default, skip_serializing)]
     pub name: String,
     /// Native type. For inputs this is what the node primarily expects; the
     /// socket may temporarily resolve to one of `allowed` while connected.
+    #[serde(default = "default_socket_type_name", skip_serializing)]
     pub type_name: String,
     /// Idle look, owned by the node definition (`idle_style` / `on_update`).
     /// The resolved look is derived from the type identity table at render time.
+    #[serde(default = "default_socket_color", skip_serializing)]
     pub color: Color32,
+    #[serde(default, skip_serializing)]
     pub shape: SocketShape,
     /// Additional type names this input accepts besides `type_name`. The node
     /// declared it can handle these itself. Empty = strict.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub allowed: Vec<String>,
     /// Set while connected to an output whose type differs from `type_name`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_type: Option<String>,
     /// Which `InputDef`/`OutputDef` of the node definition this socket came
     /// from. Socket and def counts diverge once variadic groups grow, so all
     /// def lookups (controls, restore) go through this instead of position.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub def_index: usize,
     /// Present when this socket belongs to a variadic group.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub variadic: Option<VariadicInfo>,
     /// Controlled by `on_update` — set false to suppress the socket entirely.
+    #[serde(default = "default_true", skip_serializing)]
     pub visible: bool,
     /// Set true by the user via "Hide Unused"; never touched by `on_update`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub hidden: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub has_control: bool,
     /// User-toggled from the node panel's generic "View" section (outputs
     /// only): show this output as a logic analyzer lane without an explicit
     /// wire to a `Viewer` node. The compiler synthesizes the connection.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub show_in_view: bool,
+}
+
+fn default_socket_type_name() -> String {
+    "Any".to_owned()
+}
+
+fn default_socket_color() -> Color32 {
+    Color32::from_rgb(150, 150, 150)
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 impl Socket {
@@ -180,5 +205,38 @@ mod tests {
             &typed_input,
             SocketDirection::Input
         ));
+    }
+
+    #[test]
+    fn definition_owned_fields_are_not_serialized_but_legacy_values_load() {
+        let socket = socket("Float");
+        let mut value = serde_json::to_value(&socket).unwrap();
+        let object = value.as_object_mut().unwrap();
+        assert!(!object.contains_key("name"));
+        assert!(!object.contains_key("type_name"));
+        assert!(!object.contains_key("color"));
+        assert!(!object.contains_key("shape"));
+        assert!(!object.contains_key("allowed"));
+        assert!(!object.contains_key("variadic"));
+        assert!(!object.contains_key("resolved_type"));
+        assert!(!object.contains_key("visible"));
+        assert!(!object.contains_key("hidden"));
+        assert!(!object.contains_key("has_control"));
+        assert!(!object.contains_key("show_in_view"));
+
+        object.insert("name".to_owned(), serde_json::json!("Input"));
+        object.insert("type_name".to_owned(), serde_json::json!("Float"));
+        object.insert("color".to_owned(), serde_json::json!([1, 2, 3, 255]));
+        object.insert("shape".to_owned(), serde_json::json!("Diamond"));
+        object.insert(
+            "variadic".to_owned(),
+            serde_json::json!({"base":"Input","max":4,"placeholder":true}),
+        );
+        let restored: Socket = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.name, "Input");
+        assert_eq!(restored.type_name, "Float");
+        assert_eq!(restored.color, Color32::from_rgb(1, 2, 3));
+        assert_eq!(restored.shape, SocketShape::Diamond);
+        assert!(restored.is_variadic_placeholder());
     }
 }

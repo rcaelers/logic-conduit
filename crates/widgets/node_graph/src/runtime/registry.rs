@@ -84,13 +84,47 @@ fn reconcile_input_sockets<S>(sockets: &mut Vec<Socket>, defs: &[InputDef<S>]) {
         }
     }
 
+    // Compact graph files retain one socket record per live instance but do
+    // not repeat the variadic contract owned by the node definition. Members
+    // precede the optional trailing placeholder, so the instance sequence and
+    // the definition's maximum reconstruct the transient flags unambiguously.
+    for (def_index, definition) in defs.iter().enumerate() {
+        let Some(max) = definition.variadic_max else {
+            continue;
+        };
+        let positions: Vec<_> = sockets
+            .iter()
+            .enumerate()
+            .filter_map(|(index, socket)| (socket.def_index == def_index).then_some(index))
+            .collect();
+        if positions.is_empty()
+            || !positions
+                .iter()
+                .all(|&index| sockets[index].variadic.is_none())
+        {
+            continue;
+        }
+        let count = positions.len();
+        for (group_index, position) in positions.into_iter().enumerate() {
+            sockets[position].variadic = Some(VariadicInfo {
+                base: definition.label.clone(),
+                max,
+                placeholder: group_index + 1 == count && count < max,
+            });
+        }
+    }
+
     if !input_sockets_match_defs(sockets, defs) {
         *sockets = build_input_sockets(defs);
         return;
     }
 
+    let mut variadic_member_counts = HashMap::<usize, usize>::new();
     for socket in sockets.iter_mut() {
         let definition = &defs[socket.def_index];
+        socket.type_name = definition.type_name.to_owned();
+        socket.color = definition.color;
+        socket.shape = definition.shape;
         socket.has_control = definition.control.is_some() && definition.variadic_max.is_none();
         socket.allowed = definition
             .accepted
@@ -107,6 +141,15 @@ fn reconcile_input_sockets<S>(sockets: &mut Vec<Socket>, defs: &[InputDef<S>]) {
             if let Some(max) = definition.variadic_max {
                 info.max = max;
             }
+            socket.name = if info.placeholder {
+                definition.label.clone()
+            } else {
+                let member_number = variadic_member_counts.entry(socket.def_index).or_default();
+                *member_number += 1;
+                format!("{} {member_number}", definition.label)
+            };
+        } else {
+            socket.name = definition.label.clone();
         }
     }
 }
@@ -202,7 +245,13 @@ pub(crate) fn restore_node<T: NodeDef>(node: &mut Node) -> Box<dyn NodeInstance>
         node.outputs = build_output_sockets(&outputs);
     } else {
         for (index, (socket, definition)) in node.outputs.iter_mut().zip(&outputs).enumerate() {
+            socket.name = definition.label.clone();
+            socket.type_name = definition.type_name.to_owned();
+            socket.color = definition.color;
+            socket.shape = definition.shape;
+            socket.allowed.clear();
             socket.def_index = index;
+            socket.variadic = None;
             socket.has_control = definition.control.is_some();
         }
     }
@@ -431,6 +480,36 @@ mod tests {
         assert!(node.inputs[1].is_variadic_member());
         assert_eq!(node.inputs[1].name, "In 1");
         assert!(node.inputs[2].is_variadic_placeholder());
+    }
+
+    #[test]
+    fn restore_reconstructs_compact_variadic_metadata() {
+        let runtime = create_node::<MixNode>(NodeId(0), Pos2::ZERO);
+        let mut node = runtime.node;
+        let placeholder = node.inputs[1].clone();
+        let mut member = placeholder.clone();
+        member.name = "In 1".to_owned();
+        member.variadic.as_mut().unwrap().placeholder = false;
+        node.inputs[1] = member;
+        node.inputs.push(placeholder);
+
+        let json = serde_json::to_string(&node).unwrap();
+        assert!(!json.contains("\"variadic\""));
+        assert!(!json.contains("\"color\""));
+        assert!(!json.contains("\"shape\""));
+        let mut restored: Node = serde_json::from_str(&json).unwrap();
+        assert!(
+            restored
+                .inputs
+                .iter()
+                .all(|socket| socket.variadic.is_none())
+        );
+
+        restore_node::<MixNode>(&mut restored);
+        assert_eq!(restored.inputs.len(), 3);
+        assert!(restored.inputs[1].is_variadic_member());
+        assert_eq!(restored.inputs[1].name, "In 1");
+        assert!(restored.inputs[2].is_variadic_placeholder());
     }
 
     #[test]

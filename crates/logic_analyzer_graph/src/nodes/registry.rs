@@ -308,10 +308,17 @@ fn build_binary_decoder_demo(widget: &mut node_graph::NodeGraphWidget) {
         (spi, "MOSI Words"),
         (spi, "MISO Words"),
         (decoder, "Words"),
+        (formatter, "Text"),
     ] {
         let output = output_index(widget, node, output);
         widget.graph_mut().nodes.get_mut(&node).unwrap().outputs[output].show_in_view = true;
     }
+    widget
+        .graph_mut()
+        .nodes
+        .get_mut(&formatter)
+        .unwrap()
+        .selected = true;
 }
 
 /// Loads the self-contained controlled-decoder graph used by the web app.
@@ -648,7 +655,7 @@ mod tests {
                 .flat_map(|node| &node.outputs)
                 .filter(|output| output.show_in_view)
                 .count(),
-            7
+            8
         );
         let (_, preview) = crate::nodes::capture_preview(loaded.graph())
             .expect("demo source should provide a pre-run capture preview");
@@ -661,11 +668,10 @@ mod tests {
         );
         let compiled = lower(loaded.graph(), &BuilderRegistry::standard())
             .expect("wasm demo should lower cleanly");
-        // Counter/formatter are retained in the editable graph to mirror the
-        // native controlled pipeline's window-naming branch. With no wasm
-        // filesystem writer sink, lowering correctly prunes that dead branch.
+        // Watching the formatter output keeps the counter/formatter branch
+        // live even though the wasm graph has no filesystem writer sink.
         assert_eq!(loaded.graph().nodes.len(), 9);
-        assert_eq!(compiled.nodes.len(), 8);
+        assert_eq!(compiled.nodes.len(), 10);
     }
 
     #[test]

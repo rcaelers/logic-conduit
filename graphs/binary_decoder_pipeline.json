@@ -17,55 +17,9 @@
       },
       "inputs": [
         {
-          "name": "In 1",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [
-            "Words",
-            "Trigger"
-          ],
-          "resolved_type": "Words",
-          "def_index": 0,
-          "variadic": {
-            "base": "In",
-            "max": 16,
-            "placeholder": false
-          },
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "resolved_type": "Words"
         },
-        {
-          "name": "In",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [
-            "Words",
-            "Trigger"
-          ],
-          "resolved_type": null,
-          "def_index": 0,
-          "variadic": {
-            "base": "In",
-            "max": 16,
-            "placeholder": true
-          },
-          "visible": true,
-          "hidden": false,
-          "has_control": false
-        }
+        {}
       ],
       "outputs": [],
       "collapsed": false,
@@ -92,278 +46,43 @@
         "y": 232.35938
       },
       "inputs": [
+        {},
         {
-          "name": "Clock",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 0,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 1
         },
         {
-          "name": "D 1",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 1,
-          "variadic": {
-            "base": "D",
-            "max": 32,
-            "placeholder": false
-          },
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 1
         },
         {
-          "name": "D 2",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 1,
-          "variadic": {
-            "base": "D",
-            "max": 32,
-            "placeholder": false
-          },
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 1
         },
         {
-          "name": "D 3",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 1,
-          "variadic": {
-            "base": "D",
-            "max": 32,
-            "placeholder": false
-          },
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 1
         },
         {
-          "name": "D 4",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 1,
-          "variadic": {
-            "base": "D",
-            "max": 32,
-            "placeholder": false
-          },
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 1
         },
         {
-          "name": "D 5",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 1,
-          "variadic": {
-            "base": "D",
-            "max": 32,
-            "placeholder": false
-          },
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 1
         },
         {
-          "name": "D 6",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 1,
-          "variadic": {
-            "base": "D",
-            "max": 32,
-            "placeholder": false
-          },
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 1
         },
         {
-          "name": "D 7",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 1,
-          "variadic": {
-            "base": "D",
-            "max": 32,
-            "placeholder": false
-          },
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 1
         },
         {
-          "name": "D 8",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 1,
-          "variadic": {
-            "base": "D",
-            "max": 32,
-            "placeholder": false
-          },
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 1
         },
         {
-          "name": "D",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 1,
-          "variadic": {
-            "base": "D",
-            "max": 32,
-            "placeholder": true
-          },
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 2
         },
         {
-          "name": "CS",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 2,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": false
-        },
-        {
-          "name": "Enable",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 3,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 3
         }
       ],
       "outputs": [
-        {
-          "name": "Words",
-          "type_name": "Words",
-          "color": [
-            215,
-            140,
-            60,
-            255
-          ],
-          "shape": "Diamond",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 0,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": false
-        }
+        {}
       ],
       "collapsed": false,
       "state": {
@@ -416,619 +135,105 @@
         "y": 193.88672
       },
       "inputs": [
+        {},
         {
-          "name": "File",
-          "type_name": "Text",
-          "color": [
-            215,
-            150,
-            170,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 0,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": true
-        },
-        {
-          "name": "Channels",
-          "type_name": "Int",
-          "color": [
-            95,
-            145,
-            210,
-            255
-          ],
-          "shape": "Square",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 1,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": true
+          "def_index": 1
         }
       ],
       "outputs": [
+        {},
         {
-          "name": "Ch 0",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 0,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 1
         },
         {
-          "name": "Ch 1",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 1,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 2
         },
         {
-          "name": "Ch 2",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 2,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 3
         },
         {
-          "name": "Ch 3",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 3,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 4
         },
         {
-          "name": "Ch 4",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 4,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 5
         },
         {
-          "name": "Ch 5",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 5,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 6
         },
         {
-          "name": "Ch 6",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 6,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 7
         },
         {
-          "name": "Ch 7",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 7,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 8
         },
         {
-          "name": "Ch 8",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 8,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 9
         },
         {
-          "name": "Ch 9",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 9,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 10
         },
         {
-          "name": "Ch 10",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 10,
-          "variadic": null,
-          "visible": true,
-          "hidden": false,
-          "has_control": false
+          "def_index": 11
         },
         {
-          "name": "Ch 11",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 11,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 12
         },
         {
-          "name": "Ch 12",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 12,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 13
         },
         {
-          "name": "Ch 13",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 13,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 14
         },
         {
-          "name": "Ch 14",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 14,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 15
         },
         {
-          "name": "Ch 15",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 15,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 16
         },
         {
-          "name": "Ch 16",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 16,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 17
         },
         {
-          "name": "Ch 17",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 17,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 18
         },
         {
-          "name": "Ch 18",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 18,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 19
         },
         {
-          "name": "Ch 19",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 19,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 20
         },
         {
-          "name": "Ch 20",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 20,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 21
         },
         {
-          "name": "Ch 21",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 21,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 22
         },
         {
-          "name": "Ch 22",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 22,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 23
         },
         {
-          "name": "Ch 23",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 23,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 24
         },
         {
-          "name": "Ch 24",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 24,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 25
         },
         {
-          "name": "Ch 25",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 25,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 26
         },
         {
-          "name": "Ch 26",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 26,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 27
         },
         {
-          "name": "Ch 27",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 27,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 28
         },
         {
-          "name": "Ch 28",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 28,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 29
         },
         {
-          "name": "Ch 29",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 29,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 30
         },
         {
-          "name": "Ch 30",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 30,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
-        },
-        {
-          "name": "Ch 31",
-          "type_name": "Signal",
-          "color": [
-            0,
-            205,
-            160,
-            255
-          ],
-          "shape": "Circle",
-          "allowed": [],
-          "resolved_type": null,
-          "def_index": 31,
-          "variadic": null,
-          "visible": false,
-          "hidden": false,
-          "has_control": false
+          "def_index": 31
         }
       ],
       "collapsed": false,
