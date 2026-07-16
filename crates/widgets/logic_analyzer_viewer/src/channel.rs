@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 
-use egui::{Color32, CursorIcon, PointerButton, Pos2, Rect, Response, Ui, vec2};
+use egui::{Color32, CursorIcon, Pos2, Rect, Response, Ui, vec2};
 
 use signal_processing::{
     AppendOnlyMipmap, CaptureMetadata, CaptureSampledWindow, CaptureWaveformSegment,
@@ -126,7 +126,13 @@ impl LogicAnalyzerViewer {
         response: &Response,
         layout: AnalyzerLayout,
     ) -> bool {
-        if !response.double_clicked() {
+        let Some(rename_button) = self
+            .input_bindings
+            .pointer_button(&["logic_analyzer.channel", "logic_analyzer"], "rename")
+        else {
+            return false;
+        };
+        if !response.double_clicked_by(rename_button) {
             return false;
         }
         let Some(pointer) = response.interact_pointer_pos() else {
@@ -174,7 +180,13 @@ impl LogicAnalyzerViewer {
             ui.ctx().set_cursor_icon(CursorIcon::Grab);
         }
 
-        if response.drag_started_by(PointerButton::Primary)
+        let Some(reorder_button) = self
+            .input_bindings
+            .pointer_button(&["logic_analyzer.channel", "logic_analyzer"], "reorder")
+        else {
+            return false;
+        };
+        if response.drag_started_by(reorder_button)
             && let Some(grab_pos) = ui.input(|input| input.pointer.press_origin()).or(pointer)
             && let Some(row) = self.row_at_pointer(layout, grab_pos)
             && self.row_badge_rect(layout, row).contains(grab_pos)
@@ -190,7 +202,7 @@ impl LogicAnalyzerViewer {
             return false;
         };
 
-        if !response.dragged_by(PointerButton::Primary) {
+        if !response.dragged_by(reorder_button) {
             self.row_drag = None;
             return false;
         }
@@ -252,7 +264,13 @@ impl LogicAnalyzerViewer {
                         .desired_width(240.0)
                         .hint_text("Name"),
                 );
-                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if response.lost_focus()
+                    && self.input_bindings.consume_shortcut_ctx(
+                        ui.ctx(),
+                        &["logic_analyzer.channel_edit"],
+                        "confirm",
+                    )
+                {
                     apply = true;
                 } else {
                     response.request_focus();
@@ -267,7 +285,10 @@ impl LogicAnalyzerViewer {
                 });
             });
 
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if self
+            .input_bindings
+            .consume_shortcut_ctx(ctx, &["logic_analyzer.channel_edit"], "cancel")
+        {
             cancel = true;
         }
         if apply {

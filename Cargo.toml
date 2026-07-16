@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/app_native", "crates/app_web", "crates/logic_analyzer_graph", "crates/logic_analyzer_processing", "crates/logic_analyzer_ui", "crates/signal_processing", "crates/widgets/logic_analyzer_viewer", "crates/widgets/node_graph", "plugins/example-plugin"]
+members = [".", "crates/app_native", "crates/app_web", "crates/input_bindings", "crates/logic_analyzer_graph", "crates/logic_analyzer_processing", "crates/logic_analyzer_ui", "crates/signal_processing", "crates/widgets/logic_analyzer_viewer", "crates/widgets/node_graph", "plugins/example-plugin"]
 default-members = ["crates/app_native"]
 resolver = "2"
 

@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 
 use egui::{FontId, Pos2, Rect, Sense, Ui, vec2};
 
+use input_bindings::InputBindings;
 use signal_processing::{CaptureDataSource, CaptureIndex, DerivedLanes};
 
 use crate::channel::LogicChannel;
@@ -28,6 +30,7 @@ pub struct ChannelSignal {
 }
 
 pub struct LogicAnalyzerViewer {
+    pub(crate) input_bindings: Arc<InputBindings>,
     pub(crate) channels: Vec<LogicChannel>,
     /// Display order across both `channels` and `derived` lanes — the only
     /// source of truth for row order, kept in sync by `ensure_row_order`.
@@ -68,6 +71,7 @@ pub struct LogicAnalyzerViewer {
     pub(crate) derived: Option<DerivedLanes>,
     pub(crate) viewer_lanes: ViewerLaneRegistry,
     pub(crate) indexed_annotation_cache: HashMap<String, IndexedAnnotationCacheEntry>,
+    hovered_input_context: &'static str,
 }
 
 impl Default for LogicAnalyzerViewer {
@@ -79,6 +83,10 @@ impl Default for LogicAnalyzerViewer {
 impl LogicAnalyzerViewer {
     pub fn new() -> Self {
         Self {
+            input_bindings: Arc::new(
+                InputBindings::from_json(r#"{"bindings":[]}"#)
+                    .expect("empty input binding configuration is valid"),
+            ),
             row_order: Vec::new(),
             channels: Vec::new(),
             row_drag: None,
@@ -102,7 +110,16 @@ impl LogicAnalyzerViewer {
             derived: None,
             viewer_lanes: ViewerLaneRegistry::new(),
             indexed_annotation_cache: HashMap::new(),
+            hovered_input_context: "logic_analyzer",
         }
+    }
+
+    pub fn set_input_bindings(&mut self, input_bindings: Arc<InputBindings>) {
+        self.input_bindings = input_bindings;
+    }
+
+    pub fn hovered_input_context(&self) -> &'static str {
+        self.hovered_input_context
     }
 
     /// Replaces the derived-lane store: the viewer renders whatever the
@@ -262,18 +279,40 @@ impl LogicAnalyzerViewer {
         // all see the same order.
         self.ensure_row_order();
         let mut layout = self.layout(ui, rect);
+        self.hovered_input_context = response
+            .hover_pos()
+            .map(|pointer| {
+                if layout.ruler_rect.contains(pointer) {
+                    "logic_analyzer.ruler"
+                } else if layout.labels_rect.contains(pointer) {
+                    "logic_analyzer.channel"
+                } else {
+                    "logic_analyzer"
+                }
+            })
+            .unwrap_or("logic_analyzer");
         let row_rename_started = self.handle_row_label_input(ui, &response, layout);
         let row_dragging = self.handle_row_reorder(ui, &response, layout);
         let cursor_input = self.handle_cursor_input(ui, &response, layout);
         let home_pressed = response.hovered()
             && ui.ctx().memory(|memory| memory.focused().is_none())
-            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Home));
+            && self
+                .input_bindings
+                .consume_shortcut_ctx(ui.ctx(), &["logic_analyzer"], "fit");
         if home_pressed {
             self.reset_time_view();
-        } else if (response.double_clicked()
+        } else if (self
+            .input_bindings
+            .pointer_button(&["logic_analyzer"], "fit_pointer")
+            .is_some_and(|button| response.double_clicked_by(button))
             && !cursor_input.ruler_double_click
             && !row_rename_started)
-            || (response.hovered() && ui.input(|input| input.key_pressed(egui::Key::F)))
+            || (response.hovered()
+                && self.input_bindings.consume_shortcut_ctx(
+                    ui.ctx(),
+                    &["logic_analyzer"],
+                    "fit_alternate",
+                ))
         {
             self.fit_capture();
         }
@@ -281,7 +320,9 @@ impl LogicAnalyzerViewer {
             ui,
             layout,
             response.hovered(),
-            response.dragged_by(egui::PointerButton::Primary)
+            self.input_bindings
+                .pointer_button(&["logic_analyzer"], "pan")
+                .is_some_and(|button| response.dragged_by(button))
                 && !cursor_input.blocks_pan
                 && !row_dragging,
         );

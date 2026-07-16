@@ -11,52 +11,12 @@ pub(crate) struct Shortcut {
 }
 
 impl Shortcut {
-    pub fn key(key: egui::Key) -> Self {
+    pub fn from_keyboard(shortcut: egui::KeyboardShortcut) -> Self {
         Self {
-            modifiers: egui::Modifiers::NONE,
-            key,
+            modifiers: shortcut.modifiers,
+            key: shortcut.logical_key,
         }
     }
-    pub fn ctrl(key: egui::Key) -> Self {
-        Self {
-            modifiers: egui::Modifiers {
-                ctrl: true,
-                ..egui::Modifiers::NONE
-            },
-            key,
-        }
-    }
-    pub fn command(key: egui::Key) -> Self {
-        Self {
-            modifiers: egui::Modifiers::COMMAND,
-            key,
-        }
-    }
-    pub fn command_shift(key: egui::Key) -> Self {
-        Self {
-            modifiers: egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
-            key,
-        }
-    }
-    pub fn shift(key: egui::Key) -> Self {
-        Self {
-            modifiers: egui::Modifiers {
-                shift: true,
-                ..egui::Modifiers::NONE
-            },
-            key,
-        }
-    }
-    pub fn alt(key: egui::Key) -> Self {
-        Self {
-            modifiers: egui::Modifiers {
-                alt: true,
-                ..egui::Modifiers::NONE
-            },
-            key,
-        }
-    }
-
     fn consume(&self, ui: &mut egui::Ui) -> bool {
         if ui.input_mut(|input| {
             input.consume_shortcut(&egui::KeyboardShortcut::new(self.modifiers, self.key))
@@ -288,6 +248,11 @@ impl<T: Clone> Menu<T> {
         self.pending_close = false;
     }
 
+    fn close_and_surrender_focus(&mut self, ui: &mut egui::Ui) {
+        ui.memory_mut(|memory| memory.surrender_focus(self.area_id));
+        self.close();
+    }
+
     // ── Keyboard navigation ───────────────────────────────────────────────────
 
     /// `root_id` — context menus: `egui::Popup::default_response_id(response)`;
@@ -308,11 +273,11 @@ impl<T: Clone> Menu<T> {
             return Some(action);
         }
 
-        let down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
-        let up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
-        let right = ui.input(|i| i.key_pressed(egui::Key::ArrowRight));
-        let left = ui.input(|i| i.key_pressed(egui::Key::ArrowLeft));
-        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let down = ui.input(|input| input.key_pressed(egui::Key::ArrowDown));
+        let up = ui.input(|input| input.key_pressed(egui::Key::ArrowUp));
+        let right = ui.input(|input| input.key_pressed(egui::Key::ArrowRight));
+        let left = ui.input(|input| input.key_pressed(egui::Key::ArrowLeft));
+        let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
 
         if !down && !up && !right && !left && !enter {
             if !self.sel.is_empty() {
@@ -328,7 +293,7 @@ impl<T: Clone> Menu<T> {
             }
             if left && !down && !up && !right && !enter {
                 if self.visible {
-                    self.close();
+                    self.close_and_surrender_focus(ui);
                 }
                 egui::containers::menu::MenuState::from_id(ui.ctx(), root_id, |s| {
                     s.open_item = None
@@ -391,7 +356,7 @@ impl<T: Clone> Menu<T> {
                     s.open_item = None
                 });
                 if self.visible {
-                    self.close();
+                    self.close_and_surrender_focus(ui);
                 }
                 return None;
             }
@@ -848,7 +813,7 @@ impl<T: Clone> PopupMenu<T> {
             let id = self.popup.area_id;
             let result = self.popup.handle_keys(ui, id);
             if result.is_some() {
-                self.popup.close();
+                self.popup.close_and_surrender_focus(ui);
             }
             result
         } else {
@@ -862,19 +827,20 @@ impl<T: Clone> PopupMenu<T> {
 
         // Standalone popup — we own its lifecycle entirely.
         if self.popup.visible {
-            let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
-            let sec_press = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary));
+            let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+            let sec_press =
+                ui.input(|input| input.pointer.button_pressed(egui::PointerButton::Secondary));
             if escape || sec_press {
-                self.popup.close();
+                self.popup.close_and_surrender_focus(ui);
             } else {
                 let (area_resp, clicked) = self.popup.show_popup(ui);
                 if clicked.is_some() {
                     result = clicked;
-                    self.popup.close();
+                    self.popup.close_and_surrender_focus(ui);
                 } else if !area_resp.hovered()
-                    && ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary))
+                    && ui.input(|input| input.pointer.button_released(egui::PointerButton::Primary))
                 {
-                    self.popup.close();
+                    self.popup.close_and_surrender_focus(ui);
                 }
             }
         }
@@ -895,6 +861,23 @@ mod tests {
                 vec![MenuEntry::action("Buffer", ())],
             )],
         )]
+    }
+
+    #[test]
+    fn closing_popup_surrenders_its_keyboard_focus() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let id = egui::Id::new("focused-popup");
+            let mut menu = Menu::<()>::new(id);
+            menu.open(egui::Pos2::ZERO);
+            ui.memory_mut(|memory| memory.request_focus(id));
+            assert_eq!(ui.memory(|memory| memory.focused()), Some(id));
+
+            menu.close_and_surrender_focus(ui);
+
+            assert!(!menu.visible);
+            assert_eq!(ui.memory(|memory| memory.focused()), None);
+        });
     }
 
     #[test]

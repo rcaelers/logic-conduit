@@ -7,45 +7,6 @@ use crate::app_platform::{FileCommand, GuardedAction};
 #[cfg(target_os = "macos")]
 use crate::app_platform::{NativeMenuCommand, notify_recent_files_changed};
 
-#[cfg(not(target_os = "macos"))]
-fn is_quit_shortcut(event: &egui::Event) -> bool {
-    matches!(
-        event,
-        egui::Event::Key {
-            key: egui::Key::Q,
-            pressed: true,
-            modifiers,
-            ..
-        } if modifiers.matches_logically(egui::Modifiers::COMMAND)
-    )
-}
-
-#[cfg(all(test, not(target_os = "macos")))]
-mod tests {
-    use super::is_quit_shortcut;
-
-    #[test]
-    fn recognizes_command_q_key_presses() {
-        let press = egui::Event::Key {
-            key: egui::Key::Q,
-            physical_key: Some(egui::Key::Q),
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::COMMAND,
-        };
-        let release = egui::Event::Key {
-            key: egui::Key::Q,
-            physical_key: Some(egui::Key::Q),
-            pressed: false,
-            repeat: false,
-            modifiers: egui::Modifiers::COMMAND,
-        };
-
-        assert!(is_quit_shortcut(&press));
-        assert!(!is_quit_shortcut(&release));
-    }
-}
-
 impl App {
     pub(super) fn platform_load_startup_file(&mut self, file: Option<&std::path::Path>) {
         if let Some(file) = file {
@@ -63,14 +24,6 @@ impl App {
         _ctx: &egui::Context,
         _raw_input: &mut egui::RawInput,
     ) {
-        #[cfg(not(target_os = "macos"))]
-        {
-            let quit_requested = _raw_input.events.iter().any(is_quit_shortcut);
-            _raw_input.events.retain(|event| !is_quit_shortcut(event));
-            if quit_requested && !self.platform.allow_close {
-                self.request_quit(_ctx);
-            }
-        }
     }
 
     pub(super) fn platform_logic(&mut self, ctx: &egui::Context) {
@@ -466,17 +419,18 @@ impl App {
 
     #[cfg(not(target_os = "macos"))]
     pub(super) fn show_menu_bar(&mut self, ui: &mut egui::Ui) {
-        let new_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::N);
-        let load_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::O);
-        let save_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
-        let save_as_shortcut = egui::KeyboardShortcut::new(
-            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-            egui::Key::S,
-        );
-        let quit_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Q);
-        let run_shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::R);
-        let stop_shortcut =
-            egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Period);
+        let shortcut = |action| {
+            self.input_bindings
+                .shortcut(&["global"], action)
+                .unwrap_or_else(|| panic!("missing global.{action} input binding"))
+        };
+        let new_shortcut = shortcut("new");
+        let load_shortcut = shortcut("open");
+        let save_shortcut = shortcut("save");
+        let save_as_shortcut = shortcut("save_as");
+        let quit_shortcut = shortcut("quit");
+        let run_shortcut = shortcut("run");
+        let stop_shortcut = shortcut("stop");
         let mut command = if ui.input_mut(|input| input.consume_shortcut(&new_shortcut)) {
             Some(FileCommand::New)
         } else if ui.input_mut(|input| input.consume_shortcut(&load_shortcut)) {

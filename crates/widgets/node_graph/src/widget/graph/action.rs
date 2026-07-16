@@ -3,7 +3,6 @@ use std::collections::{HashMap, HashSet};
 use egui::{Color32, Pos2, Vec2};
 use serde::{Deserialize, Serialize};
 
-pub(super) use super::super::menu::Shortcut;
 use super::widget::{FrameRenameState, NodeGraphWidget, NodeRenameState};
 use crate::model::{Connection, FrameId, Node, NodeId, SocketDirection, SocketId};
 
@@ -108,7 +107,7 @@ pub(super) enum GraphAction {
 }
 
 pub(super) struct HotkeyRegistry {
-    bindings: Vec<(Shortcut, GraphAction)>,
+    bindings: Vec<(&'static str, GraphAction)>,
 }
 
 impl HotkeyRegistry {
@@ -120,56 +119,46 @@ impl HotkeyRegistry {
 
     pub fn graph_defaults() -> Self {
         let mut r = Self::new();
-        r.bind(
-            Shortcut::key(egui::Key::Delete),
-            GraphAction::Delete { target: None },
-        );
-        r.bind(
-            Shortcut::key(egui::Key::Backspace),
-            GraphAction::Delete { target: None },
-        );
+        r.bind("delete", GraphAction::Delete { target: None });
         // `M` now mutes (Blender: `M`); minimap relocated to Ctrl+M rather
         // than sharing the key, deferred from the Phase 2 keymap pass until
         // mute actually existed to claim it.
+        r.bind("mute", GraphAction::ToggleMuted { target: None });
+        r.bind("toggle_minimap", GraphAction::ToggleMinimap);
+        r.bind("toggle_panel", GraphAction::TogglePanel);
         r.bind(
-            Shortcut::key(egui::Key::M),
-            GraphAction::ToggleMuted { target: None },
-        );
-        r.bind(Shortcut::ctrl(egui::Key::M), GraphAction::ToggleMinimap);
-        r.bind(Shortcut::key(egui::Key::N), GraphAction::TogglePanel);
-        r.bind(
-            Shortcut::key(egui::Key::H),
+            "toggle_collapsed",
             GraphAction::ToggleCollapsed { target: None },
         );
         // Plain `A` (select-all) and Alt+A (deselect-all) live here; Shift+A
         // (open Add search at the pointer) is special-cased in
         // `handle_input` instead, since it needs the screen pointer/canvas
         // origin this registry's dispatch doesn't carry.
-        r.bind(Shortcut::key(egui::Key::A), GraphAction::SelectAll);
-        r.bind(Shortcut::alt(egui::Key::A), GraphAction::DeselectAll);
+        r.bind("select_all", GraphAction::SelectAll);
+        r.bind("deselect_all", GraphAction::DeselectAll);
         r
     }
 
-    pub fn bind(&mut self, shortcut: Shortcut, action: GraphAction) {
-        self.bindings.push((shortcut, action));
+    pub fn bind(&mut self, action_id: &'static str, action: GraphAction) {
+        self.bindings.push((action_id, action));
     }
 
     /// Dispatch all matching bindings. Suppressed entirely when any widget holds
     /// keyboard focus, e.g. an open menu or inline text edit.
-    pub fn dispatch(&self, ui: &egui::Ui) -> Vec<GraphAction> {
+    pub fn dispatch(
+        &self,
+        ui: &mut egui::Ui,
+        input_bindings: &input_bindings::InputBindings,
+    ) -> Vec<GraphAction> {
         if ui.ctx().memory(|m| m.focused().is_some()) {
             return Vec::new();
         }
         self.bindings
             .iter()
-            .filter_map(|(shortcut, action)| {
-                ui.input_mut(|i| {
-                    i.consume_shortcut(&egui::KeyboardShortcut::new(
-                        shortcut.modifiers,
-                        shortcut.key,
-                    ))
+            .filter_map(|(action_id, action)| {
+                input_bindings
+                    .consume_shortcut(ui, &["node_graph"], action_id)
                     .then(|| action.clone())
-                })
             })
             .collect()
     }

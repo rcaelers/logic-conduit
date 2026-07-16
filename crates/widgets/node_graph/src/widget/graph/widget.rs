@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use egui::{Pos2, Sense, Ui};
+
+use input_bindings::InputBindings;
 
 use super::action::HotkeyRegistry;
 use super::interaction::{GraphResponses, InteractionState};
@@ -28,6 +31,7 @@ pub struct NodeGraphWidget {
     /// system (Phase 4.2) owns display and timing, not the widget.
     pub(super) io_status: Option<String>,
     pub(super) hotkeys: HotkeyRegistry,
+    pub(super) input_bindings: Arc<InputBindings>,
     pub(super) clipboard_cache: Option<String>,
     pub(super) undo_stack: Vec<GraphState>,
     pub(super) redo_stack: Vec<GraphState>,
@@ -109,6 +113,10 @@ fn graph_pointer(
 
 impl NodeGraphWidget {
     pub fn new(registry: NodeTypeRegistry) -> Self {
+        let input_bindings = Arc::new(
+            InputBindings::from_json(r#"{"bindings":[]}"#)
+                .expect("empty input binding configuration is valid"),
+        );
         Self {
             graph: GraphState::default(),
             runtime: HashMap::new(),
@@ -120,6 +128,7 @@ impl NodeGraphWidget {
             menu: MenuController::new(),
             io_status: None,
             hotkeys: HotkeyRegistry::graph_defaults(),
+            input_bindings,
             clipboard_cache: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -132,6 +141,12 @@ impl NodeGraphWidget {
             derived_cache_nodes: HashSet::new(),
             clear_derived_cache_request: None,
         }
+    }
+
+    /// Installs the host application's bindings. Context and action names are
+    /// opaque to the binding manager and interpreted only by this widget.
+    pub fn set_input_bindings(&mut self, input_bindings: Arc<InputBindings>) {
+        self.input_bindings = input_bindings;
     }
 
     pub fn graph(&self) -> &GraphState {

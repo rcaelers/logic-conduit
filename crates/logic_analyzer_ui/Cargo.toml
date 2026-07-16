@@ -9,6 +9,7 @@ name = "logic_analyzer_ui"
 path = "src/lib.rs"
 
 [dependencies]
+input-bindings = { path = "../input_bindings" }
 signal-processing = { path = "../signal_processing" }
 logic-analyzer-processing = { path = "../logic_analyzer_processing" }
 logic-analyzer-graph = { path = "../logic_analyzer_graph" }

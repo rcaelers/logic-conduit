@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use egui::{Color32, Pos2};
 
+use input_bindings::InputBindings;
+
 use super::super::menu::{MenuEntry, PopupMenu, Shortcut};
 use super::action::GraphAction;
 use crate::model::{FrameId, Socket, SocketId};
@@ -129,16 +131,19 @@ pub(super) fn build_add_entries(
     entries
 }
 
-fn paste_entry(canvas_pos: Pos2) -> MenuEntry<GraphAction> {
-    MenuEntry::action(
-        "Paste",
-        GraphAction::Paste {
-            text: None,
-            pos: canvas_pos,
-        },
+fn paste_entry(canvas_pos: Pos2, input_bindings: &InputBindings) -> MenuEntry<GraphAction> {
+    configured_shortcut(
+        MenuEntry::action(
+            "Paste",
+            GraphAction::Paste {
+                text: None,
+                pos: canvas_pos,
+            },
+        )
+        .with_icon("▣"),
+        input_bindings,
+        "paste",
     )
-    .with_icon("▣")
-    .with_shortcut(Shortcut::command(egui::Key::V))
 }
 
 pub(super) fn build_empty_canvas_entries(
@@ -147,11 +152,12 @@ pub(super) fn build_empty_canvas_entries(
     can_paste: bool,
     can_undo: bool,
     can_redo: bool,
+    input_bindings: &InputBindings,
 ) -> Vec<MenuEntry<GraphAction>> {
     let mut entries = Vec::new();
-    add_undo_redo_entries(&mut entries, can_undo, can_redo);
+    add_undo_redo_entries(&mut entries, can_undo, can_redo, input_bindings);
     if can_paste {
-        entries.push(paste_entry(canvas_pos));
+        entries.push(paste_entry(canvas_pos, input_bindings));
         entries.push(MenuEntry::separator());
     }
     entries.push(MenuEntry::submenu("Add", build_add_entries(registry, canvas_pos)).with_icon("+"));
@@ -173,6 +179,7 @@ pub(super) struct ContextMenuState<'a> {
     pub can_paste: bool,
     pub can_undo: bool,
     pub can_redo: bool,
+    pub input_bindings: &'a InputBindings,
 }
 
 pub(super) fn build_context_entries(context: ContextMenuState<'_>) -> Vec<MenuEntry<GraphAction>> {
@@ -191,37 +198,44 @@ pub(super) fn build_context_entries(context: ContextMenuState<'_>) -> Vec<MenuEn
         can_paste,
         can_undo,
         can_redo,
+        input_bindings,
     } = context;
     if context_node.is_some() || any_selected {
         let mut entries = Vec::new();
-        add_undo_redo_entries(&mut entries, can_undo, can_redo);
+        add_undo_redo_entries(&mut entries, can_undo, can_redo, input_bindings);
         entries.extend([
-            MenuEntry::action(
-                "Cut",
-                GraphAction::Cut {
-                    target: context_node,
-                },
-            )
-            .with_icon("✂")
-            .with_shortcut(Shortcut::command(egui::Key::X)),
-            MenuEntry::action(
-                "Copy",
-                GraphAction::Copy {
-                    target: context_node,
-                },
-            )
-            .with_icon("🗐")
-            .with_shortcut(Shortcut::command(egui::Key::C)),
+            configured_shortcut(
+                MenuEntry::action(
+                    "Cut",
+                    GraphAction::Cut {
+                        target: context_node,
+                    },
+                )
+                .with_icon("✂"),
+                input_bindings,
+                "cut",
+            ),
+            configured_shortcut(
+                MenuEntry::action(
+                    "Copy",
+                    GraphAction::Copy {
+                        target: context_node,
+                    },
+                )
+                .with_icon("🗐"),
+                input_bindings,
+                "copy",
+            ),
         ]);
         if can_paste {
-            entries.push(paste_entry(canvas_pos));
+            entries.push(paste_entry(canvas_pos, input_bindings));
         }
         if any_selected {
-            entries.push(
-                MenuEntry::action("Duplicate", GraphAction::DuplicateSelected)
-                    .with_icon("⧉")
-                    .with_shortcut(Shortcut::shift(egui::Key::D)),
-            );
+            entries.push(configured_shortcut(
+                MenuEntry::action("Duplicate", GraphAction::DuplicateSelected).with_icon("⧉"),
+                input_bindings,
+                "duplicate",
+            ));
         }
         if context_frame.is_some() || any_frame_selected {
             let mut frame_entries = Vec::new();
@@ -243,14 +257,17 @@ pub(super) fn build_context_entries(context: ContextMenuState<'_>) -> Vec<MenuEn
         }
         entries.extend([
             MenuEntry::separator(),
-            MenuEntry::action(
-                "Mute",
-                GraphAction::ToggleMuted {
-                    target: context_node,
-                },
-            )
-            .with_checkmark(node_muted)
-            .with_shortcut(Shortcut::key(egui::Key::M)),
+            configured_shortcut(
+                MenuEntry::action(
+                    "Mute",
+                    GraphAction::ToggleMuted {
+                        target: context_node,
+                    },
+                )
+                .with_checkmark(node_muted),
+                input_bindings,
+                "mute",
+            ),
         ]);
         if node_has_derived_cache && let Some(target) = context_node {
             entries.extend([
@@ -263,13 +280,16 @@ pub(super) fn build_context_entries(context: ContextMenuState<'_>) -> Vec<MenuEn
         }
         entries.extend([
             MenuEntry::separator(),
-            MenuEntry::action(
-                "Delete",
-                GraphAction::Delete {
-                    target: context_node,
-                },
-            )
-            .with_shortcut(Shortcut::key(egui::Key::X)),
+            configured_shortcut(
+                MenuEntry::action(
+                    "Delete",
+                    GraphAction::Delete {
+                        target: context_node,
+                    },
+                ),
+                input_bindings,
+                "delete",
+            ),
             MenuEntry::action(
                 "Dissolve",
                 GraphAction::Dissolve {
@@ -277,13 +297,16 @@ pub(super) fn build_context_entries(context: ContextMenuState<'_>) -> Vec<MenuEn
                 },
             ),
             MenuEntry::separator(),
-            MenuEntry::action(
-                "Join in New Frame",
-                GraphAction::AddFrame {
-                    target: context_node,
-                },
-            )
-            .with_shortcut(Shortcut::ctrl(egui::Key::J)),
+            configured_shortcut(
+                MenuEntry::action(
+                    "Join in New Frame",
+                    GraphAction::AddFrame {
+                        target: context_node,
+                    },
+                ),
+                input_bindings,
+                "join_frame",
+            ),
             MenuEntry::action(
                 "Remove from Frame",
                 GraphAction::RemoveFromFrame {
@@ -294,27 +317,41 @@ pub(super) fn build_context_entries(context: ContextMenuState<'_>) -> Vec<MenuEn
             MenuEntry::submenu(
                 "Show/Hide",
                 vec![
-                    MenuEntry::action(
-                        "Unconnected Sockets",
-                        GraphAction::ToggleHidden {
-                            target: context_node,
-                        },
-                    )
-                    .with_checkmark(node_hidden)
-                    .with_shortcut(Shortcut::ctrl(egui::Key::H)),
-                    MenuEntry::action(
-                        "Collapse",
-                        GraphAction::ToggleCollapsed {
-                            target: context_node,
-                        },
-                    )
-                    .with_checkmark(node_collapsed),
+                    configured_shortcut(
+                        MenuEntry::action(
+                            "Unconnected Sockets",
+                            GraphAction::ToggleHidden {
+                                target: context_node,
+                            },
+                        )
+                        .with_checkmark(node_hidden),
+                        input_bindings,
+                        "toggle_unconnected",
+                    ),
+                    configured_shortcut(
+                        MenuEntry::action(
+                            "Collapse",
+                            GraphAction::ToggleCollapsed {
+                                target: context_node,
+                            },
+                        )
+                        .with_checkmark(node_collapsed),
+                        input_bindings,
+                        "toggle_collapsed",
+                    ),
                 ],
             ),
         ]);
         entries
     } else {
-        build_empty_canvas_entries(registry, canvas_pos, can_paste, can_undo, can_redo)
+        build_empty_canvas_entries(
+            registry,
+            canvas_pos,
+            can_paste,
+            can_undo,
+            can_redo,
+            input_bindings,
+        )
     }
 }
 
@@ -364,23 +401,36 @@ fn add_undo_redo_entries(
     entries: &mut Vec<MenuEntry<GraphAction>>,
     can_undo: bool,
     can_redo: bool,
+    input_bindings: &InputBindings,
 ) {
     if can_undo {
-        entries.push(
-            MenuEntry::action("Undo", GraphAction::Undo)
-                .with_icon("↶")
-                .with_shortcut(Shortcut::command(egui::Key::Z)),
-        );
+        entries.push(configured_shortcut(
+            MenuEntry::action("Undo", GraphAction::Undo).with_icon("↶"),
+            input_bindings,
+            "undo",
+        ));
     }
     if can_redo {
-        entries.push(
-            MenuEntry::action("Redo", GraphAction::Redo)
-                .with_icon("↷")
-                .with_shortcut(Shortcut::command_shift(egui::Key::Z)),
-        );
+        entries.push(configured_shortcut(
+            MenuEntry::action("Redo", GraphAction::Redo).with_icon("↷"),
+            input_bindings,
+            "redo",
+        ));
     }
     if can_undo || can_redo {
         entries.push(MenuEntry::separator());
+    }
+}
+
+fn configured_shortcut<T>(
+    entry: MenuEntry<T>,
+    input_bindings: &InputBindings,
+    action: &str,
+) -> MenuEntry<T> {
+    if let Some(shortcut) = input_bindings.shortcut(&["node_graph"], action) {
+        entry.with_shortcut(Shortcut::from_keyboard(shortcut))
+    } else {
+        entry
     }
 }
 
@@ -433,8 +483,9 @@ impl AddSearchPopup {
         if !self.visible {
             return None;
         }
-        let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
-        let sec_press = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary));
+        let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+        let sec_press =
+            ui.input(|input| input.pointer.button_pressed(egui::PointerButton::Secondary));
         if escape || sec_press {
             self.close();
             return None;
@@ -499,7 +550,7 @@ impl AddSearchPopup {
             });
         self.rect = Some(area_response.response.rect);
 
-        if result.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        if result.is_none() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
             result = first_match;
         }
 
@@ -507,9 +558,10 @@ impl AddSearchPopup {
             self.close();
             return result;
         }
-        let clicked_outside = ui.input(|i| {
-            i.pointer.button_released(egui::PointerButton::Primary)
-                && i.pointer
+        let clicked_outside = ui.input(|input| {
+            input.pointer.button_released(egui::PointerButton::Primary)
+                && input
+                    .pointer
                     .latest_pos()
                     .is_some_and(|pos| !area_response.response.rect.expand(2.0).contains(pos))
         });
@@ -651,26 +703,31 @@ impl MenuController {
         ui: &egui::Ui,
         pointer: Option<Pos2>,
         allow: bool,
+        input_bindings: &InputBindings,
     ) -> Option<Pos2> {
+        let modifiers = ui.input(|input| input.modifiers);
+        let context_button = input_bindings
+            .pointer_trigger(&["node_graph"], "options", modifiers)
+            .map(|(button, _)| button)?;
         if self.popup.is_open() || self.add_search.visible {
-            if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary))
-                || ui.input(|i| i.pointer.button_released(egui::PointerButton::Secondary))
+            if ui.input(|i| i.pointer.button_pressed(context_button))
+                || ui.input(|i| i.pointer.button_released(context_button))
             {
                 self.secondary_press = None;
             }
             return None;
         }
 
-        if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
+        if ui.input(|i| i.pointer.button_pressed(context_button)) {
             self.secondary_press = pointer;
         }
 
-        if !ui.input(|i| i.pointer.button_released(egui::PointerButton::Secondary)) {
+        if !ui.input(|i| i.pointer.button_released(context_button)) {
             return None;
         }
 
         let press = self.secondary_press.take()?;
-        if !allow || ui.input(|i| i.modifiers.ctrl) {
+        if !allow {
             return None;
         }
         let release = pointer.unwrap_or(press);

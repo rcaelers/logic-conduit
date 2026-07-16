@@ -492,7 +492,13 @@ impl NodeGraphWidget {
                         .desired_width(240.0)
                         .hint_text("Frame name"),
                 );
-                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if response.lost_focus()
+                    && self.input_bindings.consume_shortcut_ctx(
+                        ui.ctx(),
+                        &["node_graph.rename_edit"],
+                        "confirm",
+                    )
+                {
                     apply = true;
                 } else {
                     // Re-requesting focus here would mask the surrender above,
@@ -509,7 +515,10 @@ impl NodeGraphWidget {
                 });
             });
 
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if self
+            .input_bindings
+            .consume_shortcut_ctx(ctx, &["node_graph.rename_edit"], "cancel")
+        {
             cancel = true;
         }
         if apply {
@@ -549,7 +558,13 @@ impl NodeGraphWidget {
                         .desired_width(240.0)
                         .hint_text("Node name"),
                 );
-                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if response.lost_focus()
+                    && self.input_bindings.consume_shortcut_ctx(
+                        ui.ctx(),
+                        &["node_graph.rename_edit"],
+                        "confirm",
+                    )
+                {
                     apply = true;
                 } else {
                     // Re-requesting focus here would mask the surrender above,
@@ -566,7 +581,10 @@ impl NodeGraphWidget {
                 });
             });
 
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if self
+            .input_bindings
+            .consume_shortcut_ctx(ctx, &["node_graph.rename_edit"], "cancel")
+        {
             cancel = true;
         }
         if apply {

@@ -412,19 +412,31 @@ impl NodeGraphWidget {
         let Some(pc) = pointer_canvas else {
             return InteractionState::Idle;
         };
+        let primary_button = self
+            .input_bindings
+            .pointer_button(&["node_graph"], "select_move")
+            .unwrap_or(egui::PointerButton::Primary);
+        let connect_button = self
+            .input_bindings
+            .pointer_button(&["node_graph.socket", "node_graph"], "connect")
+            .unwrap_or(primary_button);
 
         let current_screen_pos = self.view.canvas_to_screen(origin, pc);
         let press_screen_pos = ui
             .input(|i| i.pointer.press_origin())
             .unwrap_or(current_screen_pos);
 
-        if ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary)) {
+        let options_button = self
+            .input_bindings
+            .pointer_button(&["node_graph"], "options")
+            .unwrap_or(egui::PointerButton::Secondary);
+        if ui.input(|i| i.pointer.button_down(options_button)) {
             return InteractionState::Idle;
         }
         let ctrl = ui.input(|i| i.modifiers.ctrl);
 
         for (&sid, response) in &responses.sockets {
-            if !response.drag_started() {
+            if !response.drag_started_by(connect_button) {
                 continue;
             }
             let Some(&spos) = layout.socket_screen_pos.get(&sid) else {
@@ -458,7 +470,7 @@ impl NodeGraphWidget {
         }
 
         for (&id, response) in &responses.collapse_toggles {
-            if response.clicked() {
+            if response.clicked_by(primary_button) {
                 self.push_undo_snapshot();
                 self.toggle_collapsed_for_node(id);
                 return InteractionState::Idle;
@@ -466,11 +478,14 @@ impl NodeGraphWidget {
         }
 
         for (&id, responses) in &responses.nodes {
-            if responses.body.clicked() || responses.header.clicked() {
+            if responses.body.clicked_by(primary_button)
+                || responses.header.clicked_by(primary_button)
+            {
                 self.select_node(id, ctrl);
                 return InteractionState::Idle;
             }
-            if (responses.header.drag_started() || responses.body.drag_started())
+            if (responses.header.drag_started_by(primary_button)
+                || responses.body.drag_started_by(primary_button))
                 && let Some(node) = self.graph.nodes.get(&id)
             {
                 let node_pos = node.pos.to_vec2();
@@ -516,14 +531,18 @@ impl NodeGraphWidget {
         // `clicked()` and `double_clicked()` on a double-click's second
         // press, and inserting a reroute shouldn't also clear the selection
         // as a side effect (Phase 6.2).
-        if responses.canvas.double_clicked()
+        let reroute_button = self
+            .input_bindings
+            .pointer_button(&["node_graph.canvas", "node_graph"], "insert_reroute")
+            .unwrap_or(primary_button);
+        if responses.canvas.double_clicked_by(reroute_button)
             && let Some(idx) = self.wire_near_point(pc, &layout.nodes)
         {
             self.insert_reroute_on_wire(idx, pc);
             return InteractionState::Idle;
         }
 
-        if responses.canvas.clicked() && !ctrl {
+        if responses.canvas.clicked_by(primary_button) && !ctrl {
             for node in self.graph.nodes.values_mut() {
                 node.selected = false;
             }
@@ -532,7 +551,7 @@ impl NodeGraphWidget {
             }
         }
 
-        if responses.canvas.drag_started() {
+        if responses.canvas.drag_started_by(primary_button) {
             return InteractionState::BoxSelecting {
                 start_canvas: pc,
                 current_canvas: pc,
@@ -565,7 +584,11 @@ impl NodeGraphWidget {
         offset: Vec2,
         layout: &GraphWidgetLayout,
     ) -> InteractionState {
-        if ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
+        let button = self
+            .input_bindings
+            .pointer_button(&["node_graph"], "select_move")
+            .unwrap_or(egui::PointerButton::Primary);
+        if ui.input(|i| i.pointer.button_down(button)) {
             if let Some(pc) = pointer_canvas {
                 let mut new_pos = (pc.to_vec2() - offset).to_pos2();
                 // Ctrl is free during an active drag (it only means
@@ -610,7 +633,11 @@ impl NodeGraphWidget {
         frame_id: FrameId,
         last_canvas: Pos2,
     ) -> InteractionState {
-        if ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
+        let button = self
+            .input_bindings
+            .pointer_button(&["node_graph"], "select_move")
+            .unwrap_or(egui::PointerButton::Primary);
+        if ui.input(|i| i.pointer.button_down(button)) {
             if let Some(pc) = pointer_canvas {
                 let delta = pc - last_canvas;
                 self.move_selected_frame_nodes(frame_id, delta);
@@ -643,11 +670,20 @@ impl NodeGraphWidget {
         layout: &GraphWidgetLayout,
     ) -> InteractionState {
         if !just_entered {
-            if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
+            let modifiers = ui.input(|input| input.modifiers);
+            let cancel = self
+                .input_bindings
+                .pointer_trigger(&["node_graph.placement"], "cancel", modifiers)
+                .is_some_and(|(button, _)| ui.input(|input| input.pointer.button_pressed(button)));
+            if cancel {
                 self.undo();
                 return InteractionState::Idle;
             }
-            if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) {
+            let confirm = self
+                .input_bindings
+                .pointer_trigger(&["node_graph.placement"], "confirm", modifiers)
+                .is_some_and(|(button, _)| ui.input(|input| input.pointer.button_pressed(button)));
+            if confirm {
                 let selected: Vec<NodeId> = self
                     .graph
                     .nodes
@@ -736,7 +772,11 @@ impl NodeGraphWidget {
         mut current_canvas: Pos2,
         connectable: Rc<HashSet<NodeId>>,
     ) -> InteractionState {
-        if ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
+        let button = self
+            .input_bindings
+            .pointer_button(&["node_graph"], "select_move")
+            .unwrap_or(egui::PointerButton::Primary);
+        if ui.input(|i| i.pointer.button_down(button)) {
             if let Some(pc) = pointer_canvas {
                 let snapped = self.snapped_wire_target(from, pc, layout);
                 current_canvas = snapped.map_or(pc, |(_, pos)| pos);
@@ -798,7 +838,11 @@ impl NodeGraphWidget {
         start_canvas: Pos2,
         mut current_canvas: Pos2,
     ) -> InteractionState {
-        if ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
+        let button = self
+            .input_bindings
+            .pointer_button(&["node_graph"], "select_move")
+            .unwrap_or(egui::PointerButton::Primary);
+        if ui.input(|i| i.pointer.button_down(button)) {
             if let Some(pc) = pointer_canvas {
                 current_canvas = pc;
             }
@@ -879,7 +923,11 @@ impl NodeGraphWidget {
         nodes: &HashMap<NodeId, NodeWidget>,
         mut path: Vec<Pos2>,
     ) -> InteractionState {
-        if ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary)) {
+        let button = self
+            .input_bindings
+            .pointer_button(&["node_graph"], "cut_wires")
+            .unwrap_or(egui::PointerButton::Secondary);
+        if ui.input(|i| i.pointer.button_down(button)) {
             if let Some(pc) = pointer_canvas {
                 let min_step = 4.0 / self.view.zoom;
                 if path.last().is_none_or(|&last| last.distance(pc) > min_step) {
@@ -1118,7 +1166,9 @@ impl NodeGraphWidget {
 
         if no_focus
             && pointer.is_some()
-            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Home))
+            && self
+                .input_bindings
+                .consume_shortcut(ui, &["node_graph"], "fit")
         {
             self.fit_graph_to_viewport(layout, canvas_rect, origin);
             return;
@@ -1131,14 +1181,18 @@ impl NodeGraphWidget {
         // position) that the generic action dispatch doesn't carry.
         if no_focus
             && pointer.is_some()
-            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Period))
+            && self
+                .input_bindings
+                .consume_shortcut(ui, &["node_graph"], "fit_selection")
         {
             self.fit_selection_to_viewport(layout, canvas_rect, origin);
             return;
         }
 
         if no_focus
-            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::F2))
+            && self
+                .input_bindings
+                .consume_shortcut(ui, &["node_graph"], "rename")
             && let Some(active) = self.active_node
             && let Some(&header_rect) = layout.header_screen_rects.get(&active)
         {
@@ -1164,6 +1218,7 @@ impl NodeGraphWidget {
                 can_paste: self.can_paste_nodes(),
                 can_undo: self.can_undo(),
                 can_redo: self.can_redo(),
+                input_bindings: &self.input_bindings,
             });
             if let Some(action) = dispatch_menu_shortcut(ui, &shortcut_entries) {
                 let effect = self.execute_action(action, ui.ctx(), pointer_canvas);
@@ -1188,7 +1243,9 @@ impl NodeGraphWidget {
         );
         if no_focus
             && !placing
-            && ui.input_mut(|input| input.consume_key(egui::Modifiers::SHIFT, egui::Key::A))
+            && self
+                .input_bindings
+                .consume_shortcut(ui, &["node_graph"], "add")
         {
             let screen_pos = pointer.unwrap_or(canvas_rect.center());
             let canvas_pos = self.view.screen_to_canvas(origin, screen_pos);
@@ -1196,7 +1253,7 @@ impl NodeGraphWidget {
                 .open_add_popup(screen_pos, &self.registry, canvas_pos);
         }
 
-        for action in self.hotkeys.dispatch(ui) {
+        for action in self.hotkeys.dispatch(ui, &self.input_bindings) {
             let effect = self.execute_action(action, ui.ctx(), pointer_canvas);
             self.apply_effect(effect, pointer_canvas);
         }
@@ -1205,7 +1262,7 @@ impl NodeGraphWidget {
 
         if let Some(context_screen_pos) =
             self.menu
-                .context_trigger_pos(ui, pointer, !cutting && !placing)
+                .context_trigger_pos(ui, pointer, !cutting && !placing, &self.input_bindings)
             && let Some(context_target) =
                 self.context_click_target_at(responses, layout, context_screen_pos)
         {
@@ -1250,6 +1307,7 @@ impl NodeGraphWidget {
                 can_paste,
                 can_undo: self.can_undo(),
                 can_redo: self.can_redo(),
+                input_bindings: &self.input_bindings,
             });
             self.menu.open_popup(context_screen_pos, entries);
         }
@@ -1262,12 +1320,9 @@ impl NodeGraphWidget {
         // doesn't carry.
         if no_focus
             && !placing
-            && ui.input(|i| {
-                i.key_pressed(egui::Key::A)
-                    && i.modifiers.shift
-                    && !i.modifiers.ctrl
-                    && !i.modifiers.alt
-            })
+            && self
+                .input_bindings
+                .consume_shortcut(ui, &["node_graph"], "add")
         {
             let screen_pos = pointer.unwrap_or(canvas_rect.center());
             let canvas_pos = self.view.screen_to_canvas(origin, screen_pos);
@@ -1554,7 +1609,10 @@ impl NodeGraphWidget {
         layout: &GraphWidgetLayout,
     ) {
         let response = &responses.canvas;
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if self
+            .input_bindings
+            .consume_shortcut(ui, &["node_graph"], "cancel")
+        {
             // Cancelling a placement gesture must revert the add/duplicate/
             // paste it started with, not just drop back to Idle and leave
             // the new nodes stranded.
@@ -1567,16 +1625,28 @@ impl NodeGraphWidget {
             self.interaction_state = InteractionState::Idle;
         }
 
-        let ctrl_held = ui.input(|i| i.modifiers.ctrl);
+        let modifiers = ui.input(|input| input.modifiers);
         // `button_down` is global pointer state, not scoped to this widget —
         // without the hover/already-panning check, a middle-drag started
         // over a sibling widget (e.g. the logic analyzer above the graph)
         // would also pan the graph. Once a pan has started, keep following
         // the drag even if the pointer leaves the canvas rect.
-        let middle_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle))
+        let pan_trigger = self
+            .input_bindings
+            .pointer_trigger(&["node_graph"], "pan", modifiers);
+        let zoom_trigger =
+            self.input_bindings
+                .pointer_trigger(&["node_graph"], "zoom_drag", modifiers);
+        let active_view_trigger = zoom_trigger.or(pan_trigger);
+        let middle_down = active_view_trigger
+            .is_some_and(|(button, _)| ui.input(|input| input.pointer.button_down(button)))
             && (pointer.is_some() && response.hovered()
                 || matches!(self.interaction_state, InteractionState::Panning { .. }));
-        let right_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary));
+        let cut_trigger =
+            self.input_bindings
+                .pointer_trigger(&["node_graph"], "cut_wires", modifiers);
+        let right_down = cut_trigger
+            .is_some_and(|(button, _)| ui.input(|input| input.pointer.button_down(button)));
 
         if middle_down {
             if let Some(pp) = pointer {
@@ -1586,7 +1656,7 @@ impl NodeGraphWidget {
                     } else {
                         Vec2::ZERO
                     };
-                if ctrl_held {
+                if zoom_trigger.is_some() {
                     let factor = (1.0_f32 - delta.y * 0.005).clamp(0.5, 2.0);
                     if delta.y.abs() > 0.1 {
                         self.view.zoom_around(pp, origin, factor);
@@ -1602,7 +1672,7 @@ impl NodeGraphWidget {
             self.interaction_state = InteractionState::Idle;
         }
 
-        if right_down && ctrl_held {
+        if right_down {
             if let Some(pc) = pointer_canvas {
                 match &mut self.interaction_state {
                     InteractionState::CuttingWire { path } => {

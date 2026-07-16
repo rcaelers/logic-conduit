@@ -1,14 +1,15 @@
 [package]
-name = "logic-analyzer-viewer"
+name = "input-bindings"
 version.workspace = true
 edition = "2024"
 authors = ["Rob Caelers <rob.caelers@gmail.com>"]
 
 [lib]
-name = "logic_analyzer_viewer"
+name = "input_bindings"
 path = "src/lib.rs"
 
 [dependencies]
-input-bindings = { path = "../../input_bindings" }
-signal-processing = { path = "../../signal_processing" }
 egui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

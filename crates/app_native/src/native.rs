@@ -11,7 +11,9 @@ mod macos_menu {
     use objc2_app_kit::{NSApp, NSMenu, NSMenuItem};
     use objc2_foundation::{MainThreadMarker, NSObject, ns_string};
 
-    use logic_analyzer_ui::{NativeMenuCommand, dispatch_native_menu_command};
+    use logic_analyzer_ui::{
+        NativeMenuCommand, application_input_bindings, dispatch_native_menu_command,
+    };
 
     thread_local! {
         /// "Open Recent" items dispatch through one shared `openRecent:`
@@ -109,6 +111,17 @@ mod macos_menu {
             let object: *mut MenuHandler = msg_send![MenuHandler::class(), alloc];
             Retained::from_raw(msg_send![object, init]).expect("failed to create menu handler")
         }
+    }
+
+    fn shortcut(action: &str) -> Retained<objc2_foundation::NSString> {
+        let shortcut = application_input_bindings()
+            .shortcut(&["global"], action)
+            .unwrap_or_else(|| panic!("missing global.{action} input binding"));
+        let mut key = shortcut.logical_key.name().to_ascii_lowercase();
+        if shortcut.modifiers.shift {
+            key.make_ascii_uppercase();
+        }
+        objc2_foundation::NSString::from_str(&key)
     }
 
     unsafe fn menu_item(
@@ -220,14 +233,14 @@ mod macos_menu {
                 mtm,
                 ns_string!("New"),
                 sel!(newGraph:),
-                ns_string!("n"),
+                &shortcut("new"),
                 &handler,
             ));
             file_menu.addItem(&menu_item(
                 mtm,
                 ns_string!("Load..."),
                 sel!(loadGraph:),
-                ns_string!("o"),
+                &shortcut("open"),
                 &handler,
             ));
             let recent_menu_item = NSMenuItem::new(mtm);
@@ -245,14 +258,14 @@ mod macos_menu {
                 mtm,
                 ns_string!("Save"),
                 sel!(saveGraph:),
-                ns_string!("s"),
+                &shortcut("save"),
                 &handler,
             ));
             file_menu.addItem(&menu_item(
                 mtm,
                 ns_string!("Save As..."),
                 sel!(saveGraphAs:),
-                ns_string!("S"),
+                &shortcut("save_as"),
                 &handler,
             ));
         }
@@ -266,14 +279,14 @@ mod macos_menu {
                 mtm,
                 ns_string!("Run"),
                 sel!(runPipeline:),
-                ns_string!("r"),
+                &shortcut("run"),
                 &handler,
             ));
             pipeline_menu.addItem(&menu_item(
                 mtm,
                 ns_string!("Stop"),
                 sel!(stopPipeline:),
-                ns_string!("."),
+                &shortcut("stop"),
                 &handler,
             ));
             pipeline_menu.addItem(&NSMenuItem::separatorItem(mtm));
@@ -294,6 +307,7 @@ mod macos_menu {
                     continue;
                 };
                 if item.keyEquivalent().to_string() == "q" {
+                    item.setKeyEquivalent(&shortcut("quit"));
                     unsafe {
                         item.setTarget(Some(&handler as &AnyObject));
                         item.setAction(Some(sel!(quitApplication:)));

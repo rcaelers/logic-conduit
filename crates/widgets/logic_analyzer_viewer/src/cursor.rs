@@ -39,7 +39,11 @@ impl LogicAnalyzerViewer {
         let flags = self.cursor_flag_layout(ui, wave_rect, ruler_rect);
 
         // Delete via the flag's close box.
-        if response.clicked()
+        let remove_button = self
+            .input_bindings
+            .pointer_button(&["logic_analyzer.ruler", "logic_analyzer"], "remove_cursor")
+            .unwrap_or(PointerButton::Primary);
+        if response.clicked_by(remove_button)
             && let Some(pointer) = pointer
             && let Some(index) = flags.iter().position(|(_, close)| close.contains(pointer))
         {
@@ -50,7 +54,10 @@ impl LogicAnalyzerViewer {
 
         // Double-click in the ruler adds a cursor; double-click elsewhere
         // keeps its fit-to-capture meaning.
-        if response.double_clicked()
+        let add_cursor_button = self
+            .input_bindings
+            .pointer_button(&["logic_analyzer.ruler", "logic_analyzer"], "add_cursor");
+        if add_cursor_button.is_some_and(|button| response.double_clicked_by(button))
             && let Some(pointer) = pointer
             && ruler_rect.contains(pointer)
         {
@@ -66,7 +73,11 @@ impl LogicAnalyzerViewer {
         let hovered_cursor = pointer
             .and_then(|pointer| self.cursor_at_pointer(wave_rect, ruler_rect, &flags, pointer));
 
-        if response.drag_started_by(PointerButton::Primary) {
+        let drag_button = self
+            .input_bindings
+            .pointer_button(&["logic_analyzer.ruler", "logic_analyzer"], "drag_cursor")
+            .unwrap_or(PointerButton::Primary);
+        if response.drag_started_by(drag_button) {
             // Hit-test where the button went down, not where the pointer is
             // now: egui reports drag_started only after the pointer moved
             // past the click-vs-drag threshold, by which time it may already
@@ -76,7 +87,7 @@ impl LogicAnalyzerViewer {
                 grab_pos.and_then(|pos| self.cursor_at_pointer(wave_rect, ruler_rect, &flags, pos));
         }
         if self.drag_cursor.is_some() {
-            if response.dragged_by(PointerButton::Primary) {
+            if response.dragged_by(drag_button) {
                 if let (Some(index), Some(pointer)) =
                     (self.drag_cursor, response.interact_pointer_pos())
                 {

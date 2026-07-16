@@ -1834,6 +1834,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "input-bindings"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "instant"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2151,6 +2161,7 @@ dependencies = [
  "crossbeam-channel",
  "eframe",
  "egui",
+ "input-bindings",
  "logic-analyzer-graph",
  "logic-analyzer-processing",
  "logic-analyzer-viewer",
@@ -2167,6 +2178,7 @@ name = "logic-analyzer-viewer"
 version = "0.1.0"
 dependencies = [
  "egui",
+ "input-bindings",
  "signal-processing",
 ]
 
@@ -2334,6 +2346,7 @@ name = "node-graph"
 version = "0.1.0"
 dependencies = [
  "egui",
+ "input-bindings",
  "rfd",
  "serde",
  "serde_json",

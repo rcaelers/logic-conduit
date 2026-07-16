@@ -9,6 +9,7 @@ name = "node_graph"
 path = "src/lib.rs"
 
 [dependencies]
+input-bindings = { path = "../../input_bindings" }
 egui = { workspace = true, features = ["serde"] }
 rfd = { workspace = true }
 serde = { workspace = true }
