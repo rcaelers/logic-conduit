@@ -423,7 +423,7 @@ impl NodeWidget {
             painter.line_segment([p1, p2], Stroke::new(1.0_f32, sep_color));
         }
 
-        let lf = FontId::proportional((11.0 * view.zoom).clamp(7.0, 14.0));
+        let lf = FontId::proportional((11.0 * view.zoom).max(7.0));
         let label_color = Color32::from_rgb(190, 190, 190);
 
         for (i, sock) in node.outputs.iter().enumerate() {
@@ -528,7 +528,11 @@ impl NodeWidget {
             let def_index = node.inputs[i].def_index;
             let changed = ui
                 .push_id(("node-input-control", node_id.0, def_index), |ui| {
-                    instance.draw_input_control(def_index, ui, ws, zoom, node_screen_rect)
+                    ui.scope(|ui| {
+                        scale_inline_control_style(ui.style_mut(), zoom);
+                        instance.draw_input_control(def_index, ui, ws, zoom, node_screen_rect)
+                    })
+                    .inner
                 })
                 .inner;
             if changed {
@@ -547,7 +551,11 @@ impl NodeWidget {
             let def_index = node.outputs[i].def_index;
             let changed = ui
                 .push_id(("node-output-control", node_id.0, def_index), |ui| {
-                    instance.draw_output_control(def_index, ui, ws, zoom, node_screen_rect)
+                    ui.scope(|ui| {
+                        scale_inline_control_style(ui.style_mut(), zoom);
+                        instance.draw_output_control(def_index, ui, ws, zoom, node_screen_rect)
+                    })
+                    .inner
                 })
                 .inner;
             if changed {
@@ -565,7 +573,11 @@ impl NodeWidget {
             }
             let changed = ui
                 .push_id(("node-property", node_id.0, pi), |ui| {
-                    instance.draw_property(pi, ui, ws, zoom, node_screen_rect)
+                    ui.scope(|ui| {
+                        scale_inline_control_style(ui.style_mut(), zoom);
+                        instance.draw_property(pi, ui, ws, zoom, node_screen_rect)
+                    })
+                    .inner
                 })
                 .inner;
             if changed {
@@ -578,6 +590,31 @@ impl NodeWidget {
 }
 
 // ── Private draw helpers ──────────────────────────────────────────────────────
+
+/// Inline controls receive screen-space rectangles, so their egui metrics
+/// must match the graph zoom as well. Painting this at the host keeps the
+/// contract uniform for built-in and externally supplied controls.
+fn scale_inline_control_style(style: &mut egui::Style, zoom: f32) {
+    for font in style.text_styles.values_mut() {
+        font.size *= zoom;
+    }
+    if let Some(font) = &mut style.override_font_id {
+        font.size *= zoom;
+    }
+
+    let spacing = &mut style.spacing;
+    spacing.item_spacing *= zoom;
+    spacing.button_padding *= zoom;
+    spacing.indent *= zoom;
+    spacing.interact_size *= zoom;
+    spacing.slider_width *= zoom;
+    spacing.slider_rail_height *= zoom;
+    spacing.combo_width *= zoom;
+    spacing.text_edit_width *= zoom;
+    spacing.icon_width *= zoom;
+    spacing.icon_width_inner *= zoom;
+    spacing.icon_spacing *= zoom;
+}
 
 /// Status pill under the node body. Wraps at ~1.6 node widths so long
 /// compile errors stay readable without dwarfing the node.

@@ -96,7 +96,7 @@ impl InlineControl for ChannelGridValue {
         ui: &mut egui::Ui,
         _label: &str,
         rect: egui::Rect,
-        _zoom: f32,
+        zoom: f32,
         clip_rect: egui::Rect,
     ) -> bool {
         let mut changed = false;
@@ -106,7 +106,7 @@ impl InlineControl for ChannelGridValue {
                 .layout(egui::Layout::top_down(egui::Align::LEFT)),
             |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(clip_rect));
-                ui.style_mut().spacing.item_spacing = egui::Vec2::new(4.0, 2.0);
+                ui.style_mut().spacing.item_spacing = egui::Vec2::new(4.0 * zoom, 2.0 * zoom);
                 for row in 0..self.enabled.len().div_ceil(8) {
                     ui.horizontal(|ui| {
                         for index in row * 8..((row + 1) * 8).min(self.enabled.len()) {

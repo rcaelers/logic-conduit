@@ -275,7 +275,7 @@ impl InlineControl for BoolValue {
         ui: &mut Ui,
         label: &str,
         rect: Rect,
-        _zoom: f32,
+        zoom: f32,
         clip_rect: Rect,
     ) -> bool {
         let old = self.value;
@@ -285,7 +285,7 @@ impl InlineControl for BoolValue {
                 .layout(Layout::top_down(Align::LEFT)),
             |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(clip_rect));
-                ui.style_mut().spacing.item_spacing = Vec2::splat(2.0);
+                ui.style_mut().spacing.item_spacing = Vec2::splat(2.0 * zoom);
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut self.value, label);
                 });
@@ -314,7 +314,7 @@ impl InlineControl for StringValue {
         ui: &mut Ui,
         label: &str,
         rect: Rect,
-        _zoom: f32,
+        zoom: f32,
         clip_rect: Rect,
     ) -> bool {
         let old = self.value.clone();
@@ -324,11 +324,11 @@ impl InlineControl for StringValue {
                 .layout(Layout::top_down(Align::LEFT)),
             |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(clip_rect));
-                ui.style_mut().spacing.item_spacing = Vec2::splat(2.0);
+                ui.style_mut().spacing.item_spacing = Vec2::splat(2.0 * zoom);
                 ui.add(
                     egui::TextEdit::singleline(&mut self.value)
                         .hint_text(label)
-                        .desired_width(rect.width() - 4.0),
+                        .desired_width(rect.width() - 4.0 * zoom),
                 );
             },
         );
@@ -402,7 +402,7 @@ impl InlineControl for FileValue {
         ui: &mut Ui,
         label: &str,
         rect: Rect,
-        _zoom: f32,
+        zoom: f32,
         clip_rect: Rect,
     ) -> bool {
         let old = self.value.clone();
@@ -412,12 +412,14 @@ impl InlineControl for FileValue {
                 .layout(Layout::left_to_right(Align::Center)),
             |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(clip_rect));
-                ui.style_mut().spacing.item_spacing = Vec2::splat(2.0);
-                let button_width = 28.0;
+                ui.style_mut().spacing.item_spacing = Vec2::splat(2.0 * zoom);
+                let button_width = 28.0 * zoom;
                 ui.add(
                     egui::TextEdit::singleline(&mut self.value)
                         .hint_text(label)
-                        .desired_width((rect.width() - button_width - 6.0).max(24.0)),
+                        .desired_width(
+                            (rect.width() - button_width - 6.0 * zoom).max(24.0 * zoom),
+                        ),
                 );
                 if ui
                     .add_enabled(super::file_dialog::AVAILABLE, egui::Button::new("…"))
@@ -503,7 +505,7 @@ impl InlineControl for EnumValue {
         ui: &mut Ui,
         label: &str,
         rect: Rect,
-        _zoom: f32,
+        zoom: f32,
         clip_rect: Rect,
     ) -> bool {
         let old = self.index;
@@ -513,9 +515,9 @@ impl InlineControl for EnumValue {
                 .layout(Layout::top_down(Align::LEFT)),
             |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(clip_rect));
-                ui.style_mut().spacing.item_spacing = Vec2::splat(2.0);
+                ui.style_mut().spacing.item_spacing = Vec2::splat(2.0 * zoom);
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(label).size(10.0));
+                    ui.label(egui::RichText::new(label).size(10.0 * zoom));
                     let selected = self.variants.get(self.index).cloned().unwrap_or_default();
                     let vars = self.variants.clone();
                     let mut new_idx = self.index;
