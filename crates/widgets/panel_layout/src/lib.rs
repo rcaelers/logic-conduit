@@ -416,7 +416,7 @@ impl VerticalPanelLayout {
         add_widget(PanelSlot::TitleBar(spec.id), &mut title_ui);
         title_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let visibility_icon = if geometry.minimized {
-                PanelControlIcon::Restore
+                PanelControlIcon::Reveal
             } else {
                 PanelControlIcon::Minimize
             };
@@ -428,7 +428,7 @@ impl VerticalPanelLayout {
                 });
             }
             let maximize_icon = if geometry.maximized {
-                PanelControlIcon::Restore
+                PanelControlIcon::RestoreLayout
             } else {
                 PanelControlIcon::Maximize
             };
@@ -547,8 +547,9 @@ enum PanelAction {
 #[derive(Debug, Clone, Copy)]
 enum PanelControlIcon {
     Minimize,
+    Reveal,
     Maximize,
-    Restore,
+    RestoreLayout,
 }
 
 fn panel_control_button(ui: &mut Ui, icon: PanelControlIcon, tooltip: &str) -> egui::Response {
@@ -558,31 +559,128 @@ fn panel_control_button(ui: &mut Ui, icon: PanelControlIcon, tooltip: &str) -> e
             .rect_filled(rect, 3.0, Color32::from_rgb(72, 72, 72));
     }
     let stroke = Stroke::new(1.5, ui.visuals().widgets.style(&response).fg_stroke.color);
+    let center = rect.center();
     match icon {
         PanelControlIcon::Minimize => {
+            // A downward chevron landing on a tray: panel collapse rather
+            // than the conventional desktop-window underscore.
             ui.painter().line_segment(
                 [
-                    egui::pos2(rect.left() + 5.0, rect.center().y + 3.0),
-                    egui::pos2(rect.right() - 5.0, rect.center().y + 3.0),
+                    egui::pos2(center.x - 4.0, center.y - 3.0),
+                    egui::pos2(center.x, center.y + 1.0),
+                ],
+                stroke,
+            );
+            ui.painter().line_segment(
+                [
+                    egui::pos2(center.x, center.y + 1.0),
+                    egui::pos2(center.x + 4.0, center.y - 3.0),
+                ],
+                stroke,
+            );
+            ui.painter().line_segment(
+                [
+                    egui::pos2(center.x - 5.0, center.y + 4.0),
+                    egui::pos2(center.x + 5.0, center.y + 4.0),
+                ],
+                stroke,
+            );
+        }
+        PanelControlIcon::Reveal => {
+            // The inverse panel gesture: lift content out of the tray.
+            ui.painter().line_segment(
+                [
+                    egui::pos2(center.x - 4.0, center.y + 1.0),
+                    egui::pos2(center.x, center.y - 3.0),
+                ],
+                stroke,
+            );
+            ui.painter().line_segment(
+                [
+                    egui::pos2(center.x, center.y - 3.0),
+                    egui::pos2(center.x + 4.0, center.y + 1.0),
+                ],
+                stroke,
+            );
+            ui.painter().line_segment(
+                [
+                    egui::pos2(center.x - 5.0, center.y + 4.0),
+                    egui::pos2(center.x + 5.0, center.y + 4.0),
                 ],
                 stroke,
             );
         }
         PanelControlIcon::Maximize => {
-            ui.painter().rect_stroke(
-                rect.shrink2(egui::vec2(5.5, 5.5)),
-                1.0,
-                stroke,
-                StrokeKind::Inside,
-            );
+            // Four open corner marks read as expansion without resembling a
+            // platform window frame.
+            let inner = rect.shrink(5.5);
+            let arm = 3.0;
+            for (corner, horizontal, vertical) in [
+                (inner.left_top(), arm, arm),
+                (inner.right_top(), -arm, arm),
+                (inner.left_bottom(), arm, -arm),
+                (inner.right_bottom(), -arm, -arm),
+            ] {
+                ui.painter().line_segment(
+                    [corner, egui::pos2(corner.x + horizontal, corner.y)],
+                    stroke,
+                );
+                ui.painter()
+                    .line_segment([corner, egui::pos2(corner.x, corner.y + vertical)], stroke);
+            }
         }
-        PanelControlIcon::Restore => {
-            let back = rect.shrink2(egui::vec2(6.5, 6.5));
-            let front = back.translate(egui::vec2(-2.5, 2.5));
-            ui.painter()
-                .rect_stroke(back, 1.0, stroke, StrokeKind::Inside);
-            ui.painter()
-                .rect_stroke(front, 1.0, stroke, StrokeKind::Inside);
+        PanelControlIcon::RestoreLayout => {
+            // Vertical arrows converge on a split line, describing a return
+            // from one expanded panel to the multi-panel layout.
+            ui.painter().line_segment(
+                [
+                    egui::pos2(center.x - 4.0, center.y),
+                    egui::pos2(center.x + 4.0, center.y),
+                ],
+                stroke,
+            );
+            ui.painter().line_segment(
+                [
+                    egui::pos2(center.x, center.y - 5.0),
+                    egui::pos2(center.x, center.y - 1.0),
+                ],
+                stroke,
+            );
+            ui.painter().line_segment(
+                [
+                    egui::pos2(center.x - 2.0, center.y - 3.0),
+                    egui::pos2(center.x, center.y - 1.0),
+                ],
+                stroke,
+            );
+            ui.painter().line_segment(
+                [
+                    egui::pos2(center.x + 2.0, center.y - 3.0),
+                    egui::pos2(center.x, center.y - 1.0),
+                ],
+                stroke,
+            );
+            ui.painter().line_segment(
+                [
+                    egui::pos2(center.x, center.y + 5.0),
+                    egui::pos2(center.x, center.y + 1.0),
+                ],
+                stroke,
+            );
+            ui.painter().line_segment(
+                [
+                    egui::pos2(center.x - 2.0, center.y + 3.0),
+                    egui::pos2(center.x, center.y + 1.0),
+                ],
+                stroke,
+            );
+            ui.painter().line_segment(
+                [
+                    egui::pos2(center.x + 2.0, center.y + 3.0),
+                    egui::pos2(center.x, center.y + 1.0),
+                ],
+                stroke,
+            );
         }
     }
     response.on_hover_text(tooltip)
