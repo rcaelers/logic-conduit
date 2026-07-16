@@ -10,6 +10,8 @@ use signal_processing::{
 use crate::lanes::AnnotationVisual;
 use crate::viewer::LogicAnalyzerViewer;
 
+const MIN_ANNOTATION_WIDTH_PX: f32 = 8.0;
+
 #[derive(Clone, Copy)]
 pub(super) struct DerivedRowGeometry {
     pub top: f32,
@@ -369,7 +371,7 @@ impl LogicAnalyzerViewer {
     ) {
         let effective_end = annotation_box_end(annotation, is_last_ever, previous_duration_ns);
         let x0 = self.ns_to_x(wave_rect, annotation.start_ns);
-        let natural_x1 = self.ns_to_x(wave_rect, effective_end).max(x0 + 2.0);
+        let natural_x1 = annotation_right_x(x0, self.ns_to_x(wave_rect, effective_end));
         let visual = visuals
             .get(&annotation.value)
             .cloned()
@@ -568,6 +570,10 @@ fn annotation_label_width(label: &str) -> f32 {
     (label.chars().count() as f32 * 6.2 + 10.0).max(26.0)
 }
 
+fn annotation_right_x(start_x: f32, time_end_x: f32) -> f32 {
+    time_end_x.max(start_x + MIN_ANNOTATION_WIDTH_PX)
+}
+
 fn annotation_label_position(rect: Rect, wave_rect: Rect, label_width: f32) -> Option<Pos2> {
     let visible_rect = rect.intersect(wave_rect);
     (visible_rect.width() >= label_width).then(|| visible_rect.center())
@@ -660,6 +666,12 @@ mod tests {
     fn annotation_label_width_scales_with_hex_digits() {
         assert!(annotation_label_width("600081") > annotation_label_width("4F"));
         assert!(annotation_label_width("4F") >= 26.0);
+    }
+
+    #[test]
+    fn short_annotations_have_a_readable_screen_width() {
+        assert_eq!(annotation_right_x(20.0, 21.0), 28.0);
+        assert_eq!(annotation_right_x(20.0, 35.0), 35.0);
     }
 
     #[test]

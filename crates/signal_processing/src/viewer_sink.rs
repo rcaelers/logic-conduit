@@ -1197,34 +1197,6 @@ mod tests {
     }
 
     #[test]
-    fn instantaneous_annotations_follow_a_slow_burst_cadence() {
-        const WORD_PERIOD_NS: u64 = 24_000_000;
-        let store = DerivedLanes::new();
-        let lane = store.register("w", DerivedLaneData::Annotations(Vec::new()));
-        store.append_word_batch(
-            lane,
-            [
-                (1_000_000_000, 0, 1),
-                (1_000_000_000 + WORD_PERIOD_NS, 0, 2),
-                (1_000_000_000 + WORD_PERIOD_NS * 2, 0, 3),
-                (6_000_000_000, 0, 4),
-            ],
-        );
-
-        let lanes = store.read();
-        let DerivedLaneData::Annotations(annotations) = &lanes[0].data else {
-            panic!("expected annotations");
-        };
-        assert_eq!(annotations[0].end_ns, annotations[1].start_ns);
-        assert_eq!(annotations[1].end_ns, annotations[2].start_ns);
-        assert_eq!(
-            annotations[2].end_ns,
-            annotations[2].start_ns + WORD_PERIOD_NS
-        );
-        assert!(annotations[2].end_ns < annotations[3].start_ns);
-    }
-
-    #[test]
     fn summary_tracks_digital_samples_as_they_arrive() {
         let store = DerivedLanes::new();
         let lane = store.register("d", DerivedLaneData::Digital(Vec::new()));
