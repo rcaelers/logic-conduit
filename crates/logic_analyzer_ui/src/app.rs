@@ -338,7 +338,8 @@ impl App {
             // `selection_summary` ends up flush with the right edge.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(6.0);
-                if ui.small_button("About").clicked() {
+                let about_button = ui.add_sized([52.0, 20.0], egui::Button::new("About"));
+                if about_button.clicked() {
                     self.about.open();
                 }
                 ui.weak(self.node_graph.selection_summary());

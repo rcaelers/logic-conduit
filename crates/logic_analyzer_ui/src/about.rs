@@ -12,14 +12,24 @@ const BIT_WIDTH: f32 = 16.0;
 
 pub struct AboutWindow {
     open: bool,
+    suppress_outside_dismissal: bool,
 }
 
 impl AboutWindow {
     pub fn new() -> Self {
-        Self { open: false }
+        Self {
+            open: false,
+            suppress_outside_dismissal: false,
+        }
     }
 
     pub fn open(&mut self) {
+        if !self.open {
+            // The window is rendered later in the same frame as the button
+            // that opens it. Do not treat that button click as a click outside
+            // the newly-created window.
+            self.suppress_outside_dismissal = true;
+        }
         self.open = true;
     }
 
@@ -35,6 +45,7 @@ impl AboutWindow {
         let frame = egui::Frame::window(&ctx.style_of(ctx.theme()))
             .inner_margin(egui::Margin::ZERO)
             .corner_radius(CORNER_RADIUS);
+        let suppress_outside_dismissal = std::mem::take(&mut self.suppress_outside_dismissal);
         let response = egui::Window::new("About")
             .title_bar(false)
             .collapsible(false)
@@ -47,7 +58,8 @@ impl AboutWindow {
                 self.details(ui);
             });
 
-        if let Some(response) = response
+        if !suppress_outside_dismissal
+            && let Some(response) = response
             && response.response.clicked_elsewhere()
         {
             self.open = false;
