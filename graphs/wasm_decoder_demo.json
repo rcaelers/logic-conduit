@@ -1127,7 +1127,7 @@
           "name": "Text",
           "resolved_type": null,
           "shape": "Circle",
-          "show_in_view": false,
+          "show_in_view": true,
           "type_name": "Text",
           "variadic": null,
           "visible": true
@@ -1137,7 +1137,7 @@
         "x": 1240.0,
         "y": 40.0
       },
-      "selected": false,
+      "selected": true,
       "state": {
         "template": {
           "value": "Window {n:02}"
