@@ -23,9 +23,12 @@ use super::super::super::query::{
     ExactAnnotationWindow, WordPresenceBucket,
 };
 use super::super::super::state::{LiveStoreMetadata, LiveStoreSnapshot, StoreStatus};
-use crate::events::{Annotation, MAX_ANNOTATION_NS, Word, instantaneous_word_end_ns};
+use crate::events::{
+    Annotation, Word, instantaneous_word_end_ns, instantaneous_word_end_ns_with_limit,
+};
 
 const MAX_PRESENCE_RUNS_PER_BLOCK: usize = 256;
+const MAX_PRESENCE_CADENCE_NS: u64 = 1_000_000;
 static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(1);
 
 fn intersecting_block_indices(
@@ -1106,12 +1109,13 @@ fn word_presence_summaries(block: u64, words: &[Word]) -> Vec<WordSummaryRecord>
         let end_ns = if word.duration_ns != 0 {
             word.timestamp_ns.saturating_add(word.duration_ns)
         } else if let Some(next) = words.get(index + 1) {
-            instantaneous_word_end_ns(
+            instantaneous_word_end_ns_with_limit(
                 index
                     .checked_sub(1)
                     .map(|previous| words[previous].timestamp_ns),
                 word.timestamp_ns,
                 next.timestamp_ns,
+                MAX_PRESENCE_CADENCE_NS,
             )
         } else {
             let inferred_period = index
@@ -1122,7 +1126,7 @@ fn word_presence_summaries(block: u64, words: &[Word]) -> Vec<WordSummaryRecord>
                 })
                 .filter(|period| *period > 0)
                 .unwrap_or(0)
-                .min(MAX_ANNOTATION_NS);
+                .min(MAX_PRESENCE_CADENCE_NS);
             word.timestamp_ns.saturating_add(inferred_period)
         };
 

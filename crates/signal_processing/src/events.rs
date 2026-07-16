@@ -16,7 +16,7 @@
 /// Longest inferred display span for an instantaneous word when no recent
 /// cadence is available. Prevents sparse word events from painting a value
 /// continuously across an unrelated or gated-off interval.
-pub const MAX_ANNOTATION_NS: u64 = 1_000_000;
+pub const MAX_ANNOTATION_NS: u64 = 100_000_000;
 
 /// Returns the visual end of an instantaneous word with a known successor.
 ///
@@ -28,12 +28,26 @@ pub fn instantaneous_word_end_ns(
     start_ns: u64,
     next_start_ns: u64,
 ) -> u64 {
+    instantaneous_word_end_ns_with_limit(
+        previous_start_ns,
+        start_ns,
+        next_start_ns,
+        MAX_ANNOTATION_NS,
+    )
+}
+
+pub(crate) fn instantaneous_word_end_ns_with_limit(
+    previous_start_ns: Option<u64>,
+    start_ns: u64,
+    next_start_ns: u64,
+    max_span_ns: u64,
+) -> u64 {
     let gap_ns = next_start_ns.saturating_sub(start_ns);
     let inferred_limit_ns = previous_start_ns
         .map(|previous| start_ns.saturating_sub(previous))
         .filter(|interval| *interval > 0)
-        .unwrap_or(MAX_ANNOTATION_NS)
-        .min(MAX_ANNOTATION_NS);
+        .unwrap_or(max_span_ns)
+        .min(max_span_ns);
     start_ns.saturating_add(gap_ns.min(inferred_limit_ns))
 }
 
