@@ -193,9 +193,6 @@ pub(super) fn build_context_entries(context: ContextMenuState<'_>) -> Vec<MenuEn
         can_redo,
     } = context;
     if context_node.is_some() || any_selected {
-        let hidden_chk = if node_hidden { "✓  " } else { "    " };
-        let collapsed_chk = if node_collapsed { "✓  " } else { "    " };
-        let muted_chk = if node_muted { "✓  " } else { "    " };
         let mut entries = Vec::new();
         add_undo_redo_entries(&mut entries, can_undo, can_redo);
         entries.extend([
@@ -247,11 +244,12 @@ pub(super) fn build_context_entries(context: ContextMenuState<'_>) -> Vec<MenuEn
         entries.extend([
             MenuEntry::separator(),
             MenuEntry::action(
-                format!("{muted_chk}Mute"),
+                "Mute",
                 GraphAction::ToggleMuted {
                     target: context_node,
                 },
             )
+            .with_checkmark(node_muted)
             .with_shortcut(Shortcut::key(egui::Key::M)),
         ]);
         if node_has_derived_cache && let Some(target) = context_node {
@@ -297,18 +295,20 @@ pub(super) fn build_context_entries(context: ContextMenuState<'_>) -> Vec<MenuEn
                 "Show/Hide",
                 vec![
                     MenuEntry::action(
-                        format!("{hidden_chk}Unconnected Sockets"),
+                        "Unconnected Sockets",
                         GraphAction::ToggleHidden {
                             target: context_node,
                         },
                     )
+                    .with_checkmark(node_hidden)
                     .with_shortcut(Shortcut::ctrl(egui::Key::H)),
                     MenuEntry::action(
-                        format!("{collapsed_chk}Collapse"),
+                        "Collapse",
                         GraphAction::ToggleCollapsed {
                             target: context_node,
                         },
-                    ),
+                    )
+                    .with_checkmark(node_collapsed),
                 ],
             ),
         ]);

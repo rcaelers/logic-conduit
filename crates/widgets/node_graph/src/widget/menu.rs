@@ -119,6 +119,7 @@ pub(crate) enum MenuKind<T> {
 pub(crate) struct MenuEntry<T> {
     pub label: String,
     pub icon: Option<String>,
+    pub checked: Option<bool>,
     pub shortcut: Option<Shortcut>,
     pub kind: MenuKind<T>,
 }
@@ -128,6 +129,7 @@ impl<T> MenuEntry<T> {
         Self {
             label: label.into(),
             icon: None,
+            checked: None,
             shortcut: None,
             kind: MenuKind::Action(action),
         }
@@ -138,6 +140,7 @@ impl<T> MenuEntry<T> {
         Self {
             label: label.into(),
             icon: None,
+            checked: None,
             shortcut: None,
             kind: MenuKind::SubMenu(children),
         }
@@ -147,6 +150,7 @@ impl<T> MenuEntry<T> {
         Self {
             label: String::new(),
             icon: None,
+            checked: None,
             shortcut: None,
             kind: MenuKind::Palette(items),
         }
@@ -156,6 +160,7 @@ impl<T> MenuEntry<T> {
         Self {
             label: String::new(),
             icon: None,
+            checked: None,
             shortcut: None,
             kind: MenuKind::Separator,
         }
@@ -168,6 +173,14 @@ impl<T> MenuEntry<T> {
 
     pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
         self.icon = Some(icon.into());
+        self
+    }
+
+    /// Reserves the menu icon column for a toggle state. A checked entry uses
+    /// a painted tick rather than a font glyph, avoiding platform fallback
+    /// boxes for checkmark characters.
+    pub fn with_checkmark(mut self, checked: bool) -> Self {
+        self.checked = Some(checked);
         self
     }
 
@@ -709,6 +722,9 @@ impl<T: Clone> Menu<T> {
                             btn = btn.right_text(sc.to_string());
                         }
                         let resp = ui.add(btn);
+                        if entry.checked == Some(true) {
+                            draw_checkmark(ui, &resp);
+                        }
                         if resp.hovered() {
                             if sel.len() <= depth {
                                 sel.resize(depth + 1, 0);
@@ -759,6 +775,28 @@ impl<T: Clone> Menu<T> {
             });
         }
     }
+}
+
+fn draw_checkmark(ui: &egui::Ui, response: &egui::Response) {
+    let center = egui::pos2(
+        response.rect.left() + Menu::<()>::ICON_COL_W * 0.5,
+        response.rect.center().y,
+    );
+    let stroke = egui::Stroke::new(2.0, ui.visuals().widgets.style(response).fg_stroke.color);
+    ui.painter().line_segment(
+        [
+            center + egui::vec2(-5.0, 0.0),
+            center + egui::vec2(-1.5, 3.5),
+        ],
+        stroke,
+    );
+    ui.painter().line_segment(
+        [
+            center + egui::vec2(-1.5, 3.5),
+            center + egui::vec2(5.5, -4.0),
+        ],
+        stroke,
+    );
 }
 
 // ── PopupMenu ─────────────────────────────────────────────────────────────────

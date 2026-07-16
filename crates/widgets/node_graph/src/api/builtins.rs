@@ -417,9 +417,7 @@ impl InlineControl for FileValue {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.value)
                         .hint_text(label)
-                        .desired_width(
-                            (rect.width() - button_width - 6.0 * zoom).max(24.0 * zoom),
-                        ),
+                        .desired_width((rect.width() - button_width - 6.0 * zoom).max(24.0 * zoom)),
                 );
                 if ui
                     .add_enabled(super::file_dialog::AVAILABLE, egui::Button::new("…"))
