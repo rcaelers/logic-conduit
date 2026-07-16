@@ -1230,13 +1230,7 @@ impl NodeGraphWidget {
         // plain A/Alt+A (select-all/deselect-all) go through `self.hotkeys`
         // below as ordinary `GraphAction`s. This one stays special-cased
         // because positioning the popup needs the screen pointer/canvas
-        // origin the generic action dispatch doesn't carry — but it must
-        // run, and *consume* its key event, before that dispatch: egui's
-        // `consume_shortcut` matches modifiers with `matches_logically`,
-        // which ignores *extra* Shift/Alt held beyond what a binding asks
-        // for, so the registry's plain `A` (no modifiers required) would
-        // otherwise also match a Shift+A press and fire Select All first,
-        // leaving nothing here to see.
+        // origin this registry's dispatch doesn't carry.
         let placing = matches!(
             self.interaction_state,
             InteractionState::PlacingNodes { .. }

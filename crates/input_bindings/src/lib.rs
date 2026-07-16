@@ -236,7 +236,9 @@ impl InputBindings {
                 return false;
             };
             let shortcut = KeyboardShortcut::new(binding.modifiers.to_egui(), key);
-            ui.input_mut(|input| input.consume_shortcut(&shortcut))
+            ui.input_mut(|input| {
+                binding.modifiers.matches(input.modifiers) && input.consume_shortcut(&shortcut)
+            })
         })
     }
 
@@ -254,7 +256,9 @@ impl InputBindings {
                 return false;
             };
             let shortcut = KeyboardShortcut::new(binding.modifiers.to_egui(), key);
-            context.input_mut(|input| input.consume_shortcut(&shortcut))
+            context.input_mut(|input| {
+                binding.modifiers.matches(input.modifiers) && input.consume_shortcut(&shortcut)
+            })
         })
     }
 
@@ -499,6 +503,42 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, BindingError::ConflictingTrigger { .. }));
+    }
+
+    #[test]
+    fn shortcut_consumption_requires_exact_modifiers() {
+        let manager = InputBindings::from_json(
+            r#"{"bindings":[
+              {"context":"c","action":"plain","label":"Plain","input":"key","key":"a"},
+              {"context":"c","action":"alternate","label":"Alternate","input":"key","key":"a","modifiers":{"alt":true}}
+            ]}"#,
+        )
+        .unwrap();
+        let modifiers = Modifiers::ALT;
+        let context = egui::Context::default();
+        context.begin_pass(egui::RawInput {
+            modifiers,
+            events: vec![egui::Event::Key {
+                key: Key::A,
+                physical_key: Some(Key::A),
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }],
+            ..Default::default()
+        });
+
+        let mut ui = egui::Ui::new(
+            context.clone(),
+            egui::Id::new("shortcut-consumption-test"),
+            Default::default(),
+        );
+        let plain_consumed = manager.consume_shortcut(&mut ui, &["c"], "plain");
+        let alternate_consumed = manager.consume_shortcut(&mut ui, &["c"], "alternate");
+        let _ = context.end_pass();
+
+        assert!(!plain_consumed);
+        assert!(alternate_consumed);
     }
 
     #[test]
