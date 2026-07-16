@@ -75,7 +75,14 @@ impl LogicAnalyzerViewer {
 
         let drag_button = self
             .input_bindings
-            .pointer_button(&["logic_analyzer.ruler", "logic_analyzer"], "drag_cursor")
+            .pointer_button(
+                &[
+                    "logic_analyzer.cursor",
+                    "logic_analyzer.ruler",
+                    "logic_analyzer",
+                ],
+                "drag_cursor",
+            )
             .unwrap_or(PointerButton::Primary);
         if response.drag_started_by(drag_button) {
             // Hit-test where the button went down, not where the pointer is

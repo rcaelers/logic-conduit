@@ -296,14 +296,16 @@ impl InputBindings {
     /// Menu-visible shortcuts are intentionally omitted from status hints.
     pub fn status_bindings(&self, contexts: &[&str], modifiers: Modifiers) -> Vec<&Binding> {
         let mut seen = HashSet::new();
+        let mut seen_triggers = HashSet::new();
         let mut result = Vec::new();
         for context in contexts {
             for binding in &self.bindings {
                 if binding.context == *context
-                    && binding.status
-                    && !binding.menu
                     && binding.modifiers.matches(modifiers)
                     && seen.insert(binding.action.as_str())
+                    && seen_triggers.insert(TriggerIdentity::from_binding(binding))
+                    && binding.status
+                    && !binding.menu
                 {
                     result.push(binding);
                 }
@@ -480,5 +482,23 @@ mod tests {
             .map(|binding| binding.label.as_str())
             .collect();
         assert_eq!(labels, ["Options", "Select", "Add", "Zed"]);
+    }
+
+    #[test]
+    fn specific_context_shadows_the_same_trigger_in_parent_context() {
+        let manager = InputBindings::from_json(
+            r#"{"bindings":[
+              {"context":"cursor","action":"move_cursor","label":"Move Cursor","input":"pointer","button":"primary","gesture":"drag"},
+              {"context":"viewer","action":"pan","label":"Pan View","input":"pointer","button":"primary","gesture":"drag"}
+            ]}"#,
+        )
+        .unwrap();
+
+        let labels: Vec<_> = manager
+            .status_bindings(&["cursor", "viewer"], Modifiers::NONE)
+            .into_iter()
+            .map(|binding| binding.label.as_str())
+            .collect();
+        assert_eq!(labels, ["Move Cursor"]);
     }
 }

@@ -294,6 +294,9 @@ impl LogicAnalyzerViewer {
         let row_rename_started = self.handle_row_label_input(ui, &response, layout);
         let row_dragging = self.handle_row_reorder(ui, &response, layout);
         let cursor_input = self.handle_cursor_input(ui, &response, layout);
+        if cursor_input.active.is_some() {
+            self.hovered_input_context = "logic_analyzer.cursor";
+        }
         let home_pressed = response.hovered()
             && ui.ctx().memory(|memory| memory.focused().is_none())
             && self
