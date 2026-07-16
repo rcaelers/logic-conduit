@@ -313,13 +313,50 @@ impl InputBindings {
         }
         result.sort_by(|left, right| match (&left.trigger, &right.trigger) {
             (Trigger::Key { key: left }, Trigger::Key { key: right }) => {
-                left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase())
+                compare_key_names(left, right)
             }
             (Trigger::Key { .. }, _) => std::cmp::Ordering::Greater,
             (_, Trigger::Key { .. }) => std::cmp::Ordering::Less,
             _ => std::cmp::Ordering::Equal,
         });
         result
+    }
+}
+
+fn compare_key_names(left: &str, right: &str) -> std::cmp::Ordering {
+    let left = KeySortKey::new(left);
+    let right = KeySortKey::new(right);
+    left.group
+        .cmp(&right.group)
+        .then_with(|| left.function_number.cmp(&right.function_number))
+        .then_with(|| left.name.cmp(&right.name))
+}
+
+struct KeySortKey {
+    group: u8,
+    function_number: u16,
+    name: String,
+}
+
+impl KeySortKey {
+    fn new(key: &str) -> Self {
+        let name = key.to_ascii_lowercase();
+        let is_regular = name.len() == 1 && name.as_bytes()[0].is_ascii_alphanumeric();
+        let function_number = name
+            .strip_prefix('f')
+            .and_then(|number| number.parse().ok());
+        let group = if is_regular {
+            0
+        } else if function_number.is_some() {
+            1
+        } else {
+            2
+        };
+        Self {
+            group,
+            function_number: function_number.unwrap_or_default(),
+            name,
+        }
     }
 }
 
@@ -465,12 +502,16 @@ mod tests {
     }
 
     #[test]
-    fn status_hints_put_pointer_inputs_before_sorted_keys() {
+    fn status_hints_group_and_sort_keys_after_pointer_inputs() {
         let manager = InputBindings::from_json(
             r#"{"bindings":[
               {"context":"c","action":"z","label":"Zed","input":"key","key":"z"},
+              {"context":"c","action":"home","label":"Home","input":"key","key":"home"},
+              {"context":"c","action":"f10","label":"Function 10","input":"key","key":"f10"},
               {"context":"c","action":"secondary","label":"Options","input":"pointer","button":"secondary"},
+              {"context":"c","action":"arrow_up","label":"Arrow Up","input":"key","key":"arrow_up"},
               {"context":"c","action":"a","label":"Add","input":"key","key":"a"},
+              {"context":"c","action":"f2","label":"Function 2","input":"key","key":"f2"},
               {"context":"c","action":"primary","label":"Select","input":"pointer","button":"primary"}
             ]}"#,
         )
@@ -481,7 +522,19 @@ mod tests {
             .into_iter()
             .map(|binding| binding.label.as_str())
             .collect();
-        assert_eq!(labels, ["Options", "Select", "Add", "Zed"]);
+        assert_eq!(
+            labels,
+            [
+                "Options",
+                "Select",
+                "Add",
+                "Zed",
+                "Function 2",
+                "Function 10",
+                "Arrow Up",
+                "Home",
+            ]
+        );
     }
 
     #[test]
