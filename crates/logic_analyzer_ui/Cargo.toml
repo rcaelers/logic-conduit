@@ -15,6 +15,7 @@ logic-analyzer-processing = { path = "../logic_analyzer_processing" }
 logic-analyzer-graph = { path = "../logic_analyzer_graph" }
 logic-analyzer-viewer = { path = "../widgets/logic_analyzer_viewer" }
 node-graph = { path = "../widgets/node_graph" }
+panel-layout = { path = "../widgets/panel_layout" }
 eframe = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }

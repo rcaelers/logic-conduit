@@ -1,0 +1,13 @@
+[package]
+name = "panel-layout"
+version.workspace = true
+edition = "2024"
+authors = ["Rob Caelers <rob.caelers@gmail.com>"]
+
+[lib]
+name = "panel_layout"
+path = "src/lib.rs"
+
+[dependencies]
+egui = { workspace = true }
+serde = { workspace = true }

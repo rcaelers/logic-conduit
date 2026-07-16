@@ -73,8 +73,12 @@ impl App {
     }
 
     pub(super) fn platform_save(&mut self, storage: &mut dyn eframe::Storage) {
+        let analyzer_split = self
+            .panel_layout
+            .split_fraction("logic_analyzer", "node_graph")
+            .unwrap_or(0.42);
         self.platform
-            .save(storage, self.analyzer_split, self.node_graph.ui_prefs());
+            .save(storage, analyzer_split, self.node_graph.ui_prefs());
     }
 
     pub(super) fn platform_before_ui(&mut self, _ui: &mut egui::Ui) {

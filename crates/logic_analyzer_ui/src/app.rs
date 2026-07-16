@@ -5,6 +5,7 @@ use input_bindings::{InputBindings, PointerButtonName, PointerGesture, Trigger};
 use logic_analyzer_graph::{compiler, nodes};
 use logic_analyzer_viewer::LogicAnalyzerViewer;
 use node_graph::{NodeBadge, NodeGraphWidget, NodeId};
+use panel_layout::{PanelSlot, PanelSpec, VerticalPanelLayout};
 
 use crate::about::AboutWindow;
 use crate::demo_signals;
@@ -31,9 +32,7 @@ pub struct App {
     node_graph: NodeGraphWidget,
     logic_analyzer: LogicAnalyzerViewer,
     input_bindings: Arc<InputBindings>,
-    analyzer_split: f32,
-    viewer_minimized: bool,
-    graph_minimized: bool,
+    panel_layout: VerticalPanelLayout,
     builders: compiler::BuilderRegistry,
     run: Option<compiler::AppRun>,
     /// Persistent run *state* shown in the status bar next to Run/Stop — the
@@ -133,9 +132,10 @@ impl App {
             node_graph: widget,
             logic_analyzer,
             input_bindings,
-            analyzer_split,
-            viewer_minimized: false,
-            graph_minimized: false,
+            panel_layout: VerticalPanelLayout::new([
+                ("logic_analyzer", analyzer_split),
+                ("node_graph", 1.0 - analyzer_split),
+            ]),
             builders,
             run: None,
             run_message: None,
@@ -361,97 +361,6 @@ impl App {
         }
     }
 
-    fn show_panel_title_bar(
-        ui: &mut egui::Ui,
-        title: &str,
-        minimized: bool,
-        add_contents: impl FnOnce(&mut egui::Ui),
-    ) -> PanelTitleAction {
-        let (rect, response) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), PANEL_TITLE_BAR_HEIGHT),
-            egui::Sense::click(),
-        );
-        let fill = if response.hovered() {
-            egui::Color32::from_rgb(47, 47, 47)
-        } else {
-            egui::Color32::from_rgb(38, 38, 38)
-        };
-        let rounding = if minimized {
-            egui::CornerRadius::same(PANEL_CORNER_RADIUS)
-        } else {
-            egui::CornerRadius {
-                nw: PANEL_CORNER_RADIUS,
-                ne: PANEL_CORNER_RADIUS,
-                sw: 0,
-                se: 0,
-            }
-        };
-        ui.painter().rect_filled(rect, rounding, fill);
-        ui.painter().line_segment(
-            [rect.left_bottom(), rect.right_bottom()],
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(72, 72, 72)),
-        );
-
-        let mut action = response
-            .double_clicked()
-            .then_some(PanelTitleAction::Maximize);
-        let mut title_ui = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(rect.shrink2(egui::vec2(6.0, 2.0)))
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
-        );
-        title_ui.label(egui::RichText::new(title).strong());
-        add_contents(&mut title_ui);
-        title_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let visibility_icon = if minimized {
-                PanelControlIcon::Restore
-            } else {
-                PanelControlIcon::Minimize
-            };
-            if panel_control_button(ui, visibility_icon, "Show or hide this panel").clicked() {
-                action = Some(PanelTitleAction::ToggleMinimized);
-            }
-            if panel_control_button(ui, PanelControlIcon::Maximize, "Show only this panel")
-                .clicked()
-            {
-                action = Some(PanelTitleAction::Maximize);
-            }
-        });
-        action.unwrap_or(PanelTitleAction::None)
-    }
-
-    fn apply_viewer_panel_action(&mut self, action: PanelTitleAction) {
-        match action {
-            PanelTitleAction::None => {}
-            PanelTitleAction::ToggleMinimized => {
-                if !self.viewer_minimized && self.graph_minimized {
-                    self.graph_minimized = false;
-                }
-                self.viewer_minimized = !self.viewer_minimized;
-            }
-            PanelTitleAction::Maximize => {
-                self.viewer_minimized = false;
-                self.graph_minimized = true;
-            }
-        }
-    }
-
-    fn apply_graph_panel_action(&mut self, action: PanelTitleAction) {
-        match action {
-            PanelTitleAction::None => {}
-            PanelTitleAction::ToggleMinimized => {
-                if !self.graph_minimized && self.viewer_minimized {
-                    self.viewer_minimized = false;
-                }
-                self.graph_minimized = !self.graph_minimized;
-            }
-            PanelTitleAction::Maximize => {
-                self.graph_minimized = false;
-                self.viewer_minimized = true;
-            }
-        }
-    }
-
     fn status_actions(
         &self,
         viewer_context: Option<&str>,
@@ -473,24 +382,7 @@ impl App {
     }
 }
 
-const PANEL_TITLE_BAR_HEIGHT: f32 = 28.0;
 const STATUS_BAR_HEIGHT: f32 = 28.0;
-const PANEL_HORIZONTAL_MARGIN: f32 = 4.0;
-const PANEL_CORNER_RADIUS: u8 = 7;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum PanelTitleAction {
-    None,
-    ToggleMinimized,
-    Maximize,
-}
-
-#[derive(Clone, Copy)]
-enum PanelControlIcon {
-    Minimize,
-    Maximize,
-    Restore,
-}
 
 #[derive(Clone, Copy)]
 enum MouseButtonHint {
@@ -549,75 +441,6 @@ fn key_name(key: &str) -> String {
         other if other.len() == 1 => other.to_ascii_uppercase(),
         other => other.replace('_', " "),
     }
-}
-
-fn finish_panel(painter: &egui::Painter, rect: egui::Rect, minimized: bool) {
-    let rounding = egui::CornerRadius::same(PANEL_CORNER_RADIUS);
-    if !minimized && rect.height() > f32::from(PANEL_CORNER_RADIUS) {
-        let radius = f32::from(PANEL_CORNER_RADIUS);
-        let bottom_cap = egui::Rect::from_min_max(
-            egui::pos2(rect.left(), rect.bottom() - radius),
-            rect.right_bottom(),
-        );
-        painter.rect_filled(
-            bottom_cap,
-            egui::CornerRadius {
-                nw: 0,
-                ne: 0,
-                sw: PANEL_CORNER_RADIUS,
-                se: PANEL_CORNER_RADIUS,
-            },
-            egui::Color32::from_rgb(28, 28, 28),
-        );
-    }
-    painter.rect_stroke(
-        rect,
-        rounding,
-        egui::Stroke::new(1.0, egui::Color32::from_rgb(78, 78, 78)),
-        egui::StrokeKind::Inside,
-    );
-}
-
-fn panel_control_button(
-    ui: &mut egui::Ui,
-    icon: PanelControlIcon,
-    tooltip: &str,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
-    if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, 3.0, egui::Color32::from_rgb(72, 72, 72));
-    }
-    let color = ui.visuals().widgets.style(&response).fg_stroke.color;
-    let stroke = egui::Stroke::new(1.5, color);
-    match icon {
-        PanelControlIcon::Minimize => {
-            ui.painter().line_segment(
-                [
-                    egui::pos2(rect.left() + 5.0, rect.center().y + 3.0),
-                    egui::pos2(rect.right() - 5.0, rect.center().y + 3.0),
-                ],
-                stroke,
-            );
-        }
-        PanelControlIcon::Maximize => {
-            ui.painter().rect_stroke(
-                rect.shrink2(egui::vec2(5.5, 5.5)),
-                1.0,
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-        }
-        PanelControlIcon::Restore => {
-            let back = rect.shrink2(egui::vec2(6.5, 6.5));
-            let front = back.translate(egui::vec2(-2.5, 2.5));
-            ui.painter()
-                .rect_stroke(back, 1.0, stroke, egui::StrokeKind::Inside);
-            ui.painter()
-                .rect_stroke(front, 1.0, stroke, egui::StrokeKind::Inside);
-        }
-    }
-    response.on_hover_text(tooltip)
 }
 
 fn status_input_badge(ui: &mut egui::Ui, input: &StatusInput) {
@@ -749,196 +572,56 @@ impl eframe::App for App {
         self.platform_before_ui(ui);
 
         let viewport_rect = ui.available_rect_before_wrap();
-        let available = viewport_rect.size();
-        let splitter_hit_height = 4.0;
-        let splitter_visual_height = 2.0;
-        let panel_space =
-            (available.y - PANEL_TITLE_BAR_HEIGHT * 2.0 - splitter_hit_height - STATUS_BAR_HEIGHT)
-                .max(0.0);
-        let analyzer_min = 160.0;
-        let graph_min = 160.0;
-
         self.platform_sync_capture();
-
-        let origin = viewport_rect.min;
-        let panel_left = origin.x + PANEL_HORIZONTAL_MARGIN;
-        let panel_width = (available.x - PANEL_HORIZONTAL_MARGIN * 2.0).max(0.0);
-        let viewer_title_rect = egui::Rect::from_min_size(
-            egui::pos2(panel_left, origin.y),
-            egui::vec2(panel_width, PANEL_TITLE_BAR_HEIGHT),
-        );
-        let mut viewer_title_ui = ui.new_child(
-            egui::UiBuilder::new()
-                .id_salt("logic-analyzer-panel-title")
-                .max_rect(viewer_title_rect)
-                .layout(egui::Layout::top_down(egui::Align::LEFT)),
-        );
-        viewer_title_ui.set_clip_rect(viewer_title_rect);
-        let viewer_action = Self::show_panel_title_bar(
-            &mut viewer_title_ui,
-            "Logic Analyzer",
-            self.viewer_minimized,
-            |_| {},
-        );
-        self.apply_viewer_panel_action(viewer_action);
-
-        let (mut analyzer_height, mut graph_height) =
-            match (self.viewer_minimized, self.graph_minimized) {
-                (true, true) => (0.0, 0.0),
-                (true, false) => (0.0, panel_space),
-                (false, true) => (panel_space, 0.0),
-                (false, false) => {
-                    let analyzer_height = if panel_space >= analyzer_min + graph_min {
-                        (panel_space * self.analyzer_split)
-                            .clamp(analyzer_min, panel_space - graph_min)
-                    } else {
-                        panel_space * self.analyzer_split
-                    };
-                    (analyzer_height, (panel_space - analyzer_height).max(0.0))
+        let specs = [
+            PanelSpec::new("logic_analyzer", "Logic Analyzer", 160.0),
+            PanelSpec::new("node_graph", "Node Graph", 160.0),
+        ];
+        let mut panel_layout = std::mem::take(&mut self.panel_layout);
+        let layout_response = panel_layout.show(
+            ui,
+            viewport_rect,
+            STATUS_BAR_HEIGHT,
+            &specs,
+            |slot, panel_ui| match slot {
+                PanelSlot::TitleBar("node_graph") => self.show_run_controls(panel_ui),
+                PanelSlot::Body("logic_analyzer") => self.logic_analyzer.show(panel_ui),
+                PanelSlot::Body("node_graph") => {
+                    self.platform_before_graph();
+                    self.node_graph.show(panel_ui);
+                    if let Some(message) = self.node_graph.take_io_status() {
+                        self.toasts.info(message);
+                    }
+                    self.platform_after_graph();
                 }
-            };
+                PanelSlot::TitleBar(_) | PanelSlot::Body(_) => {}
+            },
+        );
+        self.panel_layout = panel_layout;
 
-        let initial_splitter_rect = egui::Rect::from_min_size(
-            egui::pos2(panel_left, viewer_title_rect.bottom() + analyzer_height),
-            egui::vec2(panel_width, splitter_hit_height),
-        );
-        let splitter_response = if !self.viewer_minimized && !self.graph_minimized {
-            ui.interact(
-                initial_splitter_rect,
-                ui.id().with("logic_analyzer_node_graph_splitter"),
-                egui::Sense::click_and_drag(),
-            )
-        } else {
-            ui.interact(
-                initial_splitter_rect,
-                ui.id().with("logic_analyzer_node_graph_splitter"),
-                egui::Sense::hover(),
-            )
-        };
-        if splitter_response.hovered() && !self.viewer_minimized && !self.graph_minimized {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
-        }
-        if splitter_response.dragged() && panel_space > 0.0 {
-            analyzer_height = (splitter_response
-                .interact_pointer_pos()
-                .map_or(analyzer_height, |pos| {
-                    pos.y - origin.y - PANEL_TITLE_BAR_HEIGHT - splitter_hit_height * 0.5
-                }))
-            .clamp(0.0, panel_space);
-            if panel_space >= analyzer_min + graph_min {
-                analyzer_height = analyzer_height.clamp(analyzer_min, panel_space - graph_min);
-            }
-            graph_height = (panel_space - analyzer_height).max(0.0);
-            self.analyzer_split = (analyzer_height / panel_space).clamp(0.05, 0.95);
-        }
-
-        let viewer_panel_rect = egui::Rect::from_min_size(
-            viewer_title_rect.min,
-            egui::vec2(panel_width, PANEL_TITLE_BAR_HEIGHT + analyzer_height),
-        );
-        let viewer_rect = egui::Rect::from_min_size(
-            viewer_title_rect.left_bottom(),
-            egui::vec2(
-                panel_width,
-                (analyzer_height - f32::from(PANEL_CORNER_RADIUS)).max(0.0),
-            ),
-        );
-        if !self.viewer_minimized {
-            let mut viewer_ui = ui.new_child(
-                egui::UiBuilder::new()
-                    .id_salt("logic-analyzer-panel-content")
-                    .max_rect(viewer_rect)
-                    .layout(egui::Layout::top_down(egui::Align::LEFT)),
-            );
-            viewer_ui.set_clip_rect(viewer_rect);
-            self.logic_analyzer.show(&mut viewer_ui);
-        }
-        finish_panel(ui.painter(), viewer_panel_rect, self.viewer_minimized);
-
-        let splitter_rect = egui::Rect::from_min_size(
-            viewer_panel_rect.left_bottom(),
-            egui::vec2(panel_width, splitter_hit_height),
-        );
-        ui.painter()
-            .rect_filled(splitter_rect, 0.0, egui::Color32::from_rgb(16, 16, 16));
-        if splitter_response.dragged() {
-            let visual_rect = egui::Rect::from_center_size(
-                splitter_rect.center(),
-                egui::vec2(splitter_rect.width(), splitter_visual_height),
-            );
-            ui.painter()
-                .rect_filled(visual_rect, 0.0, egui::Color32::from_rgb(90, 90, 90));
-        }
-
-        let graph_title_rect = egui::Rect::from_min_size(
-            splitter_rect.left_bottom(),
-            egui::vec2(panel_width, PANEL_TITLE_BAR_HEIGHT),
-        );
-        let mut graph_title_ui = ui.new_child(
-            egui::UiBuilder::new()
-                .id_salt("node-graph-panel-title")
-                .max_rect(graph_title_rect)
-                .layout(egui::Layout::top_down(egui::Align::LEFT)),
-        );
-        graph_title_ui.set_clip_rect(graph_title_rect);
-        let graph_minimized = self.graph_minimized;
-        let graph_action =
-            Self::show_panel_title_bar(&mut graph_title_ui, "Node Graph", graph_minimized, |ui| {
-                self.show_run_controls(ui)
-            });
-        self.apply_graph_panel_action(graph_action);
-
-        let graph_panel_rect = egui::Rect::from_min_size(
-            graph_title_rect.min,
-            egui::vec2(panel_width, PANEL_TITLE_BAR_HEIGHT + graph_height),
-        );
-        let graph_rect = egui::Rect::from_min_size(
-            graph_title_rect.left_bottom(),
-            egui::vec2(
-                panel_width,
-                (graph_height - f32::from(PANEL_CORNER_RADIUS)).max(0.0),
-            ),
-        );
-        if !self.graph_minimized {
-            self.platform_before_graph();
-            let mut graph_ui = ui.new_child(
-                egui::UiBuilder::new()
-                    .id_salt("node-graph-panel-content")
-                    .max_rect(graph_rect)
-                    .layout(egui::Layout::top_down(egui::Align::LEFT)),
-            );
-            graph_ui.set_clip_rect(graph_rect);
-            self.node_graph.show(&mut graph_ui);
-            if let Some(message) = self.node_graph.take_io_status() {
-                self.toasts.info(message);
-            }
-            self.platform_after_graph();
-        }
-        finish_panel(ui.painter(), graph_panel_rect, self.graph_minimized);
+        let viewer = layout_response
+            .panel("logic_analyzer")
+            .expect("logic analyzer panel geometry");
+        let graph = layout_response
+            .panel("node_graph")
+            .expect("node graph panel geometry");
 
         let pointer_pos = ui.input(|i| i.pointer.hover_pos());
         let modifiers = ui.input(|i| i.modifiers);
         let status_actions = self.status_actions(
             pointer_pos
-                .is_some_and(|pos| !self.viewer_minimized && viewer_rect.contains(pos))
+                .is_some_and(|pos| !viewer.minimized && viewer.body_rect.contains(pos))
                 .then(|| self.logic_analyzer.hovered_input_context()),
-            pointer_pos.is_some_and(|pos| !self.graph_minimized && graph_rect.contains(pos)),
+            pointer_pos.is_some_and(|pos| !graph.minimized && graph.body_rect.contains(pos)),
             modifiers,
-        );
-        let status_rect = egui::Rect::from_min_max(
-            egui::pos2(
-                viewport_rect.left(),
-                viewport_rect.bottom() - STATUS_BAR_HEIGHT,
-            ),
-            viewport_rect.right_bottom(),
         );
         let mut status_ui = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("application-status-bar")
-                .max_rect(status_rect)
+                .max_rect(layout_response.footer_rect)
                 .layout(egui::Layout::top_down(egui::Align::LEFT)),
         );
-        status_ui.set_clip_rect(status_rect);
+        status_ui.set_clip_rect(layout_response.footer_rect);
         self.show_status_bar(&mut status_ui, &status_actions);
 
         self.about.show(ui.ctx());
