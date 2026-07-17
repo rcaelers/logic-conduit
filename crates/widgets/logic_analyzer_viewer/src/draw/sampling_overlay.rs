@@ -27,16 +27,21 @@ impl LogicAnalyzerViewer {
             return;
         };
 
-        let mut edges = visible_sampling_edges(
-            clock,
-            overlay.edge,
-            self.visible_start_us,
-            self.visible_start_us + self.visible_span_us,
-        );
-        edges.retain(|(time_us, _)| sampling_is_active(&self.channels, overlay, *time_us));
+        let visible_end_us = self.visible_start_us + self.visible_span_us;
+        let mut edges =
+            visible_sampling_edges(clock, overlay.edge, self.visible_start_us, visible_end_us);
         if edges.is_empty()
-            || edges.len() as f32 > (layout.wave_rect.width() / MARKER_SPACING).max(1.0)
+            || !sampling_edges_are_legible(
+                &edges,
+                self.visible_start_us,
+                visible_end_us,
+                layout.wave_rect.width(),
+            )
         {
+            return;
+        }
+        edges.retain(|(time_us, _)| sampling_is_active(&self.channels, overlay, *time_us));
+        if edges.is_empty() {
             return;
         }
 
@@ -79,6 +84,22 @@ impl LogicAnalyzerViewer {
             }
         }
     }
+}
+
+fn sampling_edges_are_legible(
+    edges: &[(f64, bool)],
+    visible_start_us: f64,
+    visible_end_us: f64,
+    width: f32,
+) -> bool {
+    let visible_span_us = visible_end_us - visible_start_us;
+    if width <= 0.0 || visible_span_us <= 0.0 {
+        return false;
+    }
+    let pixels_per_us = f64::from(width) / visible_span_us;
+    edges
+        .windows(2)
+        .all(|pair| (pair[1].0 - pair[0].0) * pixels_per_us >= f64::from(MARKER_SPACING))
 }
 
 fn sampling_is_active(channels: &[LogicChannel], overlay: &SamplingOverlay, time_us: f64) -> bool {
@@ -299,5 +320,22 @@ mod tests {
         assert!(!sampling_is_active(&[gate.clone()], &overlay, 1.0));
         assert!(!sampling_is_active(&[gate.clone()], &overlay, 2.0));
         assert!(sampling_is_active(&[gate], &overlay, 3.0));
+    }
+
+    #[test]
+    fn clock_density_hides_sparse_gated_markers_when_zoomed_out() {
+        let locally_dense_edges = vec![(10.0, true), (11.0, true), (12.0, true)];
+        assert!(!sampling_edges_are_legible(
+            &locally_dense_edges,
+            0.0,
+            1_000.0,
+            600.0,
+        ));
+        assert!(sampling_edges_are_legible(
+            &locally_dense_edges,
+            0.0,
+            100.0,
+            600.0,
+        ));
     }
 }
