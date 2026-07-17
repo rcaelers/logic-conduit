@@ -1,71 +1,8 @@
-use std::fmt;
-
 use egui::{Color32, Pos2};
+pub(crate) use input_bindings::MenuShortcut as Shortcut;
+use input_bindings::{MENU_ICON_COLUMN_WIDTH, menu_item_layout_job};
 
 // ── Shortcut ──────────────────────────────────────────────────────────────────
-
-#[derive(Clone, Copy)]
-pub(crate) struct Shortcut {
-    pub modifiers: egui::Modifiers,
-    pub key: egui::Key,
-}
-
-impl Shortcut {
-    pub fn from_keyboard(shortcut: egui::KeyboardShortcut) -> Self {
-        Self {
-            modifiers: shortcut.modifiers,
-            key: shortcut.logical_key,
-        }
-    }
-    fn consume(&self, ui: &mut egui::Ui) -> bool {
-        if ui.input_mut(|input| {
-            input.consume_shortcut(&egui::KeyboardShortcut::new(self.modifiers, self.key))
-        }) {
-            return true;
-        }
-
-        if !self.modifiers.command || self.modifiers.shift || self.modifiers.alt {
-            return false;
-        }
-
-        ui.input_mut(|input| {
-            let mut consumed = false;
-            input.events.retain(|event| {
-                let matches = matches!(
-                    (self.key, event),
-                    (egui::Key::C, egui::Event::Copy)
-                        | (egui::Key::X, egui::Event::Cut)
-                        | (egui::Key::V, egui::Event::Paste(_))
-                );
-                consumed |= matches;
-                !matches
-            });
-            consumed
-        })
-    }
-}
-
-impl fmt::Display for Shortcut {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.modifiers.command {
-            if cfg!(target_os = "macos") {
-                write!(f, "⌘ ")?;
-            } else {
-                write!(f, "^ ")?;
-            }
-        }
-        if self.modifiers.ctrl {
-            write!(f, "^ ")?;
-        }
-        if self.modifiers.shift {
-            write!(f, "⇧ ")?;
-        }
-        if self.modifiers.alt {
-            write!(f, "Alt+")?;
-        }
-        write!(f, "{}", self.key.name())
-    }
-}
 
 // ── MenuEntry ─────────────────────────────────────────────────────────────────
 
@@ -584,46 +521,6 @@ impl<T: Clone> Menu<T> {
         }
     }
 
-    /// Width of the icon column.  All label text starts at this x-offset so
-    /// items with and without icons stay aligned.
-    const ICON_COL_W: f32 = 22.0;
-
-    /// Build a [`LayoutJob`] whose icon section occupies exactly [`ICON_COL_W`]
-    /// points, with the label starting at that fixed offset.  Uses
-    /// `Color32::PLACEHOLDER` so egui's button widget applies the correct
-    /// hover/active text colour automatically.
-    fn item_layout_job(ui: &egui::Ui, icon: Option<&str>, label: &str) -> egui::text::LayoutJob {
-        let font_id = egui::TextStyle::Button.resolve(ui.style());
-        let ph = egui::Color32::PLACEHOLDER;
-        let fmt = egui::TextFormat {
-            font_id: font_id.clone(),
-            color: ph,
-            ..Default::default()
-        };
-
-        let mut job = egui::text::LayoutJob::default();
-        if let Some(s) = icon {
-            let icon_w = ui.ctx().fonts_mut(|f| {
-                f.layout_no_wrap(s.to_string(), font_id.clone(), ph)
-                    .size()
-                    .x
-            });
-            job.append(
-                s,
-                0.0,
-                egui::TextFormat {
-                    font_id: font_id.clone(),
-                    color: ph,
-                    ..Default::default()
-                },
-            );
-            job.append(label, (Self::ICON_COL_W - icon_w).max(2.0), fmt);
-        } else {
-            job.append(label, Self::ICON_COL_W, fmt);
-        }
-        job
-    }
-
     fn render_column(
         ui: &mut egui::Ui,
         entries: &[MenuEntry<T>],
@@ -658,7 +555,7 @@ impl<T: Clone> Menu<T> {
                 Color32::TRANSPARENT
             };
             ui.push_id(("menu-entry", column_path, &entry.label, i), |ui| {
-                let job = Self::item_layout_job(ui, entry.icon.as_deref(), &entry.label);
+                let job = menu_item_layout_job(ui, entry.icon.as_deref(), &entry.label);
 
                 match &entry.kind {
                     MenuKind::SubMenu(_) => {
@@ -744,7 +641,7 @@ impl<T: Clone> Menu<T> {
 
 fn draw_checkmark(ui: &egui::Ui, response: &egui::Response) {
     let center = egui::pos2(
-        response.rect.left() + Menu::<()>::ICON_COL_W * 0.5,
+        response.rect.left() + MENU_ICON_COLUMN_WIDTH * 0.5,
         response.rect.center().y,
     );
     let stroke = egui::Stroke::new(2.0, ui.visuals().widgets.style(response).fg_stroke.color);

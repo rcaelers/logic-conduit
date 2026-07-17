@@ -13,6 +13,8 @@ use egui::{
 };
 use serde::{Deserialize, Serialize};
 
+use input_bindings::{MenuShortcut, menu_item_layout_job};
+
 #[derive(Debug, Clone, Copy)]
 pub struct PanelSpec<'a> {
     pub id: &'a str,
@@ -1023,11 +1025,16 @@ impl PanelLayout {
         geometry: &PanelGeometry,
         action: &mut Option<LayoutAction>,
     ) {
+        ui.set_min_width(180.0);
         let flip_label = match geometry.title_bar_position {
             TitleBarPosition::Top => "Flip to Bottom",
             TitleBarPosition::Bottom => "Flip to Top",
         };
-        if ui.button(flip_label).clicked() {
+        let flip_icon = match geometry.title_bar_position {
+            TitleBarPosition::Top => "↓",
+            TitleBarPosition::Bottom => "↑",
+        };
+        if area_menu_button(ui, flip_label, flip_icon, None, true).clicked() {
             *action = Some(LayoutAction::Panel {
                 panel_id: geometry.panel_id.clone(),
                 action: PanelAction::FlipTitleBar,
@@ -1035,28 +1042,32 @@ impl PanelLayout {
             ui.close();
         }
         ui.separator();
-        ui.menu_button("Split This Area", |ui| {
-            if ui.button("Horizontal Split").clicked() {
+        let split_label = menu_item_layout_job(ui, Some("▣"), "Split This Area");
+        ui.menu_button(egui::WidgetText::LayoutJob(split_label.into()), |ui| {
+            ui.set_min_width(180.0);
+            if area_menu_button(ui, "Horizontal Split", "═", None, true).clicked() {
                 *action = Some(LayoutAction::BeginSplit {
                     axis: SplitAxis::Horizontal,
                 });
                 ui.close();
             }
-            if ui.button("Vertical Split").clicked() {
+            if area_menu_button(ui, "Vertical Split", "║", None, true).clicked() {
                 *action = Some(LayoutAction::BeginSplit {
                     axis: SplitAxis::Vertical,
                 });
                 ui.close();
             }
         });
-        ui.menu_button("Add Area to Layout", |ui| {
-            for (label, side) in [
-                ("Left", LayoutSide::Left),
-                ("Right", LayoutSide::Right),
-                ("Top", LayoutSide::Top),
-                ("Bottom", LayoutSide::Bottom),
+        let add_label = menu_item_layout_job(ui, Some("+"), "Add Area to Layout");
+        ui.menu_button(egui::WidgetText::LayoutJob(add_label.into()), |ui| {
+            ui.set_min_width(180.0);
+            for (label, icon, side) in [
+                ("Left", "←", LayoutSide::Left),
+                ("Right", "→", LayoutSide::Right),
+                ("Top", "↑", LayoutSide::Top),
+                ("Bottom", "↓", LayoutSide::Bottom),
             ] {
-                if ui.button(label).clicked() {
+                if area_menu_button(ui, label, icon, None, true).clicked() {
                     *action = Some(LayoutAction::BeginLayoutSplit { side });
                     ui.close();
                 }
@@ -1067,11 +1078,16 @@ impl PanelLayout {
         } else {
             "Maximize Area"
         };
-        let mut maximize_button = egui::Button::new(maximize_label);
-        if let Some(shortcut) = self.maximize_shortcut {
-            maximize_button = maximize_button.shortcut_text(ui.ctx().format_shortcut(&shortcut));
-        }
-        if ui.add(maximize_button).clicked() {
+        let maximize_icon = if geometry.maximized { "▣" } else { "□" };
+        if area_menu_button(
+            ui,
+            maximize_label,
+            maximize_icon,
+            self.maximize_shortcut.map(MenuShortcut::from_keyboard),
+            true,
+        )
+        .clicked()
+        {
             *action = Some(LayoutAction::Panel {
                 panel_id: geometry.panel_id.clone(),
                 action: if geometry.maximized {
@@ -1083,13 +1099,15 @@ impl PanelLayout {
             ui.close();
         }
         ui.separator();
-        if ui
-            .add_enabled(
-                all_panels(self.state.root.as_ref()).len() > 1,
-                egui::Button::new("Close Area"),
-            )
-            .on_disabled_hover_text("The last area cannot be closed")
-            .clicked()
+        if area_menu_button(
+            ui,
+            "Close Area",
+            "×",
+            None,
+            all_panels(self.state.root.as_ref()).len() > 1,
+        )
+        .on_disabled_hover_text("The last area cannot be closed")
+        .clicked()
         {
             *action = Some(LayoutAction::Panel {
                 panel_id: geometry.panel_id.clone(),
@@ -1282,6 +1300,22 @@ impl PanelLayout {
             }
         }
     }
+}
+
+fn area_menu_button(
+    ui: &mut Ui,
+    label: &str,
+    icon: &str,
+    shortcut: Option<MenuShortcut>,
+    enabled: bool,
+) -> egui::Response {
+    let job = menu_item_layout_job(ui, Some(icon), label);
+    let mut button = egui::Button::new(egui::WidgetText::LayoutJob(job.into()))
+        .wrap_mode(egui::TextWrapMode::Extend);
+    if let Some(shortcut) = shortcut {
+        button = button.right_text(shortcut.to_string());
+    }
+    ui.add_enabled(enabled, button)
 }
 
 /// Compatibility alias for hosts that used the original flat vertical
@@ -2254,6 +2288,14 @@ mod tests {
         layout.apply_panel_action("graph", PanelAction::RestoreMaximized);
         let (restored, _) = layout.geometries(rect, &specs());
         assert_eq!(restored.len(), 2);
+    }
+
+    #[test]
+    fn area_menu_uses_shared_shortcut_formatter() {
+        for (key, expected) in [(egui::Key::Space, "^ Space"), (egui::Key::A, "^ A")] {
+            let shortcut = KeyboardShortcut::new(egui::Modifiers::CTRL, key);
+            assert_eq!(MenuShortcut::from_keyboard(shortcut).to_string(), expected);
+        }
     }
 
     #[test]

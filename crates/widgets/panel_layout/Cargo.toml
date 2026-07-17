@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 egui = { workspace = true }
+input-bindings = { path = "../../input_bindings" }
 serde = { workspace = true }
 
 [dev-dependencies]

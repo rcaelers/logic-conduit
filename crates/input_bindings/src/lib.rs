@@ -11,6 +11,108 @@ use egui::{Key, KeyboardShortcut, Modifiers, PointerButton, Ui};
 use serde::Deserialize;
 use thiserror::Error;
 
+/// Width reserved for icons and toggle marks in application popup menus.
+pub const MENU_ICON_COLUMN_WIDTH: f32 = 22.0;
+
+/// Builds the shared icon-and-label layout used by application popup menus.
+/// Placeholder colors let the hosting egui button apply hover, active, and
+/// disabled colors consistently.
+pub fn menu_item_layout_job(ui: &Ui, icon: Option<&str>, label: &str) -> egui::text::LayoutJob {
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let color = egui::Color32::PLACEHOLDER;
+    let format = egui::TextFormat {
+        font_id: font_id.clone(),
+        color,
+        ..Default::default()
+    };
+    let mut job = egui::text::LayoutJob::default();
+    if let Some(icon) = icon {
+        let icon_width = ui.ctx().fonts_mut(|fonts| {
+            fonts
+                .layout_no_wrap(icon.to_owned(), font_id.clone(), color)
+                .size()
+                .x
+        });
+        job.append(icon, 0.0, format.clone());
+        job.append(
+            label,
+            (MENU_ICON_COLUMN_WIDTH - icon_width).max(2.0),
+            format,
+        );
+    } else {
+        job.append(label, MENU_ICON_COLUMN_WIDTH, format);
+    }
+    job
+}
+
+/// Menu presentation and dispatch for a configured keyboard shortcut.
+///
+/// This is the single application-neutral translation used by popup menus,
+/// keeping modifier notation consistent across reusable widgets.
+#[derive(Clone, Copy)]
+pub struct MenuShortcut {
+    pub modifiers: Modifiers,
+    pub key: Key,
+}
+
+impl MenuShortcut {
+    pub fn from_keyboard(shortcut: KeyboardShortcut) -> Self {
+        Self {
+            modifiers: shortcut.modifiers,
+            key: shortcut.logical_key,
+        }
+    }
+
+    pub fn consume(&self, ui: &mut Ui) -> bool {
+        if ui.input_mut(|input| {
+            input.consume_shortcut(&KeyboardShortcut::new(self.modifiers, self.key))
+        }) {
+            return true;
+        }
+
+        if !self.modifiers.command || self.modifiers.shift || self.modifiers.alt {
+            return false;
+        }
+
+        ui.input_mut(|input| {
+            let mut consumed = false;
+            input.events.retain(|event| {
+                let matches = matches!(
+                    (self.key, event),
+                    (Key::C, egui::Event::Copy)
+                        | (Key::X, egui::Event::Cut)
+                        | (Key::V, egui::Event::Paste(_))
+                );
+                consumed |= matches;
+                !matches
+            });
+            consumed
+        })
+    }
+}
+
+impl fmt::Display for MenuShortcut {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.modifiers.command {
+            if cfg!(target_os = "macos") {
+                write!(f, "⌘ ")?;
+            } else {
+                write!(f, "^ ")?;
+            }
+        }
+        if self.modifiers.ctrl {
+            write!(f, "^ ")?;
+        }
+        if self.modifiers.shift {
+            write!(f, "⇧ ")?;
+        }
+        if self.modifiers.alt {
+            write!(f, "Alt+")?;
+        }
+        write!(f, "{}", self.key.name())
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BindingFile {
