@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use web_time::Instant;
 
 use signal_processing::{Annotation, AnnotationQuery, DerivedLaneData, WordPresenceBucket};
 

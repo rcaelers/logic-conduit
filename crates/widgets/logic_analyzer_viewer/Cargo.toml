@@ -12,3 +12,4 @@ path = "src/lib.rs"
 input-bindings = { path = "../../input_bindings" }
 signal-processing = { path = "../../signal_processing" }
 egui = { workspace = true }
+web-time = { workspace = true }
