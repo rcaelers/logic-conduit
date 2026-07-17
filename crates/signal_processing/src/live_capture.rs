@@ -1,0 +1,605 @@
+//! Generic, UI-independent contracts for bounded live-capture ingestion.
+//!
+//! Concrete devices and acquisition lifecycles live in `logic-analyzer-processing`. This module
+//! owns only the canonical data, status, and writer boundaries shared by capture providers,
+//! stores, graph cursors, and viewers.
+
+use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
+use thiserror::Error;
+
+pub const CAPTURE_CHUNK_FORMAT_VERSION: u16 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CaptureSessionId(u128);
+
+impl CaptureSessionId {
+    pub const fn new(value: u128) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u128 {
+        self.0
+    }
+}
+
+impl fmt::Display for CaptureSessionId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{:032x}", self.0)
+    }
+}
+
+/// Provider-owned physical-channel identity. Generic code treats it as opaque.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CaptureChannelId(Arc<str>);
+
+impl CaptureChannelId {
+    pub fn new(value: impl Into<Arc<str>>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for CaptureChannelId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureSessionState {
+    Preparing,
+    Prepared,
+    Armed,
+    Triggered,
+    Recording,
+    Stopping,
+    Complete,
+    Error,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureAcquisitionPhase {
+    Preparing,
+    Ready,
+    WaitingForTrigger,
+    CapturingOnDevice,
+    ReceivingLiveData,
+    UploadingBufferedData,
+    DrainingPipeline,
+    Finalizing,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CaptureProgress {
+    pub captured_samples: Option<u64>,
+    pub transferred_bytes: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaptureStatus {
+    pub session_id: CaptureSessionId,
+    pub state: CaptureSessionState,
+    pub phase: CaptureAcquisitionPhase,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureFailureKind {
+    InvalidRequest,
+    Transport,
+    Protocol,
+    Writer,
+    Cancelled,
+    Internal,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CaptureFailure {
+    pub session_id: CaptureSessionId,
+    pub kind: CaptureFailureKind,
+    pub message: String,
+}
+
+impl CaptureFailure {
+    pub fn new(
+        session_id: CaptureSessionId,
+        kind: CaptureFailureKind,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            session_id,
+            kind,
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CaptureEvent {
+    Status(CaptureStatus),
+    Progress {
+        session_id: CaptureSessionId,
+        progress: CaptureProgress,
+    },
+    Failed(CaptureFailure),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CaptureChunkPayload {
+    /// Channel bits follow the chunk's channel table, least-significant bit first in each byte.
+    PackedLsbFirst { bytes: Arc<[u8]>, bit_offset: u8 },
+}
+
+/// Immutable canonical raw data shared by acquisition, storage, and caught-up consumers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CaptureChunk {
+    format_version: u16,
+    session_id: CaptureSessionId,
+    sequence: u64,
+    start_sample: u64,
+    sample_count: u64,
+    channels: Arc<[CaptureChannelId]>,
+    payload: CaptureChunkPayload,
+}
+
+impl CaptureChunk {
+    #[allow(clippy::too_many_arguments)]
+    pub fn packed_lsb_first(
+        session_id: CaptureSessionId,
+        sequence: u64,
+        start_sample: u64,
+        sample_count: u64,
+        channels: impl Into<Arc<[CaptureChannelId]>>,
+        bytes: impl Into<Arc<[u8]>>,
+        bit_offset: u8,
+    ) -> Result<Self, CaptureChunkError> {
+        let channels = channels.into();
+        let bytes = bytes.into();
+        if channels.is_empty() {
+            return Err(CaptureChunkError::NoChannels);
+        }
+        if sample_count == 0 {
+            return Err(CaptureChunkError::NoSamples);
+        }
+        if bit_offset >= 8 {
+            return Err(CaptureChunkError::InvalidBitOffset(bit_offset));
+        }
+        start_sample
+            .checked_add(sample_count)
+            .ok_or(CaptureChunkError::SampleRangeOverflow)?;
+        let required_bits = u128::from(sample_count)
+            .checked_mul(channels.len() as u128)
+            .ok_or(CaptureChunkError::PayloadSizeOverflow)?;
+        let available_bits = (bytes.len() as u128)
+            .checked_mul(8)
+            .and_then(|bits| bits.checked_sub(u128::from(bit_offset)))
+            .ok_or(CaptureChunkError::PayloadSizeOverflow)?;
+        if required_bits > available_bits {
+            return Err(CaptureChunkError::PayloadTooShort {
+                required_bits,
+                available_bits,
+            });
+        }
+        Ok(Self {
+            format_version: CAPTURE_CHUNK_FORMAT_VERSION,
+            session_id,
+            sequence,
+            start_sample,
+            sample_count,
+            channels,
+            payload: CaptureChunkPayload::PackedLsbFirst { bytes, bit_offset },
+        })
+    }
+
+    pub const fn format_version(&self) -> u16 {
+        self.format_version
+    }
+
+    pub const fn session_id(&self) -> CaptureSessionId {
+        self.session_id
+    }
+
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    pub const fn start_sample(&self) -> u64 {
+        self.start_sample
+    }
+
+    pub const fn sample_count(&self) -> u64 {
+        self.sample_count
+    }
+
+    pub fn end_sample(&self) -> u64 {
+        self.start_sample + self.sample_count
+    }
+
+    pub fn channels(&self) -> &[CaptureChannelId] {
+        &self.channels
+    }
+
+    pub fn payload(&self) -> &CaptureChunkPayload {
+        &self.payload
+    }
+
+    pub fn encoded_byte_len(&self) -> usize {
+        match &self.payload {
+            CaptureChunkPayload::PackedLsbFirst { bytes, .. } => bytes.len(),
+        }
+    }
+
+    pub fn packed_level(&self, relative_sample: u64, channel: usize) -> Option<bool> {
+        if relative_sample >= self.sample_count || channel >= self.channels.len() {
+            return None;
+        }
+        let relative_bit = (relative_sample as u128)
+            .checked_mul(self.channels.len() as u128)?
+            .checked_add(channel as u128)?;
+        let CaptureChunkPayload::PackedLsbFirst { bytes, bit_offset } = &self.payload;
+        let absolute_bit = relative_bit.checked_add(u128::from(*bit_offset))?;
+        let byte_index = usize::try_from(absolute_bit / 8).ok()?;
+        let bit_index = u8::try_from(absolute_bit % 8).ok()?;
+        bytes
+            .get(byte_index)
+            .map(|byte| (byte & (1_u8 << bit_index)) != 0)
+    }
+}
+
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum CaptureChunkError {
+    #[error("a capture chunk must contain at least one channel")]
+    NoChannels,
+    #[error("a capture chunk must contain at least one sample")]
+    NoSamples,
+    #[error("capture chunk bit offset {0} is outside 0..8")]
+    InvalidBitOffset(u8),
+    #[error("capture chunk sample range overflows u64")]
+    SampleRangeOverflow,
+    #[error("capture chunk payload size overflows its representation")]
+    PayloadSizeOverflow,
+    #[error(
+        "capture chunk payload has {available_bits} available bits but requires {required_bits}"
+    )]
+    PayloadTooShort {
+        required_bits: u128,
+        available_bits: u128,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaptureQueueLimits {
+    max_queued_chunks: usize,
+    max_chunk_bytes: usize,
+}
+
+impl CaptureQueueLimits {
+    pub fn new(
+        max_queued_chunks: usize,
+        max_chunk_bytes: usize,
+    ) -> Result<Self, CaptureQueueConfigError> {
+        if max_queued_chunks == 0 {
+            return Err(CaptureQueueConfigError::ZeroChunkCapacity);
+        }
+        if max_chunk_bytes == 0 {
+            return Err(CaptureQueueConfigError::ZeroChunkSize);
+        }
+        Ok(Self {
+            max_queued_chunks,
+            max_chunk_bytes,
+        })
+    }
+
+    pub const fn max_queued_chunks(self) -> usize {
+        self.max_queued_chunks
+    }
+
+    pub const fn max_chunk_bytes(self) -> usize {
+        self.max_chunk_bytes
+    }
+}
+
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum CaptureQueueConfigError {
+    #[error("capture chunk queue capacity must be non-zero")]
+    ZeroChunkCapacity,
+    #[error("maximum capture chunk size must be non-zero")]
+    ZeroChunkSize,
+    #[error("capture event queue capacity must be non-zero")]
+    ZeroEventCapacity,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum CaptureWriteError {
+    #[error("capture chunk queue is closed")]
+    Closed,
+    #[error("capture chunk contains {actual} bytes, exceeding the configured maximum of {limit}")]
+    ChunkTooLarge { actual: usize, limit: usize },
+    #[error("capture writer rejected the chunk: {0}")]
+    Rejected(String),
+}
+
+/// Synchronous authority boundary used by an acquisition worker.
+pub trait CaptureChunkWriter: Send {
+    fn append(&mut self, chunk: CaptureChunk) -> Result<(), CaptureWriteError>;
+}
+
+pub struct CaptureQueueWriter {
+    sender: Sender<CaptureChunk>,
+    limits: CaptureQueueLimits,
+    max_observed: Arc<AtomicUsize>,
+}
+
+pub struct CaptureQueueReader {
+    receiver: Receiver<CaptureChunk>,
+    limits: CaptureQueueLimits,
+    max_observed: Arc<AtomicUsize>,
+}
+
+pub fn bounded_capture_queue(
+    limits: CaptureQueueLimits,
+) -> (CaptureQueueWriter, CaptureQueueReader) {
+    let (sender, receiver) = crossbeam_channel::bounded(limits.max_queued_chunks);
+    let max_observed = Arc::new(AtomicUsize::new(0));
+    (
+        CaptureQueueWriter {
+            sender,
+            limits,
+            max_observed: Arc::clone(&max_observed),
+        },
+        CaptureQueueReader {
+            receiver,
+            limits,
+            max_observed,
+        },
+    )
+}
+
+impl CaptureChunkWriter for CaptureQueueWriter {
+    fn append(&mut self, chunk: CaptureChunk) -> Result<(), CaptureWriteError> {
+        let actual = chunk.encoded_byte_len();
+        if actual > self.limits.max_chunk_bytes {
+            return Err(CaptureWriteError::ChunkTooLarge {
+                actual,
+                limit: self.limits.max_chunk_bytes,
+            });
+        }
+        self.sender
+            .send(chunk)
+            .map_err(|_| CaptureWriteError::Closed)?;
+        self.max_observed
+            .fetch_max(self.sender.len(), Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+impl CaptureQueueReader {
+    pub fn recv(&self) -> Result<CaptureChunk, CaptureQueueReceiveError> {
+        self.receiver
+            .recv()
+            .map_err(|_| CaptureQueueReceiveError::Closed)
+    }
+
+    pub fn recv_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<CaptureChunk, CaptureQueueReceiveError> {
+        self.receiver
+            .recv_timeout(timeout)
+            .map_err(|error| match error {
+                RecvTimeoutError::Timeout => CaptureQueueReceiveError::Timeout,
+                RecvTimeoutError::Disconnected => CaptureQueueReceiveError::Closed,
+            })
+    }
+
+    pub fn try_recv(&self) -> Result<CaptureChunk, CaptureQueueReceiveError> {
+        self.receiver.try_recv().map_err(|error| match error {
+            TryRecvError::Empty => CaptureQueueReceiveError::Empty,
+            TryRecvError::Disconnected => CaptureQueueReceiveError::Closed,
+        })
+    }
+
+    pub fn queued_chunks(&self) -> usize {
+        self.receiver.len()
+    }
+
+    pub const fn capacity(&self) -> usize {
+        self.limits.max_queued_chunks
+    }
+
+    pub fn max_observed_queued_chunks(&self) -> usize {
+        self.max_observed.load(Ordering::Relaxed)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum CaptureQueueReceiveError {
+    #[error("capture chunk queue is currently empty")]
+    Empty,
+    #[error("capture chunk receive timed out")]
+    Timeout,
+    #[error("capture chunk queue is closed")]
+    Closed,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum CaptureEventPublishError {
+    #[error("capture event queue is full")]
+    Full,
+    #[error("capture event queue is closed")]
+    Closed,
+}
+
+pub trait CaptureEventPublisher: Send {
+    fn publish(&mut self, event: CaptureEvent) -> Result<(), CaptureEventPublishError>;
+}
+
+pub struct CaptureEventQueuePublisher {
+    sender: Sender<CaptureEvent>,
+}
+
+pub struct CaptureEventQueueReader {
+    receiver: Receiver<CaptureEvent>,
+    capacity: usize,
+}
+
+pub fn bounded_capture_event_queue(
+    capacity: usize,
+) -> Result<(CaptureEventQueuePublisher, CaptureEventQueueReader), CaptureQueueConfigError> {
+    if capacity == 0 {
+        return Err(CaptureQueueConfigError::ZeroEventCapacity);
+    }
+    let (sender, receiver) = crossbeam_channel::bounded(capacity);
+    Ok((
+        CaptureEventQueuePublisher { sender },
+        CaptureEventQueueReader { receiver, capacity },
+    ))
+}
+
+impl CaptureEventPublisher for CaptureEventQueuePublisher {
+    fn publish(&mut self, event: CaptureEvent) -> Result<(), CaptureEventPublishError> {
+        self.sender.try_send(event).map_err(|error| match error {
+            TrySendError::Full(_) => CaptureEventPublishError::Full,
+            TrySendError::Disconnected(_) => CaptureEventPublishError::Closed,
+        })
+    }
+}
+
+impl CaptureEventQueueReader {
+    pub fn recv(&self) -> Result<CaptureEvent, CaptureQueueReceiveError> {
+        self.receiver
+            .recv()
+            .map_err(|_| CaptureQueueReceiveError::Closed)
+    }
+
+    pub fn recv_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<CaptureEvent, CaptureQueueReceiveError> {
+        self.receiver
+            .recv_timeout(timeout)
+            .map_err(|error| match error {
+                RecvTimeoutError::Timeout => CaptureQueueReceiveError::Timeout,
+                RecvTimeoutError::Disconnected => CaptureQueueReceiveError::Closed,
+            })
+    }
+
+    pub fn try_recv(&self) -> Result<CaptureEvent, CaptureQueueReceiveError> {
+        self.receiver.try_recv().map_err(|error| match error {
+            TryRecvError::Empty => CaptureQueueReceiveError::Empty,
+            TryRecvError::Disconnected => CaptureQueueReceiveError::Closed,
+        })
+    }
+
+    pub fn queued_events(&self) -> usize {
+        self.receiver.len()
+    }
+
+    pub const fn capacity(&self) -> usize {
+        self.capacity
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::{
+        CaptureChannelId, CaptureChunk, CaptureChunkError, CaptureChunkWriter, CaptureQueueLimits,
+        CaptureSessionId, CaptureWriteError, bounded_capture_queue,
+    };
+
+    fn channels() -> Arc<[CaptureChannelId]> {
+        vec![
+            CaptureChannelId::new("bank-a:7"),
+            CaptureChannelId::new("bank-c:2"),
+            CaptureChannelId::new("aux:19"),
+        ]
+        .into()
+    }
+
+    #[test]
+    fn packed_chunk_validates_and_reads_unaligned_payload() {
+        let levels = [true, false, true, false, true, false, true, true, false];
+        let mut bytes = vec![0_u8; 2];
+        for (relative, level) in levels.into_iter().enumerate() {
+            if level {
+                let bit = relative + 3;
+                bytes[bit / 8] |= 1 << (bit % 8);
+            }
+        }
+        let chunk = CaptureChunk::packed_lsb_first(
+            CaptureSessionId::new(9),
+            4,
+            11,
+            3,
+            channels(),
+            bytes,
+            3,
+        )
+        .unwrap();
+
+        assert_eq!(chunk.start_sample(), 11);
+        assert_eq!(chunk.end_sample(), 14);
+        assert_eq!(chunk.channels()[1].as_str(), "bank-c:2");
+        assert_eq!(chunk.packed_level(0, 0), Some(true));
+        assert_eq!(chunk.packed_level(1, 1), Some(true));
+        assert_eq!(chunk.packed_level(2, 1), Some(true));
+        assert_eq!(chunk.packed_level(3, 0), None);
+        assert_eq!(chunk.packed_level(0, 3), None);
+    }
+
+    #[test]
+    fn packed_chunk_rejects_short_payload() {
+        let error = CaptureChunk::packed_lsb_first(
+            CaptureSessionId::new(1),
+            0,
+            0,
+            3,
+            channels(),
+            [0_u8],
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            CaptureChunkError::PayloadTooShort {
+                required_bits: 9,
+                available_bits: 8,
+            }
+        );
+    }
+
+    #[test]
+    fn bounded_queue_rejects_oversized_chunks() {
+        let limits = CaptureQueueLimits::new(2, 1).unwrap();
+        let (mut writer, reader) = bounded_capture_queue(limits);
+        let chunk = CaptureChunk::packed_lsb_first(
+            CaptureSessionId::new(1),
+            0,
+            0,
+            3,
+            channels(),
+            [0_u8; 2],
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(
+            writer.append(chunk),
+            Err(CaptureWriteError::ChunkTooLarge {
+                actual: 2,
+                limit: 1,
+            })
+        );
+        assert_eq!(reader.queued_chunks(), 0);
+        assert_eq!(reader.capacity(), 2);
+    }
+}

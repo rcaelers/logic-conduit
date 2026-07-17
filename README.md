@@ -183,7 +183,7 @@ for inspecting captured CCD image data rather than a processing pipeline.
 | [docs/NODE_GRAPH_API.md](docs/NODE_GRAPH_API.md) | Embedding the editor widget and defining node types |
 | [docs/LOGIC_ANALYZER_VIEWER_DESIGN.md](docs/LOGIC_ANALYZER_VIEWER_DESIGN.md) | Waveform viewer: index format, sampling, rendering |
 | [docs/LOGIC_ANALYZER_VIEWER_API.md](docs/LOGIC_ANALYZER_VIEWER_API.md) | Embedding the viewer widget |
-| [docs/LIVE_CAPTURE_TRIGGER_DESIGN.md](docs/LIVE_CAPTURE_TRIGGER_DESIGN.md) | Proposed staged design for hardware triggering, live capture, and replay |
+| [docs/LIVE_CAPTURE_TRIGGER_DESIGN.md](docs/LIVE_CAPTURE_TRIGGER_DESIGN.md) | Live-capture foundation and staged plan for hardware triggering, capture, and replay |
 | [docs/PIPELINE_DESIGN.md](docs/PIPELINE_DESIGN.md) | Streaming engine: nodes, channels, backpressure, live supervision |
 | [docs/DSLOGIC_U3PRO16_PROTOCOL.md](docs/DSLOGIC_U3PRO16_PROTOCOL.md) | DSLogic U3Pro16 USB protocol (hardware reference) |
 | [docs/REGISTERS.md](docs/REGISTERS.md) | Hardware register reference |

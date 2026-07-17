@@ -70,35 +70,32 @@ Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN
 - Implement the dependency-ordered delivery plan in
   [Live Capture and Trigger Control](docs/LIVE_CAPTURE_TRIGGER_DESIGN.md). Start with Phase 1 and do
   not begin a later phase until the preceding completion gate passes:
-  1. **Provider lifecycle and deterministic fake:** add neutral session/lifecycle/chunk contracts,
-     bounded delivery, prepared acquisition, and exact headless lifecycle tests. Do not modify the
-     graph, UI, or viewer in this phase.
-  2. **Minimal authoritative store:** add sequential staging, the minimal commit log, committed
+  1. **Minimal authoritative store:** add sequential staging, the minimal commit log, committed
      cursor, finalization, byte-exact replay, bounded memory, and slow-reader isolation.
-  3. **Immediate-capture application integration:** add generic feature discovery, coordinator,
+  2. **Immediate-capture application integration:** add generic feature discovery, coordinator,
      title-bar Start/Stop and status, safe drain, and graph read-only state using the fake provider.
-  4. **Growing live waveform:** add incremental summaries, growing timeline queries, Follow Newest,
+  3. **Growing live waveform:** add incremental summaries, growing timeline queries, Follow Newest,
      Pause Display, and Go Live using fake data.
-  5. **Independent live graph analysis:** consume committed chunks through a lag-tolerant cursor and
+  4. **Independent live graph analysis:** consume committed chunks through a lag-tolerant cursor and
      prove a slow graph neither blocks capture nor loses data.
-  6. **Finalized-session Run replay:** add node-ID source overrides and byte-equal live/replay
+  5. **Finalized-session Run replay:** add node-ID source overrides and byte-equal live/replay
      derived-output tests that prove no hardware is opened.
-  7. **Portable simple triggering:** add neutral conditions, lane controls, recording-origin gating,
+  6. **Portable simple triggering:** add neutral conditions, lane controls, recording-origin gating,
      a migration/diagnostic contract, and deterministic fake-trigger tests.
-  8. **Provider-neutrality conformance:** add a deliberately different buffered fake provider with
+  7. **Provider-neutrality conformance:** add a deliberately different buffered fake provider with
      non-contiguous bank-qualified channels and pass both providers through the shared suite before
      integrating hardware.
-  9. **U3Pro16 device-buffered acquisition:** add concrete state migration,
+  8. **U3Pro16 device-buffered acquisition:** add concrete state migration,
      negotiation/lowering, trigger-header position, lossless upload, fixture coverage, and an
      ignored hardware test.
-  10. **U3Pro16 host streaming and sustained ingest:** add the streaming profile, tuple validation,
+  9. **U3Pro16 host streaming and sustained ingest:** add the streaming profile, tuple validation,
      integrity reporting, bounded-memory benchmarks, and measured optimization only where needed.
-  11. **Capture policies and health controls:** add finite/rolling policy, trigger placement,
+  10. **Capture policies and health controls:** add finite/rolling policy, trigger placement,
       timeout and one-shot controls, capacity estimates, telemetry, and reclamation tests.
-  12. **Recovery and session ownership:** add commit-boundary recovery, incomplete-session handling,
+  11. **Recovery and session ownership:** add commit-boundary recovery, incomplete-session handling,
       pinning, cleanup, and recent-session ownership.
-  13. **Export:** add raw DSL/portable export first and capability-aware derived export afterward.
-  14. **Extended workflows:** scope configuration epochs, advanced triggers, segmented acquisition,
+  12. **Export:** add raw DSL/portable export first and capability-aware derived export afterward.
+  13. **Extended workflows:** scope configuration epochs, advanced triggers, segmented acquisition,
       automation, synchronization, and related features as separate follow-up amendments rather
       than one implementation batch.
 - Make file and live sources first-class capture providers, rather than having the app select

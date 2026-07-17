@@ -1,7 +1,8 @@
-# Live Capture and Trigger Control — Proposed Future Design
+# Live Capture and Trigger Control
 
-> Status: proposed future design. The behavior under **Proposed future design** is not yet
-> implemented. Actionable work is tracked in [TODO.md](../TODO.md).
+> Status: the foundation described under **Current baseline** is implemented. The behavior under
+> **Proposed future design** is not yet implemented. Actionable work is tracked in
+> [TODO.md](../TODO.md).
 
 This design adds interactive triggering, live waveform display, lossless host upload, live graph
 processing, and post-capture re-analysis for hardware logic-analyzer sources such as the DSLogic
@@ -28,6 +29,24 @@ already represent hardware trigger stages. Today, however:
 The existing live graph manager already supplies one important future invariant: hot changes and
 branch restarts take effect from the current stream position and do not rewrite previously emitted
 derived data.
+
+The UI-independent live-capture foundation is also present:
+
+- `signal_processing::live_capture` defines opaque session and physical-channel identities,
+  lifecycle state, acquisition phase/progress, structured failures, and a versioned immutable
+  packed raw chunk with validated unaligned payload access;
+- `CaptureChunkWriter` and `CaptureEventPublisher` are the generic acquisition boundaries, with
+  bounded in-memory chunk and event queues available for contract tests;
+- `logic_analyzer_processing::live_capture` defines `AcquisitionContext` and the object-safe
+  `PreparedAcquisition` lifecycle with Prepare, Start, idempotent Stop, and Join behavior;
+- the native deterministic fake provider generates known packed samples across deliberately
+  unaligned chunk boundaries and supports manual pacing for exact stop tests; and
+- the fake-provider tests reconstruct every sample, verify lifecycle order and repeated Stop, and
+  assert configured queue bounds.
+
+The native fake is selected as a complete platform module and is not registered in the production
+node catalog. The graph, application, and viewer do not yet consume these contracts, and the
+existing `LogicAnalyzerSource` path remains unchanged.
 
 ## Proposed future design
 
@@ -826,33 +845,13 @@ work on the next phase starts only after its gate passes. Every gate includes fo
 `cargo check -p logic-analyzer-app-web --target wasm32-unknown-unknown`. Native-only implementations
 remain behind whole-module platform boundaries so the wasm check does not spread conditional code.
 
-The existing `LogicAnalyzerSource` graph-run path remains operational while Phases 1–8 establish
-and prove the parallel session path. The fake source uses live analysis in Phase 5; the concrete
-U3Pro16 graph path switches only in Phases 9–10. Early phases therefore do not leave ordinary graph
+The existing `LogicAnalyzerSource` graph-run path remains operational while Phases 1–7 build on and
+prove the parallel session foundation. The fake source uses live analysis in Phase 4; the concrete
+U3Pro16 graph path switches only in Phases 8–9. Early phases therefore do not leave ordinary graph
 runs half-migrated. Test providers are registered only by test/development composition and never by
 matching their names in application or generic code.
 
-#### Phase 1 — Provider lifecycle and deterministic fake
-
-- Add provider-neutral session identity, lifecycle state, phase/progress, structured errors,
-  canonical raw-chunk ownership, and the bounded writer/event boundary.
-- Add the object-safe prepared-acquisition lifecycle in `logic_analyzer_processing`: Prepare,
-  Start, idempotent Stop, event publication, and Join.
-- Add one deterministic continuously delivering fake provider as reusable test support. It emits a
-  known packed pattern in deliberately awkward chunk boundaries and can be stopped at a known
-  sample.
-- Keep graph discovery, UI, persistence, triggers, summaries, U3Pro16, and replay out of this phase.
-
-Gate: a headless test observes the exact Prepare/Start/Data/Stop/Complete event order, reconstructs
-the fake samples byte-for-byte, proves repeated Stop is harmless, and proves outstanding chunks and
-queue occupancy never exceed configured bounds.
-
-The first code changes belong in a new generic live-capture module in `signal_processing` and the
-portable analyzer lifecycle in `logic_analyzer_processing`. `logic_analyzer_graph`,
-`logic_analyzer_ui`, and `logic_analyzer_viewer` remain unchanged in this phase. This is the defined
-starting point for implementation.
-
-#### Phase 2 — Minimal authoritative store
+#### Phase 1 — Minimal authoritative store
 
 - Implement sequential native raw staging, the smallest durable commit log, a committed-prefix
   cursor, finalization, and a reader for finalized sessions.
@@ -865,7 +864,12 @@ Gate: fake-provider input is committed and replayed byte-for-byte across unalign
 boundaries; a deliberately paused reader does not block acquisition; resident memory reaches a
 fixed bound during a long synthetic capture.
 
-#### Phase 3 — Immediate-capture application integration
+The first code changes in this phase belong in the platform-neutral live-store contract in
+`signal_processing` and its complete native implementation module. They implement
+`CaptureChunkWriter` without changing `logic_analyzer_graph`, `logic_analyzer_ui`, or
+`logic_analyzer_viewer`.
+
+#### Phase 2 — Immediate-capture application integration
 
 - Add the optional generic `LiveCaptureFeature` discovery contract to `RuntimeBuilder` and expose
   the fake provider through test/development registration.
@@ -878,7 +882,7 @@ Gate: an application integration test starts and stops the fake source through t
 the title bar, displays every lifecycle state, restores graph editing after drain, and produces a
 finalized session.
 
-#### Phase 4 — Growing live waveform
+#### Phase 3 — Growing live waveform
 
 - Evolve the capture query into a growing timeline and build incremental waveform summaries from
   committed chunks.
@@ -890,7 +894,7 @@ Gate: the fake waveform becomes visible before capture completes, paused display
 acquisition, Go Live catches up, and the finalized waveform matches the fake input at exact and
 summary zoom levels.
 
-#### Phase 5 — Independent live graph analysis
+#### Phase 4 — Independent live graph analysis
 
 - Add the independent analysis cursor and feed the fixed compiled graph from committed raw chunks.
 - Start at the immediate recording origin, expose graph lag, and let a lagging graph catch up from
@@ -901,7 +905,7 @@ Gate: a deliberately throttled decoder falls behind without slowing acquisition,
 catches up without a sequence gap, and produces the same derived output as processing the same
 finite fake input.
 
-#### Phase 6 — Finalized-session Run replay
+#### Phase 5 — Finalized-session Run replay
 
 - Add node-ID source overrides and make Run read the finalized raw session without opening a live
   provider.
@@ -910,20 +914,20 @@ finite fake input.
 Gate: live-derived and replay-derived outputs for a finalized fake session are byte-for-byte equal,
 and an instrumented provider proves that replay performs no discovery, open, or device operation.
 
-#### Phase 7 — Portable simple triggering
+#### Phase 6 — Portable simple triggering
 
 - Add the common Ignore/Low/High/Rising/Falling/Either trigger model, neutral feature edits,
   per-lane icons, Armed/Triggered status, and recording-origin gating.
 - Persist the requested trigger in the test/development feature and establish the explicit
   migration/diagnostic contract, but lower and exercise it against a trigger-capable fake provider
-  before using real hardware. Concrete U3Pro16 state migration remains in Phase 9.
+  before using real hardware. Concrete U3Pro16 state migration remains in Phase 8.
 - Exclude advanced stages, serial triggers, trigger placement, timeout actions, and Force Trigger.
 
 Gate: every simple condition and disabled-channel case has a deterministic trigger sample; the
 viewer marks it; graph output begins at the defined recording origin; save/load and migration tests
 preserve the requested trigger with user-visible compatibility diagnostics.
 
-#### Phase 8 — Provider-neutrality conformance
+#### Phase 7 — Provider-neutrality conformance
 
 - Add the second deliberately different fake provider required by the architecture: it buffers on
   the device, exposes data only during upload, lacks Force Trigger, and advertises a different
@@ -937,7 +941,7 @@ Gate: both fake providers pass the shared conformance suite, registration requir
 source edits, and architecture tests find no provider/model-name branches in the application,
 compiler core, viewer, session coordinator, or store.
 
-#### Phase 9 — U3Pro16 device-buffered acquisition
+#### Phase 8 — U3Pro16 device-buffered acquisition
 
 - Register the concrete U3Pro16 live feature, evolve its saved state explicitly, and lower generic
   channel, rate, depth, simple-trigger, and timebase requests into its provider representation.
@@ -949,7 +953,7 @@ Gate: packet-fixture tests cover configuration and trigger-header translation; a
 test completes one buffered capture and replay; generic crates contain no U3/model/port-name
 branches.
 
-#### Phase 10 — U3Pro16 host streaming and sustained ingest
+#### Phase 9 — U3Pro16 host streaming and sustained ingest
 
 - Add the separate host-streamed acquisition profile, its channel/rate/link matrix, live delivery,
   stop behavior, and explicit overflow/integrity handling.
@@ -962,7 +966,7 @@ Gate: long captures have duration-independent resident memory, a slow optional c
 block the device reader, unsupported rate tuples are rejected, and every loss/overflow condition is
 reported rather than silently discarded.
 
-#### Phase 11 — Capture policies and health controls
+#### Phase 10 — Capture policies and health controls
 
 - Add finite completion, rolling retention, trigger placement, timeout actions, Capture Now, Force
   Trigger, Abort, capacity estimates, and health/lag telemetry through advertised capabilities.
@@ -973,7 +977,7 @@ Gate: the deterministic providers cover every supported policy composition and r
 pinning and reclamation never remove required data; UI commands never imply an unsupported device
 operation.
 
-#### Phase 12 — Recovery and session ownership
+#### Phase 11 — Recovery and session ownership
 
 - Add recovery after every durable commit step, incomplete-session presentation, cleanup and
   pinning, recent-session ownership, and explicit keep/discard decisions.
@@ -982,7 +986,7 @@ operation.
 Gate: fault-injection tests recover exactly the committed prefix or return a structured corruption
 error, and no pinned viewer, analysis, or future-export session can be removed.
 
-#### Phase 13 — Export
+#### Phase 12 — Export
 
 - Add raw DSL and supported portable interchange export from finalized sessions.
 - Add capability-aware derived export only after raw export is reliable.
@@ -990,7 +994,7 @@ error, and no pinned viewer, analysis, or future-export session can be removed.
 Gate: exported raw captures reopen with identical channels, sample rate/timebase, samples, and
 trigger position; unsupported derived values produce an explicit warning rather than omission.
 
-#### Phase 14 — Extended live workflows
+#### Phase 13 — Extended live workflows
 
 - Add configuration epochs and graph changes that affect only future samples.
 - Add advanced staged/counted/serial triggers, repeated or segmented acquisition, live search and
@@ -998,7 +1002,7 @@ trigger position; unsupported derived values produce an explicit warning rather 
   integration as separately scoped follow-up work.
 
 Gate: each follow-up receives its own focused design amendment and acceptance gate before
-implementation; Phase 14 is not a single release-blocking batch.
+implementation; Phase 13 is not a single release-blocking batch.
 
 ### Verification strategy
 

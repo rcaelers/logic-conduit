@@ -19,6 +19,7 @@ pub mod edge_query;
 pub mod errors;
 pub mod events;
 mod graph;
+pub mod live_capture;
 mod manager;
 pub mod node;
 pub mod pipeline;
@@ -78,6 +79,15 @@ pub use events::{
 };
 pub use graph::{Connection, GraphBuilder, NodeId};
 pub(crate) use idle::idle_backoff;
+pub use live_capture::{
+    CAPTURE_CHUNK_FORMAT_VERSION, CaptureAcquisitionPhase, CaptureChannelId, CaptureChunk,
+    CaptureChunkError, CaptureChunkPayload, CaptureChunkWriter, CaptureEvent,
+    CaptureEventPublishError, CaptureEventPublisher, CaptureEventQueuePublisher,
+    CaptureEventQueueReader, CaptureFailure, CaptureFailureKind, CaptureProgress,
+    CaptureQueueConfigError, CaptureQueueLimits, CaptureQueueReader, CaptureQueueReceiveError,
+    CaptureQueueWriter, CaptureSessionId, CaptureSessionState, CaptureStatus, CaptureWriteError,
+    bounded_capture_event_queue, bounded_capture_queue,
+};
 pub use manager::{DisconnectEvent, InputSub, NodeSpec, PipelineManager};
 pub use node::{ConfigOutcome, ConfigValue, InputProtocolCandidate, NodeConfig, ProcessNode};
 pub use pipeline::Pipeline;

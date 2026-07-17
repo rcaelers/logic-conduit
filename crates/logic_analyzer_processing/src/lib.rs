@@ -1,7 +1,12 @@
 //! Concrete, UI-independent logic-analyzer processing nodes.
 
+pub mod live_capture;
 pub mod nodes;
 
+pub use live_capture::{
+    AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult, LogicCaptureEvent,
+    PreparedAcquisition,
+};
 pub use nodes::decoders::{
     CsPolarity, ParallelDecoder, ParallelDecoderMetrics, ParallelDecoderMetricsSnapshot,
     ParallelInputStrategy, SpiDecoder, SpiMode, StrobeMode,
@@ -16,6 +21,9 @@ pub use nodes::{DemoCaptureSource, UartDemoSource};
 std::cfg_select! {
     target_arch = "wasm32" => {}
     _ => {
+        pub use live_capture::{
+            DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,
+        };
         pub use nodes::{
             CaptureMode, ClockEdge, ClockSource, DeferredDslFileSource, DsLogicU3Pro16,
             DsLogicU3Pro16Source, DslCaptureReader, DslChunkedCaptureReader,
