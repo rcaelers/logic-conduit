@@ -1,7 +1,7 @@
 use egui::{Color32, Painter, Pos2, Shape, Stroke};
 
 use crate::channel::LogicChannel;
-use crate::sampling_overlay::SamplingEdge;
+use crate::sampling_overlay::{SamplingEdge, SamplingOverlay};
 use crate::types::{AnalyzerLayout, RowKey, WaveformSegmentKind};
 use crate::viewer::LogicAnalyzerViewer;
 
@@ -27,12 +27,13 @@ impl LogicAnalyzerViewer {
             return;
         };
 
-        let edges = visible_sampling_edges(
+        let mut edges = visible_sampling_edges(
             clock,
             overlay.edge,
             self.visible_start_us,
             self.visible_start_us + self.visible_span_us,
         );
+        edges.retain(|(time_us, _)| sampling_is_active(&self.channels, overlay, *time_us));
         if edges.is_empty()
             || edges.len() as f32 > (layout.wave_rect.width() / MARKER_SPACING).max(1.0)
         {
@@ -78,6 +79,21 @@ impl LogicAnalyzerViewer {
             }
         }
     }
+}
+
+fn sampling_is_active(channels: &[LogicChannel], overlay: &SamplingOverlay, time_us: f64) -> bool {
+    let time_ns = (time_us * 1_000.0).round().max(0.0) as u64;
+    overlay
+        .activities
+        .iter()
+        .all(|activity| activity.is_active_at(time_ns))
+        && overlay.qualifiers.iter().all(|qualifier| {
+            channels
+                .iter()
+                .find(|channel| channel.index == qualifier.channel)
+                .and_then(|channel| channel_value_at(channel, time_us))
+                == Some(qualifier.active_level)
+        })
 }
 
 fn visible_sampling_edges(
@@ -189,7 +205,10 @@ fn draw_clock_arrow(
 
 #[cfg(test)]
 mod tests {
+    use signal_processing::SamplingActivity;
+
     use super::*;
+    use crate::sampling_overlay::SamplingQualifier;
     use crate::types::Transition;
 
     fn channel() -> LogicChannel {
@@ -258,5 +277,27 @@ mod tests {
             },
         ];
         assert_eq!(channel_value_at(&channel, 1.0), Some(true));
+    }
+
+    #[test]
+    fn raw_and_runtime_gates_must_both_be_active() {
+        let mut gate = channel();
+        gate.index = 4;
+        let activity = SamplingActivity::default();
+        activity.record_interval(1_500, 3_500);
+        let overlay = SamplingOverlay {
+            clock_channel: 0,
+            sampled_channels: vec![1],
+            edge: SamplingEdge::Rising,
+            qualifiers: vec![SamplingQualifier {
+                channel: 4,
+                active_level: true,
+            }],
+            activities: vec![activity],
+        };
+
+        assert!(!sampling_is_active(&[gate.clone()], &overlay, 1.0));
+        assert!(!sampling_is_active(&[gate.clone()], &overlay, 2.0));
+        assert!(sampling_is_active(&[gate], &overlay, 3.0));
     }
 }

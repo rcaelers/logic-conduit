@@ -207,6 +207,12 @@ fn work_parallel(
             window_end,
             strobe.timestamp_step,
         )?;
+        record_enabled_ranges(
+            decoder.enable_activity.as_ref(),
+            strobe.start_position,
+            strobe.timestamp_step,
+            &enabled_ranges,
+        );
         let strobe = strobe.clone();
         let data = blocks.data.clone();
         let cs = blocks.cs.clone();

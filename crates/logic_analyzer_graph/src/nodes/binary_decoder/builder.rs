@@ -10,7 +10,8 @@ use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock, Word};
 
 use crate::compiler::{
-    CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, SamplingOverlayDescriptor, parse_state,
+    CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, SamplingOverlayDescriptor,
+    SamplingQualifierDescriptor, parse_state,
 };
 use crate::nodes;
 
@@ -42,6 +43,28 @@ impl RuntimeBuilder for BinaryDecoderBuilder {
             clock_input: 0,
             sampled_input_groups: vec![1],
             edge,
+            qualifiers: {
+                let mut qualifiers = Vec::new();
+                match Self::cs_polarity(&state) {
+                    CsPolarity::ActiveLow => qualifiers.push(SamplingQualifierDescriptor {
+                        input: 2,
+                        active_level: false,
+                        runtime_fallback: false,
+                    }),
+                    CsPolarity::ActiveHigh => qualifiers.push(SamplingQualifierDescriptor {
+                        input: 2,
+                        active_level: true,
+                        runtime_fallback: false,
+                    }),
+                    CsPolarity::Disabled => {}
+                }
+                qualifiers.push(SamplingQualifierDescriptor {
+                    input: 3,
+                    active_level: true,
+                    runtime_fallback: true,
+                });
+                qualifiers
+            },
         })
     }
 
@@ -91,7 +114,7 @@ impl RuntimeBuilder for BinaryDecoderBuilder {
         name: &str,
         state: &Value,
         resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state = Self::parsed(state)?;
         let data_bits = resolved.member_count(1);
@@ -112,6 +135,9 @@ impl RuntimeBuilder for BinaryDecoderBuilder {
                 "Indexed" => ParallelInputStrategy::Indexed,
                 _ => ParallelInputStrategy::Auto,
             });
+        if let Some(activity) = ctx.sampling_activity(name, 3) {
+            decoder = decoder.with_enable_activity(activity);
+        }
         let cycles = state.word_size.value.clamp(1, 8) as usize;
         if cycles > 1 {
             let endianness = if state.endianness.selected() == "Big" {

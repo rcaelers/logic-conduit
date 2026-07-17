@@ -19,9 +19,18 @@ impl SamplingEdge {
 /// Protocol-neutral description of sampling markers drawn over raw capture
 /// channels. Channel numbers are the stable indices used by the capture
 /// presented to the viewer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SamplingQualifier {
+    pub channel: usize,
+    pub active_level: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct SamplingOverlay {
     pub clock_channel: usize,
     pub sampled_channels: Vec<usize>,
     pub edge: SamplingEdge,
+    pub qualifiers: Vec<SamplingQualifier>,
+    pub activities: Vec<SamplingActivity>,
 }
+use signal_processing::SamplingActivity;

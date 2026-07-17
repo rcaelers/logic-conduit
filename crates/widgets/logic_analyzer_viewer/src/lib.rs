@@ -26,6 +26,6 @@ pub use lanes::{
     ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneRegistry, ViewerLaneRenderer, ViewerLaneTrack,
     ViewerLaneTrackFrame, ViewerLaneTrackId, ViewerOutputPresentation,
 };
-pub use sampling_overlay::{SamplingEdge, SamplingOverlay};
+pub use sampling_overlay::{SamplingEdge, SamplingOverlay, SamplingQualifier};
 pub use types::ColorProfile;
 pub use viewer::{ChannelSignal, LogicAnalyzerViewer};

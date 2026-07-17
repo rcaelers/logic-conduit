@@ -8,7 +8,8 @@ use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, Word};
 
 use crate::compiler::{
-    CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, SamplingOverlayDescriptor, parse_state,
+    CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, SamplingOverlayDescriptor,
+    SamplingQualifierDescriptor, parse_state,
 };
 use crate::nodes;
 
@@ -43,6 +44,19 @@ impl RuntimeBuilder for SpiDecoderBuilder {
             clock_input: 0,
             sampled_input_groups,
             edge,
+            qualifiers: match Self::cs_polarity(&state) {
+                CsPolarity::ActiveLow => vec![SamplingQualifierDescriptor {
+                    input: 3,
+                    active_level: false,
+                    runtime_fallback: true,
+                }],
+                CsPolarity::ActiveHigh => vec![SamplingQualifierDescriptor {
+                    input: 3,
+                    active_level: true,
+                    runtime_fallback: true,
+                }],
+                CsPolarity::Disabled => Vec::new(),
+            },
         })
     }
 
@@ -85,7 +99,7 @@ impl RuntimeBuilder for SpiDecoderBuilder {
         name: &str,
         state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state = Self::parsed(state)?;
         let mode = match (state.cpol.selected(), state.cpha.selected()) {
@@ -100,7 +114,7 @@ impl RuntimeBuilder for SpiDecoderBuilder {
         } else {
             BitOrder::MsbFirst
         };
-        let decoder = SpiDecoder::with_cs_polarity(
+        let mut decoder = SpiDecoder::with_cs_polarity(
             mode,
             state.word_size.value.clamp(1, 64) as usize,
             true,
@@ -109,6 +123,9 @@ impl RuntimeBuilder for SpiDecoderBuilder {
         )
         .with_bit_order(bit_order)
         .with_name(name);
+        if let Some(activity) = ctx.sampling_activity(name, 3) {
+            decoder = decoder.with_cs_activity(activity);
+        }
         Ok(Box::new(decoder))
     }
 }

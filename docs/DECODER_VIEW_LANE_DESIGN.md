@@ -185,20 +185,28 @@ logic.
 
 SPI and Binary Decoder outputs use the default word presentation.
 
-### Raw-channel sampling overlays
+### Sampling overlays
 
 Clocked nodes can also contribute a protocol-neutral sampling-overlay descriptor. The descriptor
-identifies a clock input definition, sampled input groups, and an electrical edge rule (rising,
-falling, or both). Concrete builders derive that descriptor from their node state. Generic
-lowering resolves its input references to explicit capture-channel origins supplied by capture
-source builders; it never parses socket labels or runtime port names.
+identifies a clock input definition, sampled input groups, an electrical edge rule (rising,
+falling, or both), and optional active-level qualifiers. Concrete builders derive that descriptor
+from their node state. Generic lowering resolves its input references to explicit capture-channel
+origins supplied by capture source builders; it never parses socket labels or runtime port names.
+
+Capture-backed qualifiers are evaluated directly from their channel value at each candidate clock
+edge. When a qualifier is produced by processing rather than a capture channel, lowering provides
+the runtime node with a generic, shared activity timeline. The runtime publishes active intervals
+to that timeline while it processes data. The timeline stores only level boundaries rather than a
+marker for every clock edge. This permits derived enable conditions without introducing protocol
+knowledge into the viewer or storing sampling overlays as derived words.
 
 The application exposes each resolved descriptor as a host-contributed node context action and
 keeps at most one selected node. Selection is presentation state rather than node state. The
-viewer receives only the selected clock channel, sampled channel indices, and edge rule. It draws
-directional markers on exact visible clock edges and circles at the sampled high/low level on the
-other rows. Marker rendering is bounded by viewport density and is suppressed when the indexed
-window contains only unresolved activity summaries.
+viewer receives only the selected clock channel, sampled channel indices, edge rule, qualifiers,
+and activity timelines. It draws directional markers and sampled-value circles only on exact
+visible clock edges for which every sampling condition is active. Marker rendering is bounded by
+viewport density and is suppressed when the indexed window contains only unresolved activity
+summaries.
 
 Sampling descriptors and resolved channel origins are reconstructed from node definitions during
 lowering and are not serialized in graph files. Native and wasm use the same descriptor and

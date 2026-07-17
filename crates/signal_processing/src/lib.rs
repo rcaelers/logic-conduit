@@ -27,6 +27,7 @@ pub mod protocol;
 pub mod receiver;
 pub mod sample;
 pub mod sample_kind;
+mod sampling_activity;
 pub mod scheduler;
 pub mod sender;
 mod type_registry;
@@ -85,6 +86,7 @@ pub use protocol::ProtocolKind;
 pub use receiver::{Receiver, ReceiverSelector};
 pub use sample::{Sample, SampleBlock};
 pub use sample_kind::SampleKind;
+pub use sampling_activity::SamplingActivity;
 pub use scheduler::{Scheduler, StopHandle};
 pub use sender::{ChannelMessage, OverflowPolicy, Sender, SharedSenders};
 pub use viewer_sink::{

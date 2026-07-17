@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tracing::debug;
 
+use signal_processing::SamplingActivity;
 use signal_processing::capture::CaptureTransition;
 use signal_processing::edge_query::EdgeQuery;
 use signal_processing::errors::{WorkError, WorkResult};
@@ -131,6 +132,7 @@ pub struct ParallelDecoder {
     /// A value of one selects the sequential path.
     parallel_workers: usize,
     parallel_metrics: ParallelDecoderMetrics,
+    enable_activity: Option<SamplingActivity>,
 }
 
 impl ParallelDecoder {
@@ -183,6 +185,7 @@ impl ParallelDecoder {
             next_stream_merge_sequence: 0,
             parallel_workers: Self::DEFAULT_PARALLEL_WORKERS,
             parallel_metrics: ParallelDecoderMetrics::default(),
+            enable_activity: None,
         }
     }
 
@@ -194,6 +197,11 @@ impl ParallelDecoder {
 
     pub fn with_input_strategy(mut self, strategy: ParallelInputStrategy) -> Self {
         self.input_strategy = strategy;
+        self
+    }
+
+    pub fn with_enable_activity(mut self, activity: SamplingActivity) -> Self {
+        self.enable_activity = Some(activity);
         self
     }
 
@@ -658,6 +666,27 @@ fn enabled_ranges_for_window(
     Ok(ranges)
 }
 
+fn record_enabled_ranges(
+    activity: Option<&SamplingActivity>,
+    block_start_position: u64,
+    timestamp_step: u64,
+    ranges: &[EnabledRange],
+) {
+    let Some(activity) = activity else {
+        return;
+    };
+    activity.record_intervals(ranges.iter().map(|range| {
+        (
+            block_start_position
+                .saturating_add(range.start as u64)
+                .saturating_mul(timestamp_step),
+            block_start_position
+                .saturating_add(range.end as u64)
+                .saturating_mul(timestamp_step),
+        )
+    }));
+}
+
 #[allow(clippy::too_many_arguments)]
 fn scan_stream_fragment(
     config: StreamScanConfig,
@@ -996,6 +1025,12 @@ impl ParallelDecoder {
             scan_len,
             timestamp_step,
         )?;
+        record_enabled_ranges(
+            self.enable_activity.as_ref(),
+            scan_start,
+            timestamp_step,
+            &enabled_ranges,
+        );
 
         let mut next_scan_position = scan_end;
         let mut scan_complete = true;
@@ -1287,6 +1322,12 @@ impl ParallelDecoder {
             window_end,
             strobe_block.timestamp_step,
         )?;
+        record_enabled_ranges(
+            self.enable_activity.as_ref(),
+            strobe_block.start_position,
+            strobe_block.timestamp_step,
+            &enabled_ranges,
+        );
         let mut fragment = scan_stream_fragment(
             StreamScanConfig {
                 mode: self.mode,
@@ -2188,6 +2229,34 @@ mod tests {
                 reset_before: true,
             }]
         );
+    }
+
+    #[test]
+    fn enabled_ranges_publish_only_active_intervals() {
+        let activity = SamplingActivity::default();
+        record_enabled_ranges(
+            Some(&activity),
+            100,
+            10,
+            &[
+                EnabledRange {
+                    start: 4,
+                    end: 8,
+                    reset_before: true,
+                },
+                EnabledRange {
+                    start: 12,
+                    end: 16,
+                    reset_before: true,
+                },
+            ],
+        );
+
+        assert!(!activity.is_active_at(1_039));
+        assert!(activity.is_active_at(1_040));
+        assert!(!activity.is_active_at(1_080));
+        assert!(activity.is_active_at(1_120));
+        assert!(!activity.is_active_at(1_160));
     }
 
     #[test]

@@ -19,7 +19,7 @@ use egui::{Color32, Pos2};
 use serde_json::Value;
 
 use logic_analyzer_viewer::{
-    SamplingEdge, SamplingOverlay, ViewerLaneRegistry, ViewerOutputPresentation,
+    SamplingEdge, SamplingOverlay, SamplingQualifier, ViewerLaneRegistry, ViewerOutputPresentation,
 };
 use node_graph::{
     Connection, GraphState, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId, SocketShape,
@@ -27,7 +27,7 @@ use node_graph::{
 };
 use signal_processing::{
     AppManager, DerivedLanes, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy,
-    PersistentStoreConfig, ProcessNode, SampleBlock, ViewerRetention,
+    PersistentStoreConfig, ProcessNode, SampleBlock, SamplingActivity, ViewerRetention,
 };
 
 use super::cache_platform;
@@ -49,6 +49,15 @@ pub struct CompileCtx {
     /// Clocked-node sampling overlays resolved during lowering. The host
     /// application chooses at most one candidate to display.
     pub sampling_overlays: Vec<SamplingOverlayCandidate>,
+    sampling_activities: HashMap<(String, usize), SamplingActivity>,
+}
+
+impl CompileCtx {
+    pub fn sampling_activity(&self, runtime_name: &str, input: usize) -> Option<SamplingActivity> {
+        self.sampling_activities
+            .get(&(runtime_name.to_owned(), input))
+            .cloned()
+    }
 }
 
 /// Input-definition references supplied by a concrete clocked builder. The
@@ -59,14 +68,25 @@ pub struct SamplingOverlayDescriptor {
     pub clock_input: usize,
     pub sampled_input_groups: Vec<usize>,
     pub edge: SamplingEdge,
+    pub qualifiers: Vec<SamplingQualifierDescriptor>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SamplingQualifierDescriptor {
+    pub input: usize,
+    pub active_level: bool,
+    /// Whether the concrete runtime can publish this input's activity when
+    /// it is not backed directly by a displayed capture channel.
+    pub runtime_fallback: bool,
 }
 
 /// A fully resolved, selectable sampling overlay belonging to one graph node.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct SamplingOverlayCandidate {
     pub node_id: NodeId,
     pub node_title: String,
     pub overlay: SamplingOverlay,
+    runtime_activities: Vec<(usize, SamplingActivity)>,
 }
 
 /// What one input edge settled on: the negotiated stream kind plus a
@@ -735,6 +755,26 @@ pub fn lower(
             if sampled_channels.is_empty() {
                 return None;
             }
+            let mut qualifiers = Vec::new();
+            let mut activities = Vec::new();
+            let mut runtime_activities = Vec::new();
+            for qualifier in descriptor.qualifiers {
+                let Some(input) = compiled_node.resolved.get(qualifier.input, 0) else {
+                    continue;
+                };
+                if let Some(channel) = input.capture_channel {
+                    qualifiers.push(SamplingQualifier {
+                        channel,
+                        active_level: qualifier.active_level,
+                    });
+                } else if qualifier.runtime_fallback {
+                    let activity = SamplingActivity::default();
+                    activities.push(activity.clone());
+                    runtime_activities.push((qualifier.input, activity));
+                } else {
+                    return None;
+                }
+            }
             Some(SamplingOverlayCandidate {
                 node_id: compiled_node.id,
                 node_title: graph.nodes[&compiled_node.id].title.clone(),
@@ -742,7 +782,10 @@ pub fn lower(
                     clock_channel,
                     sampled_channels,
                     edge: descriptor.edge,
+                    qualifiers,
+                    activities,
                 },
+                runtime_activities,
             })
         })
         .collect();
@@ -765,6 +808,48 @@ pub fn sampling_overlay_candidates(
     registry: &BuilderRegistry,
 ) -> Result<Vec<SamplingOverlayCandidate>, Vec<CompileError>> {
     lower(graph, registry).map(|compiled| compiled.sampling_overlays)
+}
+
+fn sampling_activity_map(compiled: &CompiledGraph) -> HashMap<(String, usize), SamplingActivity> {
+    compiled
+        .sampling_overlays
+        .iter()
+        .flat_map(|candidate| {
+            let runtime_name = compiled_node(compiled, candidate.node_id)
+                .runtime_name
+                .clone();
+            candidate
+                .runtime_activities
+                .iter()
+                .map(move |(input, activity)| ((runtime_name.clone(), *input), activity.clone()))
+        })
+        .collect()
+}
+
+fn reuse_sampling_activities(previous: &CompiledGraph, next: &mut CompiledGraph) {
+    for candidate in &mut next.sampling_overlays {
+        let Some(previous_candidate) = previous
+            .sampling_overlays
+            .iter()
+            .find(|previous| previous.node_id == candidate.node_id)
+        else {
+            continue;
+        };
+        for (input, activity) in &mut candidate.runtime_activities {
+            if let Some((_, previous_activity)) = previous_candidate
+                .runtime_activities
+                .iter()
+                .find(|(previous_input, _)| previous_input == input)
+            {
+                *activity = previous_activity.clone();
+            }
+        }
+        candidate.overlay.activities = candidate
+            .runtime_activities
+            .iter()
+            .map(|(_, activity)| activity.clone())
+            .collect();
+    }
 }
 
 fn has_cycle(nodes: &[NodeId], edges: &[CompiledEdge]) -> bool {
@@ -1039,6 +1124,7 @@ pub fn start_live(
     ctx.viewer_retention = compiled.viewer_retention;
     ctx.sampling_overlays
         .clone_from(&compiled.sampling_overlays);
+    ctx.sampling_activities = sampling_activity_map(&compiled);
     let mut manager = AppManager::new();
     let mut names: HashMap<NodeId, String> = HashMap::new();
 
@@ -1100,6 +1186,7 @@ impl LiveRun {
         registry: &BuilderRegistry,
     ) -> Result<ApplySummary, ApplyError> {
         let mut new = lower(graph, registry).map_err(ApplyError::Compile)?;
+        reuse_sampling_activities(&self.compiled, &mut new);
         cache_platform::configure_directory(&mut new, self.persistent_cache_directory.as_deref());
         let edits = diff(&self.compiled, &new, registry).map_err(ApplyError::NeedsFullRestart)?;
         if edits.is_empty() {
@@ -1120,6 +1207,7 @@ impl LiveRun {
             viewer_word_caches: Vec::new(),
             persistent_cache_directory: self.persistent_cache_directory.clone(),
             sampling_overlays: new.sampling_overlays.clone(),
+            sampling_activities: sampling_activity_map(&new),
         };
         let mut summary = ApplySummary::default();
         for edit in edits {
@@ -1352,6 +1440,10 @@ mod tests {
             .expect("SPI decoder should expose a sampling overlay");
         assert_eq!(spi_sampling.overlay.edge, SamplingEdge::Rising);
         assert!(!spi_sampling.overlay.sampled_channels.is_empty());
+        assert!(
+            !spi_sampling.overlay.qualifiers.is_empty()
+                || !spi_sampling.overlay.activities.is_empty()
+        );
         let binary_sampling = compiled
             .sampling_overlays
             .iter()
@@ -1359,6 +1451,10 @@ mod tests {
             .expect("binary decoder should expose a sampling overlay");
         assert_eq!(binary_sampling.overlay.edge, SamplingEdge::Both);
         assert!(!binary_sampling.overlay.sampled_channels.is_empty());
+        assert!(
+            !binary_sampling.overlay.qualifiers.is_empty()
+                || !binary_sampling.overlay.activities.is_empty()
+        );
 
         // Viewer lanes resolve with per-lane kinds and producer labels.
         let viewer = compiled
@@ -1425,6 +1521,31 @@ mod tests {
                 .iter()
                 .any(|e| e.to.1 == "enable_signal" && e.buffer == 1_000)
         );
+    }
+
+    #[test]
+    fn unchanged_live_lowering_reuses_runtime_sampling_activity() {
+        let widget = startup_widget();
+        let registry = BuilderRegistry::standard();
+        let old = lower(widget.graph(), &registry).unwrap();
+        let activity = old
+            .sampling_overlays
+            .iter()
+            .find(|candidate| candidate.node_title == "Binary Decoder")
+            .and_then(|candidate| candidate.overlay.activities.first())
+            .expect("startup binary enable is a runtime sampling condition")
+            .clone();
+        activity.record_interval(100, 200);
+
+        let mut new = lower(widget.graph(), &registry).unwrap();
+        reuse_sampling_activities(&old, &mut new);
+        let reused = new
+            .sampling_overlays
+            .iter()
+            .find(|candidate| candidate.node_title == "Binary Decoder")
+            .and_then(|candidate| candidate.overlay.activities.first())
+            .unwrap();
+        assert!(reused.is_active_at(150));
     }
 
     /// A lone source node, no explicit sink — the graph the "no wiring

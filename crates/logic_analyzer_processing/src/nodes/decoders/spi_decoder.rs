@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use tracing::{debug, trace};
 
+use signal_processing::SamplingActivity;
 use signal_processing::capture::CaptureTransition;
 use signal_processing::edge_query::EdgeQuery;
 use signal_processing::errors::{WorkError, WorkResult};
@@ -72,6 +73,7 @@ pub struct SpiDecoder {
     query_miso_word: u64,
     query_bits_collected: usize,
     query_first_clock_edge: Option<u64>,
+    cs_activity: Option<SamplingActivity>,
 }
 
 impl SpiDecoder {
@@ -113,6 +115,7 @@ impl SpiDecoder {
             query_miso_word: 0,
             query_bits_collected: 0,
             query_first_clock_edge: None,
+            cs_activity: None,
         }
     }
 
@@ -125,6 +128,11 @@ impl SpiDecoder {
     /// With a bit order other than the default MSB-first
     pub fn with_bit_order(mut self, bit_order: BitOrder) -> Self {
         self.bit_order = bit_order;
+        self
+    }
+
+    pub fn with_cs_activity(mut self, activity: SamplingActivity) -> Self {
+        self.cs_activity = Some(activity);
         self
     }
 
@@ -403,6 +411,12 @@ impl SpiDecoder {
 
                 self.query_window_end = Some(inactive_time);
                 self.query_clk_position = cs_active_start;
+                if let Some(activity) = &self.cs_activity {
+                    activity.record_interval(
+                        position_to_ns(cs_active_start),
+                        position_to_ns(inactive_time),
+                    );
+                }
                 debug!(
                     "CS window: {:.9}s — {:.9}s ({:.3}µs)",
                     position_to_ns(cs_active_start) as f64 / 1_000_000_000.0,
@@ -632,6 +646,9 @@ impl SpiDecoder {
             }
         };
         let cs_inactive_time = cs_inactive_edge.start_time_ns;
+        if let Some(activity) = &self.cs_activity {
+            activity.record_interval(cs_active_start, cs_inactive_time);
+        }
 
         debug!(
             "CS window: {:.9}s — {:.9}s ({:.3}µs)",
@@ -950,7 +967,9 @@ mod tests {
             "spi",
             "mosi_words",
         )];
-        let mut decoder = SpiDecoder::new(SpiMode::Mode0, 4, true, false);
+        let activity = SamplingActivity::default();
+        let mut decoder =
+            SpiDecoder::new(SpiMode::Mode0, 4, true, false).with_cs_activity(activity.clone());
 
         assert!(matches!(
             decoder.work(&inputs, &outputs),
@@ -972,6 +991,10 @@ mod tests {
         assert_eq!(clk_calls.next_edge.load(Ordering::Relaxed), 0);
         assert!(mosi_calls.values_at.load(Ordering::Relaxed) > 0);
         assert_eq!(mosi_calls.value_at.load(Ordering::Relaxed), 0);
+        assert!(!activity.is_active_at(9));
+        assert!(activity.is_active_at(10));
+        assert!(activity.is_active_at(89));
+        assert!(!activity.is_active_at(90));
     }
 
     /// MOSI and MISO are independent `Word` streams on independent output
