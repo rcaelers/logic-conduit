@@ -28,6 +28,9 @@ impl RuntimeBuilder for UartDemoSourceBuilder {
     fn output_port(&self, _socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
         (kind == PortKind::of::<Sample>()).then(|| "rx".into())
     }
+    fn viewer_channel_origin(&self, _socket: &Socket, _state: &Value) -> Option<usize> {
+        Some(0)
+    }
     fn input_required(&self, _: &Socket, _: &Value) -> bool {
         false
     }

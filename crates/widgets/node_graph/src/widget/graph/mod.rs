@@ -7,4 +7,4 @@ mod panel;
 mod render;
 mod widget;
 
-pub use widget::{GraphPanelTab, GraphUiPrefs, NodeGraphWidget};
+pub use widget::{GraphPanelTab, GraphUiPrefs, NodeContextAction, NodeGraphWidget};

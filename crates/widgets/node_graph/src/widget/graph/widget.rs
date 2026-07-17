@@ -50,6 +50,40 @@ pub struct NodeGraphWidget {
     /// menu. The widget only queues a request; the host performs the I/O.
     pub(super) derived_cache_nodes: HashSet<NodeId>,
     pub(super) clear_derived_cache_request: Option<NodeId>,
+    /// Host-provided, application-neutral node context actions.
+    pub(super) node_context_actions: HashMap<NodeId, Vec<NodeContextAction>>,
+    pub(super) node_context_action_request: Option<(NodeId, String)>,
+}
+
+/// A context-menu action contributed by the host application. Both the ID
+/// and its meaning are opaque to the node graph widget.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeContextAction {
+    pub id: String,
+    pub label: String,
+    pub icon: Option<String>,
+    pub checked: bool,
+}
+
+impl NodeContextAction {
+    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            icon: None,
+            checked: false,
+        }
+    }
+
+    pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    pub fn with_checkmark(mut self, checked: bool) -> Self {
+        self.checked = checked;
+        self
+    }
 }
 
 pub(super) struct FrameRenameState {
@@ -140,6 +174,8 @@ impl NodeGraphWidget {
             node_statuses: HashMap::new(),
             derived_cache_nodes: HashSet::new(),
             clear_derived_cache_request: None,
+            node_context_actions: HashMap::new(),
+            node_context_action_request: None,
         }
     }
 
@@ -170,6 +206,14 @@ impl NodeGraphWidget {
 
     pub fn take_clear_derived_cache_request(&mut self) -> Option<NodeId> {
         self.clear_derived_cache_request.take()
+    }
+
+    pub fn set_node_context_actions(&mut self, actions: HashMap<NodeId, Vec<NodeContextAction>>) {
+        self.node_context_actions = actions;
+    }
+
+    pub fn take_node_context_action(&mut self) -> Option<(NodeId, String)> {
+        self.node_context_action_request.take()
     }
 
     /// Current UI prefs (N-panel width/tab, minimap visibility) — for the

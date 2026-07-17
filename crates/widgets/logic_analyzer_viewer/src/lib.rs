@@ -8,6 +8,7 @@ mod indexed_annotations;
 mod input;
 mod lanes;
 mod sampling;
+mod sampling_overlay;
 mod types;
 mod viewer;
 std::cfg_select! {
@@ -25,5 +26,6 @@ pub use lanes::{
     ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneRegistry, ViewerLaneRenderer, ViewerLaneTrack,
     ViewerLaneTrackFrame, ViewerLaneTrackId, ViewerOutputPresentation,
 };
+pub use sampling_overlay::{SamplingEdge, SamplingOverlay};
 pub use types::ColorProfile;
 pub use viewer::{ChannelSignal, LogicAnalyzerViewer};

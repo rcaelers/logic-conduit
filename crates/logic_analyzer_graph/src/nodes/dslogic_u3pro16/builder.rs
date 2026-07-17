@@ -62,6 +62,25 @@ impl RuntimeBuilder for DsLogicU3Pro16Builder {
         Some(format!("ch{logical_channel}"))
     }
 
+    fn viewer_channel_origin(&self, socket: &Socket, state: &Value) -> Option<usize> {
+        let state: U3Pro16State = parse_state(state).ok()?;
+        if !state
+            .channels
+            .enabled
+            .get(socket.def_index)
+            .copied()
+            .unwrap_or(false)
+        {
+            return None;
+        }
+        Some(
+            state.channels.enabled[..socket.def_index]
+                .iter()
+                .filter(|enabled| **enabled)
+                .count(),
+        )
+    }
+
     fn build(
         &self,
         name: &str,

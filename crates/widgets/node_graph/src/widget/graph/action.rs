@@ -98,6 +98,10 @@ pub(super) enum GraphAction {
     ClearDerivedCache {
         target: NodeId,
     },
+    HostNodeAction {
+        target: NodeId,
+        action_id: String,
+    },
     ToggleMinimap,
     TogglePanel,
     /// Selects every node and frame (Phase 2, Blender's `A`).
@@ -298,6 +302,10 @@ impl NodeGraphWidget {
             }
             GraphAction::ClearDerivedCache { target } => {
                 self.clear_derived_cache_request = Some(target);
+                ActionEffect::None
+            }
+            GraphAction::HostNodeAction { target, action_id } => {
+                self.node_context_action_request = Some((target, action_id));
                 ActionEffect::None
             }
             GraphAction::ToggleMinimap => {
@@ -1208,5 +1216,26 @@ mod action_tests {
 
         assert_eq!(widget.take_clear_derived_cache_request(), Some(node));
         assert_eq!(widget.take_clear_derived_cache_request(), None);
+    }
+
+    #[test]
+    fn host_node_action_is_forwarded_without_widget_semantics() {
+        let mut widget = test_widget();
+        let node = widget.add_node_at("Source", Pos2::ZERO).unwrap();
+
+        widget.execute_action(
+            GraphAction::HostNodeAction {
+                target: node,
+                action_id: "application-action".into(),
+            },
+            &egui::Context::default(),
+            None,
+        );
+
+        assert_eq!(
+            widget.take_node_context_action(),
+            Some((node, "application-action".into()))
+        );
+        assert_eq!(widget.take_node_context_action(), None);
     }
 }

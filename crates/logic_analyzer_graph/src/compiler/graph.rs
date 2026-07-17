@@ -18,7 +18,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use egui::{Color32, Pos2};
 use serde_json::Value;
 
-use logic_analyzer_viewer::{ViewerLaneRegistry, ViewerOutputPresentation};
+use logic_analyzer_viewer::{
+    SamplingEdge, SamplingOverlay, ViewerLaneRegistry, ViewerOutputPresentation,
+};
 use node_graph::{
     Connection, GraphState, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId, SocketShape,
     VariadicInfo,
@@ -44,6 +46,27 @@ pub struct CompileCtx {
     pub viewer_retention: ViewerRetention,
     pub viewer_word_caches: Vec<Option<PersistentStoreConfig>>,
     pub persistent_cache_directory: Option<std::path::PathBuf>,
+    /// Clocked-node sampling overlays resolved during lowering. The host
+    /// application chooses at most one candidate to display.
+    pub sampling_overlays: Vec<SamplingOverlayCandidate>,
+}
+
+/// Input-definition references supplied by a concrete clocked builder. The
+/// compiler resolves these references without interpreting socket names or
+/// protocol semantics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SamplingOverlayDescriptor {
+    pub clock_input: usize,
+    pub sampled_input_groups: Vec<usize>,
+    pub edge: SamplingEdge,
+}
+
+/// A fully resolved, selectable sampling overlay belonging to one graph node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SamplingOverlayCandidate {
+    pub node_id: NodeId,
+    pub node_title: String,
+    pub overlay: SamplingOverlay,
 }
 
 /// What one input edge settled on: the negotiated stream kind plus a
@@ -57,6 +80,10 @@ pub struct ResolvedInput {
     pub source_node_title: String,
     pub word_display_format: Option<String>,
     pub viewer_presentation: Option<ViewerOutputPresentation>,
+    /// Displayed capture channel from which this edge originates. Concrete
+    /// source builders provide it explicitly; generic lowering never parses
+    /// runtime port names or display labels.
+    pub capture_channel: Option<usize>,
 }
 
 /// Per input socket, keyed `(def_index, member_index)`. Keys are
@@ -65,6 +92,9 @@ pub struct ResolvedInput {
 pub struct ResolvedInputs(HashMap<(usize, usize), ResolvedInput>);
 
 impl ResolvedInputs {
+    pub fn get(&self, def_index: usize, member_index: usize) -> Option<&ResolvedInput> {
+        self.0.get(&(def_index, member_index))
+    }
     pub fn kind(&self, def_index: usize) -> Option<PortKind> {
         self.0.get(&(def_index, 0)).map(|input| input.kind)
     }
@@ -127,6 +157,17 @@ pub trait RuntimeBuilder {
         _socket: &Socket,
         _state: &Value,
     ) -> Option<ViewerOutputPresentation> {
+        None
+    }
+    /// Raw capture channel represented by this output, when it corresponds
+    /// directly to a channel displayed by the logic-analyzer viewer.
+    fn viewer_channel_origin(&self, _socket: &Socket, _state: &Value) -> Option<usize> {
+        None
+    }
+    /// Optional protocol-neutral description of how this node samples its
+    /// inputs. Concrete builders own the mapping from node state and input
+    /// definitions to this electrical presentation contract.
+    fn sampling_overlay(&self, _state: &Value) -> Option<SamplingOverlayDescriptor> {
         None
     }
     /// Whether an unconnected input is a compile error (given the state:
@@ -207,6 +248,7 @@ pub struct CompiledGraph {
     pub nodes: Vec<CompiledNode>,
     pub edges: Vec<CompiledEdge>,
     pub viewer_retention: ViewerRetention,
+    pub sampling_overlays: Vec<SamplingOverlayCandidate>,
 }
 
 #[derive(Debug, Clone)]
@@ -599,6 +641,7 @@ pub fn lower(
                     .word_display_format(from_socket, &from_node.state),
                 viewer_presentation: from_builder
                     .viewer_output_presentation(from_socket, &from_node.state),
+                capture_channel: from_builder.viewer_channel_origin(from_socket, &from_node.state),
             },
         );
         edges.push(CompiledEdge {
@@ -658,7 +701,7 @@ pub fn lower(
         return Err(errors);
     }
 
-    let nodes = kept
+    let nodes: Vec<CompiledNode> = kept
         .iter()
         .map(|&id| {
             let node = &graph.nodes[&id];
@@ -672,14 +715,56 @@ pub fn lower(
             }
         })
         .collect();
+    let sampling_overlays = nodes
+        .iter()
+        .filter_map(|compiled_node| {
+            let builder = registry.get(&compiled_node.builder)?;
+            let descriptor = builder.sampling_overlay(&compiled_node.state)?;
+            let clock_channel = compiled_node
+                .resolved
+                .get(descriptor.clock_input, 0)?
+                .capture_channel?;
+            let mut sampled_channels = descriptor
+                .sampled_input_groups
+                .iter()
+                .flat_map(|def_index| compiled_node.resolved.members(*def_index))
+                .filter_map(|(_, input)| input.capture_channel)
+                .collect::<Vec<_>>();
+            sampled_channels.sort_unstable();
+            sampled_channels.dedup();
+            if sampled_channels.is_empty() {
+                return None;
+            }
+            Some(SamplingOverlayCandidate {
+                node_id: compiled_node.id,
+                node_title: graph.nodes[&compiled_node.id].title.clone(),
+                overlay: SamplingOverlay {
+                    clock_channel,
+                    sampled_channels,
+                    edge: descriptor.edge,
+                },
+            })
+        })
+        .collect();
     let compiled = CompiledGraph {
         nodes,
         edges,
         viewer_retention,
+        sampling_overlays,
     };
     let mut compiled = compiled;
     cache_platform::assign_viewer_caches(&mut compiled);
     Ok(compiled)
+}
+
+/// Resolves the clocked-node sampling presentations available for the
+/// current graph without starting its runtime. Hosts use this to populate
+/// presentation controls before the user runs the pipeline.
+pub fn sampling_overlay_candidates(
+    graph: &GraphState,
+    registry: &BuilderRegistry,
+) -> Result<Vec<SamplingOverlayCandidate>, Vec<CompileError>> {
+    lower(graph, registry).map(|compiled| compiled.sampling_overlays)
 }
 
 fn has_cycle(nodes: &[NodeId], edges: &[CompiledEdge]) -> bool {
@@ -952,6 +1037,8 @@ pub fn start_live(
     let mut compiled = lower(graph, registry)?;
     cache_platform::configure_directory(&mut compiled, ctx.persistent_cache_directory.as_deref());
     ctx.viewer_retention = compiled.viewer_retention;
+    ctx.sampling_overlays
+        .clone_from(&compiled.sampling_overlays);
     let mut manager = AppManager::new();
     let mut names: HashMap<NodeId, String> = HashMap::new();
 
@@ -999,6 +1086,10 @@ pub fn start_live(
 }
 
 impl LiveRun {
+    pub fn sampling_overlays(&self) -> &[SamplingOverlayCandidate] {
+        &self.compiled.sampling_overlays
+    }
+
     /// Diffs the edited graph against what is running and applies the
     /// difference live. On any error the running pipeline is untouched
     /// (edits either fail up front in `diff`, or — for build failures midway
@@ -1028,6 +1119,7 @@ impl LiveRun {
             viewer_retention: new.viewer_retention,
             viewer_word_caches: Vec::new(),
             persistent_cache_directory: self.persistent_cache_directory.clone(),
+            sampling_overlays: new.sampling_overlays.clone(),
         };
         let mut summary = ApplySummary::default();
         for edit in edits {
@@ -1252,6 +1344,21 @@ mod tests {
         // sink synthesized from watched outputs.
         assert_eq!(compiled.nodes.len(), 11);
         assert_eq!(compiled.edges.len(), 29);
+
+        let spi_sampling = compiled
+            .sampling_overlays
+            .iter()
+            .find(|candidate| candidate.node_title == "SPI Decoder")
+            .expect("SPI decoder should expose a sampling overlay");
+        assert_eq!(spi_sampling.overlay.edge, SamplingEdge::Rising);
+        assert!(!spi_sampling.overlay.sampled_channels.is_empty());
+        let binary_sampling = compiled
+            .sampling_overlays
+            .iter()
+            .find(|candidate| candidate.node_title == "Binary Decoder")
+            .expect("binary decoder should expose a sampling overlay");
+        assert_eq!(binary_sampling.overlay.edge, SamplingEdge::Both);
+        assert!(!binary_sampling.overlay.sampled_channels.is_empty());
 
         // Viewer lanes resolve with per-lane kinds and producer labels.
         let viewer = compiled
@@ -2020,6 +2127,7 @@ mod tests {
                 source_node_title: "Formatter".into(),
                 word_display_format: None,
                 viewer_presentation: None,
+                capture_channel: None,
             },
         );
         let node = builder

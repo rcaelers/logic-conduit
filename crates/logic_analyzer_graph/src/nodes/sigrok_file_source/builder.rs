@@ -28,6 +28,9 @@ impl RuntimeBuilder for SigrokFileSourceBuilder {
     fn output_port(&self, socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
         (kind == PortKind::of::<Sample>()).then(|| format!("ch{}", socket.def_index))
     }
+    fn viewer_channel_origin(&self, socket: &Socket, _state: &Value) -> Option<usize> {
+        Some(socket.def_index)
+    }
     fn input_required(&self, socket: &Socket, state: &Value) -> bool {
         socket.def_index == 0
             && parse_state::<nodes::SigrokFileSourceState>(state)

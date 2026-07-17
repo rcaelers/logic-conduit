@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use input_bindings::{InputBindings, PointerButtonName, PointerGesture, Trigger};
 use logic_analyzer_graph::{compiler, nodes};
 use logic_analyzer_viewer::LogicAnalyzerViewer;
-use node_graph::{NodeBadge, NodeGraphWidget, NodeId};
+use node_graph::{NodeBadge, NodeContextAction, NodeGraphWidget, NodeId};
 use panel_layout::{BoundaryInteraction, PanelIcon, PanelLayout, PanelSlot, PanelSpec};
 
 use crate::about::AboutWindow;
@@ -49,6 +50,8 @@ pub struct App {
     error_badges: Vec<NodeId>,
     /// Last time the running pipeline was diffed against the edited graph.
     last_live_sync: f64,
+    sampling_overlay_candidates: Vec<compiler::SamplingOverlayCandidate>,
+    selected_sampling_overlay: Option<NodeId>,
 }
 
 impl App {
@@ -163,8 +166,55 @@ impl App {
             platform,
             about: AboutWindow::new(),
             error_badges: Vec::new(),
-            last_live_sync: 0.0,
+            last_live_sync: -1.0,
+            sampling_overlay_candidates: Vec::new(),
+            selected_sampling_overlay: None,
         }
+    }
+
+    fn refresh_sampling_overlay_ui(&mut self) {
+        if self.selected_sampling_overlay.is_some_and(|selected| {
+            !self
+                .sampling_overlay_candidates
+                .iter()
+                .any(|candidate| candidate.node_id == selected)
+        }) {
+            self.selected_sampling_overlay = None;
+        }
+
+        let overlay = self.selected_sampling_overlay.and_then(|selected| {
+            self.sampling_overlay_candidates
+                .iter()
+                .find(|candidate| candidate.node_id == selected)
+                .map(|candidate| candidate.overlay.clone())
+        });
+        self.logic_analyzer.set_sampling_overlay(overlay);
+
+        let mut actions: HashMap<NodeId, Vec<NodeContextAction>> = HashMap::new();
+        for candidate in &self.sampling_overlay_candidates {
+            let selected = self.selected_sampling_overlay == Some(candidate.node_id);
+            let mut action = NodeContextAction::new("sampling_overlay", "Sampling Points")
+                .with_checkmark(selected);
+            if !selected {
+                action = action.with_icon("◆");
+            }
+            actions.insert(candidate.node_id, vec![action]);
+        }
+        self.node_graph.set_node_context_actions(actions);
+    }
+
+    fn handle_node_context_action(&mut self, node_id: NodeId, action_id: &str) {
+        if action_id != "sampling_overlay"
+            || !self
+                .sampling_overlay_candidates
+                .iter()
+                .any(|candidate| candidate.node_id == node_id)
+        {
+            return;
+        }
+        self.selected_sampling_overlay =
+            (self.selected_sampling_overlay != Some(node_id)).then_some(node_id);
+        self.refresh_sampling_overlay_ui();
     }
 
     fn report_compile_errors(&mut self, errors: &[compiler::CompileError]) {
@@ -219,9 +269,15 @@ impl App {
 
         match compiler::start_app_run(self.node_graph.graph(), &self.builders, &mut ctx) {
             Ok(run) => {
+                self.sampling_overlay_candidates = ctx.sampling_overlays;
+                self.refresh_sampling_overlay_ui();
                 self.run = Some(run);
             }
-            Err(errors) => self.report_compile_errors(&errors),
+            Err(errors) => {
+                self.sampling_overlay_candidates.clear();
+                self.refresh_sampling_overlay_ui();
+                self.report_compile_errors(&errors);
+            }
         }
     }
 
@@ -265,6 +321,19 @@ impl App {
     /// can't be gated behind the same throttle as the `apply()` diff below.
     fn sync_run(&mut self, ctx: &egui::Context) {
         const SYNC_INTERVAL_S: f64 = 0.5;
+        let now = ctx.input(|input| input.time);
+        if self.run.is_none() {
+            if now - self.last_live_sync >= SYNC_INTERVAL_S {
+                self.last_live_sync = now;
+                if let Ok(candidates) =
+                    compiler::sampling_overlay_candidates(self.node_graph.graph(), &self.builders)
+                {
+                    self.sampling_overlay_candidates = candidates;
+                    self.refresh_sampling_overlay_ui();
+                }
+            }
+            return;
+        }
         let Some(run) = &mut self.run else {
             return;
         };
@@ -273,7 +342,6 @@ impl App {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
 
-        let now = ctx.input(|input| input.time);
         if now - self.last_live_sync < SYNC_INTERVAL_S {
             return;
         }
@@ -295,9 +363,13 @@ impl App {
             return;
         }
 
+        let mut refresh_sampling_overlays = false;
         match run.apply(self.node_graph.graph(), &self.builders) {
-            Ok(summary) if summary.is_empty() => {}
+            Ok(summary) if summary.is_empty() => {
+                refresh_sampling_overlays = true;
+            }
             Ok(summary) => {
+                refresh_sampling_overlays = true;
                 self.toasts.info(format!(
                     "live: +{} −{} cfg {} restart {}",
                     summary.added, summary.removed, summary.configured, summary.restarted
@@ -326,6 +398,10 @@ impl App {
                 );
                 self.error_badges.push(id);
             }
+        }
+        if refresh_sampling_overlays {
+            self.sampling_overlay_candidates = run.sampling_overlays().to_vec();
+            self.refresh_sampling_overlay_ui();
         }
     }
 
@@ -695,6 +771,9 @@ impl eframe::App for App {
                     self.node_graph.show(panel_ui);
                     if let Some(message) = self.node_graph.take_io_status() {
                         self.toasts.info(message);
+                    }
+                    if let Some((node_id, action_id)) = self.node_graph.take_node_context_action() {
+                        self.handle_node_context_action(node_id, &action_id);
                     }
                     self.platform_after_graph();
                 }

@@ -11,6 +11,7 @@ use signal_processing::{CaptureDataSource, CaptureIndex, DerivedLanes};
 use crate::channel::LogicChannel;
 use crate::indexed_annotations::IndexedAnnotationCacheEntry;
 use crate::lanes::{ViewerLaneGroupId, ViewerLaneRegistry};
+use crate::sampling_overlay::SamplingOverlay;
 use crate::types::{
     AnalyzerLayout, CaptureInfo, ColorProfile, IndexBuildProgress, PulseMeasurement, RowDragState,
     RowKey, RowRenameState, TimeCursor, Transition,
@@ -71,6 +72,7 @@ pub struct LogicAnalyzerViewer {
     pub(crate) derived: Option<DerivedLanes>,
     pub(crate) viewer_lanes: ViewerLaneRegistry,
     pub(crate) indexed_annotation_cache: HashMap<String, IndexedAnnotationCacheEntry>,
+    pub(crate) sampling_overlay: Option<SamplingOverlay>,
     hovered_input_context: &'static str,
 }
 
@@ -110,6 +112,7 @@ impl LogicAnalyzerViewer {
             derived: None,
             viewer_lanes: ViewerLaneRegistry::new(),
             indexed_annotation_cache: HashMap::new(),
+            sampling_overlay: None,
             hovered_input_context: "logic_analyzer",
         }
     }
@@ -154,6 +157,14 @@ impl LogicAnalyzerViewer {
     /// after this call; clones share the same per-run contents.
     pub fn set_viewer_lanes(&mut self, lanes: ViewerLaneRegistry) {
         self.viewer_lanes = lanes;
+    }
+
+    /// Replaces the protocol-neutral sampling markers drawn over raw capture
+    /// rows. The graph/application layer resolves decoder inputs to channel
+    /// indices; this widget only renders the resulting electrical sampling
+    /// relationship.
+    pub fn set_sampling_overlay(&mut self, overlay: Option<SamplingOverlay>) {
+        self.sampling_overlay = overlay;
     }
 
     /// Replaces the raw channel rows with `signals` — the generic way for a

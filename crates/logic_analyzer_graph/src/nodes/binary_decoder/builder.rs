@@ -5,10 +5,13 @@ use serde_json::Value;
 use logic_analyzer_processing::nodes::decoders::{
     CsPolarity, Endianness, ParallelDecoder, ParallelInputStrategy, StrobeMode,
 };
+use logic_analyzer_viewer::SamplingEdge;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock, Word};
 
-use crate::compiler::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::compiler::{
+    CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, SamplingOverlayDescriptor, parse_state,
+};
 use crate::nodes;
 
 pub(crate) struct BinaryDecoderBuilder;
@@ -27,6 +30,21 @@ impl BinaryDecoderBuilder {
 }
 
 impl RuntimeBuilder for BinaryDecoderBuilder {
+    fn sampling_overlay(&self, state: &Value) -> Option<SamplingOverlayDescriptor> {
+        let state = Self::parsed(state).ok()?;
+        let edge = match state.sample_on.selected() {
+            "Rising (SDR)" => SamplingEdge::Rising,
+            "Falling (SDR)" => SamplingEdge::Falling,
+            "Both (DDR)" => SamplingEdge::Both,
+            _ => return None,
+        };
+        Some(SamplingOverlayDescriptor {
+            clock_input: 0,
+            sampled_input_groups: vec![1],
+            edge,
+        })
+    }
+
     fn word_display_format(&self, _socket: &Socket, state: &Value) -> Option<String> {
         Self::parsed(state)
             .ok()
@@ -104,5 +122,29 @@ impl RuntimeBuilder for BinaryDecoderBuilder {
             decoder = decoder.with_word_assembly(cycles, endianness);
         }
         Ok(Box::new(decoder))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use node_graph::NodeDef;
+
+    use super::*;
+
+    #[test]
+    fn sampling_overlay_follows_edge_mode_and_ignores_level_modes() {
+        let builder = BinaryDecoderBuilder;
+        let mut state = nodes::BinaryDecoder::state();
+        for (mode, expected) in [
+            ("Rising (SDR)", Some(SamplingEdge::Rising)),
+            ("Falling (SDR)", Some(SamplingEdge::Falling)),
+            ("Both (DDR)", Some(SamplingEdge::Both)),
+            ("High level", None),
+            ("Low level", None),
+        ] {
+            state.sample_on.select(mode);
+            let descriptor = builder.sampling_overlay(&serde_json::to_value(&state).unwrap());
+            assert_eq!(descriptor.map(|descriptor| descriptor.edge), expected);
+        }
     }
 }

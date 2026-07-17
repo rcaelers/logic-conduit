@@ -65,6 +65,7 @@ impl LogicAnalyzerViewer {
             trace,
             grid,
         );
+        self.draw_sampling_overlay(painter, layout);
 
         // Pointer position marker: a small triangle hanging from the ruler
         // bottom instead of a full-height crosshair line.

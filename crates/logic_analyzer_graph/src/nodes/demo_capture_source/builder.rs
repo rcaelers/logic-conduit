@@ -43,6 +43,10 @@ impl RuntimeBuilder for DemoCaptureSourceBuilder {
         }
     }
 
+    fn viewer_channel_origin(&self, socket: &Socket, _state: &Value) -> Option<usize> {
+        Some(socket.def_index)
+    }
+
     fn input_required(&self, _socket: &Socket, _state: &Value) -> bool {
         false
     }

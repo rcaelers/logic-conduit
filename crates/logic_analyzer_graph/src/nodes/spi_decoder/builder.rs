@@ -3,10 +3,13 @@
 use serde_json::Value;
 
 use logic_analyzer_processing::nodes::decoders::{BitOrder, CsPolarity, SpiDecoder, SpiMode};
+use logic_analyzer_viewer::SamplingEdge;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, Word};
 
-use crate::compiler::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::compiler::{
+    CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, SamplingOverlayDescriptor, parse_state,
+};
 use crate::nodes;
 
 pub(crate) struct SpiDecoderBuilder;
@@ -25,6 +28,24 @@ impl SpiDecoderBuilder {
 }
 
 impl RuntimeBuilder for SpiDecoderBuilder {
+    fn sampling_overlay(&self, state: &Value) -> Option<SamplingOverlayDescriptor> {
+        let state = Self::parsed(state).ok()?;
+        let edge = if state.cpol.selected() == state.cpha.selected() {
+            SamplingEdge::Rising
+        } else {
+            SamplingEdge::Falling
+        };
+        let mut sampled_input_groups = vec![1];
+        if state.has_miso.value {
+            sampled_input_groups.push(2);
+        }
+        Some(SamplingOverlayDescriptor {
+            clock_input: 0,
+            sampled_input_groups,
+            edge,
+        })
+    }
+
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
         vec![PortKind::of::<Sample>()]
     }
@@ -89,5 +110,31 @@ impl RuntimeBuilder for SpiDecoderBuilder {
         .with_bit_order(bit_order)
         .with_name(name);
         Ok(Box::new(decoder))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use node_graph::NodeDef;
+
+    use super::*;
+
+    #[test]
+    fn sampling_overlay_uses_spi_sampling_edge() {
+        let builder = SpiDecoderBuilder;
+        let mut state = nodes::SpiDecoder::state();
+        for (cpol, cpha, expected) in [
+            ("0", "0", SamplingEdge::Rising),
+            ("0", "1", SamplingEdge::Falling),
+            ("1", "0", SamplingEdge::Falling),
+            ("1", "1", SamplingEdge::Rising),
+        ] {
+            state.cpol.select(cpol);
+            state.cpha.select(cpha);
+            let descriptor = builder
+                .sampling_overlay(&serde_json::to_value(&state).unwrap())
+                .unwrap();
+            assert_eq!(descriptor.edge, expected);
+        }
     }
 }

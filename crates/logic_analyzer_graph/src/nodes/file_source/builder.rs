@@ -47,6 +47,9 @@ impl RuntimeBuilder for FileSourceBuilder {
             None
         }
     }
+    fn viewer_channel_origin(&self, socket: &Socket, _state: &Value) -> Option<usize> {
+        Some(socket.def_index)
+    }
     fn input_required(&self, _socket: &Socket, _state: &Value) -> bool {
         // Empty paths are valid in saved/example graphs.  Runtime start will
         // report a missing path when the user actually runs the source.

@@ -6,6 +6,7 @@ use input_bindings::InputBindings;
 
 use super::super::menu::{MenuEntry, PopupMenu, Shortcut};
 use super::action::GraphAction;
+use super::widget::NodeContextAction;
 use crate::model::{FrameId, Socket, SocketId};
 use crate::runtime::NodeTypeRegistry;
 
@@ -175,6 +176,7 @@ pub(super) struct ContextMenuState<'a> {
     pub node_collapsed: bool,
     pub node_muted: bool,
     pub node_has_derived_cache: bool,
+    pub node_actions: &'a [NodeContextAction],
     pub any_selected: bool,
     pub can_paste: bool,
     pub can_undo: bool,
@@ -194,6 +196,7 @@ pub(super) fn build_context_entries(context: ContextMenuState<'_>) -> Vec<MenuEn
         node_collapsed,
         node_muted,
         node_has_derived_cache,
+        node_actions,
         any_selected,
         can_paste,
         can_undo,
@@ -269,6 +272,22 @@ pub(super) fn build_context_entries(context: ContextMenuState<'_>) -> Vec<MenuEn
                 "mute",
             ),
         ]);
+        if let Some(target) = context_node {
+            for action in node_actions {
+                let mut entry = MenuEntry::action(
+                    action.label.clone(),
+                    GraphAction::HostNodeAction {
+                        target,
+                        action_id: action.id.clone(),
+                    },
+                )
+                .with_checkmark(action.checked);
+                if let Some(icon) = &action.icon {
+                    entry = entry.with_icon(icon.clone());
+                }
+                entries.push(entry);
+            }
+        }
         if node_has_derived_cache && let Some(target) = context_node {
             entries.extend([
                 MenuEntry::separator(),

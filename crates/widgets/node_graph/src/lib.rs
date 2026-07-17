@@ -14,4 +14,4 @@ pub use model::{
     Socket, SocketDirection, SocketId, SocketShape, VariadicInfo,
 };
 pub use runtime::{NodeTypeRegistry, SocketTypeStyle};
-pub use widget::{GraphPanelTab, GraphUiPrefs, NodeGraphWidget};
+pub use widget::{GraphPanelTab, GraphUiPrefs, NodeContextAction, NodeGraphWidget};
