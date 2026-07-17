@@ -17,6 +17,20 @@ impl App {
     pub(super) fn platform_save(&mut self, _storage: &mut dyn eframe::Storage) {}
 
     pub(super) fn platform_before_ui(&mut self, ui: &mut egui::Ui) {
+        let shortcut = |action| {
+            self.input_bindings
+                .shortcut(&["global"], action)
+                .unwrap_or_else(|| panic!("missing global.{action} input binding"))
+        };
+        let run_shortcut = shortcut("run");
+        let stop_shortcut = shortcut("stop");
+
+        if ui.input_mut(|input| input.consume_shortcut(&run_shortcut)) {
+            self.run_command();
+        } else if ui.input_mut(|input| input.consume_shortcut(&stop_shortcut)) {
+            self.stop_command();
+        }
+
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("View", |ui| {
                 for (label, content_id, icon) in [
@@ -35,6 +49,34 @@ impl App {
                     .clicked()
                 {
                     self.reset_panel_layout();
+                    ui.close();
+                }
+            });
+            ui.menu_button("Pipeline", |ui| {
+                if ui
+                    .add(
+                        egui::Button::new("Run")
+                            .shortcut_text(ui.ctx().format_shortcut(&run_shortcut)),
+                    )
+                    .clicked()
+                {
+                    self.run_command();
+                    ui.close();
+                }
+                if ui
+                    .add(
+                        egui::Button::new("Stop")
+                            .shortcut_text(ui.ctx().format_shortcut(&stop_shortcut)),
+                    )
+                    .clicked()
+                {
+                    self.stop_command();
+                    ui.close();
+                }
+            });
+            ui.menu_button("Help", |ui| {
+                if ui.button("About DSL Pipeline Editor").clicked() {
+                    self.about.open();
                     ui.close();
                 }
             });
