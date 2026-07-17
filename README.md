@@ -125,6 +125,35 @@ cargo build --release      # release strongly recommended for capture processing
 cargo test                 # workspace tests
 ```
 
+### Testing the browser app on macOS
+
+Install the WebAssembly target and the `wasm-bindgen` CLI once. The CLI version must
+match the version pinned by this workspace:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.126 --locked
+```
+
+Build the browser application and serve its generated files over HTTP:
+
+```bash
+scripts/build_wasm_app.sh
+python3 -m http.server 8000 --directory target/wasm-app/dist
+```
+
+Then open <http://localhost:8000> in Safari, Firefox, or Chrome. Keep the server running
+while testing and press `Ctrl-C` in its terminal to stop it. Do not open `index.html`
+directly from Finder: browser security rules require the JavaScript modules and WASM
+file to be loaded over HTTP.
+
+After changing Rust or web files, run `scripts/build_wasm_app.sh` again and refresh the
+browser. For a compile-only check matching CI, run:
+
+```bash
+cargo check -p logic-analyzer-app-web --target wasm32-unknown-unknown
+```
+
 The repository is a Cargo workspace: `crates/signal_processing` (generic streaming runtime),
 `crates/logic_analyzer_processing` (concrete decoders, processing nodes, and file/USB sources),
 `crates/logic_analyzer_graph` (node catalog and graph compiler),
