@@ -64,23 +64,28 @@ pub fn capture_file_source(graph: &node_graph::GraphState) -> Option<CaptureFile
 
 #[cfg(test)]
 mod tests {
-    use node_graph::NodeGraphWidget;
+    use egui::Pos2;
+    use node_graph::{NodeDef, NodeGraphWidget};
 
     use super::*;
     use crate::compiler::{BuilderRegistry, lower};
     use crate::nodes::{build_registry, test_graphs};
 
     #[test]
-    fn native_hardware_example_graphs_load_and_lower() {
-        for json in [
-            include_str!("../../../../graphs/pi5_u3pro16_spi_decode.json"),
-            include_str!("../../../../graphs/u3pro16_spi_decode.json"),
-        ] {
-            let graph: node_graph::GraphState = serde_json::from_str(json).unwrap();
-            let mut widget = NodeGraphWidget::new(build_registry());
-            widget.set_graph(graph);
-            lower(widget.graph(), &BuilderRegistry::standard()).unwrap();
-        }
+    fn native_hardware_source_registers_and_lowers() {
+        let mut widget = NodeGraphWidget::new(build_registry());
+        let source = widget
+            .add_node_at(DsLogicU3Pro16::name(), Pos2::ZERO)
+            .expect("native hardware source should be registered");
+        widget.graph_mut().nodes.get_mut(&source).unwrap().outputs[0].show_in_view = true;
+
+        let compiled = lower(widget.graph(), &BuilderRegistry::standard()).unwrap();
+        assert!(
+            compiled
+                .nodes
+                .iter()
+                .any(|node| node.builder == DsLogicU3Pro16::name())
+        );
     }
 
     #[test]

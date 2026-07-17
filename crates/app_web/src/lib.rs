@@ -24,7 +24,12 @@ impl WebHandle {
             .start(
                 canvas,
                 eframe::WebOptions::default(),
-                Box::new(|cc| Ok(Box::new(logic_analyzer_ui::App::new(cc)))),
+                Box::new(|cc| {
+                    let graph: node_graph::GraphState =
+                        serde_json::from_str(include_str!("../data/wasm_decoder_demo.json"))
+                            .expect("web application demo graph is valid");
+                    Ok(Box::new(logic_analyzer_ui::App::new_with_graph(cc, graph)))
+                }),
             )
             .await
     }

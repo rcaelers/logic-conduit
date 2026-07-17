@@ -5,12 +5,8 @@ pub(crate) struct PlatformState {
 impl PlatformState {
     pub(crate) fn restore(
         _cc: &eframe::CreationContext,
-        widget: &mut node_graph::NodeGraphWidget,
+        _widget: &mut node_graph::NodeGraphWidget,
     ) -> (Self, Option<panel_layout::PanelLayoutState>, f32) {
-        let graph: node_graph::GraphState =
-            serde_json::from_str(include_str!("../../../../graphs/wasm_decoder_demo.json"))
-                .expect("checked-in wasm decoder demo graph is valid");
-        widget.set_graph(graph);
         (
             Self {
                 preview_source: None,

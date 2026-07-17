@@ -1,0 +1,783 @@
+{
+  "connections": [
+    {
+      "from": {
+        "direction": "Output",
+        "index": 7,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 1
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 6,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 1,
+        "node": 1
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 5,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 2,
+        "node": 1
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 8,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 3,
+        "node": 1
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 1
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 2
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 1
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 3
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 2
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 5
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 3
+      },
+      "to": {
+        "direction": "Input",
+        "index": 1,
+        "node": 5
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 2
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 4
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 4
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 6
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 8,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 7
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 5
+      },
+      "to": {
+        "direction": "Input",
+        "index": 1,
+        "node": 7
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 7
+      },
+      "to": {
+        "direction": "Input",
+        "index": 11,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 10,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 1,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 1,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 2,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 2,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 3,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 3,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 4,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 4,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 5,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 5,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 6,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 6,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 7,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 7,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 8,
+        "node": 8
+      }
+    }
+  ],
+  "frames": [],
+  "next_frame_id": 0,
+  "next_id": 9,
+  "nodes": {
+    "0": {
+      "collapsed": false,
+      "header_color": [
+        100,
+        75,
+        140,
+        255
+      ],
+      "id": 0,
+      "inputs": [],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [
+        {},
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 2
+        },
+        {
+          "def_index": 3
+        },
+        {
+          "def_index": 4
+        },
+        {
+          "def_index": 5
+        },
+        {
+          "def_index": 6
+        },
+        {
+          "def_index": 7
+        },
+        {
+          "def_index": 8
+        },
+        {
+          "def_index": 9
+        },
+        {
+          "def_index": 10
+        }
+      ],
+      "pos": {
+        "x": 40.0,
+        "y": 300.0
+      },
+      "selected": false,
+      "state": {},
+      "title": "Demo",
+      "type_name": "Demo Capture Source"
+    },
+    "1": {
+      "collapsed": false,
+      "header_color": [
+        60,
+        100,
+        160,
+        255
+      ],
+      "id": 1,
+      "inputs": [
+        {},
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 2
+        },
+        {
+          "def_index": 3
+        }
+      ],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [
+        {
+          "show_in_view": true
+        },
+        {
+          "def_index": 1,
+          "show_in_view": true
+        }
+      ],
+      "pos": {
+        "x": 360.0,
+        "y": 80.0
+      },
+      "selected": false,
+      "state": {
+        "bit_order": {
+          "value": "MSB first",
+          "variants": [
+            "MSB first",
+            "LSB first"
+          ]
+        },
+        "cpha": {
+          "value": "0",
+          "variants": [
+            "0",
+            "1"
+          ]
+        },
+        "cpol": {
+          "value": "0",
+          "variants": [
+            "0",
+            "1"
+          ]
+        },
+        "cs_polarity": {
+          "value": "Active low",
+          "variants": [
+            "Active low",
+            "Active high",
+            "Disabled"
+          ]
+        },
+        "has_miso": {
+          "value": true
+        },
+        "word_size": {
+          "max": 64,
+          "min": 1,
+          "value": 8
+        }
+      },
+      "title": "SPI Decoder",
+      "type_name": "SPI Decoder"
+    },
+    "2": {
+      "collapsed": false,
+      "header_color": [
+        60,
+        140,
+        100,
+        255
+      ],
+      "id": 2,
+      "inputs": [
+        {}
+      ],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [
+        {
+          "show_in_view": true
+        },
+        {
+          "def_index": 1
+        }
+      ],
+      "pos": {
+        "x": 680.0,
+        "y": 40.0
+      },
+      "selected": false,
+      "state": {
+        "mask": {
+          "value": "0xFF"
+        },
+        "op": {
+          "value": "==",
+          "variants": [
+            "==",
+            "≠",
+            "<",
+            "≤",
+            ">",
+            "≥"
+          ]
+        },
+        "pattern": {
+          "value": "0x9A"
+        },
+        "pulse_output": {
+          "value": false
+        },
+        "trigger_at": {
+          "value": "Word end",
+          "variants": [
+            "Word start",
+            "Word end"
+          ]
+        }
+      },
+      "title": "Match Start 0x9A",
+      "type_name": "Word Matcher"
+    },
+    "3": {
+      "collapsed": false,
+      "header_color": [
+        60,
+        140,
+        100,
+        255
+      ],
+      "id": 3,
+      "inputs": [
+        {}
+      ],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [
+        {
+          "show_in_view": true
+        },
+        {
+          "def_index": 1
+        }
+      ],
+      "pos": {
+        "x": 680.0,
+        "y": 230.0
+      },
+      "selected": false,
+      "state": {
+        "mask": {
+          "value": "0xFF"
+        },
+        "op": {
+          "value": "==",
+          "variants": [
+            "==",
+            "≠",
+            "<",
+            "≤",
+            ">",
+            "≥"
+          ]
+        },
+        "pattern": {
+          "value": "0xDE"
+        },
+        "pulse_output": {
+          "value": false
+        },
+        "trigger_at": {
+          "value": "Word end",
+          "variants": [
+            "Word start",
+            "Word end"
+          ]
+        }
+      },
+      "title": "Match Stop 0xDE",
+      "type_name": "Word Matcher"
+    },
+    "4": {
+      "collapsed": false,
+      "header_color": [
+        60,
+        140,
+        100,
+        255
+      ],
+      "id": 4,
+      "inputs": [
+        {}
+      ],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [
+        {}
+      ],
+      "pos": {
+        "x": 960.0,
+        "y": 40.0
+      },
+      "selected": false,
+      "state": {
+        "start": {
+          "max": 2147483647,
+          "min": -2147483648,
+          "value": 0
+        },
+        "step": {
+          "max": 2147483647,
+          "min": -2147483648,
+          "value": 1
+        }
+      },
+      "title": "Counter",
+      "type_name": "Counter"
+    },
+    "5": {
+      "collapsed": false,
+      "header_color": [
+        60,
+        140,
+        100,
+        255
+      ],
+      "id": 5,
+      "inputs": [
+        {},
+        {
+          "def_index": 1
+        }
+      ],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [
+        {
+          "show_in_view": true
+        }
+      ],
+      "pos": {
+        "x": 960.0,
+        "y": 230.0
+      },
+      "selected": false,
+      "state": {
+        "initial": {
+          "value": false
+        }
+      },
+      "title": "SR Flip-Flop",
+      "type_name": "SR Flip-Flop"
+    },
+    "6": {
+      "collapsed": false,
+      "header_color": [
+        60,
+        140,
+        100,
+        255
+      ],
+      "id": 6,
+      "inputs": [
+        {},
+        {}
+      ],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [
+        {
+          "show_in_view": true
+        }
+      ],
+      "pos": {
+        "x": 1240.0,
+        "y": 40.0
+      },
+      "selected": true,
+      "state": {
+        "template": {
+          "value": "Window {n:02}"
+        }
+      },
+      "title": "String Formatter",
+      "type_name": "String Formatter"
+    },
+    "7": {
+      "collapsed": false,
+      "header_color": [
+        60,
+        140,
+        100,
+        255
+      ],
+      "id": 7,
+      "inputs": [
+        {},
+        {},
+        {}
+      ],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [
+        {
+          "show_in_view": true
+        }
+      ],
+      "pos": {
+        "x": 1198.4296875,
+        "y": 592.265625
+      },
+      "selected": false,
+      "state": {
+        "op": {
+          "value": "AND",
+          "variants": [
+            "NOT",
+            "AND",
+            "NAND",
+            "OR",
+            "NOR",
+            "XOR",
+            "XNOR"
+          ]
+        }
+      },
+      "title": "Parallel Enable Gate",
+      "type_name": "Logic Gate"
+    },
+    "8": {
+      "collapsed": false,
+      "header_color": [
+        60,
+        100,
+        160,
+        255
+      ],
+      "id": 8,
+      "inputs": [
+        {},
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 2
+        },
+        {
+          "def_index": 3
+        }
+      ],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [
+        {
+          "show_in_view": true
+        }
+      ],
+      "pos": {
+        "x": 1520.0,
+        "y": 300.0
+      },
+      "selected": false,
+      "state": {
+        "cs_polarity": {
+          "value": "Disabled",
+          "variants": [
+            "Disabled",
+            "Active low",
+            "Active high"
+          ]
+        },
+        "display_format": {
+          "value": "Hex",
+          "variants": [
+            "Hex",
+            "Binary",
+            "Octal",
+            "Decimal",
+            "ASCII",
+            "Hex + ASCII"
+          ]
+        },
+        "endianness": {
+          "value": "Little",
+          "variants": [
+            "Little",
+            "Big"
+          ]
+        },
+        "input_strategy": {
+          "value": "Packed stream",
+          "variants": [
+            "Auto",
+            "Packed stream",
+            "Indexed"
+          ]
+        },
+        "sample_on": {
+          "value": "Rising (SDR)",
+          "variants": [
+            "Rising (SDR)",
+            "Falling (SDR)",
+            "Both (DDR)",
+            "High level",
+            "Low level"
+          ]
+        },
+        "word_size": {
+          "max": 8,
+          "min": 1,
+          "value": 1
+        }
+      },
+      "title": "Parallel Decoder",
+      "type_name": "Binary Decoder"
+    }
+  }
+}

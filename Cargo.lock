@@ -2140,6 +2140,8 @@ dependencies = [
  "eframe",
  "log",
  "logic-analyzer-ui",
+ "node-graph",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

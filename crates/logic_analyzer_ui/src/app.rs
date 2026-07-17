@@ -74,6 +74,14 @@ impl App {
         Self::new_with_plugins(cc, |_ctx| {})
     }
 
+    /// Builds the application around an initial graph supplied by the host
+    /// application. The host owns where that graph comes from.
+    pub fn new_with_graph(cc: &eframe::CreationContext, graph: node_graph::GraphState) -> Self {
+        let mut app = Self::build(cc, |_ctx| {});
+        app.node_graph.set_graph(graph);
+        app
+    }
+
     /// The persisted MRU list, most recent first — read once at startup by
     /// the native macOS menu to build its "Open Recent" submenu (Phase 5.1).
     /// Empty on wasm, where there is no recent-files list at all.

@@ -2414,8 +2414,7 @@ mod tests {
     }
 
     /// Reference pipeline: the byte-exact Phase-1 wiring of
-    /// `examples/spi_graph_decode.rs` (itself verified against the original
-    /// `graphs/spi_controlled_decode.json`).
+    /// `examples/spi_graph_decode.rs`.
     fn run_reference(capture: &Path, out_dir: &Path) {
         use logic_analyzer_processing::nodes::decoders::{
             CsPolarity, ParallelDecoder, SpiDecoder, SpiMode, StrobeMode,
@@ -2833,17 +2832,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "runs the full checked-in SPI-controlled graph; use --release"]
-    fn benchmark_checked_in_spi_controlled_graph_runtime() {
+    #[ignore = "runs the full SPI-controlled test graph; use --release"]
+    fn benchmark_spi_controlled_test_graph_runtime() {
         let capture = repo_path("_captures/wipneus5.dsl");
-        let graph_path = repo_path("graphs/spi_controlled_decode.json");
-        let graph: GraphState = serde_json::from_str(
-            &std::fs::read_to_string(&graph_path)
-                .unwrap_or_else(|error| panic!("cannot read {}: {error}", graph_path.display())),
-        )
-        .unwrap();
-        let mut widget = NodeGraphWidget::new(nodes::build_registry());
-        widget.set_graph(graph);
+        let mut widget = startup_widget();
         let output = tempfile::tempdir().unwrap();
         for node in widget.graph_mut().nodes.values_mut() {
             match node.def_name() {
@@ -2879,25 +2871,18 @@ mod tests {
             .map(|name| std::fs::metadata(output.path().join(name)).unwrap().len())
             .sum();
         eprintln!(
-            "checked-in graph: elapsed={:.3}s files={} bytes={bytes}",
+            "test graph: elapsed={:.3}s files={} bytes={bytes}",
             elapsed.as_secs_f64(),
             files.len()
         );
-        assert!(!files.is_empty(), "checked-in graph produced no output");
+        assert!(!files.is_empty(), "test graph produced no output");
     }
 
     #[test]
     #[ignore = "runs the full graph while simulating a 60 Hz 5120-pixel viewer; use --release"]
-    fn benchmark_checked_in_spi_controlled_graph_with_live_viewer_queries() {
+    fn benchmark_spi_controlled_test_graph_with_live_viewer_queries() {
         let capture = repo_path("_captures/wipneus5.dsl");
-        let graph_path = repo_path("graphs/spi_controlled_decode.json");
-        let graph: GraphState = serde_json::from_str(
-            &std::fs::read_to_string(&graph_path)
-                .unwrap_or_else(|error| panic!("cannot read {}: {error}", graph_path.display())),
-        )
-        .unwrap();
-        let mut widget = NodeGraphWidget::new(nodes::build_registry());
-        widget.set_graph(graph);
+        let mut widget = startup_widget();
         let output = tempfile::tempdir().unwrap();
         for node in widget.graph_mut().nodes.values_mut() {
             match node.def_name() {
@@ -2984,7 +2969,7 @@ mod tests {
         assert!(query_count > 0, "viewer lane produced no live queries");
         assert!(
             !bin_files(output.path()).is_empty(),
-            "checked-in graph produced no output"
+            "test graph produced no output"
         );
     }
 

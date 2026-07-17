@@ -331,9 +331,9 @@ pub(crate) mod test_graphs {
             .selected = true;
     }
 
-    /// Builds the CCD analysis pipeline (`graphs/spi_controlled_decode.json`) as the
-    /// startup graph. Select a capture in its DSL File Source before running it
-    /// (SPI cs=8 clk=7 mosi=6; parallel strobe=10 (ACDK), data D0..D7 = ch 0..7).
+    /// Builds the CCD analysis pipeline captured by the embedded test fixture.
+    /// Select a capture in its DSL File Source before running it (SPI cs=8
+    /// clk=7 mosi=6; parallel strobe=10 (ACDK), data D0..D7 = ch 0..7).
     ///
     /// The enable gate is `AND(CS, Q)` with no NOT node: CS idles high and the
     /// parallel bus is decodable only while it is *inactive* (channels 6/7 are
@@ -521,43 +521,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn checked_in_spi_decode_pipeline_lowers_cleanly() {
-        use crate::compiler::{BuilderRegistry, lower};
-
-        let saved: serde_json::Value =
-            serde_json::from_str(include_str!("../../../../graphs/spi_decode_pipeline.json"))
-                .expect("checked-in graph should be valid JSON");
-        let graph: node_graph::GraphState =
-            serde_json::from_value(saved).expect("checked-in graph should deserialize");
-
-        let mut widget = NodeGraphWidget::new(build_registry());
-        widget.set_graph(graph);
-
-        let registry = BuilderRegistry::standard();
-        let compiled = lower(widget.graph(), &registry).expect("graph should lower cleanly");
-        assert_eq!(compiled.nodes.len(), 4);
-    }
-
-    #[test]
-    fn checked_in_spi_graph_decode_pipeline_requires_a_capture_selection() {
-        use crate::compiler::{BuilderRegistry, lower};
-
-        let saved: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../graphs/spi_graph_decode_pipeline.json"
-        ))
-        .expect("checked-in graph should be valid JSON");
-        let graph: node_graph::GraphState =
-            serde_json::from_value(saved).expect("checked-in graph should deserialize");
-
-        let mut widget = NodeGraphWidget::new(build_registry());
-        widget.set_graph(graph);
-
-        let registry = BuilderRegistry::standard();
-        let compiled = lower(widget.graph(), &registry).expect("empty capture picker is loadable");
-        assert!(!compiled.nodes.is_empty());
-    }
-
-    #[test]
     fn startup_graph_builds_with_compatible_wiring() {
         let mut widget = NodeGraphWidget::new(build_registry());
         test_graphs::populate_startup(&mut widget);
@@ -585,64 +548,20 @@ mod tests {
     }
 
     #[test]
-    fn checked_in_spi_controlled_graph_matches_builder() {
-        let saved: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../graphs/spi_controlled_decode.json"
-        ))
-        .expect("checked-in SPI-controlled graph should be valid JSON");
-
-        let mut widget = NodeGraphWidget::new(build_registry());
-        test_graphs::populate_startup(&mut widget);
-        let generated = serde_json::to_value(widget.graph()).expect("graph should serialize");
-
-        // The checked-in example is intentionally allowed to omit optional
-        // runtime/default fields (for example a local capture path).  Keep
-        // this test focused on the graph topology rather than byte-for-byte
-        // serialization details.
-        assert_eq!(
-            saved["nodes"].as_object().map_or(0, serde_json::Map::len),
-            generated["nodes"]
-                .as_object()
-                .map_or(0, serde_json::Map::len)
-        );
-        assert_eq!(
-            saved["connections"].as_array().map_or(0, Vec::len),
-            generated["connections"].as_array().map_or(0, Vec::len)
-        );
-    }
-
-    #[test]
-    fn checked_in_wasm_demo_matches_builder_and_lowers() {
+    fn binary_decoder_demo_fixture_lowers() {
         use crate::compiler::{BuilderRegistry, lower};
 
-        let saved: node_graph::GraphState =
-            serde_json::from_str(include_str!("../../../../graphs/wasm_decoder_demo.json"))
-                .expect("checked-in wasm demo should be valid JSON");
-        let mut generated = NodeGraphWidget::new(build_registry());
-        test_graphs::build_binary_decoder_demo(&mut generated);
-
-        let without_positions = |mut graph: serde_json::Value| {
-            for node in graph["nodes"].as_object_mut().unwrap().values_mut() {
-                node.as_object_mut().unwrap().remove("pos");
-            }
-            graph
-        };
-        assert_eq!(
-            without_positions(serde_json::to_value(&saved).unwrap()),
-            without_positions(serde_json::to_value(generated.graph()).unwrap())
-        );
-
-        let mut loaded = NodeGraphWidget::new(build_registry());
-        loaded.set_graph(saved);
+        let mut widget = NodeGraphWidget::new(build_registry());
+        test_graphs::build_binary_decoder_demo(&mut widget);
         assert!(
-            loaded
+            widget
                 .graph()
                 .nodes
                 .values()
                 .all(|node| node.type_name != Viewer::name())
         );
         assert_eq!(
-            loaded
+            widget
                 .graph()
                 .nodes
                 .values()
@@ -651,7 +570,7 @@ mod tests {
                 .count(),
             8
         );
-        let (_, preview) = crate::nodes::capture_preview(loaded.graph())
+        let (_, preview) = crate::nodes::capture_preview(widget.graph())
             .expect("demo source should provide a pre-run capture preview");
         assert_eq!(preview.len(), 10);
         assert_eq!(preview.first().unwrap().name, "Ch 0");
@@ -660,11 +579,11 @@ mod tests {
             preview.last().unwrap().transitions.last().unwrap().0,
             59_999_000.0
         );
-        let compiled = lower(loaded.graph(), &BuilderRegistry::standard())
+        let compiled = lower(widget.graph(), &BuilderRegistry::standard())
             .expect("wasm demo should lower cleanly");
         // Watching the formatter output keeps the counter/formatter branch
         // live even though the wasm graph has no filesystem writer sink.
-        assert_eq!(loaded.graph().nodes.len(), 9);
+        assert_eq!(widget.graph().nodes.len(), 9);
         assert_eq!(compiled.nodes.len(), 10);
     }
 
