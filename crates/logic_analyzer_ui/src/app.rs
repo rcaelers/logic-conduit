@@ -5,7 +5,7 @@ use std::sync::Arc;
 use input_bindings::{InputBindings, PointerButtonName, PointerGesture, Trigger};
 use logic_analyzer_graph::{compiler, nodes};
 use logic_analyzer_viewer::LogicAnalyzerViewer;
-use node_graph::{NodeBadge, NodeContextAction, NodeGraphWidget, NodeId};
+use node_graph::{GraphState, NodeBadge, NodeContextAction, NodeGraphWidget, NodeId};
 use panel_layout::{BoundaryInteraction, PanelIcon, PanelLayout, PanelSlot, PanelSpec};
 
 use crate::about::AboutWindow;
@@ -28,6 +28,25 @@ std::cfg_select! {
 }
 
 use self::font_platform::load_symbol_fonts;
+
+const SAMPLING_OVERLAY_EXTENSION: &str = "logic_analyzer_ui.sampling_overlay";
+
+fn saved_sampling_overlay(graph: &GraphState) -> Result<Option<NodeId>, serde_json::Error> {
+    graph.extension(SAMPLING_OVERLAY_EXTENSION)
+}
+
+fn save_sampling_overlay(
+    graph: &mut GraphState,
+    selected: Option<NodeId>,
+) -> Result<(), serde_json::Error> {
+    match selected {
+        Some(selected) => graph.set_extension(SAMPLING_OVERLAY_EXTENSION, selected),
+        None => {
+            graph.remove_extension(SAMPLING_OVERLAY_EXTENSION);
+            Ok(())
+        }
+    }
+}
 
 pub struct App {
     node_graph: NodeGraphWidget,
@@ -82,6 +101,7 @@ impl App {
     pub fn new_with_graph(cc: &eframe::CreationContext, graph: node_graph::GraphState) -> Self {
         let mut app = Self::build(cc, |_ctx| {});
         app.node_graph.set_graph(graph);
+        app.restore_sampling_overlay_setting();
         app
     }
 
@@ -173,15 +193,6 @@ impl App {
     }
 
     fn refresh_sampling_overlay_ui(&mut self) {
-        if self.selected_sampling_overlay.is_some_and(|selected| {
-            !self
-                .sampling_overlay_candidates
-                .iter()
-                .any(|candidate| candidate.node_id == selected)
-        }) {
-            self.selected_sampling_overlay = None;
-        }
-
         let overlay = self.selected_sampling_overlay.and_then(|selected| {
             self.sampling_overlay_candidates
                 .iter()
@@ -203,6 +214,47 @@ impl App {
         self.node_graph.set_node_context_actions(actions);
     }
 
+    fn restore_sampling_overlay_setting(&mut self) {
+        match saved_sampling_overlay(self.node_graph.graph()) {
+            Ok(selected) => self.selected_sampling_overlay = selected,
+            Err(error) => {
+                self.selected_sampling_overlay = None;
+                self.toasts.error(format!(
+                    "Could not restore the graph's sampling-points setting: {error}"
+                ));
+            }
+        }
+        self.sampling_overlay_candidates.clear();
+        self.refresh_sampling_overlay_ui();
+    }
+
+    fn persist_sampling_overlay_setting(&mut self) {
+        let result =
+            save_sampling_overlay(self.node_graph.graph_mut(), self.selected_sampling_overlay);
+        if let Err(error) = result {
+            self.toasts.error(format!(
+                "Could not save the graph's sampling-points setting: {error}"
+            ));
+        }
+    }
+
+    fn set_sampling_overlay_candidates(
+        &mut self,
+        candidates: Vec<compiler::SamplingOverlayCandidate>,
+    ) {
+        self.sampling_overlay_candidates = candidates;
+        if self.selected_sampling_overlay.is_some_and(|selected| {
+            !self
+                .sampling_overlay_candidates
+                .iter()
+                .any(|candidate| candidate.node_id == selected)
+        }) {
+            self.selected_sampling_overlay = None;
+            self.persist_sampling_overlay_setting();
+        }
+        self.refresh_sampling_overlay_ui();
+    }
+
     fn handle_node_context_action(&mut self, node_id: NodeId, action_id: &str) {
         if action_id != "sampling_overlay"
             || !self
@@ -214,6 +266,7 @@ impl App {
         }
         self.selected_sampling_overlay =
             (self.selected_sampling_overlay != Some(node_id)).then_some(node_id);
+        self.persist_sampling_overlay_setting();
         self.refresh_sampling_overlay_ui();
     }
 
@@ -269,8 +322,7 @@ impl App {
 
         match compiler::start_app_run(self.node_graph.graph(), &self.builders, &mut ctx) {
             Ok(run) => {
-                self.sampling_overlay_candidates = ctx.sampling_overlays;
-                self.refresh_sampling_overlay_ui();
+                self.set_sampling_overlay_candidates(ctx.sampling_overlays);
                 self.run = Some(run);
             }
             Err(errors) => {
@@ -328,8 +380,7 @@ impl App {
                 if let Ok(candidates) =
                     compiler::sampling_overlay_candidates(self.node_graph.graph(), &self.builders)
                 {
-                    self.sampling_overlay_candidates = candidates;
-                    self.refresh_sampling_overlay_ui();
+                    self.set_sampling_overlay_candidates(candidates);
                 }
             }
             return;
@@ -400,8 +451,8 @@ impl App {
             }
         }
         if refresh_sampling_overlays {
-            self.sampling_overlay_candidates = run.sampling_overlays().to_vec();
-            self.refresh_sampling_overlay_ui();
+            let candidates = run.sampling_overlays().to_vec();
+            self.set_sampling_overlay_candidates(candidates);
         }
     }
 
@@ -833,7 +884,9 @@ impl eframe::App for App {
 
 #[cfg(test)]
 mod font_tests {
-    use super::{install_fonts, load_symbol_fonts};
+    use node_graph::{GraphState, NodeId};
+
+    use super::{install_fonts, load_symbol_fonts, save_sampling_overlay, saved_sampling_overlay};
 
     #[test]
     fn application_input_bindings_are_valid() {
@@ -847,6 +900,19 @@ mod font_tests {
                 egui::Key::Space,
             ))
         );
+    }
+
+    #[test]
+    fn sampling_overlay_selection_round_trips_with_the_graph_document() {
+        let mut graph = GraphState::default();
+        save_sampling_overlay(&mut graph, Some(NodeId(17))).unwrap();
+
+        let json = serde_json::to_string(&graph).unwrap();
+        let mut restored: GraphState = serde_json::from_str(&json).unwrap();
+        assert_eq!(saved_sampling_overlay(&restored).unwrap(), Some(NodeId(17)));
+
+        save_sampling_overlay(&mut restored, None).unwrap();
+        assert_eq!(saved_sampling_overlay(&restored).unwrap(), None);
     }
 
     #[test]

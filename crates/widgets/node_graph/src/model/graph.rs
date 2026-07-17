@@ -1,6 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use egui::Color32;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -15,9 +16,38 @@ pub struct GraphState {
     pub frames: Vec<Frame>,
     next_id: u32,
     next_frame_id: u32,
+    /// Namespaced, host-owned document state. Generic graph code preserves
+    /// these values without interpreting their contents.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    extensions: BTreeMap<String, serde_json::Value>,
 }
 
 impl GraphState {
+    pub fn extension<T: DeserializeOwned>(
+        &self,
+        key: &str,
+    ) -> Result<Option<T>, serde_json::Error> {
+        self.extensions
+            .get(key)
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+    }
+
+    pub fn set_extension<T: Serialize>(
+        &mut self,
+        key: impl Into<String>,
+        value: T,
+    ) -> Result<(), serde_json::Error> {
+        self.extensions
+            .insert(key.into(), serde_json::to_value(value)?);
+        Ok(())
+    }
+
+    pub fn remove_extension(&mut self, key: &str) {
+        self.extensions.remove(key);
+    }
+
     pub fn next_id(&mut self) -> NodeId {
         let id = NodeId(self.next_id);
         self.next_id += 1;
@@ -826,5 +856,34 @@ mod tests {
             serde_json::from_str(&json).expect("graph state should deserialize");
 
         assert_eq!(loaded.nodes[&id].kind, NodeKind::Reroute);
+    }
+
+    #[test]
+    fn namespaced_document_extensions_round_trip_but_empty_maps_stay_compatible() {
+        let mut graph = GraphState::default();
+        assert!(
+            !serde_json::to_value(&graph)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("extensions")
+        );
+
+        graph.set_extension("example.selection", NodeId(7)).unwrap();
+        let json = serde_json::to_string(&graph).unwrap();
+        let loaded: GraphState = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            loaded.extension::<NodeId>("example.selection").unwrap(),
+            Some(NodeId(7))
+        );
+
+        let legacy: GraphState = serde_json::from_str(
+            r#"{"nodes":{},"connections":[],"frames":[],"next_id":0,"next_frame_id":0}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            legacy.extension::<NodeId>("example.selection").unwrap(),
+            None
+        );
     }
 }

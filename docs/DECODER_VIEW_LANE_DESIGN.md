@@ -209,8 +209,10 @@ viewport density and is suppressed when the indexed window contains only unresol
 summaries.
 
 Sampling descriptors and resolved channel origins are reconstructed from node definitions during
-lowering and are not serialized in graph files. Native and wasm use the same descriptor and
-rendering path.
+lowering and are not serialized in graph files. The selected descriptor's node ID is presentation
+state and is stored in the graph's generic, namespaced document extensions. Old graphs without the
+extension load with no sampling overlay selected. Native and wasm use the same descriptor,
+selection, and rendering path.
 
 ### Proposed future adapters
 

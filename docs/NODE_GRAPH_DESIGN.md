@@ -151,6 +151,9 @@ Interaction highlights:
   input/output pass-through pairs from the node's declared sockets; rendering shows those
   links inside the muted node, and the product compiler follows the same pairs. Generic
   `node-graph` code never decides runtime bypass semantics.
+- **Document extensions**: hosts persist namespaced document-level presentation or tool state in
+  `GraphState`. The generic graph model preserves opaque JSON values and does not interpret their
+  keys or contents; empty extension maps are omitted for compatibility with existing graph files.
 - **Clipboard** is the system clipboard: selected nodes + their internal connections
   serialize to a JSON payload tagged `node_graph_clipboard_v1`, so copy/paste works across
   application instances. Paste remaps ids, offsets positions, selects the pasted set, and

@@ -169,8 +169,10 @@ interdependent props. `badge` is recomputed after each update; return
 
 ## Model types
 
-`GraphState { nodes, connections, frames }` is plain serde data — safe to inspect and
-(carefully) mutate. Useful pieces:
+`GraphState { nodes, connections, frames, … }` is plain serde data — safe to inspect and
+(carefully) mutate. Hosts can preserve namespaced document state through
+`extension::<T>(key)`, `set_extension(key, value)`, and `remove_extension(key)`; generic graph
+code serializes these values without interpreting them. Useful pieces:
 
 - `Node`: `id`, `title`, `pos`, `state: serde_json::Value`, `inputs`/`outputs:
   Vec<Socket>`, `kind` (`Regular`/`Reroute`), `collapsed`, `selected`, `badge`.
