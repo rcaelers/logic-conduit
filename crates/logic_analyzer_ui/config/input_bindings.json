@@ -27,6 +27,8 @@
     { "context": "panel_boundary", "action": "resize", "label": "Resize Panels", "input": "pointer", "button": "primary", "gesture": "drag" },
     { "context": "panel_boundary", "action": "options", "label": "Panel Options", "input": "pointer", "button": "secondary", "gesture": "click" },
     { "context": "panel_boundary.dragging", "action": "finish_resize", "label": "Finish Resize", "input": "pointer", "button": "primary", "gesture": "release" },
+    { "context": "panel_title", "action": "toggle_maximize", "label": "Maximize / Restore Area", "input": "pointer", "button": "primary", "gesture": "double_click" },
+    { "context": "panel_title", "action": "options", "label": "Area Options", "input": "pointer", "button": "secondary", "gesture": "click" },
 
     { "context": "node_graph", "action": "select_move", "label": "Select / Move", "input": "pointer", "button": "primary", "gesture": "drag" },
     { "context": "node_graph", "action": "extend_selection", "label": "Extend Selection", "input": "pointer", "button": "primary", "gesture": "click", "modifiers": { "shift": true } },

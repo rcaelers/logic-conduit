@@ -413,6 +413,7 @@ impl App {
     fn status_actions(
         &self,
         boundary_interaction: Option<BoundaryInteraction>,
+        over_panel_title: bool,
         viewer_context: Option<&str>,
         over_graph: bool,
         modifiers: egui::Modifiers,
@@ -423,6 +424,8 @@ impl App {
             vec![graph_context, "global"]
         } else if boundary_interaction == Some(BoundaryInteraction::Hovered) {
             vec!["panel_boundary", "global"]
+        } else if over_panel_title {
+            vec!["panel_title", "global"]
         } else if over_graph {
             vec!["node_graph", "global"]
         } else if let Some(viewer_context) = viewer_context {
@@ -709,8 +712,15 @@ impl eframe::App for App {
 
         let pointer_pos = ui.input(|i| i.pointer.hover_pos());
         let modifiers = ui.input(|i| i.modifiers);
+        let over_panel_title = pointer_pos.is_some_and(|pos| {
+            layout_response
+                .panels
+                .iter()
+                .any(|panel| panel.title_rect.contains(pos))
+        });
         let status_actions = self.status_actions(
             layout_response.boundary_interaction,
+            over_panel_title,
             viewer
                 .filter(|viewer| pointer_pos.is_some_and(|pos| viewer.body_rect.contains(pos)))
                 .map(|_| self.logic_analyzer.hovered_input_context()),
@@ -771,6 +781,13 @@ mod font_tests {
             .map(|binding| binding.label.as_str())
             .collect();
         assert_eq!(resizing, ["Finish Resize"]);
+
+        let title_bar: Vec<_> = bindings
+            .status_bindings(&["panel_title"], egui::Modifiers::NONE)
+            .into_iter()
+            .map(|binding| binding.label.as_str())
+            .collect();
+        assert_eq!(title_bar, ["Maximize / Restore Area", "Area Options"]);
 
         let dragging: Vec<_> = bindings
             .status_bindings(&["node_graph.drag_node"], egui::Modifiers::NONE)
