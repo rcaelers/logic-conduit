@@ -24,6 +24,8 @@ const MAX_RECENT_FILES: usize = 10;
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PersistedState {
     analyzer_split: f32,
+    #[serde(default)]
+    panel_layout: Option<panel_layout::PanelLayoutState>,
     graph_ui_prefs: node_graph::GraphUiPrefs,
     recent_files: Vec<PathBuf>,
 }
@@ -112,7 +114,7 @@ impl PlatformState {
     pub(crate) fn restore(
         cc: &eframe::CreationContext,
         widget: &mut node_graph::NodeGraphWidget,
-    ) -> (Self, f32) {
+    ) -> (Self, Option<panel_layout::PanelLayoutState>, f32) {
         let persisted = cc
             .storage
             .and_then(|storage| eframe::get_value::<PersistedState>(storage, eframe::APP_KEY));
@@ -122,6 +124,9 @@ impl PlatformState {
         let analyzer_split = persisted
             .as_ref()
             .map_or(0.42, |state| state.analyzer_split);
+        let panel_layout = persisted
+            .as_ref()
+            .and_then(|state| state.panel_layout.clone());
         let recent_files = persisted
             .map(|state| normalize_recent_files(state.recent_files))
             .unwrap_or_default();
@@ -156,6 +161,7 @@ impl PlatformState {
                 #[cfg(target_os = "macos")]
                 native_menu_commands,
             },
+            panel_layout,
             analyzer_split,
         )
     }
@@ -174,13 +180,36 @@ impl PlatformState {
         &self,
         storage: &mut dyn eframe::Storage,
         analyzer_split: f32,
+        panel_layout: panel_layout::PanelLayoutState,
         graph_ui_prefs: node_graph::GraphUiPrefs,
     ) {
         let state = PersistedState {
             analyzer_split,
+            panel_layout: Some(panel_layout),
             graph_ui_prefs,
             recent_files: self.recent_files.clone(),
         };
         eframe::set_value(storage, eframe::APP_KEY, &state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PersistedState;
+
+    #[test]
+    fn legacy_state_without_panel_tree_still_loads() {
+        let legacy = serde_json::json!({
+            "analyzer_split": 0.37,
+            "graph_ui_prefs": {
+                "panel_width": 320.0,
+                "panel_tab": null,
+                "minimap_visible": true,
+            },
+            "recent_files": [],
+        });
+        let restored: PersistedState = serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored.analyzer_split, 0.37);
+        assert!(restored.panel_layout.is_none());
     }
 }

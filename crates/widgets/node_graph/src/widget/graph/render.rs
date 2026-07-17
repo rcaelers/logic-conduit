@@ -133,6 +133,7 @@ impl NodeGraphWidget {
             from_canvas,
             current_canvas,
             connectable,
+            ..
         } = &self.interaction_state
         {
             wire_drag_dim = Some((from.node, connectable.clone()));

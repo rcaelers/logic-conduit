@@ -5,7 +5,7 @@ use input_bindings::{InputBindings, PointerButtonName, PointerGesture, Trigger};
 use logic_analyzer_graph::{compiler, nodes};
 use logic_analyzer_viewer::LogicAnalyzerViewer;
 use node_graph::{NodeBadge, NodeGraphWidget, NodeId};
-use panel_layout::{PanelSlot, PanelSpec, VerticalPanelLayout};
+use panel_layout::{BoundaryInteraction, PanelIcon, PanelLayout, PanelSlot, PanelSpec};
 
 use crate::about::AboutWindow;
 use crate::demo_signals;
@@ -32,7 +32,7 @@ pub struct App {
     node_graph: NodeGraphWidget,
     logic_analyzer: LogicAnalyzerViewer,
     input_bindings: Arc<InputBindings>,
-    panel_layout: VerticalPanelLayout,
+    panel_layout: PanelLayout,
     builders: compiler::BuilderRegistry,
     run: Option<compiler::AppRun>,
     /// Persistent run *state* shown in the status bar next to Run/Stop — the
@@ -123,7 +123,7 @@ impl App {
         ));
         let mut widget = NodeGraphWidget::new(registry);
         widget.set_input_bindings(input_bindings.clone());
-        let (platform, analyzer_split) =
+        let (platform, panel_layout_state, analyzer_split) =
             crate::app_platform::PlatformState::restore(cc, &mut widget);
         let mut logic_analyzer = LogicAnalyzerViewer::new();
         logic_analyzer.set_input_bindings(input_bindings.clone());
@@ -139,10 +139,15 @@ impl App {
             node_graph: widget,
             logic_analyzer,
             input_bindings,
-            panel_layout: VerticalPanelLayout::new([
-                ("logic_analyzer", analyzer_split),
-                ("node_graph", 1.0 - analyzer_split),
-            ]),
+            panel_layout: panel_layout_state.map_or_else(
+                || {
+                    PanelLayout::new([
+                        ("logic_analyzer", analyzer_split),
+                        ("node_graph", 1.0 - analyzer_split),
+                    ])
+                },
+                PanelLayout::from_state,
+            ),
             builders,
             run: None,
             run_message: None,
@@ -349,7 +354,6 @@ impl App {
     }
 
     fn show_run_controls(&mut self, ui: &mut egui::Ui) {
-        self.sync_run(ui.ctx());
         ui.separator();
         let running = self.is_running();
         let stopping = self.is_stopping();
@@ -381,13 +385,30 @@ impl App {
         }
     }
 
+    fn show_placeholder_panel(ui: &mut egui::Ui, title: &str) {
+        ui.centered_and_justified(|ui| {
+            ui.label(
+                egui::RichText::new(format!("{title} panel"))
+                    .size(16.0)
+                    .weak(),
+            );
+        });
+    }
+
     fn status_actions(
         &self,
+        boundary_interaction: Option<BoundaryInteraction>,
         viewer_context: Option<&str>,
         over_graph: bool,
         modifiers: egui::Modifiers,
     ) -> Vec<StatusAction> {
-        let contexts = if over_graph {
+        let contexts = if boundary_interaction == Some(BoundaryInteraction::Dragging) {
+            vec!["panel_boundary.dragging", "global"]
+        } else if let Some(graph_context) = self.node_graph.active_input_context() {
+            vec![graph_context, "global"]
+        } else if boundary_interaction == Some(BoundaryInteraction::Hovered) {
+            vec!["panel_boundary", "global"]
+        } else if over_graph {
             vec!["node_graph", "global"]
         } else if let Some(viewer_context) = viewer_context {
             vec![viewer_context, "logic_analyzer", "global"]
@@ -577,6 +598,7 @@ fn install_fonts(ctx: &egui::Context) {
 
 impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.node_graph.filter_modal_raw_input(raw_input);
         self.platform_raw_input_hook(ctx, raw_input);
     }
 
@@ -593,23 +615,50 @@ impl eframe::App for App {
 
         let viewport_rect = ui.available_rect_before_wrap();
         self.platform_sync_capture();
+        self.sync_run(ui.ctx());
         let specs = [
-            PanelSpec::new("logic_analyzer", "Logic Analyzer", 160.0),
-            PanelSpec::new("node_graph", "Node Graph", 160.0),
+            PanelSpec::new("logic_analyzer", "Logic Analyzer", 160.0)
+                .icon(PanelIcon::Waveform)
+                .minimum_width(220.0)
+                .singleton(),
+            PanelSpec::new("node_graph", "Node Graph", 160.0)
+                .icon(PanelIcon::Network)
+                .minimum_width(220.0)
+                .singleton(),
+            PanelSpec::new("watches", "Watches", 120.0)
+                .icon(PanelIcon::List)
+                .minimum_width(180.0),
+            PanelSpec::new("triggers", "Triggers", 120.0)
+                .icon(PanelIcon::Target)
+                .minimum_width(180.0),
         ];
         let mut panel_layout = std::mem::take(&mut self.panel_layout);
+        panel_layout
+            .set_maximize_shortcut(self.input_bindings.shortcut(&["panel"], "toggle_maximize"));
         let layout_response = panel_layout.show(
             ui,
             viewport_rect,
             STATUS_BAR_HEIGHT,
             &specs,
             |slot, panel_ui| match slot {
-                PanelSlot::TitleBar("logic_analyzer") => {
+                PanelSlot::TitleBar {
+                    content_id: "logic_analyzer",
+                    ..
+                } => {
                     self.show_logic_analyzer_status(panel_ui);
                 }
-                PanelSlot::TitleBar("node_graph") => self.show_run_controls(panel_ui),
-                PanelSlot::Body("logic_analyzer") => self.logic_analyzer.show(panel_ui),
-                PanelSlot::Body("node_graph") => {
+                PanelSlot::TitleBar {
+                    content_id: "node_graph",
+                    ..
+                } => self.show_run_controls(panel_ui),
+                PanelSlot::Body {
+                    content_id: "logic_analyzer",
+                    ..
+                } => self.logic_analyzer.show(panel_ui),
+                PanelSlot::Body {
+                    content_id: "node_graph",
+                    ..
+                } => {
                     self.platform_before_graph();
                     self.node_graph.show(panel_ui);
                     if let Some(message) = self.node_graph.take_io_status() {
@@ -617,25 +666,30 @@ impl eframe::App for App {
                     }
                     self.platform_after_graph();
                 }
-                PanelSlot::TitleBar(_) | PanelSlot::Body(_) => {}
+                PanelSlot::Body {
+                    content_id: "watches",
+                    ..
+                } => Self::show_placeholder_panel(panel_ui, "Watches"),
+                PanelSlot::Body {
+                    content_id: "triggers",
+                    ..
+                } => Self::show_placeholder_panel(panel_ui, "Triggers"),
+                PanelSlot::TitleBar { .. } | PanelSlot::Body { .. } => {}
             },
         );
         self.panel_layout = panel_layout;
 
-        let viewer = layout_response
-            .panel("logic_analyzer")
-            .expect("logic analyzer panel geometry");
-        let graph = layout_response
-            .panel("node_graph")
-            .expect("node graph panel geometry");
+        let viewer = layout_response.content_panel("logic_analyzer");
+        let graph = layout_response.content_panel("node_graph");
 
         let pointer_pos = ui.input(|i| i.pointer.hover_pos());
         let modifiers = ui.input(|i| i.modifiers);
         let status_actions = self.status_actions(
-            pointer_pos
-                .is_some_and(|pos| !viewer.minimized && viewer.body_rect.contains(pos))
-                .then(|| self.logic_analyzer.hovered_input_context()),
-            pointer_pos.is_some_and(|pos| !graph.minimized && graph.body_rect.contains(pos)),
+            layout_response.boundary_interaction,
+            viewer
+                .filter(|viewer| pointer_pos.is_some_and(|pos| viewer.body_rect.contains(pos)))
+                .map(|_| self.logic_analyzer.hovered_input_context()),
+            graph.is_some_and(|graph| pointer_pos.is_some_and(|pos| graph.body_rect.contains(pos))),
             modifiers,
         );
         let mut status_ui = ui.new_child(
@@ -661,8 +715,61 @@ mod font_tests {
 
     #[test]
     fn application_input_bindings_are_valid() {
-        input_bindings::InputBindings::from_json(include_str!("../config/input_bindings.json"))
-            .expect("invalid application input binding configuration");
+        let bindings =
+            input_bindings::InputBindings::from_json(include_str!("../config/input_bindings.json"))
+                .expect("invalid application input binding configuration");
+        assert_eq!(
+            bindings.shortcut(&["panel"], "toggle_maximize"),
+            Some(egui::KeyboardShortcut::new(
+                egui::Modifiers::CTRL,
+                egui::Key::Space,
+            ))
+        );
+    }
+
+    #[test]
+    fn interaction_status_bindings_change_during_panel_and_node_drags() {
+        let bindings =
+            input_bindings::InputBindings::from_json(include_str!("../config/input_bindings.json"))
+                .expect("invalid application input binding configuration");
+
+        let boundary: Vec<_> = bindings
+            .status_bindings(&["panel_boundary"], egui::Modifiers::NONE)
+            .into_iter()
+            .map(|binding| binding.label.as_str())
+            .collect();
+        assert_eq!(boundary, ["Resize Panels", "Panel Options"]);
+
+        let resizing: Vec<_> = bindings
+            .status_bindings(&["panel_boundary.dragging"], egui::Modifiers::NONE)
+            .into_iter()
+            .map(|binding| binding.label.as_str())
+            .collect();
+        assert_eq!(resizing, ["Finish Resize"]);
+
+        let dragging: Vec<_> = bindings
+            .status_bindings(&["node_graph.drag_node"], egui::Modifiers::NONE)
+            .into_iter()
+            .map(|binding| binding.label.as_str())
+            .collect();
+        assert_eq!(dragging, ["Confirm", "Cancel", "X Axis", "Y Axis"]);
+
+        let snapping: Vec<_> = bindings
+            .status_bindings(&["node_graph.drag_node"], egui::Modifiers::CTRL)
+            .into_iter()
+            .map(|binding| binding.label.as_str())
+            .collect();
+        assert_eq!(
+            snapping,
+            ["Confirm", "Cancel", "Snap to Grid", "X Axis", "Y Axis"]
+        );
+
+        let wire_drag: Vec<_> = bindings
+            .status_bindings(&["node_graph.drag_wire"], egui::Modifiers::NONE)
+            .into_iter()
+            .map(|binding| binding.label.as_str())
+            .collect();
+        assert_eq!(wire_drag, ["Drag Node-link", "Confirm Link", "Cancel"]);
     }
 
     #[test]

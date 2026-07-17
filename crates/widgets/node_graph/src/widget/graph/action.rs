@@ -346,6 +346,16 @@ impl NodeGraphWidget {
         self.restore_runtime();
     }
 
+    /// Restores the snapshot for a cancelled interaction without turning the
+    /// partially completed interaction into a redo step.
+    pub(super) fn cancel_undo_snapshot(&mut self) {
+        let Some(previous) = self.undo_stack.pop() else {
+            return;
+        };
+        self.graph = previous;
+        self.restore_runtime();
+    }
+
     fn redo(&mut self) {
         let Some(next) = self.redo_stack.pop() else {
             return;
@@ -926,6 +936,22 @@ mod action_tests {
         // A single undo step covers both the add and the connect.
         assert!(widget.can_undo());
         assert_eq!(widget.undo_stack.len(), 1);
+    }
+
+    #[test]
+    fn cancelling_an_interaction_restores_without_creating_a_redo_step() {
+        let mut widget = test_widget();
+        let node_id = widget
+            .add_node_at("Source", Pos2::new(10.0, 20.0))
+            .expect("source node should be created");
+        widget.push_undo_snapshot();
+        widget.graph.nodes.get_mut(&node_id).unwrap().pos = Pos2::new(80.0, 90.0);
+
+        widget.cancel_undo_snapshot();
+
+        assert_eq!(widget.graph.nodes[&node_id].pos, Pos2::new(10.0, 20.0));
+        assert!(widget.undo_stack.is_empty());
+        assert!(widget.redo_stack.is_empty());
     }
 
     #[test]

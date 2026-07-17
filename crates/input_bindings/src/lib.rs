@@ -24,6 +24,9 @@ pub struct Binding {
     pub label: String,
     #[serde(default)]
     pub modifiers: ModifierSpec,
+    /// Match this binding regardless of which modifiers are currently held.
+    #[serde(default)]
+    pub any_modifiers: bool,
     #[serde(flatten)]
     pub trigger: Trigger,
     #[serde(default)]
@@ -34,6 +37,12 @@ pub struct Binding {
 
 fn default_true() -> bool {
     true
+}
+
+impl Binding {
+    fn matches_modifiers(&self, actual: Modifiers) -> bool {
+        self.any_modifiers || self.modifiers.matches(actual)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq, Hash)]
@@ -235,9 +244,53 @@ impl InputBindings {
             let Some(key) = parse_key(key) else {
                 return false;
             };
-            let shortcut = KeyboardShortcut::new(binding.modifiers.to_egui(), key);
             ui.input_mut(|input| {
-                binding.modifiers.matches(input.modifiers) && input.consume_shortcut(&shortcut)
+                if !binding.matches_modifiers(input.modifiers) {
+                    return false;
+                }
+                let modifiers = if binding.any_modifiers {
+                    input.modifiers
+                } else {
+                    binding.modifiers.to_egui()
+                };
+                input.consume_shortcut(&KeyboardShortcut::new(modifiers, key))
+            })
+        })
+    }
+
+    /// Consumes a configured shortcut only for its initial key press.
+    /// Auto-repeat events are consumed but do not retrigger the action, which
+    /// is useful for toggles and other state transitions.
+    pub fn consume_shortcut_once(&self, ui: &mut Ui, contexts: &[&str], action: &str) -> bool {
+        self.bindings(contexts, action).into_iter().any(|binding| {
+            let Trigger::Key { key } = &binding.trigger else {
+                return false;
+            };
+            let Some(key) = parse_key(key) else {
+                return false;
+            };
+            ui.input_mut(|input| {
+                if !binding.matches_modifiers(input.modifiers) {
+                    return false;
+                }
+                let mut initial_press = false;
+                input.events.retain(|event| {
+                    let matching = matches!(
+                        event,
+                        egui::Event::Key {
+                            key: event_key,
+                            pressed: true,
+                            repeat,
+                            modifiers,
+                            ..
+                        } if *event_key == key && binding.matches_modifiers(*modifiers)
+                    );
+                    if matching && let egui::Event::Key { repeat, .. } = event {
+                        initial_press |= !repeat;
+                    }
+                    !matching
+                });
+                initial_press
             })
         })
     }
@@ -255,9 +308,16 @@ impl InputBindings {
             let Some(key) = parse_key(key) else {
                 return false;
             };
-            let shortcut = KeyboardShortcut::new(binding.modifiers.to_egui(), key);
             context.input_mut(|input| {
-                binding.modifiers.matches(input.modifiers) && input.consume_shortcut(&shortcut)
+                if !binding.matches_modifiers(input.modifiers) {
+                    return false;
+                }
+                let modifiers = if binding.any_modifiers {
+                    input.modifiers
+                } else {
+                    binding.modifiers.to_egui()
+                };
+                input.consume_shortcut(&KeyboardShortcut::new(modifiers, key))
             })
         })
     }
@@ -285,7 +345,7 @@ impl InputBindings {
         self.bindings(contexts, action)
             .into_iter()
             .find_map(|binding| {
-                if !binding.modifiers.matches(modifiers) {
+                if !binding.matches_modifiers(modifiers) {
                     return None;
                 }
                 let Trigger::Pointer { button, gesture } = binding.trigger else {
@@ -305,7 +365,7 @@ impl InputBindings {
         for context in contexts {
             for binding in &self.bindings {
                 if binding.context == *context
-                    && binding.modifiers.matches(modifiers)
+                    && binding.matches_modifiers(modifiers)
                     && seen.insert(binding.action.as_str())
                     && seen_triggers.insert(TriggerIdentity::from_binding(binding))
                     && binding.status
@@ -539,6 +599,62 @@ mod tests {
 
         assert!(!plain_consumed);
         assert!(alternate_consumed);
+    }
+
+    #[test]
+    fn one_shot_shortcuts_ignore_key_repeat_events() {
+        let manager = InputBindings::from_json(
+            r#"{"bindings":[
+              {"context":"drag","action":"axis","label":"Axis","input":"key","key":"x"}
+            ]}"#,
+        )
+        .unwrap();
+        let context = egui::Context::default();
+
+        for (repeat, expected) in [(false, true), (true, false)] {
+            context.begin_pass(egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: Key::X,
+                    physical_key: Some(Key::X),
+                    pressed: true,
+                    repeat,
+                    modifiers: Modifiers::NONE,
+                }],
+                ..Default::default()
+            });
+            let mut ui = egui::Ui::new(
+                context.clone(),
+                egui::Id::new(("one-shot-shortcut", repeat)),
+                Default::default(),
+            );
+            assert_eq!(
+                manager.consume_shortcut_once(&mut ui, &["drag"], "axis"),
+                expected
+            );
+            let _ = context.end_pass();
+        }
+    }
+
+    #[test]
+    fn modifier_independent_pointer_bindings_remain_active_with_control_held() {
+        let manager = InputBindings::from_json(
+            r#"{"bindings":[
+              {"context":"drag","action":"confirm","label":"Confirm","input":"pointer","button":"primary","gesture":"release","any_modifiers":true},
+              {"context":"drag","action":"snap","label":"Snap","input":"pointer","button":"primary","gesture":"drag","modifiers":{"control":true}}
+            ]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            manager.pointer_trigger(&["drag"], "confirm", Modifiers::CTRL),
+            Some((PointerButton::Primary, PointerGesture::Release))
+        );
+        let labels: Vec<_> = manager
+            .status_bindings(&["drag"], Modifiers::CTRL)
+            .into_iter()
+            .map(|binding| binding.label.as_str())
+            .collect();
+        assert_eq!(labels, ["Confirm", "Snap"]);
     }
 
     #[test]

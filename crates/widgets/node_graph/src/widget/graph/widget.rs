@@ -487,6 +487,20 @@ impl NodeGraphWidget {
         }
     }
 
+    /// Most-specific input-binding context for an active graph interaction.
+    ///
+    /// The strings are opaque to the generic binding manager. Returning only
+    /// active interactions lets the host keep ordinary hover context handling
+    /// separate while ensuring a drag remains active after leaving the graph
+    /// rectangle.
+    pub fn active_input_context(&self) -> Option<&'static str> {
+        match self.interaction_state {
+            InteractionState::DraggingNode { .. } => Some("node_graph.drag_node"),
+            InteractionState::DraggingWire { .. } => Some("node_graph.drag_wire"),
+            _ => None,
+        }
+    }
+
     /// Current zoom level as a whole-number percentage, for a status bar.
     pub fn zoom_percent(&self) -> i32 {
         (self.view.zoom * 100.0).round() as i32
@@ -511,10 +525,12 @@ impl NodeGraphWidget {
 
 #[cfg(test)]
 mod tests {
-    use egui::{Pos2, Rect};
+    use egui::{Pos2, Rect, Vec2};
 
     use super::{GraphPanelTab, GraphUiPrefs, NodeGraphWidget, graph_pointer};
+    use crate::model::NodeId;
     use crate::runtime::NodeTypeRegistry;
+    use crate::widget::graph::interaction::InteractionState;
 
     #[test]
     fn node_panel_is_open_by_default_and_restored_preferences_win() {
@@ -550,5 +566,18 @@ mod tests {
             graph_pointer(Some(Pos2::new(300.0, 200.0)), Some(panel), tabs),
             Some(Pos2::new(300.0, 200.0))
         );
+    }
+
+    #[test]
+    fn node_drag_reports_a_specific_input_context() {
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        assert_eq!(widget.active_input_context(), None);
+
+        widget.interaction_state = InteractionState::DraggingNode {
+            node_id: NodeId(1),
+            offset: Vec2::ZERO,
+            constraint: None,
+        };
+        assert_eq!(widget.active_input_context(), Some("node_graph.drag_node"));
     }
 }

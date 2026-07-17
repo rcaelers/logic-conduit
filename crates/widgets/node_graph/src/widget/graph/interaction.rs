@@ -17,9 +17,69 @@ const WIRE_SNAP_DISTANCE: f32 = 18.0;
 /// Ctrl-held grid size while dragging a node (Phase 6.3), in canvas units.
 const GRID_SNAP: f32 = 10.0;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DragAxis {
+    X,
+    Y,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct DragConstraint {
+    axis: DragAxis,
+    locked_coordinate: f32,
+}
+
 /// Nearest `grid`-unit canvas grid point to `pos`.
 fn snap_to_grid(pos: Pos2, grid: f32) -> Pos2 {
     Pos2::new((pos.x / grid).round() * grid, (pos.y / grid).round() * grid)
+}
+
+fn toggle_drag_axis(
+    current: Option<DragConstraint>,
+    requested: DragAxis,
+    position: Pos2,
+) -> Option<DragConstraint> {
+    if current.is_some_and(|constraint| constraint.axis == requested) {
+        None
+    } else {
+        Some(DragConstraint {
+            axis: requested,
+            locked_coordinate: match requested {
+                DragAxis::X => position.y,
+                DragAxis::Y => position.x,
+            },
+        })
+    }
+}
+
+fn constrain_drag_position(
+    mut position: Pos2,
+    constraint: Option<DragConstraint>,
+    snap: bool,
+) -> Pos2 {
+    match constraint {
+        Some(DragConstraint {
+            axis: DragAxis::X,
+            locked_coordinate,
+        }) => position.y = locked_coordinate,
+        Some(DragConstraint {
+            axis: DragAxis::Y,
+            locked_coordinate,
+        }) => position.x = locked_coordinate,
+        None => {}
+    }
+    if snap {
+        match constraint.map(|constraint| constraint.axis) {
+            Some(DragAxis::X) => position.x = snap_to_grid(position, GRID_SNAP).x,
+            Some(DragAxis::Y) => position.y = snap_to_grid(position, GRID_SNAP).y,
+            None => position = snap_to_grid(position, GRID_SNAP),
+        }
+    }
+    position
+}
+
+fn rebase_drag_offset(pointer: Pos2, node_position: Pos2) -> Vec2 {
+    pointer - node_position
 }
 
 #[derive(Default)]
@@ -29,6 +89,7 @@ pub(super) enum InteractionState {
     DraggingNode {
         node_id: NodeId,
         offset: Vec2,
+        constraint: Option<DragConstraint>,
     },
     DraggingFrame {
         frame_id: FrameId,
@@ -38,6 +99,8 @@ pub(super) enum InteractionState {
         from: SocketId,
         from_canvas: Pos2,
         current_canvas: Pos2,
+        /// Reconnects an input wire that was detached when the drag began.
+        restore_on_cancel: bool,
         /// Every node with at least one socket compatible with `from` —
         /// computed once when the drag starts (`connectable_nodes`), not
         /// per frame. `render.rs` dims everything else during the drag
@@ -131,6 +194,81 @@ impl GraphResponses {
 }
 
 impl NodeGraphWidget {
+    /// Handles device drivers that encode a cancel gesture as another
+    /// Primary press while a primary-started modal drag is already active.
+    /// The duplicate event is removed before any widget sees it and the drag
+    /// is cancelled semantically, so no synthetic pointer event can leak to
+    /// panel or window handling.
+    pub fn filter_modal_raw_input(&mut self, raw_input: &mut egui::RawInput) -> bool {
+        if !matches!(
+            self.interaction_state,
+            InteractionState::DraggingNode { .. } | InteractionState::DraggingWire { .. }
+        ) {
+            return false;
+        }
+        let previous_len = raw_input.events.len();
+        raw_input.events.retain(|event| {
+            !matches!(
+                event,
+                egui::Event::PointerButton {
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    ..
+                }
+            )
+        });
+        if raw_input.events.len() == previous_len {
+            return false;
+        }
+        self.cancel_modal_drag()
+    }
+
+    /// Cancels the current modal node/link drag without synthesizing pointer
+    /// input. Raw-input adapters use this after consuming device-specific
+    /// duplicate events.
+    pub fn cancel_modal_drag(&mut self) -> bool {
+        let restore_snapshot = match self.interaction_state {
+            InteractionState::DraggingNode { .. } => true,
+            InteractionState::DraggingWire {
+                restore_on_cancel, ..
+            } => restore_on_cancel,
+            _ => return false,
+        };
+        if restore_snapshot {
+            self.cancel_undo_snapshot();
+        }
+        self.interaction_state = InteractionState::Idle;
+        true
+    }
+
+    /// Cancels an active node or wire drag before ordinary graph input can
+    /// claim the secondary button. Older binding files may not contain the
+    /// modal action yet, so secondary remains the guaranteed fallback.
+    fn cancel_active_drag(&mut self, ui: &egui::Ui) -> bool {
+        let (context, cancel_action) = match self.interaction_state {
+            InteractionState::DraggingNode { .. } => ("node_graph.drag_node", "cancel_move"),
+            InteractionState::DraggingWire { .. } => ("node_graph.drag_wire", "cancel_link"),
+            _ => return false,
+        };
+        let modifiers = ui.input(|input| input.modifiers);
+        let configured_button = self
+            .input_bindings
+            .pointer_trigger(&[context], cancel_action, modifiers)
+            .map(|(button, _)| button);
+        let cancel = ui.input(|input| {
+            let active = |button| {
+                input.pointer.button_pressed(button)
+                    || input.pointer.button_down(button)
+                    || input.pointer.button_released(button)
+            };
+            active(egui::PointerButton::Secondary) || configured_button.is_some_and(active)
+        });
+        if cancel {
+            self.cancel_modal_drag();
+        }
+        cancel
+    }
+
     pub(super) fn compatible_wire_target(&self, from: SocketId, to: SocketId) -> bool {
         if from == to {
             return false;
@@ -292,14 +430,16 @@ impl NodeGraphWidget {
             .map(|(target, pos, _)| (target, pos))
     }
 
-    fn add_wire_connection(&mut self, from: SocketId, to: SocketId) {
+    fn add_wire_connection(&mut self, from: SocketId, to: SocketId, push_undo: bool) {
         let (output, input) = if from.direction == SocketDirection::Output {
             (from, to)
         } else {
             (to, from)
         };
         if self.compatible_wire_target(from, to) {
-            self.push_undo_snapshot();
+            if push_undo {
+                self.push_undo_snapshot();
+            }
             self.graph.add_connection(output, input);
             self.run_update(output.node);
             self.run_update(input.node);
@@ -458,6 +598,7 @@ impl NodeGraphWidget {
                     from: src,
                     from_canvas: self.view.screen_to_canvas(origin, src_spos),
                     current_canvas: pc,
+                    restore_on_cancel: true,
                     connectable: Rc::new(self.connectable_nodes(src)),
                 };
             }
@@ -465,6 +606,7 @@ impl NodeGraphWidget {
                 from: sid,
                 from_canvas: self.view.screen_to_canvas(origin, spos),
                 current_canvas: pc,
+                restore_on_cancel: false,
                 connectable: Rc::new(self.connectable_nodes(sid)),
             };
         }
@@ -488,7 +630,8 @@ impl NodeGraphWidget {
                 || responses.body.drag_started_by(primary_button))
                 && let Some(node) = self.graph.nodes.get(&id)
             {
-                let node_pos = node.pos.to_vec2();
+                let start_pos = node.pos;
+                let node_pos = start_pos.to_vec2();
                 if !node.selected || ctrl {
                     self.select_node(id, ctrl);
                 }
@@ -496,6 +639,7 @@ impl NodeGraphWidget {
                 return InteractionState::DraggingNode {
                     node_id: id,
                     offset: pc.to_vec2() - node_pos,
+                    constraint: None,
                 };
             }
         }
@@ -578,42 +722,83 @@ impl NodeGraphWidget {
 
     fn update_drag_node(
         &mut self,
-        ui: &egui::Ui,
+        ui: &mut egui::Ui,
         pointer_canvas: Option<Pos2>,
         node_id: NodeId,
-        offset: Vec2,
+        mut offset: Vec2,
+        mut constraint: Option<DragConstraint>,
         layout: &GraphWidgetLayout,
     ) -> InteractionState {
-        let button = self
-            .input_bindings
-            .pointer_button(&["node_graph"], "select_move")
-            .unwrap_or(egui::PointerButton::Primary);
-        if ui.input(|i| i.pointer.button_down(button)) {
-            if let Some(pc) = pointer_canvas {
-                let mut new_pos = (pc.to_vec2() - offset).to_pos2();
-                // Ctrl is free during an active drag (it only means
-                // toggle-select on the click that *starts* one) — reused
-                // here for Blender-style grid snap (Phase 6.3). Only the
-                // dragged node itself snaps to the grid; every other
-                // selected node moves by the same resulting delta, keeping
-                // the whole selection's relative layout intact.
-                if ui.input(|i| i.modifiers.ctrl) {
-                    new_pos = snap_to_grid(new_pos, GRID_SNAP);
-                }
-                let delta = self
-                    .graph
-                    .nodes
-                    .get(&node_id)
-                    .map(|n| new_pos - n.pos)
-                    .unwrap_or(Vec2::ZERO);
-                for n in self.graph.nodes.values_mut() {
-                    if n.selected {
-                        n.pos += delta;
-                    }
+        let modifiers = ui.input(|input| input.modifiers);
+        let requested_axis = if self.input_bindings.consume_shortcut_once(
+            ui,
+            &["node_graph.drag_node"],
+            "constrain_x",
+        ) {
+            Some(DragAxis::X)
+        } else if self.input_bindings.consume_shortcut_once(
+            ui,
+            &["node_graph.drag_node"],
+            "constrain_y",
+        ) {
+            Some(DragAxis::Y)
+        } else {
+            None
+        };
+        if let Some(requested_axis) = requested_axis {
+            let position = self
+                .graph
+                .nodes
+                .get(&node_id)
+                .map_or(Pos2::ZERO, |node| node.pos);
+            let next_constraint = toggle_drag_axis(constraint, requested_axis, position);
+            if constraint.is_some()
+                && next_constraint.is_none()
+                && let Some(pointer) = pointer_canvas
+            {
+                // Free movement resumes from the node's current position,
+                // rather than jumping to the unconstrained pointer offset.
+                offset = rebase_drag_offset(pointer, position);
+            }
+            constraint = next_constraint;
+        }
+
+        if let Some(pc) = pointer_canvas {
+            // The active-drag binding controls Blender-style grid snap.
+            // Only the dragged node itself snaps to the grid; every
+            // other selected node moves by the same resulting delta,
+            // keeping the whole selection's relative layout intact.
+            let snap = self
+                .input_bindings
+                .pointer_trigger(&["node_graph.drag_node"], "snap_to_grid", modifiers)
+                .is_some();
+            let new_pos =
+                constrain_drag_position((pc.to_vec2() - offset).to_pos2(), constraint, snap);
+            let delta = self
+                .graph
+                .nodes
+                .get(&node_id)
+                .map(|n| new_pos - n.pos)
+                .unwrap_or(Vec2::ZERO);
+            for n in self.graph.nodes.values_mut() {
+                if n.selected {
+                    n.pos += delta;
                 }
             }
-            return InteractionState::DraggingNode { node_id, offset };
         }
+
+        let confirm = self
+            .input_bindings
+            .pointer_trigger(&["node_graph.drag_node"], "confirm_move", modifiers)
+            .is_some_and(|(button, _)| ui.input(|input| input.pointer.button_released(button)));
+        if !confirm {
+            return InteractionState::DraggingNode {
+                node_id,
+                offset,
+                constraint,
+            };
+        }
+
         self.try_wire_insert(node_id, pointer_canvas, &layout.nodes);
         let selected: Vec<NodeId> = self
             .graph
@@ -770,28 +955,33 @@ impl NodeGraphWidget {
         from: SocketId,
         from_canvas: Pos2,
         mut current_canvas: Pos2,
+        restore_on_cancel: bool,
         connectable: Rc<HashSet<NodeId>>,
     ) -> InteractionState {
-        let button = self
-            .input_bindings
-            .pointer_button(&["node_graph"], "select_move")
-            .unwrap_or(egui::PointerButton::Primary);
-        if ui.input(|i| i.pointer.button_down(button)) {
-            if let Some(pc) = pointer_canvas {
-                let snapped = self.snapped_wire_target(from, pc, layout);
-                current_canvas = snapped.map_or(pc, |(_, pos)| pos);
-                // Not over a compatible socket: releasing here opens
-                // link-drag search (Phase 1.1) instead of connecting
-                // directly. Blender flags this with a "+" cursor; the
-                // closest built-in egui cursor with the same badge is Copy.
-                if snapped.is_none() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
-                }
+        if let Some(pc) = pointer_canvas {
+            let snapped = self.snapped_wire_target(from, pc, layout);
+            current_canvas = snapped.map_or(pc, |(_, pos)| pos);
+            // Not over a compatible socket: releasing here opens link-drag
+            // search instead of connecting directly. Blender flags this
+            // with a "+" cursor; egui's closest equivalent is Copy.
+            if snapped.is_none() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
             }
+        }
+        let modifiers = ui.input(|input| input.modifiers);
+        let confirm = self
+            .input_bindings
+            .pointer_trigger(&["node_graph.drag_wire"], "confirm_link", modifiers)
+            .map_or_else(
+                || ui.input(|input| input.pointer.button_released(egui::PointerButton::Primary)),
+                |(button, _)| ui.input(|input| input.pointer.button_released(button)),
+            );
+        if !confirm {
             return InteractionState::DraggingWire {
                 from,
                 from_canvas,
                 current_canvas,
+                restore_on_cancel,
                 connectable,
             };
         }
@@ -799,7 +989,7 @@ impl NodeGraphWidget {
         if let Some((target, _)) =
             pointer_canvas.and_then(|pc| self.snapped_wire_target(from, pc, layout))
         {
-            self.add_wire_connection(from, target);
+            self.add_wire_connection(from, target, !restore_on_cancel);
             return InteractionState::Idle;
         }
 
@@ -808,7 +998,7 @@ impl NodeGraphWidget {
             .iter()
             .find(|(sid, response)| **sid != from && response.hovered())
         {
-            self.add_wire_connection(from, target);
+            self.add_wire_connection(from, target, !restore_on_cancel);
             return InteractionState::Idle;
         }
 
@@ -1253,10 +1443,21 @@ impl NodeGraphWidget {
         }
 
         let cutting = matches!(self.interaction_state, InteractionState::CuttingWire { .. });
+        let dragging_modal = matches!(
+            self.interaction_state,
+            InteractionState::DraggingNode { .. } | InteractionState::DraggingWire { .. }
+        );
 
-        if let Some(context_screen_pos) =
-            self.menu
-                .context_trigger_pos(ui, pointer, !cutting && !placing, &self.input_bindings)
+        // A modal drag owns secondary-click. Do not remember that press for
+        // the ordinary graph context menu; otherwise releasing the cancel
+        // button on the following frame can immediately open that menu.
+        if !dragging_modal
+            && let Some(context_screen_pos) = self.menu.context_trigger_pos(
+                ui,
+                pointer,
+                !cutting && !placing,
+                &self.input_bindings,
+            )
             && let Some(context_target) =
                 self.context_click_target_at(responses, layout, context_screen_pos)
         {
@@ -1602,21 +1803,31 @@ impl NodeGraphWidget {
         canvas_rect: Rect,
         layout: &GraphWidgetLayout,
     ) {
+        // Keep modal cancellation in the interaction update. This is where
+        // node dragging handled it before wire dragging gained the same
+        // controls, and it ensures cancel wins over confirm for both modes.
+        if self.cancel_active_drag(ui) {
+            return;
+        }
         let response = &responses.canvas;
         if self
             .input_bindings
             .consume_shortcut(ui, &["node_graph"], "cancel")
         {
-            // Cancelling a placement gesture must revert the add/duplicate/
-            // paste it started with, not just drop back to Idle and leave
-            // the new nodes stranded.
-            if matches!(
-                self.interaction_state,
-                InteractionState::PlacingNodes { .. }
-            ) {
-                self.undo();
+            match self.interaction_state {
+                // Cancelling placement reverts the add/duplicate/paste that
+                // started it. Node and detached-wire drags restore their
+                // pre-drag snapshots.
+                InteractionState::PlacingNodes { .. } => self.undo(),
+                InteractionState::DraggingNode { .. } => self.cancel_undo_snapshot(),
+                InteractionState::DraggingWire {
+                    restore_on_cancel: true,
+                    ..
+                } => self.cancel_undo_snapshot(),
+                _ => {}
             }
             self.interaction_state = InteractionState::Idle;
+            return;
         }
 
         let modifiers = ui.input(|input| input.modifiers);
@@ -1632,15 +1843,30 @@ impl NodeGraphWidget {
             self.input_bindings
                 .pointer_trigger(&["node_graph"], "zoom_drag", modifiers);
         let active_view_trigger = zoom_trigger.or(pan_trigger);
-        let middle_down = active_view_trigger
-            .is_some_and(|(button, _)| ui.input(|input| input.pointer.button_down(button)))
+        let can_pan = matches!(
+            self.interaction_state,
+            InteractionState::Idle | InteractionState::Panning { .. }
+        );
+        let middle_down = can_pan
+            && active_view_trigger
+                .is_some_and(|(button, _)| ui.input(|input| input.pointer.button_down(button)))
             && (pointer.is_some() && response.hovered()
                 || matches!(self.interaction_state, InteractionState::Panning { .. }));
         let cut_trigger =
             self.input_bindings
                 .pointer_trigger(&["node_graph"], "cut_wires", modifiers);
-        let right_down = cut_trigger
-            .is_some_and(|(button, _)| ui.input(|input| input.pointer.button_down(button)));
+        let can_cut = matches!(
+            self.interaction_state,
+            InteractionState::Idle | InteractionState::CuttingWire { .. }
+        );
+        let cutting = matches!(self.interaction_state, InteractionState::CuttingWire { .. });
+        let right_down = can_cut
+            && cut_trigger.is_some_and(|(button, _)| {
+                ui.input(|input| {
+                    input.pointer.button_down(button)
+                        && (cutting || input.pointer.button_pressed(button))
+                })
+            });
 
         if middle_down {
             if let Some(pp) = pointer {
@@ -1717,9 +1943,11 @@ impl NodeGraphWidget {
             InteractionState::Panning { last_screen } => {
                 self.update_panning(response, pointer, last_screen)
             }
-            InteractionState::DraggingNode { node_id, offset } => {
-                self.update_drag_node(ui, pointer_canvas, node_id, offset, layout)
-            }
+            InteractionState::DraggingNode {
+                node_id,
+                offset,
+                constraint,
+            } => self.update_drag_node(ui, pointer_canvas, node_id, offset, constraint, layout),
             InteractionState::DraggingFrame {
                 frame_id,
                 last_canvas,
@@ -1728,6 +1956,7 @@ impl NodeGraphWidget {
                 from,
                 from_canvas,
                 current_canvas,
+                restore_on_cancel,
                 connectable,
             } => self.update_drag_wire(
                 ui,
@@ -1738,6 +1967,7 @@ impl NodeGraphWidget {
                 from,
                 from_canvas,
                 current_canvas,
+                restore_on_cancel,
                 connectable,
             ),
             InteractionState::BoxSelecting {
@@ -1765,6 +1995,20 @@ fn node_has_any_connection(connections: &[Connection], node_id: NodeId) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn modal_drag_bindings() -> std::sync::Arc<input_bindings::InputBindings> {
+        std::sync::Arc::new(
+            input_bindings::InputBindings::from_json(
+                r#"{"bindings":[
+                  {"context":"node_graph.drag_node","action":"confirm_move","label":"Confirm","input":"pointer","button":"primary","gesture":"release","any_modifiers":true},
+                  {"context":"node_graph.drag_node","action":"cancel_move","label":"Cancel","input":"pointer","button":"secondary","gesture":"press","any_modifiers":true},
+                  {"context":"node_graph.drag_wire","action":"confirm_link","label":"Confirm Link","input":"pointer","button":"primary","gesture":"release","any_modifiers":true},
+                  {"context":"node_graph.drag_wire","action":"cancel_link","label":"Cancel","input":"pointer","button":"secondary","gesture":"press","any_modifiers":true}
+                ]}"#,
+            )
+            .expect("modal drag bindings are valid"),
+        )
+    }
 
     fn socket(node: u32, index: usize, direction: SocketDirection) -> SocketId {
         SocketId {
@@ -1815,6 +2059,289 @@ mod tests {
             snap_to_grid(Pos2::new(10.0, 10.0), 10.0),
             Pos2::new(10.0, 10.0)
         );
+    }
+
+    #[test]
+    fn pressing_the_active_drag_axis_again_restores_free_movement() {
+        let position = Pos2::new(13.0, 17.0);
+        let x_constraint = toggle_drag_axis(None, DragAxis::X, position).unwrap();
+        assert_eq!(x_constraint.axis, DragAxis::X);
+        assert_eq!(x_constraint.locked_coordinate, 17.0);
+        assert_eq!(
+            toggle_drag_axis(Some(x_constraint), DragAxis::X, position),
+            None
+        );
+        assert_eq!(
+            toggle_drag_axis(Some(x_constraint), DragAxis::Y, position),
+            Some(DragConstraint {
+                axis: DragAxis::Y,
+                locked_coordinate: 13.0,
+            })
+        );
+    }
+
+    #[test]
+    fn activating_a_constraint_keeps_the_other_axis_at_its_current_position() {
+        let current = Pos2::new(24.0, 36.0);
+        let pointer_position = Pos2::new(43.0, 58.0);
+        let x_constraint = toggle_drag_axis(None, DragAxis::X, current);
+        let y_constraint = toggle_drag_axis(None, DragAxis::Y, current);
+
+        assert_eq!(
+            constrain_drag_position(pointer_position, x_constraint, false),
+            Pos2::new(43.0, 36.0)
+        );
+        assert_eq!(
+            constrain_drag_position(pointer_position, y_constraint, false),
+            Pos2::new(24.0, 58.0)
+        );
+        assert_eq!(
+            constrain_drag_position(pointer_position, x_constraint, true),
+            Pos2::new(40.0, 36.0)
+        );
+    }
+
+    #[test]
+    fn disabling_a_constraint_rebases_free_movement_without_a_jump() {
+        let current = Pos2::new(24.0, 36.0);
+        let pointer = Pos2::new(43.0, 58.0);
+        let offset = rebase_drag_offset(pointer, current);
+
+        assert_eq!(
+            constrain_drag_position((pointer.to_vec2() - offset).to_pos2(), None, false),
+            current
+        );
+    }
+
+    #[test]
+    fn secondary_press_always_cancels_even_when_another_button_is_configured() {
+        use crate::runtime::NodeTypeRegistry;
+
+        let context = egui::Context::default();
+        context.begin_pass(egui::RawInput {
+            events: vec![egui::Event::PointerButton {
+                pos: Pos2::new(20.0, 20.0),
+                button: egui::PointerButton::Secondary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        });
+        let ui = egui::Ui::new(
+            context.clone(),
+            egui::Id::new("cancel-node-drag-test"),
+            Default::default(),
+        );
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        widget.set_input_bindings(std::sync::Arc::new(
+            input_bindings::InputBindings::from_json(
+                r#"{"bindings":[
+                  {"context":"node_graph.drag_node","action":"cancel_move","label":"Cancel","input":"pointer","button":"primary","gesture":"press","any_modifiers":true}
+                ]}"#,
+            )
+            .unwrap(),
+        ));
+        widget.interaction_state = InteractionState::DraggingNode {
+            node_id: NodeId(1),
+            offset: Vec2::ZERO,
+            constraint: None,
+        };
+
+        assert!(widget.cancel_active_drag(&ui));
+        assert!(matches!(widget.interaction_state, InteractionState::Idle));
+        let _ = context.end_pass();
+    }
+
+    #[test]
+    fn cancelling_a_new_wire_drag_does_not_pop_an_unrelated_undo_step() {
+        use crate::runtime::NodeTypeRegistry;
+
+        let context = egui::Context::default();
+        context.begin_pass(egui::RawInput {
+            events: vec![egui::Event::PointerButton {
+                pos: Pos2::new(20.0, 20.0),
+                button: egui::PointerButton::Secondary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        });
+        let ui = egui::Ui::new(
+            context.clone(),
+            egui::Id::new("cancel-new-wire-test"),
+            Default::default(),
+        );
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        widget.push_undo_snapshot();
+        widget.interaction_state = InteractionState::DraggingWire {
+            from: socket(1, 0, SocketDirection::Output),
+            from_canvas: Pos2::ZERO,
+            current_canvas: Pos2::new(10.0, 10.0),
+            restore_on_cancel: false,
+            connectable: Rc::new(HashSet::new()),
+        };
+
+        assert!(widget.cancel_active_drag(&ui));
+        assert_eq!(widget.undo_stack.len(), 1);
+        assert!(matches!(widget.interaction_state, InteractionState::Idle));
+        let _ = context.end_pass();
+    }
+
+    #[test]
+    fn duplicate_primary_filter_restores_a_dragged_node() {
+        use crate::runtime::NodeTypeRegistry;
+
+        fn show_frame(
+            context: &egui::Context,
+            widget: &mut NodeGraphWidget,
+            events: Vec<egui::Event>,
+        ) -> Pos2 {
+            let screen_rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+            context.begin_pass(egui::RawInput {
+                screen_rect: Some(screen_rect),
+                events,
+                ..Default::default()
+            });
+            let mut ui = egui::Ui::new(
+                context.clone(),
+                egui::Id::new("node-drag-sequence-test"),
+                egui::UiBuilder::new().max_rect(screen_rect),
+            );
+            let origin = ui.available_rect_before_wrap().min;
+            widget.show(&mut ui);
+            let _ = context.end_pass();
+            origin
+        }
+
+        let context = egui::Context::default();
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        widget.set_input_bindings(modal_drag_bindings());
+        let original = Pos2::new(100.0, 100.0);
+        let node_id = widget
+            .add_node_at("Reroute", original)
+            .expect("built-in reroute node");
+        let origin = show_frame(&context, &mut widget, Vec::new());
+        let press = widget.build_layout(origin).node_screen_rects[&node_id].center();
+        show_frame(
+            &context,
+            &mut widget,
+            vec![
+                egui::Event::PointerMoved(press),
+                egui::Event::PointerButton {
+                    pos: press,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        let dragged = press + egui::vec2(40.0, 30.0);
+        show_frame(
+            &context,
+            &mut widget,
+            vec![egui::Event::PointerMoved(dragged)],
+        );
+        assert!(matches!(
+            widget.interaction_state,
+            InteractionState::DraggingNode { .. }
+        ));
+        let dragged_further = dragged + egui::vec2(10.0, 5.0);
+        show_frame(
+            &context,
+            &mut widget,
+            vec![egui::Event::PointerMoved(dragged_further)],
+        );
+        assert_ne!(widget.graph.nodes[&node_id].pos, original);
+
+        let mut raw_input = egui::RawInput {
+            events: vec![egui::Event::PointerButton {
+                pos: dragged_further,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        assert!(widget.filter_modal_raw_input(&mut raw_input));
+        assert!(raw_input.events.is_empty());
+
+        assert!(matches!(widget.interaction_state, InteractionState::Idle));
+        assert_eq!(widget.graph.nodes[&node_id].pos, original);
+    }
+
+    #[test]
+    fn duplicate_primary_filter_cancels_a_new_wire() {
+        use crate::runtime::NodeTypeRegistry;
+
+        fn show_frame(
+            context: &egui::Context,
+            widget: &mut NodeGraphWidget,
+            events: Vec<egui::Event>,
+        ) -> Pos2 {
+            let screen_rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+            context.begin_pass(egui::RawInput {
+                screen_rect: Some(screen_rect),
+                events,
+                ..Default::default()
+            });
+            let mut ui = egui::Ui::new(
+                context.clone(),
+                egui::Id::new("wire-drag-sequence-test"),
+                egui::UiBuilder::new().max_rect(screen_rect),
+            );
+            let origin = ui.available_rect_before_wrap().min;
+            widget.show(&mut ui);
+            let _ = context.end_pass();
+            origin
+        }
+
+        let context = egui::Context::default();
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        widget.set_input_bindings(modal_drag_bindings());
+        let source = widget
+            .add_node_at("Reroute", Pos2::new(100.0, 100.0))
+            .expect("built-in reroute node");
+        let origin = show_frame(&context, &mut widget, Vec::new());
+        let output = socket(source.0, 0, SocketDirection::Output);
+        let press = widget.build_layout(origin).socket_screen_pos[&output];
+        show_frame(
+            &context,
+            &mut widget,
+            vec![
+                egui::Event::PointerMoved(press),
+                egui::Event::PointerButton {
+                    pos: press,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        let dragged = press + egui::vec2(80.0, 40.0);
+        show_frame(
+            &context,
+            &mut widget,
+            vec![egui::Event::PointerMoved(dragged)],
+        );
+        assert!(matches!(
+            widget.interaction_state,
+            InteractionState::DraggingWire { .. }
+        ));
+
+        let mut raw_input = egui::RawInput {
+            events: vec![egui::Event::PointerButton {
+                pos: dragged,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        assert!(widget.filter_modal_raw_input(&mut raw_input));
+        assert!(raw_input.events.is_empty());
+
+        assert!(matches!(widget.interaction_state, InteractionState::Idle));
+        assert!(widget.graph.connections.is_empty());
     }
 
     #[test]
