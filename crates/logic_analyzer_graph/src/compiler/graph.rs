@@ -1248,10 +1248,9 @@ mod tests {
         let compiled = lower(widget.graph(), &BuilderRegistry::standard())
             .unwrap_or_else(|errors| panic!("lower failed: {errors:?}"));
 
-        // Every startup node has a runtime, including the viewer sink and
-        // the explicit buffer decoupling the viewer from the file writer's
-        // shared decoder output.
-        assert_eq!(compiled.nodes.len(), 12);
+        // Every saved processing node has a runtime, plus the generic viewer
+        // sink synthesized from watched outputs.
+        assert_eq!(compiled.nodes.len(), 11);
         assert_eq!(compiled.edges.len(), 29);
 
         // Viewer lanes resolve with per-lane kinds and producer labels.
@@ -1261,19 +1260,24 @@ mod tests {
             .find(|n| n.builder == "Viewer")
             .unwrap();
         let lanes = viewer.resolved.members(0);
-        assert_eq!(lanes.len(), 5);
-        assert_eq!(lanes[0].1.kind, PortKind::of::<Sample>());
+        assert_eq!(lanes.len(), 6);
         assert!(
             lanes
                 .iter()
                 .any(|(_, input)| input.kind == PortKind::of::<Word>()
-                    && input.source == "Viewer Buffer.Out")
+                    && input.source == "SPI Decoder.MOSI Words")
         );
         assert!(
             lanes
                 .iter()
                 .any(|(_, input)| input.kind == PortKind::of::<Trigger>()
                     && input.source == "Match Start.Match")
+        );
+        assert!(
+            lanes
+                .iter()
+                .any(|(_, input)| input.kind == PortKind::of::<Word>()
+                    && input.source == "Binary Decoder.Words")
         );
 
         // Kind negotiation spot checks: SPI clk reads edges, the binary
@@ -2303,8 +2307,6 @@ mod tests {
         assert!(error.contains("fed directly by the source"), "{error}");
     }
 
-    /// Wires a fresh Word Matcher (start pattern) into the SPI words stream
-    /// and its trigger into the existing viewer; returns the matcher id.
     /// Wires a new matcher onto the **binary decoder's** words — the one
     /// event branch that stays live for the whole run. The SPI control
     /// branch is index-driven (EdgeQuery) and decodes the entire capture
@@ -2324,7 +2326,6 @@ mod tests {
         widget.set_node_state(matcher, serde_json::to_value(state).unwrap());
 
         let decoder = node_by_def(widget, "Binary Decoder");
-        let viewer = node_by_def(widget, "Viewer");
         let out_idx = |graph: &node_graph::GraphState, id: NodeId, name: &str| {
             graph.nodes[&id]
                 .outputs
@@ -2332,7 +2333,7 @@ mod tests {
                 .position(|s| s.name == name)
                 .unwrap()
         };
-        let in_idx = |graph: &node_graph::GraphState, id: NodeId, name: &str| {
+        let input_idx = |graph: &node_graph::GraphState, id: NodeId, name: &str| {
             graph.nodes[&id]
                 .inputs
                 .iter()
@@ -2341,7 +2342,7 @@ mod tests {
         };
         let graph = widget.graph_mut();
         let decoder_words = out_idx(graph, decoder, "Words");
-        let matcher_in = in_idx(graph, matcher, "Words");
+        let matcher_in = input_idx(graph, matcher, "Words");
         graph.add_connection(
             SocketId {
                 node: decoder,
@@ -2355,19 +2356,7 @@ mod tests {
             },
         );
         let matcher_out = out_idx(graph, matcher, "Match");
-        let viewer_in = in_idx(graph, viewer, "In");
-        graph.add_connection(
-            SocketId {
-                node: matcher,
-                index: matcher_out,
-                direction: node_graph::SocketDirection::Output,
-            },
-            SocketId {
-                node: viewer,
-                index: viewer_in,
-                direction: node_graph::SocketDirection::Input,
-            },
-        );
+        graph.nodes.get_mut(&matcher).unwrap().outputs[matcher_out].show_in_view = true;
         matcher
     }
 
@@ -2378,7 +2367,6 @@ mod tests {
         let old = lower(widget.graph(), &registry).unwrap();
 
         let matcher = attach_matcher_tap(&mut widget);
-        let viewer = node_by_def(&widget, "Viewer");
         let new = lower(widget.graph(), &registry).unwrap();
         let edits = diff(&old, &new, &registry).unwrap();
 
@@ -2391,7 +2379,7 @@ mod tests {
         assert!(
             edits
                 .iter()
-                .any(|edit| matches!(edit, LiveEdit::Restart(id) if *id == viewer)),
+                .any(|edit| matches!(edit, LiveEdit::Restart(id) if *id == AUTO_VIEW_NODE_ID)),
             "{edits:?}"
         );
         assert_eq!(edits.len(), 2, "{edits:?}");
@@ -2407,25 +2395,9 @@ mod tests {
         // worker threads snapshot destinations at start, so this cannot
         // join live.
         let source = node_by_def(&widget, "DSL File Source");
-        let viewer = node_by_def(&widget, "Viewer");
-        let graph = widget.graph_mut();
-        let viewer_in = graph.nodes[&viewer]
-            .inputs
-            .iter()
-            .position(|s| s.is_variadic_placeholder())
-            .unwrap();
-        graph.add_connection(
-            SocketId {
-                node: source,
-                index: 9, // Ch 9 (TGCK), unused elsewhere
-                direction: node_graph::SocketDirection::Output,
-            },
-            SocketId {
-                node: viewer,
-                index: viewer_in,
-                direction: node_graph::SocketDirection::Input,
-            },
-        );
+        // Ch 9 (TGCK) is otherwise unused. Watching it adds a new edge from
+        // the already-running source to the synthetic viewer.
+        widget.graph_mut().nodes.get_mut(&source).unwrap().outputs[9].show_in_view = true;
 
         let new = lower(widget.graph(), &registry).unwrap();
         let error = diff(&old, &new, &registry).unwrap_err();
