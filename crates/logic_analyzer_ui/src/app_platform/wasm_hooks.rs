@@ -16,7 +16,30 @@ impl App {
 
     pub(super) fn platform_save(&mut self, _storage: &mut dyn eframe::Storage) {}
 
-    pub(super) fn platform_before_ui(&mut self, _ui: &mut egui::Ui) {}
+    pub(super) fn platform_before_ui(&mut self, ui: &mut egui::Ui) {
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button("View", |ui| {
+                for (label, content_id, icon) in [
+                    ("Watches", "watches", panel_layout::PanelIcon::List),
+                    ("Triggers", "triggers", panel_layout::PanelIcon::Target),
+                    ("Decoder", "decoder", panel_layout::PanelIcon::Table),
+                ] {
+                    if icon.menu_item(ui, label).clicked() {
+                        self.show_view_panel(content_id);
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if panel_layout::PanelIcon::Reset
+                    .menu_item(ui, "Reset Layout")
+                    .clicked()
+                {
+                    self.reset_panel_layout();
+                    ui.close();
+                }
+            });
+        });
+    }
 
     pub(super) fn platform_sync_capture(&mut self) {
         let preview = nodes::capture_preview(self.node_graph.graph());

@@ -73,6 +73,10 @@ pub enum NativeMenuCommand {
     Run,
     Stop,
     ClearDerivedCaches,
+    ShowWatches,
+    ShowTriggers,
+    ShowDecoder,
+    ResetLayout,
 }
 
 #[cfg(target_os = "macos")]

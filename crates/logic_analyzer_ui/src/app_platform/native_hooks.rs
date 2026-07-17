@@ -46,6 +46,22 @@ impl App {
                     self.request_clear_all_derived_caches();
                     continue;
                 }
+                NativeMenuCommand::ShowWatches => {
+                    self.show_view_panel("watches");
+                    continue;
+                }
+                NativeMenuCommand::ShowTriggers => {
+                    self.show_view_panel("triggers");
+                    continue;
+                }
+                NativeMenuCommand::ShowDecoder => {
+                    self.show_view_panel("decoder");
+                    continue;
+                }
+                NativeMenuCommand::ResetLayout => {
+                    self.reset_panel_layout();
+                    continue;
+                }
                 NativeMenuCommand::New => FileCommand::New,
                 NativeMenuCommand::Load => FileCommand::Load,
                 NativeMenuCommand::LoadPath(path) => FileCommand::LoadPath(path),
@@ -544,6 +560,26 @@ impl App {
                     .clicked()
                 {
                     command = Some(FileCommand::Quit);
+                    ui.close();
+                }
+            });
+            ui.menu_button("View", |ui| {
+                for (label, content_id, icon) in [
+                    ("Watches", "watches", panel_layout::PanelIcon::List),
+                    ("Triggers", "triggers", panel_layout::PanelIcon::Target),
+                    ("Decoder", "decoder", panel_layout::PanelIcon::Table),
+                ] {
+                    if icon.menu_item(ui, label).clicked() {
+                        self.show_view_panel(content_id);
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if panel_layout::PanelIcon::Reset
+                    .menu_item(ui, "Reset Layout")
+                    .clicked()
+                {
+                    self.reset_panel_layout();
                     ui.close();
                 }
             });

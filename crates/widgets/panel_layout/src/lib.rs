@@ -63,6 +63,8 @@ pub enum PanelIcon {
     Network,
     List,
     Target,
+    Table,
+    Reset,
 }
 
 impl PanelIcon {
@@ -156,7 +158,74 @@ impl PanelIcon {
                     stroke,
                 );
             }
+            Self::Table => {
+                let table = rect.shrink(1.5);
+                painter.rect_stroke(table, 1.5, stroke, StrokeKind::Inside);
+                for fraction in [1.0 / 3.0, 2.0 / 3.0] {
+                    let x = egui::lerp(table.left()..=table.right(), fraction);
+                    let y = egui::lerp(table.top()..=table.bottom(), fraction);
+                    painter.line_segment(
+                        [egui::pos2(x, table.top()), egui::pos2(x, table.bottom())],
+                        stroke,
+                    );
+                    painter.line_segment(
+                        [egui::pos2(table.left(), y), egui::pos2(table.right(), y)],
+                        stroke,
+                    );
+                }
+            }
+            Self::Reset => {
+                let center = rect.center();
+                let radius = 5.5;
+                let points = (0..=12)
+                    .map(|step| {
+                        let angle = -2.5 + step as f32 * 4.5 / 12.0;
+                        center + egui::vec2(angle.cos(), angle.sin()) * radius
+                    })
+                    .collect();
+                painter.add(egui::Shape::line(points, stroke));
+                let tip = center + egui::vec2((-2.5_f32).cos(), (-2.5_f32).sin()) * radius;
+                painter.line_segment([tip, tip + egui::vec2(0.5, -3.5)], stroke);
+                painter.line_segment([tip, tip + egui::vec2(3.4, -0.8)], stroke);
+            }
         }
+    }
+
+    /// Adds an icon-and-label row suitable for an egui popup menu.
+    pub fn menu_item(self, ui: &mut Ui, label: &str) -> egui::Response {
+        ui.add(PanelIconMenuItem { icon: self, label })
+    }
+}
+
+struct PanelIconMenuItem<'a> {
+    icon: PanelIcon,
+    label: &'a str,
+}
+
+impl egui::Widget for PanelIconMenuItem<'_> {
+    fn ui(self, ui: &mut Ui) -> egui::Response {
+        let width = ui.available_width().max(150.0);
+        let response = ui.add_sized(
+            [width, 24.0],
+            egui::Button::new(egui::RichText::new(self.label).color(Color32::TRANSPARENT)),
+        );
+        let color = ui.visuals().widgets.style(&response).fg_stroke.color;
+        self.icon.paint(
+            ui,
+            Rect::from_center_size(
+                egui::pos2(response.rect.left() + 14.0, response.rect.center().y),
+                egui::vec2(16.0, 16.0),
+            ),
+            color,
+        );
+        ui.painter().text(
+            egui::pos2(response.rect.left() + 28.0, response.rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            self.label,
+            egui::TextStyle::Button.resolve(ui.style()),
+            color,
+        );
+        response
     }
 }
 
@@ -357,6 +426,76 @@ impl PanelLayout {
 
     pub fn split_fraction(&self, first_content: &str, second_content: &str) -> Option<f32> {
         find_content_split_fraction(self.state.root.as_ref()?, first_content, second_content)
+    }
+
+    /// Ensures `content_id` is visible in a top-to-bottom column on the right
+    /// side of the complete layout.
+    ///
+    /// If a right column containing only `ordered_contents` already exists,
+    /// the new content is inserted there and the column is rebuilt in the
+    /// supplied order. Otherwise the complete current layout is wrapped in a
+    /// new vertical split. Identifiers and ordering are opaque to the manager.
+    pub fn ensure_right_column_content(
+        &mut self,
+        content_id: &str,
+        ordered_contents: &[&str],
+        existing_layout_fraction: f32,
+    ) -> bool {
+        if !ordered_contents.contains(&content_id)
+            || find_panel_by_content(self.state.root.as_ref(), content_id).is_some()
+        {
+            return false;
+        }
+        self.restore_maximized();
+
+        let existing_column = match self.state.root.as_ref() {
+            Some(LayoutNode::Split {
+                axis: SplitAxis::Vertical,
+                second,
+                ..
+            }) if subtree_contains_only(second, ordered_contents) => Some(
+                all_panels(Some(second))
+                    .into_iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        };
+        let new_panel = PanelState {
+            id: self.allocate_id("panel"),
+            content: content_id.to_owned(),
+            title_bar_position: TitleBarPosition::Top,
+        };
+
+        if let Some(mut panels) = existing_column {
+            panels.push(new_panel);
+            panels.sort_by_key(|panel| {
+                ordered_contents
+                    .iter()
+                    .position(|content| *content == panel.content)
+                    .unwrap_or(usize::MAX)
+            });
+            let split_ids: Vec<_> = (1..panels.len())
+                .map(|_| self.allocate_numeric_id())
+                .collect();
+            let column = build_panel_column(&panels, &split_ids);
+            let Some(LayoutNode::Split { second, .. }) = self.state.root.as_mut() else {
+                return false;
+            };
+            **second = column;
+        } else if let Some(existing) = self.state.root.take() {
+            let split_id = self.allocate_numeric_id();
+            self.state.root = Some(LayoutNode::Split {
+                id: split_id,
+                axis: SplitAxis::Vertical,
+                fraction: existing_layout_fraction.clamp(0.1, 0.9),
+                first: Box::new(existing),
+                second: Box::new(LayoutNode::Panel { panel: new_panel }),
+            });
+        } else {
+            self.state.root = Some(LayoutNode::Panel { panel: new_panel });
+        }
+        true
     }
 
     pub fn show(
@@ -1303,6 +1442,25 @@ fn build_vertical_tree(panels: &[(String, f32)], next_id: &mut u64) -> Option<La
     })
 }
 
+fn build_panel_column(panels: &[PanelState], split_ids: &[u64]) -> LayoutNode {
+    let (first, rest) = panels
+        .split_first()
+        .expect("a panel column must contain at least one panel");
+    let first = LayoutNode::Panel {
+        panel: first.clone(),
+    };
+    if rest.is_empty() {
+        return first;
+    }
+    LayoutNode::Split {
+        id: split_ids[0],
+        axis: SplitAxis::Horizontal,
+        fraction: 1.0 / panels.len() as f32,
+        first: Box::new(first),
+        second: Box::new(build_panel_column(rest, &split_ids[1..])),
+    }
+}
+
 fn max_layout_id(node: Option<&LayoutNode>) -> u64 {
     match node {
         Some(LayoutNode::Panel { panel }) => panel
@@ -1590,6 +1748,12 @@ fn all_panels(node: Option<&LayoutNode>) -> Vec<&PanelState> {
     result
 }
 
+fn subtree_contains_only(node: &LayoutNode, contents: &[&str]) -> bool {
+    all_panels(Some(node))
+        .into_iter()
+        .all(|panel| contents.contains(&panel.content.as_str()))
+}
+
 fn assigned_singletons(node: Option<&LayoutNode>, specs: &[PanelSpec<'_>]) -> HashSet<String> {
     all_panels(node)
         .into_iter()
@@ -1816,12 +1980,13 @@ fn panel_control_button(ui: &mut Ui, icon: PanelControlIcon, tooltip: &str) -> e
 mod tests {
     use super::*;
 
-    fn specs() -> [PanelSpec<'static>; 4] {
+    fn specs() -> [PanelSpec<'static>; 5] {
         [
             PanelSpec::new("viewer", "Viewer", 100.0).singleton(),
             PanelSpec::new("graph", "Graph", 100.0).singleton(),
             PanelSpec::new("watches", "Watches", 80.0),
             PanelSpec::new("triggers", "Triggers", 80.0),
+            PanelSpec::new("decoder", "Decoder", 80.0).icon(PanelIcon::Table),
         ]
     }
 
@@ -2020,6 +2185,61 @@ mod tests {
         let (committed_panels, committed_boundaries) = committed.geometries(rect, &specs());
         assert_eq!(committed_panels.len(), preview.len());
         assert_eq!(committed_boundaries.len(), preview_boundaries.len());
+    }
+
+    #[test]
+    fn right_column_content_is_added_once_and_kept_in_declared_order() {
+        for requested in [
+            ["watches", "triggers", "decoder"],
+            ["decoder", "triggers", "watches"],
+        ] {
+            let mut layout = PanelLayout::new([("viewer", 0.5), ("graph", 0.5)]);
+            for content in requested {
+                assert!(layout.ensure_right_column_content(
+                    content,
+                    &["watches", "triggers", "decoder"],
+                    0.75,
+                ));
+            }
+            assert!(!layout.ensure_right_column_content(
+                "watches",
+                &["watches", "triggers", "decoder"],
+                0.75,
+            ));
+
+            let LayoutNode::Split {
+                axis: SplitAxis::Vertical,
+                first,
+                second,
+                ..
+            } = layout.state.root.as_ref().unwrap()
+            else {
+                panic!("expected a right-side column");
+            };
+            assert!(contains_content(first, "viewer"));
+            assert!(contains_content(first, "graph"));
+            let column_contents: Vec<_> = all_panels(Some(second))
+                .into_iter()
+                .map(|panel| panel.content.as_str())
+                .collect();
+            assert_eq!(column_contents, ["watches", "triggers", "decoder"]);
+            assert_eq!(all_panels(layout.state.root.as_ref()).len(), 5);
+        }
+    }
+
+    #[test]
+    fn first_right_column_content_spans_the_complete_layout_height() {
+        let mut layout = PanelLayout::new([("viewer", 0.5), ("graph", 0.5)]);
+        assert!(layout.ensure_right_column_content("watches", &["watches", "triggers"], 0.75,));
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let (panels, _) = layout.geometries(rect, &specs());
+        let watches = panels
+            .iter()
+            .find(|panel| panel.content_id == "watches")
+            .unwrap();
+
+        assert_eq!(watches.panel_rect.top(), rect.top());
+        assert_eq!(watches.panel_rect.bottom(), rect.bottom());
     }
 
     #[test]

@@ -8,7 +8,7 @@ mod macos_menu {
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
     use objc2::{ClassType, define_class, msg_send, sel};
-    use objc2_app_kit::{NSApp, NSMenu, NSMenuItem};
+    use objc2_app_kit::{NSApp, NSImage, NSMenu, NSMenuItem, NSWindow};
     use objc2_foundation::{MainThreadMarker, NSObject, ns_string};
 
     use logic_analyzer_ui::{
@@ -103,6 +103,26 @@ mod macos_menu {
             fn clear_derived_caches(&self, _sender: &AnyObject) {
                 dispatch_native_menu_command(NativeMenuCommand::ClearDerivedCaches);
             }
+
+            #[unsafe(method(showWatches:))]
+            fn show_watches(&self, _sender: &AnyObject) {
+                dispatch_native_menu_command(NativeMenuCommand::ShowWatches);
+            }
+
+            #[unsafe(method(showTriggers:))]
+            fn show_triggers(&self, _sender: &AnyObject) {
+                dispatch_native_menu_command(NativeMenuCommand::ShowTriggers);
+            }
+
+            #[unsafe(method(showDecoder:))]
+            fn show_decoder(&self, _sender: &AnyObject) {
+                dispatch_native_menu_command(NativeMenuCommand::ShowDecoder);
+            }
+
+            #[unsafe(method(resetLayout:))]
+            fn reset_layout(&self, _sender: &AnyObject) {
+                dispatch_native_menu_command(NativeMenuCommand::ResetLayout);
+            }
         }
     );
 
@@ -140,6 +160,22 @@ mod macos_menu {
             )
         };
         unsafe { item.setTarget(Some(handler as &AnyObject)) };
+        item
+    }
+
+    unsafe fn menu_item_with_symbol(
+        mtm: MainThreadMarker,
+        title: &objc2_foundation::NSString,
+        action: objc2::runtime::Sel,
+        symbol_name: &objc2_foundation::NSString,
+        handler: &MenuHandler,
+    ) -> Retained<NSMenuItem> {
+        let item = unsafe { menu_item(mtm, title, action, ns_string!(""), handler) };
+        if let Some(image) =
+            NSImage::imageWithSystemSymbolName_accessibilityDescription(symbol_name, Some(title))
+        {
+            item.setImage(Some(&image));
+        }
         item
     }
 
@@ -218,6 +254,11 @@ mod macos_menu {
         });
     }
 
+    pub fn disable_automatic_window_tabbing() {
+        let mtm = MainThreadMarker::new().expect("must configure window tabbing on the main thread");
+        NSWindow::setAllowsAutomaticWindowTabbing(false, mtm);
+    }
+
     pub fn install(recent_files: &[PathBuf]) {
         let mtm = MainThreadMarker::new().expect("must install the menu on the main thread");
         let app = NSApp(mtm);
@@ -271,6 +312,42 @@ mod macos_menu {
         }
         file_menu_item.setSubmenu(Some(&file_menu));
         menu_bar.addItem(&file_menu_item);
+
+        let view_menu_item = NSMenuItem::new(mtm);
+        let view_menu = NSMenu::initWithTitle(mtm.alloc(), ns_string!("View"));
+        unsafe {
+            view_menu.addItem(&menu_item_with_symbol(
+                mtm,
+                ns_string!("Watches"),
+                sel!(showWatches:),
+                ns_string!("list.bullet"),
+                &handler,
+            ));
+            view_menu.addItem(&menu_item_with_symbol(
+                mtm,
+                ns_string!("Triggers"),
+                sel!(showTriggers:),
+                ns_string!("scope"),
+                &handler,
+            ));
+            view_menu.addItem(&menu_item_with_symbol(
+                mtm,
+                ns_string!("Decoder"),
+                sel!(showDecoder:),
+                ns_string!("tablecells"),
+                &handler,
+            ));
+            view_menu.addItem(&NSMenuItem::separatorItem(mtm));
+            view_menu.addItem(&menu_item_with_symbol(
+                mtm,
+                ns_string!("Reset Layout"),
+                sel!(resetLayout:),
+                ns_string!("arrow.counterclockwise"),
+                &handler,
+            ));
+        }
+        view_menu_item.setSubmenu(Some(&view_menu));
+        menu_bar.addItem(&view_menu_item);
 
         let pipeline_menu_item = NSMenuItem::new(mtm);
         let pipeline_menu = NSMenu::initWithTitle(mtm.alloc(), ns_string!("Pipeline"));
@@ -348,6 +425,9 @@ pub fn run() -> MainResult {
         .init();
 
     let args = Args::parse();
+
+    #[cfg(target_os = "macos")]
+    macos_menu::disable_automatic_window_tabbing();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

@@ -395,6 +395,21 @@ impl App {
         });
     }
 
+    fn show_view_panel(&mut self, content_id: &str) {
+        self.panel_layout.ensure_right_column_content(
+            content_id,
+            &VIEW_PANEL_ORDER,
+            RIGHT_COLUMN_LAYOUT_FRACTION,
+        );
+    }
+
+    fn reset_panel_layout(&mut self) {
+        self.panel_layout = PanelLayout::new([
+            ("logic_analyzer", DEFAULT_ANALYZER_SPLIT),
+            ("node_graph", 1.0 - DEFAULT_ANALYZER_SPLIT),
+        ]);
+    }
+
     fn status_actions(
         &self,
         boundary_interaction: Option<BoundaryInteraction>,
@@ -424,6 +439,9 @@ impl App {
 }
 
 const STATUS_BAR_HEIGHT: f32 = 28.0;
+const DEFAULT_ANALYZER_SPLIT: f32 = 0.42;
+const RIGHT_COLUMN_LAYOUT_FRACTION: f32 = 0.75;
+const VIEW_PANEL_ORDER: [&str; 3] = ["watches", "triggers", "decoder"];
 
 #[derive(Clone, Copy)]
 enum MouseButtonHint {
@@ -631,6 +649,9 @@ impl eframe::App for App {
             PanelSpec::new("triggers", "Triggers", 120.0)
                 .icon(PanelIcon::Target)
                 .minimum_width(180.0),
+            PanelSpec::new("decoder", "Decoder", 120.0)
+                .icon(PanelIcon::Table)
+                .minimum_width(220.0),
         ];
         let mut panel_layout = std::mem::take(&mut self.panel_layout);
         panel_layout
@@ -674,6 +695,10 @@ impl eframe::App for App {
                     content_id: "triggers",
                     ..
                 } => Self::show_placeholder_panel(panel_ui, "Triggers"),
+                PanelSlot::Body {
+                    content_id: "decoder",
+                    ..
+                } => Self::show_placeholder_panel(panel_ui, "Decoder"),
                 PanelSlot::TitleBar { .. } | PanelSlot::Body { .. } => {}
             },
         );
