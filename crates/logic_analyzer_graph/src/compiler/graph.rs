@@ -1186,19 +1186,19 @@ mod tests {
 
     fn startup_widget() -> NodeGraphWidget {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
-        nodes::populate_startup(&mut widget);
+        nodes::test_graphs::populate_startup(&mut widget);
         widget
     }
 
     fn uart_demo_widget() -> NodeGraphWidget {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
-        nodes::populate_uart_demo(&mut widget);
+        nodes::test_graphs::populate_uart_demo(&mut widget);
         widget
     }
 
     fn binary_decoder_demo_widget() -> NodeGraphWidget {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
-        nodes::populate_binary_decoder_demo(&mut widget);
+        nodes::test_graphs::build_binary_decoder_demo(&mut widget);
         widget
     }
 
@@ -1368,7 +1368,7 @@ mod tests {
         use signal_processing::{NumberSample, TextSample};
 
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
-        nodes::populate_binary_decoder_demo(&mut widget);
+        nodes::test_graphs::build_binary_decoder_demo(&mut widget);
         for definition in [nodes::Counter::name(), nodes::StringFormatter::name()] {
             let node = widget
                 .graph_mut()

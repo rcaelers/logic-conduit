@@ -68,7 +68,7 @@ mod tests {
 
     use super::*;
     use crate::compiler::{BuilderRegistry, lower};
-    use crate::nodes::{build_registry, populate_startup};
+    use crate::nodes::{build_registry, test_graphs};
 
     #[test]
     fn native_hardware_example_graphs_load_and_lower() {
@@ -86,7 +86,7 @@ mod tests {
     #[test]
     fn dsl_source_path_found_by_def_name_after_rename() {
         let mut widget = NodeGraphWidget::new(build_registry());
-        populate_startup(&mut widget);
+        test_graphs::populate_startup(&mut widget);
         let source_id = *widget
             .graph()
             .nodes

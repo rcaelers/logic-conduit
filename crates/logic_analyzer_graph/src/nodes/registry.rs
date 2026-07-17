@@ -17,24 +17,22 @@
 
 use egui::Color32;
 
-use node_graph::{NodeDef, NodeTypeRegistry, SocketDef, SocketShape};
+use node_graph::{NodeTypeRegistry, SocketDef, SocketShape};
 
-use super::binary_decoder::{self, BinaryDecoder, BinaryDecoderState};
+use super::binary_decoder::BinaryDecoder;
 use super::buffer::Buffer;
 use super::counter::Counter;
 use super::demo_capture_source::DemoCaptureSource;
-use super::file_source::DslFileSource;
-use super::file_writer::FileWriter;
 use super::formatter::StringFormatter;
 use super::i2c_decoder::I2cDecoder;
 use super::logic_gate::LogicGate;
-use super::spi_decoder::{SpiDecoder, SpiDecoderState};
+use super::spi_decoder::SpiDecoder;
 use super::sr_flip_flop::SrFlipFlop;
 use super::tgck_recorder::TgckRecorder;
-use super::uart_decoder::{self, UartDecoder, UartDecoderState};
-use super::uart_demo_source::{UartDemoSource, UartDemoSourceState};
+use super::uart_decoder::UartDecoder;
+use super::uart_demo_source::UartDemoSource;
 use super::viewer::Viewer;
-use super::word_matcher::{WordMatcher, WordMatcherState, default_match_op, default_trigger_at};
+use super::word_matcher::WordMatcher;
 
 // ── Stream socket types (`docs/APP_DESIGN.md`) ───────────────────────────────────────────────
 
@@ -174,347 +172,351 @@ pub fn build_registry() -> NodeTypeRegistry {
     registry
 }
 
-// ── Startup graph: the CCD capture pipeline ─────────────────────────────
-
-fn output_index(
-    widget: &node_graph::NodeGraphWidget,
-    node: node_graph::NodeId,
-    name: &str,
-) -> usize {
-    widget.graph().nodes[&node]
-        .outputs
-        .iter()
-        .position(|socket| socket.name == name)
-        .unwrap_or_else(|| panic!("no output socket '{name}'"))
-}
-
-fn input_index(
-    widget: &node_graph::NodeGraphWidget,
-    node: node_graph::NodeId,
-    name: &str,
-) -> usize {
-    widget.graph().nodes[&node]
-        .inputs
-        .iter()
-        .position(|socket| socket.name == name && socket.visible)
-        .unwrap_or_else(|| panic!("no input socket '{name}'"))
-}
-
-fn connect(
-    widget: &mut node_graph::NodeGraphWidget,
-    from: (node_graph::NodeId, &str),
-    to: (node_graph::NodeId, &str),
-) {
-    let from_socket = node_graph::SocketId {
-        node: from.0,
-        index: output_index(widget, from.0, from.1),
-        direction: node_graph::SocketDirection::Output,
-    };
-    let to_socket = node_graph::SocketId {
-        node: to.0,
-        index: input_index(widget, to.0, to.1),
-        direction: node_graph::SocketDirection::Input,
-    };
-    widget.graph_mut().add_connection(from_socket, to_socket);
-}
+// ── Test graph fixtures ──────────────────────────────────────────────────────
 
 #[cfg(test)]
-fn build_binary_decoder_demo(widget: &mut node_graph::NodeGraphWidget) {
-    use egui::Pos2;
-    use node_graph::{BoolValue, EnumValue, IntValue, StringValue};
+pub(crate) mod test_graphs {
+    use node_graph::NodeDef;
 
-    let add = |widget: &mut node_graph::NodeGraphWidget, name: &str, x: f32, y: f32| {
+    use super::super::binary_decoder::{self, BinaryDecoderState};
+    use super::super::file_source::DslFileSource;
+    use super::super::file_writer::FileWriter;
+    use super::super::spi_decoder::SpiDecoderState;
+    use super::super::uart_decoder::{self, UartDecoderState};
+    use super::super::uart_demo_source::UartDemoSourceState;
+    use super::super::word_matcher::{WordMatcherState, default_match_op, default_trigger_at};
+    use super::*;
+
+    fn output_index(
+        widget: &node_graph::NodeGraphWidget,
+        node: node_graph::NodeId,
+        name: &str,
+    ) -> usize {
+        widget.graph().nodes[&node]
+            .outputs
+            .iter()
+            .position(|socket| socket.name == name)
+            .unwrap_or_else(|| panic!("no output socket '{name}'"))
+    }
+
+    fn input_index(
+        widget: &node_graph::NodeGraphWidget,
+        node: node_graph::NodeId,
+        name: &str,
+    ) -> usize {
+        widget.graph().nodes[&node]
+            .inputs
+            .iter()
+            .position(|socket| socket.name == name && socket.visible)
+            .unwrap_or_else(|| panic!("no input socket '{name}'"))
+    }
+
+    fn connect(
+        widget: &mut node_graph::NodeGraphWidget,
+        from: (node_graph::NodeId, &str),
+        to: (node_graph::NodeId, &str),
+    ) {
+        let from_socket = node_graph::SocketId {
+            node: from.0,
+            index: output_index(widget, from.0, from.1),
+            direction: node_graph::SocketDirection::Output,
+        };
+        let to_socket = node_graph::SocketId {
+            node: to.0,
+            index: input_index(widget, to.0, to.1),
+            direction: node_graph::SocketDirection::Input,
+        };
+        widget.graph_mut().add_connection(from_socket, to_socket);
+    }
+
+    pub(crate) fn build_binary_decoder_demo(widget: &mut node_graph::NodeGraphWidget) {
+        use egui::Pos2;
+        use node_graph::{BoolValue, EnumValue, IntValue, StringValue};
+
+        let add = |widget: &mut node_graph::NodeGraphWidget, name: &str, x: f32, y: f32| {
+            widget
+                .add_node_at(name, Pos2::new(x, y))
+                .unwrap_or_else(|| panic!("unknown node type '{name}'"))
+        };
+
+        let source = add(widget, DemoCaptureSource::name(), 40.0, 300.0);
+        let spi = add(widget, SpiDecoder::name(), 360.0, 80.0);
+        let start = add(widget, WordMatcher::name(), 680.0, 40.0);
+        let stop = add(widget, WordMatcher::name(), 680.0, 230.0);
+        let counter = add(widget, Counter::name(), 960.0, 40.0);
+        let latch = add(widget, SrFlipFlop::name(), 960.0, 230.0);
+        let formatter = add(widget, StringFormatter::name(), 1240.0, 40.0);
+        let gate = add(widget, LogicGate::name(), 1198.4297, 592.2656);
+        let decoder = add(widget, BinaryDecoder::name(), 1520.0, 300.0);
+
+        widget.set_node_state(
+            spi,
+            serde_json::to_value(SpiDecoderState {
+                word_size: IntValue::new(8, 1, 64),
+                cpol: EnumValue::new(0, &["0", "1"]),
+                cpha: EnumValue::new(0, &["0", "1"]),
+                bit_order: EnumValue::new(0, &["MSB first", "LSB first"]),
+                cs_polarity: EnumValue::new(0, &["Active low", "Active high", "Disabled"]),
+                has_miso: BoolValue::new(true),
+            })
+            .unwrap(),
+        );
+        let matcher_state = |pattern: &str| {
+            serde_json::to_value(WordMatcherState {
+                pattern: StringValue::new(pattern),
+                mask: StringValue::new("0xFF"),
+                op: default_match_op(),
+                trigger_at: default_trigger_at(),
+                pulse_output: BoolValue::new(false),
+            })
+            .unwrap()
+        };
+        widget.set_node_state(start, matcher_state("0x9A"));
+        widget.set_node_state(stop, matcher_state("0xDE"));
+
+        let mut formatter_state = StringFormatter::state();
+        formatter_state.template.value = "Window {n:02}".to_owned();
+        widget.set_node_state(formatter, serde_json::to_value(formatter_state).unwrap());
+
+        let mut decoder_state = BinaryDecoder::state();
+        decoder_state.input_strategy.select("Packed stream");
+        widget.set_node_state(decoder, serde_json::to_value(decoder_state).unwrap());
+
+        for (id, title) in [
+            (source, "Demo"),
+            (start, "Match Start 0x9A"),
+            (stop, "Match Stop 0xDE"),
+            (gate, "Parallel Enable Gate"),
+            (decoder, "Parallel Decoder"),
+        ] {
+            widget.graph_mut().nodes.get_mut(&id).unwrap().title = title.to_owned();
+        }
+
+        connect(widget, (source, "Ch 7"), (spi, "CLK"));
+        connect(widget, (source, "Ch 6"), (spi, "MOSI"));
+        connect(widget, (source, "Ch 5"), (spi, "MISO"));
+        connect(widget, (source, "Ch 8"), (spi, "CS#"));
+        connect(widget, (spi, "MOSI Words"), (start, "Words"));
+        connect(widget, (spi, "MOSI Words"), (stop, "Words"));
+        connect(widget, (start, "Match"), (latch, "Set"));
+        connect(widget, (stop, "Match"), (latch, "Reset"));
+        connect(widget, (start, "Match"), (counter, "Trigger"));
+        connect(widget, (counter, "Count"), (formatter, "Value"));
+
+        connect(widget, (source, "Ch 8"), (gate, "In"));
+        connect(widget, (latch, "Q"), (gate, "In"));
+        connect(widget, (gate, "Out"), (decoder, "Enable"));
+        connect(widget, (source, "Ch 10"), (decoder, "Clock"));
+        for bit in 0..8 {
+            connect(widget, (source, &format!("Ch {bit}")), (decoder, "D"));
+        }
+        for (node, output) in [
+            (latch, "Q"),
+            (gate, "Out"),
+            (start, "Match"),
+            (stop, "Match"),
+            (spi, "MOSI Words"),
+            (spi, "MISO Words"),
+            (decoder, "Words"),
+            (formatter, "Text"),
+        ] {
+            let output = output_index(widget, node, output);
+            widget.graph_mut().nodes.get_mut(&node).unwrap().outputs[output].show_in_view = true;
+        }
         widget
-            .add_node_at(name, Pos2::new(x, y))
-            .unwrap_or_else(|| panic!("unknown node type '{name}'"))
-    };
-
-    let source = add(widget, DemoCaptureSource::name(), 40.0, 300.0);
-    let spi = add(widget, SpiDecoder::name(), 360.0, 80.0);
-    let start = add(widget, WordMatcher::name(), 680.0, 40.0);
-    let stop = add(widget, WordMatcher::name(), 680.0, 230.0);
-    let counter = add(widget, Counter::name(), 960.0, 40.0);
-    let latch = add(widget, SrFlipFlop::name(), 960.0, 230.0);
-    let formatter = add(widget, StringFormatter::name(), 1240.0, 40.0);
-    let gate = add(widget, LogicGate::name(), 1198.4297, 592.2656);
-    let decoder = add(widget, BinaryDecoder::name(), 1520.0, 300.0);
-
-    widget.set_node_state(
-        spi,
-        serde_json::to_value(SpiDecoderState {
-            word_size: IntValue::new(8, 1, 64),
-            cpol: EnumValue::new(0, &["0", "1"]),
-            cpha: EnumValue::new(0, &["0", "1"]),
-            bit_order: EnumValue::new(0, &["MSB first", "LSB first"]),
-            cs_polarity: EnumValue::new(0, &["Active low", "Active high", "Disabled"]),
-            has_miso: BoolValue::new(true),
-        })
-        .unwrap(),
-    );
-    let matcher_state = |pattern: &str| {
-        serde_json::to_value(WordMatcherState {
-            pattern: StringValue::new(pattern),
-            mask: StringValue::new("0xFF"),
-            op: default_match_op(),
-            trigger_at: default_trigger_at(),
-            pulse_output: BoolValue::new(false),
-        })
-        .unwrap()
-    };
-    widget.set_node_state(start, matcher_state("0x9A"));
-    widget.set_node_state(stop, matcher_state("0xDE"));
-
-    let mut formatter_state = StringFormatter::state();
-    formatter_state.template.value = "Window {n:02}".to_owned();
-    widget.set_node_state(formatter, serde_json::to_value(formatter_state).unwrap());
-
-    let mut decoder_state = BinaryDecoder::state();
-    decoder_state.input_strategy.select("Packed stream");
-    widget.set_node_state(decoder, serde_json::to_value(decoder_state).unwrap());
-
-    for (id, title) in [
-        (source, "Demo"),
-        (start, "Match Start 0x9A"),
-        (stop, "Match Stop 0xDE"),
-        (gate, "Parallel Enable Gate"),
-        (decoder, "Parallel Decoder"),
-    ] {
-        widget.graph_mut().nodes.get_mut(&id).unwrap().title = title.to_owned();
+            .graph_mut()
+            .nodes
+            .get_mut(&formatter)
+            .unwrap()
+            .selected = true;
     }
 
-    connect(widget, (source, "Ch 7"), (spi, "CLK"));
-    connect(widget, (source, "Ch 6"), (spi, "MOSI"));
-    connect(widget, (source, "Ch 5"), (spi, "MISO"));
-    connect(widget, (source, "Ch 8"), (spi, "CS#"));
-    connect(widget, (spi, "MOSI Words"), (start, "Words"));
-    connect(widget, (spi, "MOSI Words"), (stop, "Words"));
-    connect(widget, (start, "Match"), (latch, "Set"));
-    connect(widget, (stop, "Match"), (latch, "Reset"));
-    connect(widget, (start, "Match"), (counter, "Trigger"));
-    connect(widget, (counter, "Count"), (formatter, "Value"));
+    /// Builds the CCD analysis pipeline (`graphs/spi_controlled_decode.json`) as the
+    /// startup graph. Select a capture in its DSL File Source before running it
+    /// (SPI cs=8 clk=7 mosi=6; parallel strobe=10 (ACDK), data D0..D7 = ch 0..7).
+    ///
+    /// The enable gate is `AND(CS, Q)` with no NOT node: CS idles high and the
+    /// parallel bus is decodable only while it is *inactive* (channels 6/7 are
+    /// multiplexed with SPI), so the raw active-low line already is the
+    /// "inverted SPI enable" of the requirement.
+    pub(crate) fn populate_startup(widget: &mut node_graph::NodeGraphWidget) {
+        use egui::Pos2;
+        use node_graph::{BoolValue, EnumValue, IntValue, StringValue};
 
-    connect(widget, (source, "Ch 8"), (gate, "In"));
-    connect(widget, (latch, "Q"), (gate, "In"));
-    connect(widget, (gate, "Out"), (decoder, "Enable"));
-    connect(widget, (source, "Ch 10"), (decoder, "Clock"));
-    for bit in 0..8 {
-        connect(widget, (source, &format!("Ch {bit}")), (decoder, "D"));
-    }
-    for (node, output) in [
-        (latch, "Q"),
-        (gate, "Out"),
-        (start, "Match"),
-        (stop, "Match"),
-        (spi, "MOSI Words"),
-        (spi, "MISO Words"),
-        (decoder, "Words"),
-        (formatter, "Text"),
-    ] {
-        let output = output_index(widget, node, output);
-        widget.graph_mut().nodes.get_mut(&node).unwrap().outputs[output].show_in_view = true;
-    }
-    widget
-        .graph_mut()
-        .nodes
-        .get_mut(&formatter)
-        .unwrap()
-        .selected = true;
-}
+        let add = |widget: &mut node_graph::NodeGraphWidget, name: &str, x: f32, y: f32| {
+            widget
+                .add_node_at(name, Pos2::new(x, y))
+                .unwrap_or_else(|| panic!("unknown node type '{name}'"))
+        };
 
-/// Loads the self-contained controlled-decoder graph used by the web app.
-pub fn populate_binary_decoder_demo(widget: &mut node_graph::NodeGraphWidget) {
-    let graph = serde_json::from_str(include_str!("../../../../graphs/wasm_decoder_demo.json"))
-        .expect("checked-in wasm decoder demo graph is valid");
-    widget.set_graph(graph);
-}
+        let source = add(widget, DslFileSource::name(), 40.0, 260.0);
+        let spi = add(widget, SpiDecoder::name(), 330.0, 120.0);
+        let start = add(widget, WordMatcher::name(), 620.0, 40.0);
+        let stop = add(widget, WordMatcher::name(), 620.0, 230.0);
+        let counter = add(widget, Counter::name(), 900.0, 40.0);
+        let latch = add(widget, SrFlipFlop::name(), 900.0, 230.0);
+        let formatter = add(widget, StringFormatter::name(), 1160.0, 40.0);
+        let gate = add(widget, LogicGate::name(), 1160.0, 400.0);
+        let decoder = add(widget, BinaryDecoder::name(), 1440.0, 260.0);
+        let writer = add(widget, FileWriter::name(), 1760.0, 120.0);
 
-/// Builds the CCD analysis pipeline (`graphs/spi_controlled_decode.json`) as the
-/// startup graph. Select a capture in its DSL File Source before running it
-/// (SPI cs=8 clk=7 mosi=6; parallel strobe=10 (ACDK), data D0..D7 = ch 0..7).
-///
-/// The enable gate is `AND(CS, Q)` with no NOT node: CS idles high and the
-/// parallel bus is decodable only while it is *inactive* (channels 6/7 are
-/// multiplexed with SPI), so the raw active-low line already is the
-/// "inverted SPI enable" of the requirement.
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn populate_startup(widget: &mut node_graph::NodeGraphWidget) {
-    use egui::Pos2;
-    use node_graph::{BoolValue, EnumValue, IntValue, StringValue};
+        // Configure states before wiring so `on_update`-driven socket visibility
+        // (e.g. hidden MISO) is settled.
+        widget.set_node_state(
+            spi,
+            serde_json::to_value(SpiDecoderState {
+                word_size: IntValue::new(24, 1, 32),
+                cpol: EnumValue::new(0, &["0", "1"]),
+                cpha: EnumValue::new(0, &["0", "1"]),
+                bit_order: EnumValue::new(0, &["MSB first", "LSB first"]),
+                cs_polarity: EnumValue::new(0, &["Active low", "Active high", "Disabled"]),
+                has_miso: BoolValue::new(false),
+            })
+            .unwrap(),
+        );
+        let matcher_state = |pattern: &str| {
+            serde_json::to_value(WordMatcherState {
+                pattern: StringValue::new(pattern),
+                mask: StringValue::new("0xFFFFFF"),
+                op: default_match_op(),
+                trigger_at: default_trigger_at(),
+                pulse_output: BoolValue::new(false),
+            })
+            .unwrap()
+        };
+        widget.set_node_state(start, matcher_state("0x600081"));
+        widget.set_node_state(stop, matcher_state("0x600000"));
+        let mut decoder_state = BinaryDecoderState {
+            display_format: uart_decoder::default_display_format(),
+            sample_on: EnumValue::new(
+                0,
+                &[
+                    "Rising (SDR)",
+                    "Falling (SDR)",
+                    "Both (DDR)",
+                    "High level",
+                    "Low level",
+                ],
+            ),
+            input_strategy: binary_decoder::default_input_strategy(),
+            word_size: IntValue::new(1, 1, 8),
+            endianness: EnumValue::new(0, &["Little", "Big"]),
+            cs_polarity: EnumValue::new(0, &["Disabled", "Active low", "Active high"]),
+        };
+        decoder_state.sample_on.select("Both (DDR)");
+        widget.set_node_state(decoder, serde_json::to_value(decoder_state).unwrap());
 
-    let add = |widget: &mut node_graph::NodeGraphWidget, name: &str, x: f32, y: f32| {
-        widget
-            .add_node_at(name, Pos2::new(x, y))
-            .unwrap_or_else(|| panic!("unknown node type '{name}'"))
-    };
+        // Descriptive titles (the def is still identified by `type_name`).
+        for (id, title) in [
+            (start, "Match Start"),
+            (stop, "Match Stop"),
+            (gate, "Enable Gate"),
+        ] {
+            if let Some(node) = widget.graph_mut().nodes.get_mut(&id) {
+                node.title = title.to_owned();
+            }
+        }
 
-    let source = add(widget, DslFileSource::name(), 40.0, 260.0);
-    let spi = add(widget, SpiDecoder::name(), 330.0, 120.0);
-    let start = add(widget, WordMatcher::name(), 620.0, 40.0);
-    let stop = add(widget, WordMatcher::name(), 620.0, 230.0);
-    let counter = add(widget, Counter::name(), 900.0, 40.0);
-    let latch = add(widget, SrFlipFlop::name(), 900.0, 230.0);
-    let formatter = add(widget, StringFormatter::name(), 1160.0, 40.0);
-    let gate = add(widget, LogicGate::name(), 1160.0, 400.0);
-    let decoder = add(widget, BinaryDecoder::name(), 1440.0, 260.0);
-    let writer = add(widget, FileWriter::name(), 1760.0, 120.0);
+        // SPI control path.
+        connect(widget, (source, "Ch 7"), (spi, "CLK"));
+        connect(widget, (source, "Ch 6"), (spi, "MOSI"));
+        connect(widget, (source, "Ch 8"), (spi, "CS#"));
+        connect(widget, (spi, "MOSI Words"), (start, "Words"));
+        connect(widget, (spi, "MOSI Words"), (stop, "Words"));
+        connect(widget, (start, "Match"), (latch, "Set"));
+        connect(widget, (stop, "Match"), (latch, "Reset"));
 
-    // Configure states before wiring so `on_update`-driven socket visibility
-    // (e.g. hidden MISO) is settled.
-    widget.set_node_state(
-        spi,
-        serde_json::to_value(SpiDecoderState {
-            word_size: IntValue::new(24, 1, 32),
-            cpol: EnumValue::new(0, &["0", "1"]),
-            cpha: EnumValue::new(0, &["0", "1"]),
-            bit_order: EnumValue::new(0, &["MSB first", "LSB first"]),
-            cs_polarity: EnumValue::new(0, &["Active low", "Active high", "Disabled"]),
-            has_miso: BoolValue::new(false),
-        })
-        .unwrap(),
-    );
-    let matcher_state = |pattern: &str| {
-        serde_json::to_value(WordMatcherState {
-            pattern: StringValue::new(pattern),
-            mask: StringValue::new("0xFFFFFF"),
-            op: default_match_op(),
-            trigger_at: default_trigger_at(),
-            pulse_output: BoolValue::new(false),
-        })
-        .unwrap()
-    };
-    widget.set_node_state(start, matcher_state("0x600081"));
-    widget.set_node_state(stop, matcher_state("0x600000"));
-    let mut decoder_state = BinaryDecoderState {
-        display_format: uart_decoder::default_display_format(),
-        sample_on: EnumValue::new(
-            0,
-            &[
-                "Rising (SDR)",
-                "Falling (SDR)",
-                "Both (DDR)",
-                "High level",
-                "Low level",
-            ],
-        ),
-        input_strategy: binary_decoder::default_input_strategy(),
-        word_size: IntValue::new(1, 1, 8),
-        endianness: EnumValue::new(0, &["Little", "Big"]),
-        cs_polarity: EnumValue::new(0, &["Disabled", "Active low", "Active high"]),
-    };
-    decoder_state.sample_on.select("Both (DDR)");
-    widget.set_node_state(decoder, serde_json::to_value(decoder_state).unwrap());
+        // Filename path.
+        connect(widget, (start, "Match"), (counter, "Trigger"));
+        connect(widget, (counter, "Count"), (formatter, "Value"));
+        connect(widget, (formatter, "Text"), (writer, "Filename"));
 
-    // Descriptive titles (the def is still identified by `type_name`).
-    for (id, title) in [
-        (start, "Match Start"),
-        (stop, "Match Stop"),
-        (gate, "Enable Gate"),
-    ] {
-        if let Some(node) = widget.graph_mut().nodes.get_mut(&id) {
-            node.title = title.to_owned();
+        // Enable gate: stream window (Q) AND bus free (CS inactive-high).
+        connect(widget, (source, "Ch 8"), (gate, "In"));
+        connect(widget, (latch, "Q"), (gate, "In"));
+        connect(widget, (gate, "Out"), (decoder, "Enable"));
+
+        // Data path.
+        connect(widget, (source, "Ch 10"), (decoder, "Clock"));
+        for bit in 0..8 {
+            connect(widget, (source, &format!("Ch {bit}")), (decoder, "D"));
+        }
+        connect(widget, (decoder, "Words"), (writer, "Data"));
+
+        // The generic watched-output contract creates the viewer sink during
+        // lowering, keeping presentation choices out of the saved graph's
+        // processing topology.
+        for (node, output) in [
+            (spi, "MOSI Words"),
+            (start, "Match"),
+            (stop, "Match"),
+            (latch, "Q"),
+            (gate, "Out"),
+            (decoder, "Words"),
+        ] {
+            let output = output_index(widget, node, output);
+            widget.graph_mut().nodes.get_mut(&node).unwrap().outputs[output].show_in_view = true;
         }
     }
 
-    // SPI control path.
-    connect(widget, (source, "Ch 7"), (spi, "CLK"));
-    connect(widget, (source, "Ch 6"), (spi, "MOSI"));
-    connect(widget, (source, "Ch 8"), (spi, "CS#"));
-    connect(widget, (spi, "MOSI Words"), (start, "Words"));
-    connect(widget, (spi, "MOSI Words"), (stop, "Words"));
-    connect(widget, (start, "Match"), (latch, "Set"));
-    connect(widget, (stop, "Match"), (latch, "Reset"));
+    /// Startup graph for the built-in UART demo. The signal is generated by a
+    /// runtime source node; decoded words appear in the viewer only after the
+    /// graph runs through the normal pipeline.
+    pub(crate) fn populate_uart_demo(widget: &mut node_graph::NodeGraphWidget) {
+        use egui::Pos2;
+        use node_graph::{BoolValue, EnumValue, IntValue, StringValue};
 
-    // Filename path.
-    connect(widget, (start, "Match"), (counter, "Trigger"));
-    connect(widget, (counter, "Count"), (formatter, "Value"));
-    connect(widget, (formatter, "Text"), (writer, "Filename"));
+        let add = |widget: &mut node_graph::NodeGraphWidget, name: &str, x: f32, y: f32| {
+            widget
+                .add_node_at(name, Pos2::new(x, y))
+                .unwrap_or_else(|| panic!("unknown node type '{name}'"))
+        };
 
-    // Enable gate: stream window (Q) AND bus free (CS inactive-high).
-    connect(widget, (source, "Ch 8"), (gate, "In"));
-    connect(widget, (latch, "Q"), (gate, "In"));
-    connect(widget, (gate, "Out"), (decoder, "Enable"));
+        let source = add(widget, UartDemoSource::name(), 80.0, 220.0);
+        let uart = add(widget, UartDecoder::name(), 420.0, 180.0);
+        let viewer = add(widget, Viewer::name(), 760.0, 230.0);
 
-    // Data path.
-    connect(widget, (source, "Ch 10"), (decoder, "Clock"));
-    for bit in 0..8 {
-        connect(widget, (source, &format!("Ch {bit}")), (decoder, "D"));
+        widget.set_node_state(
+            source,
+            serde_json::to_value(UartDemoSourceState {
+                message: StringValue::new("HELLO\n"),
+                baud_rate: IntValue::new(115_200, 300, 100_000_000),
+            })
+            .unwrap(),
+        );
+        widget.set_node_state(
+            uart,
+            serde_json::to_value(UartDecoderState {
+                display_format: uart_decoder::default_display_format(),
+                baud_preset: uart_decoder::default_baud_preset(),
+                baud_rate: IntValue::new(115_200, 300, 100_000_000),
+                data_bits: IntValue::new(8, 5, 9),
+                parity: EnumValue::new(0, &["None", "Odd", "Even", "Mark", "Space"]),
+                check_parity: BoolValue::new(false),
+                stop_bits: EnumValue::new(2, &["0", "0.5", "1", "1.5", "2"]),
+                bit_order: EnumValue::new(0, &["LSB first", "MSB first"]),
+                invert: BoolValue::new(false),
+                error_output: BoolValue::new(false),
+            })
+            .unwrap(),
+        );
+
+        if let Some(node) = widget.graph_mut().nodes.get_mut(&source) {
+            node.title = "Generated serial.rx".to_owned();
+        }
+        if let Some(node) = widget.graph_mut().nodes.get_mut(&uart) {
+            node.title = "UART 115200 8N1".to_owned();
+        }
+
+        connect(widget, (source, "RX"), (uart, "RX/TX"));
+        connect(widget, (source, "RX"), (viewer, "In"));
+        connect(widget, (uart, "Data"), (viewer, "In"));
     }
-    connect(widget, (decoder, "Words"), (writer, "Data"));
-
-    // The generic watched-output contract creates the viewer sink during
-    // lowering, keeping presentation choices out of the saved graph's
-    // processing topology.
-    for (node, output) in [
-        (spi, "MOSI Words"),
-        (start, "Match"),
-        (stop, "Match"),
-        (latch, "Q"),
-        (gate, "Out"),
-        (decoder, "Words"),
-    ] {
-        let output = output_index(widget, node, output);
-        widget.graph_mut().nodes.get_mut(&node).unwrap().outputs[output].show_in_view = true;
-    }
-}
-
-/// Startup graph for the built-in UART demo. The signal is generated by a
-/// runtime source node; decoded words appear in the viewer only after the
-/// graph runs through the normal pipeline.
-#[allow(dead_code)]
-pub fn populate_uart_demo(widget: &mut node_graph::NodeGraphWidget) {
-    use egui::Pos2;
-    use node_graph::{BoolValue, EnumValue, IntValue, StringValue};
-
-    let add = |widget: &mut node_graph::NodeGraphWidget, name: &str, x: f32, y: f32| {
-        widget
-            .add_node_at(name, Pos2::new(x, y))
-            .unwrap_or_else(|| panic!("unknown node type '{name}'"))
-    };
-
-    let source = add(widget, UartDemoSource::name(), 80.0, 220.0);
-    let uart = add(widget, UartDecoder::name(), 420.0, 180.0);
-    let viewer = add(widget, Viewer::name(), 760.0, 230.0);
-
-    widget.set_node_state(
-        source,
-        serde_json::to_value(UartDemoSourceState {
-            message: StringValue::new("HELLO\n"),
-            baud_rate: IntValue::new(115_200, 300, 100_000_000),
-        })
-        .unwrap(),
-    );
-    widget.set_node_state(
-        uart,
-        serde_json::to_value(UartDecoderState {
-            display_format: uart_decoder::default_display_format(),
-            baud_preset: uart_decoder::default_baud_preset(),
-            baud_rate: IntValue::new(115_200, 300, 100_000_000),
-            data_bits: IntValue::new(8, 5, 9),
-            parity: EnumValue::new(0, &["None", "Odd", "Even", "Mark", "Space"]),
-            check_parity: BoolValue::new(false),
-            stop_bits: EnumValue::new(2, &["0", "0.5", "1", "1.5", "2"]),
-            bit_order: EnumValue::new(0, &["LSB first", "MSB first"]),
-            invert: BoolValue::new(false),
-            error_output: BoolValue::new(false),
-        })
-        .unwrap(),
-    );
-
-    if let Some(node) = widget.graph_mut().nodes.get_mut(&source) {
-        node.title = "Generated serial.rx".to_owned();
-    }
-    if let Some(node) = widget.graph_mut().nodes.get_mut(&uart) {
-        node.title = "UART 115200 8N1".to_owned();
-    }
-
-    connect(widget, (source, "RX"), (uart, "RX/TX"));
-    connect(widget, (source, "RX"), (viewer, "In"));
-    connect(widget, (uart, "Data"), (viewer, "In"));
 }
 
 #[cfg(test)]
 mod tests {
-    use node_graph::NodeGraphWidget;
+    use node_graph::{NodeDef, NodeGraphWidget};
 
     use super::*;
 
@@ -558,7 +560,7 @@ mod tests {
     #[test]
     fn startup_graph_builds_with_compatible_wiring() {
         let mut widget = NodeGraphWidget::new(build_registry());
-        populate_startup(&mut widget);
+        test_graphs::populate_startup(&mut widget);
         let graph = widget.graph();
 
         assert_eq!(graph.nodes.len(), 10);
@@ -590,7 +592,7 @@ mod tests {
         .expect("checked-in SPI-controlled graph should be valid JSON");
 
         let mut widget = NodeGraphWidget::new(build_registry());
-        populate_startup(&mut widget);
+        test_graphs::populate_startup(&mut widget);
         let generated = serde_json::to_value(widget.graph()).expect("graph should serialize");
 
         // The checked-in example is intentionally allowed to omit optional
@@ -617,7 +619,7 @@ mod tests {
             serde_json::from_str(include_str!("../../../../graphs/wasm_decoder_demo.json"))
                 .expect("checked-in wasm demo should be valid JSON");
         let mut generated = NodeGraphWidget::new(build_registry());
-        build_binary_decoder_demo(&mut generated);
+        test_graphs::build_binary_decoder_demo(&mut generated);
 
         let without_positions = |mut graph: serde_json::Value| {
             for node in graph["nodes"].as_object_mut().unwrap().values_mut() {
@@ -669,7 +671,7 @@ mod tests {
     #[test]
     fn graph_file_api_round_trips_the_startup_graph() {
         let mut original = NodeGraphWidget::new(build_registry());
-        populate_startup(&mut original);
+        test_graphs::populate_startup(&mut original);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pipeline.json");
         original.save_to_path(&path).unwrap();
@@ -689,7 +691,7 @@ mod tests {
         use crate::compiler::{BuilderRegistry, lower};
 
         let mut widget = NodeGraphWidget::new(build_registry());
-        populate_startup(&mut widget);
+        test_graphs::populate_startup(&mut widget);
         let registry = BuilderRegistry::standard();
         let original = lower(widget.graph(), &registry).expect("original lowers");
 

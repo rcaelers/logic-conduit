@@ -2,4 +2,6 @@ mod builder;
 mod definition;
 
 pub(crate) use builder::BinaryDecoderBuilder;
-pub use definition::{BinaryDecoder, BinaryDecoderState, default_input_strategy};
+#[cfg(test)]
+pub(crate) use definition::default_input_strategy;
+pub use definition::{BinaryDecoder, BinaryDecoderState};

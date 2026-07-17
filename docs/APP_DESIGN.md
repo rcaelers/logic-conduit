@@ -107,10 +107,10 @@ dialog while `Filename` is unconnected; a connected text stream hides it and win
 File Writer, TGCK Recorder, Viewer (variadic input accepting
 `Signal | Words | Trigger | Number | Text`).
 
-`nodes::populate_startup` builds the CCD capture graph programmatically (the shipped
-`graphs/spi_controlled_decode.json`). The wasm app loads
-`graphs/wasm_decoder_demo.json`, a self-contained one-minute SPI-controlled
-parallel-bus capture backed by `Demo Capture Source`.
+The native application loads graphs selected by the user. The wasm application embeds and loads
+`graphs/wasm_decoder_demo.json`, a self-contained one-minute SPI-controlled parallel-bus capture
+backed by `Demo Capture Source`. Programmatic graph construction is confined to test fixtures in
+`nodes::test_graphs`.
 
 ## Graph → pipeline compiler
 

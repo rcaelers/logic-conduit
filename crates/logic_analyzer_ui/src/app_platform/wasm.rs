@@ -7,7 +7,10 @@ impl PlatformState {
         _cc: &eframe::CreationContext,
         widget: &mut node_graph::NodeGraphWidget,
     ) -> (Self, Option<panel_layout::PanelLayoutState>, f32) {
-        logic_analyzer_graph::nodes::populate_binary_decoder_demo(widget);
+        let graph: node_graph::GraphState =
+            serde_json::from_str(include_str!("../../../../graphs/wasm_decoder_demo.json"))
+                .expect("checked-in wasm decoder demo graph is valid");
+        widget.set_graph(graph);
         (
             Self {
                 preview_source: None,
