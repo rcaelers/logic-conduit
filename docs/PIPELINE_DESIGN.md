@@ -125,6 +125,19 @@ selection, fingerprints, throughput, worker/reorder metrics, and retention behav
 cargo run -p signal-processing --release --bin parallel-decoder-bench -- --help
 ```
 
+The benchmark's `file` sink writes decoded words through the production binary-file sink. It
+therefore covers decoder transport, batch serialization, and filesystem output without retaining
+the decoded stream in memory.
+
+The ignored full-graph benchmark loads the checked-in controlled binary-decoder graph and includes
+its production binary writer and automatically attached indexed viewer lane. This is the regression
+benchmark for end-to-end throughput rather than decoder-kernel throughput alone:
+
+```bash
+cargo test -p logic-analyzer-graph --release \
+  benchmark_checked_in_spi_controlled_graph_runtime -- --ignored --nocapture
+```
+
 Correctness tests compare indexed, packed, sequential, and parallel paths, including every
 strobe mode, CS/enable boundaries, partial-word assembly, deliberately reordered completion,
 and stop latency.

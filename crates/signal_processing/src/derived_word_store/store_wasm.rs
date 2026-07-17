@@ -79,6 +79,7 @@ impl AnnotationQuery for IndexedAnnotationStore {
         let snapshot = self.snapshot();
         AnnotationStoreMetadata {
             generation: snapshot.metadata.generation,
+            is_live: snapshot.metadata.status == StoreStatus::Live,
             total_word_count: snapshot.metadata.committed_word_count,
             first_timestamp_ns: snapshot.metadata.first_timestamp_ns,
             last_timestamp_ns: snapshot.metadata.last_timestamp_ns,

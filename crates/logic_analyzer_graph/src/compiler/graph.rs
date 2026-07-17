@@ -1172,11 +1172,13 @@ pub fn start_app_run(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     use logic_analyzer_processing::BinaryFileWriter;
     use node_graph::{NodeDef, NodeGraphWidget};
     use signal_processing::{
-        ConfigValue, CooperativeManager, NodeSpec, Pipeline, Sample, Trigger, Word,
+        ConfigValue, CooperativeManager, DerivedLaneData, NodeSpec, Pipeline, Sample, Trigger, Word,
     };
 
     use super::*;
@@ -2537,6 +2539,93 @@ mod tests {
         pipeline.build().unwrap().wait();
     }
 
+    fn run_current_reference(capture: &Path, out_dir: &Path) {
+        use logic_analyzer_processing::nodes::decoders::{
+            CsPolarity, ParallelDecoder, SpiDecoder, SpiMode, StrobeMode,
+        };
+        use logic_analyzer_processing::{
+            DslFileSource, GateOp, LogicGate, SrLatch, TextFormatter, TriggerCounter, WordMatcher,
+        };
+
+        let mut pipeline = Pipeline::new().with_default_buffer_size(10_000_000);
+        pipeline
+            .add_process("source", DslFileSource::new(capture, 11).unwrap())
+            .unwrap();
+        pipeline
+            .add_process("spi", SpiDecoder::new(SpiMode::Mode0, 24, true, false))
+            .unwrap();
+        pipeline
+            .add_process("start", WordMatcher::new(0x600081, u64::MAX))
+            .unwrap();
+        pipeline
+            .add_process("stop", WordMatcher::new(0x600000, u64::MAX))
+            .unwrap();
+        pipeline.add_process("latch", SrLatch::new(false)).unwrap();
+        pipeline
+            .add_process("gate", LogicGate::new(GateOp::And, 2))
+            .unwrap();
+        pipeline
+            .add_process("counter", TriggerCounter::new(0, 1))
+            .unwrap();
+        pipeline
+            .add_process(
+                "formatter",
+                TextFormatter::new(format!("{}/capture_{{n:04}}.bin", out_dir.display())),
+            )
+            .unwrap();
+        pipeline
+            .add_process(
+                "decoder",
+                ParallelDecoder::new(8, StrobeMode::AnyEdge, CsPolarity::Disabled),
+            )
+            .unwrap();
+        pipeline
+            .add_process("writer", BinaryFileWriter::new().with_index_csv(true))
+            .unwrap();
+
+        pipeline.connect("source", "ch7", "spi", "clk").unwrap();
+        pipeline.connect("source", "ch8", "spi", "cs").unwrap();
+        pipeline.connect("source", "ch6", "spi", "mosi").unwrap();
+        pipeline
+            .connect("spi", "mosi_words", "start", "words")
+            .unwrap();
+        pipeline
+            .connect("spi", "mosi_words", "stop", "words")
+            .unwrap();
+        pipeline
+            .connect("start", "trigger", "latch", "set")
+            .unwrap();
+        pipeline
+            .connect("stop", "trigger", "latch", "reset")
+            .unwrap();
+        pipeline.connect("source", "ch8", "gate", "in0").unwrap();
+        pipeline.connect("latch", "q", "gate", "in1").unwrap();
+        pipeline
+            .connect("gate", "out", "decoder", "enable_signal")
+            .unwrap();
+        pipeline
+            .connect("start", "trigger", "counter", "trigger")
+            .unwrap();
+        pipeline
+            .connect("counter", "count", "formatter", "value")
+            .unwrap();
+        pipeline
+            .connect("formatter", "text", "writer", "filename")
+            .unwrap();
+        pipeline
+            .connect("source", "ch10", "decoder", "strobe")
+            .unwrap();
+        for bit in 0..8 {
+            pipeline
+                .connect("source", &format!("ch{bit}"), "decoder", &format!("d{bit}"))
+                .unwrap();
+        }
+        pipeline
+            .connect("decoder", "words", "writer", "data")
+            .unwrap();
+        pipeline.build().unwrap().wait();
+    }
+
     fn bin_files(dir: &Path) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(dir)
             .unwrap()
@@ -2696,6 +2785,235 @@ mod tests {
             }
             other => panic!("expected marker lane, got {other:?}"),
         }
+    }
+
+    /// Measures the live compiled graph without the golden test's concurrent
+    /// reference pass or multi-gigabyte byte-for-byte comparison.
+    #[test]
+    #[ignore = "runs the full wipneus5.dsl capture; use --release"]
+    fn benchmark_compiled_graph_runtime() {
+        let capture = repo_path("_captures/wipneus5.dsl");
+        assert!(capture.exists(), "capture not found: {}", capture.display());
+
+        let output = tempfile::tempdir().unwrap();
+        let widget = golden_widget(&capture, output.path());
+        let mut ctx = CompileCtx::default();
+        let start = std::time::Instant::now();
+        let mut run = start_live(widget.graph(), &BuilderRegistry::standard(), &mut ctx)
+            .unwrap_or_else(|errors| panic!("compile failed: {errors:?}"));
+        run.wait();
+        let elapsed = start.elapsed();
+        let files = bin_files(output.path());
+        let bytes: u64 = files
+            .iter()
+            .map(|name| std::fs::metadata(output.path().join(name)).unwrap().len())
+            .sum();
+        eprintln!(
+            "compiled graph: elapsed={:.3}s files={} bytes={bytes}",
+            elapsed.as_secs_f64(),
+            files.len()
+        );
+        assert!(!files.is_empty(), "compiled graph produced no output");
+    }
+
+    #[test]
+    #[ignore = "runs the full wipneus5.dsl capture; use --release"]
+    fn benchmark_reference_pipeline_runtime() {
+        let capture = repo_path("_captures/wipneus5.dsl");
+        assert!(capture.exists(), "capture not found: {}", capture.display());
+
+        let output = tempfile::tempdir().unwrap();
+        let start = std::time::Instant::now();
+        run_reference(&capture, output.path());
+        let elapsed = start.elapsed();
+        let files = bin_files(output.path());
+        let bytes: u64 = files
+            .iter()
+            .map(|name| std::fs::metadata(output.path().join(name)).unwrap().len())
+            .sum();
+        eprintln!(
+            "reference pipeline: elapsed={:.3}s files={} bytes={bytes}",
+            elapsed.as_secs_f64(),
+            files.len()
+        );
+        assert!(!files.is_empty(), "reference pipeline produced no output");
+    }
+
+    #[test]
+    #[ignore = "runs the current full pipeline topology; use --release"]
+    fn benchmark_current_reference_pipeline_runtime() {
+        let capture = repo_path("_captures/wipneus5.dsl");
+        let output = tempfile::tempdir().unwrap();
+        let start = std::time::Instant::now();
+        run_current_reference(&capture, output.path());
+        let elapsed = start.elapsed();
+        let files = bin_files(output.path());
+        let bytes: u64 = files
+            .iter()
+            .map(|name| std::fs::metadata(output.path().join(name)).unwrap().len())
+            .sum();
+        eprintln!(
+            "current reference: elapsed={:.3}s files={} bytes={bytes}",
+            elapsed.as_secs_f64(),
+            files.len()
+        );
+        assert!(!files.is_empty());
+    }
+
+    #[test]
+    #[ignore = "runs the full checked-in SPI-controlled graph; use --release"]
+    fn benchmark_checked_in_spi_controlled_graph_runtime() {
+        let capture = repo_path("_captures/wipneus5.dsl");
+        let graph_path = repo_path("graphs/spi_controlled_decode.json");
+        let graph: GraphState = serde_json::from_str(
+            &std::fs::read_to_string(&graph_path)
+                .unwrap_or_else(|error| panic!("cannot read {}: {error}", graph_path.display())),
+        )
+        .unwrap();
+        let mut widget = NodeGraphWidget::new(nodes::build_registry());
+        widget.set_graph(graph);
+        let output = tempfile::tempdir().unwrap();
+        for node in widget.graph_mut().nodes.values_mut() {
+            match node.def_name() {
+                "DSL File Source" => {
+                    node.state = serde_json::to_value(nodes::DslFileSourceState {
+                        file: node_graph::FileValue::new(capture.display().to_string()),
+                        channels: node_graph::IntValue::new(11, 1, 32),
+                    })
+                    .unwrap();
+                }
+                "String Formatter" => {
+                    node.state = serde_json::to_value(nodes::StringFormatterState {
+                        template: node_graph::StringValue::new(format!(
+                            "{}/capture_{{n:04}}.bin",
+                            output.path().display()
+                        )),
+                    })
+                    .unwrap();
+                }
+                _ => {}
+            }
+        }
+
+        let mut ctx = CompileCtx::default();
+        let start = std::time::Instant::now();
+        let mut run = start_live(widget.graph(), &BuilderRegistry::standard(), &mut ctx)
+            .unwrap_or_else(|errors| panic!("compile failed: {errors:?}"));
+        run.wait();
+        let elapsed = start.elapsed();
+        let files = bin_files(output.path());
+        let bytes: u64 = files
+            .iter()
+            .map(|name| std::fs::metadata(output.path().join(name)).unwrap().len())
+            .sum();
+        eprintln!(
+            "checked-in graph: elapsed={:.3}s files={} bytes={bytes}",
+            elapsed.as_secs_f64(),
+            files.len()
+        );
+        assert!(!files.is_empty(), "checked-in graph produced no output");
+    }
+
+    #[test]
+    #[ignore = "runs the full graph while simulating a 60 Hz 5120-pixel viewer; use --release"]
+    fn benchmark_checked_in_spi_controlled_graph_with_live_viewer_queries() {
+        let capture = repo_path("_captures/wipneus5.dsl");
+        let graph_path = repo_path("graphs/spi_controlled_decode.json");
+        let graph: GraphState = serde_json::from_str(
+            &std::fs::read_to_string(&graph_path)
+                .unwrap_or_else(|error| panic!("cannot read {}: {error}", graph_path.display())),
+        )
+        .unwrap();
+        let mut widget = NodeGraphWidget::new(nodes::build_registry());
+        widget.set_graph(graph);
+        let output = tempfile::tempdir().unwrap();
+        for node in widget.graph_mut().nodes.values_mut() {
+            match node.def_name() {
+                "DSL File Source" => {
+                    node.state = serde_json::to_value(nodes::DslFileSourceState {
+                        file: node_graph::FileValue::new(capture.display().to_string()),
+                        channels: node_graph::IntValue::new(11, 1, 32),
+                    })
+                    .unwrap();
+                }
+                "String Formatter" => {
+                    node.state = serde_json::to_value(nodes::StringFormatterState {
+                        template: node_graph::StringValue::new(format!(
+                            "{}/capture_{{n:04}}.bin",
+                            output.path().display()
+                        )),
+                    })
+                    .unwrap();
+                }
+                _ => {}
+            }
+        }
+
+        const TARGET_POINTS: usize = 5_120;
+        const END_NS: u64 = 250_000_000_000;
+        let mut ctx = CompileCtx::default();
+        let start = Instant::now();
+        let mut run = start_live(widget.graph(), &BuilderRegistry::standard(), &mut ctx)
+            .unwrap_or_else(|errors| panic!("compile failed: {errors:?}"));
+        let mut generations = HashMap::new();
+        let mut sampled_at = HashMap::new();
+        let mut query_time = Duration::ZERO;
+        let mut query_count = 0u64;
+        while !run.is_finished() {
+            let frame_start = Instant::now();
+            let queries: Vec<_> = run
+                .lanes
+                .read()
+                .iter()
+                .filter_map(|lane| match &lane.data {
+                    DerivedLaneData::IndexedAnnotations(indexed) => {
+                        Some((lane.name.clone(), Arc::clone(&indexed.query)))
+                    }
+                    _ => None,
+                })
+                .collect();
+            for (name, query) in queries {
+                let metadata = query.metadata();
+                if generations.get(&name) == Some(&metadata.generation) {
+                    continue;
+                }
+                if metadata.is_live
+                    && sampled_at.get(&name).is_some_and(|sampled: &Instant| {
+                        sampled.elapsed() < Duration::from_millis(50)
+                    })
+                {
+                    continue;
+                }
+                sampled_at.insert(name.clone(), Instant::now());
+                generations.insert(name, metadata.generation);
+                let query_start = Instant::now();
+                let buckets = query
+                    .coarse_presence_window(0, END_NS, TARGET_POINTS)
+                    .unwrap();
+                let estimated_words = buckets
+                    .iter()
+                    .map(|bucket| bucket.word_count)
+                    .fold(0u64, u64::saturating_add);
+                if estimated_words <= (TARGET_POINTS * 2) as u64 {
+                    let _ = query.exact_window(0, END_NS, TARGET_POINTS * 2).unwrap();
+                }
+                query_time += query_start.elapsed();
+                query_count += 1;
+            }
+            let remaining = Duration::from_millis(16).saturating_sub(frame_start.elapsed());
+            std::thread::sleep(remaining);
+        }
+        run.wait();
+        eprintln!(
+            "live viewer graph: elapsed={:.3}s queries={query_count} query_time={:.3}s",
+            start.elapsed().as_secs_f64(),
+            query_time.as_secs_f64()
+        );
+        assert!(query_count > 0, "viewer lane produced no live queries");
+        assert!(
+            !bin_files(output.path()).is_empty(),
+            "checked-in graph produced no output"
+        );
     }
 
     /// The golden correctness gate: the compiled startup graph must

@@ -105,9 +105,6 @@ pub struct ParallelDecoder {
 
     /// Current enable state from edge-based enable_signal
     current_enable_value: bool,
-    /// Indexed-path timestamp up to which the current enable value is known.
-    /// Streamed enable handling peeks directly at the next queued sample.
-    next_enable_change_position: u64,
 
     last_strobe_value: bool,
     work_call_count: usize,
@@ -174,7 +171,6 @@ impl ParallelDecoder {
             endianness: Endianness::default(),
             enable_buffer: VecDeque::new(),
             current_enable_value: false,
-            next_enable_change_position: 0,
             last_strobe_value: false,
             work_call_count: 0,
             total_words_emitted: 0,
@@ -349,13 +345,13 @@ impl ProcessNode for ParallelDecoder {
             return selected;
         };
 
+        let raw_inputs = 1 + self.num_data_bits + 1;
         let preferred = Self::auto_protocol_for_activity_ratio(activity_ratio);
         let alternate = if preferred == ProtocolKind::Stream {
             ProtocolKind::EdgeQuery
         } else {
             ProtocolKind::Stream
         };
-        let raw_inputs = 1 + self.num_data_bits + 1;
         let group_supports = |protocol| {
             candidates[..raw_inputs]
                 .iter()
@@ -447,10 +443,10 @@ struct AssemblyState {
 struct QueryBuffers {
     edges: Vec<CaptureTransition>,
     positions: Vec<u64>,
+    gate_reset_before: Vec<bool>,
     eligible_positions: Vec<u64>,
     reset_before: Vec<bool>,
     cs_values: Vec<bool>,
-    enable_values: Vec<bool>,
     data_values: Vec<Vec<bool>>,
 }
 
@@ -902,15 +898,6 @@ fn acquire_stream_block_set(
     Ok(())
 }
 
-/// Enable-signal state, threaded through `process_trigger` calls. Either a
-/// point-queried channel (`query`, when the connection negotiated
-/// `EdgeQuery`) or a streamed `Sample` level advanced edge by edge.
-struct EnableState<'a> {
-    current: bool,
-    next_change_position: u64,
-    input: Option<Receiver<'a, Sample>>,
-}
-
 impl ParallelDecoder {
     /// Per-`work()`-call trigger budget for the index-driven path. Each
     /// trigger costs a handful of index queries (microseconds), so this
@@ -919,6 +906,11 @@ impl ParallelDecoder {
     /// feel instantly stoppable, long enough that the per-call overhead is
     /// noise.
     const QUERY_TRIGGERS_PER_CALL: usize = 65_536;
+
+    /// Maximum capture span inspected by one indexed call. Disabled spans
+    /// perform no clock or data queries, so this is primarily a cancellation
+    /// and upstream-watermark boundary rather than an I/O batch size.
+    const QUERY_SCAN_SAMPLES_PER_CALL: u64 = 64 * 1024 * 1024;
 
     /// Maximum number of packed samples scanned in one streamed-path
     /// `work()` call. The resident blocks remain borrowed through shared
@@ -960,22 +952,13 @@ impl ParallelDecoder {
             .and_then(|port| port.edge_query());
         // An EdgeQuery-negotiated enable never has a channel — don't let
         // the missing receiver read as "unconnected → always enabled".
-        let enable_recv = if enable_query.is_some() {
+        let mut enable_recv = if enable_query.is_some() {
             None
         } else {
             inputs
                 .get(enable_port_idx)
                 .and_then(|port| port.get::<Sample>(&mut self.enable_buffer))
         };
-        let mut enable = EnableState {
-            current: self.current_enable_value,
-            next_change_position: self.next_enable_change_position,
-            input: enable_recv,
-        };
-        if enable_query.is_none() && enable.input.is_none() {
-            enable.current = true;
-            enable.next_change_position = u64::MAX;
-        }
 
         let mode = self.mode;
         let cs_polarity = self.cs_polarity;
@@ -995,55 +978,93 @@ impl ParallelDecoder {
 
         buffers.edges.clear();
         buffers.positions.clear();
-        let mut raw_position = self.query_strobe_position;
+        buffers.gate_reset_before.clear();
+        let scan_start = self.query_strobe_position;
+        if scan_start >= total_samples {
+            return Err(WorkError::Shutdown);
+        }
+        let scan_end = scan_start
+            .saturating_add(Self::QUERY_SCAN_SAMPLES_PER_CALL)
+            .min(total_samples);
+        let scan_len = (scan_end - scan_start) as usize;
+        let enabled_ranges = enabled_ranges_for_window(
+            enable_query.as_ref(),
+            &mut enable_recv,
+            &mut self.current_enable_value,
+            scan_start,
+            0,
+            scan_len,
+            timestamp_step,
+        )?;
 
-        // Mirrors work_streamed's `last_strobe_value` starting `false`: a
-        // strobe already at the triggering level at position 0 counts as a
-        // trigger there too (there's no real "edge" at the very first
-        // sample — the implicit prior sample is treated as low, exactly
-        // like the streaming per-sample scan does).
-        if raw_position == 0 {
-            let value = strobe_query.value_at(0).map_err(query_err)?;
-            let triggered0 = match mode {
-                StrobeMode::RisingEdge | StrobeMode::AnyEdge => value,
-                StrobeMode::FallingEdge => false,
-                StrobeMode::HighLevel | StrobeMode::LowLevel => {
-                    unreachable!("excluded from query mode by work()'s sparse_mode gate")
+        let mut next_scan_position = scan_end;
+        let mut scan_complete = true;
+        for range in &enabled_ranges {
+            let range_start = scan_start + range.start as u64;
+            let range_end = scan_start + range.end as u64;
+            let mut raw_position = range_start.saturating_sub(1);
+            let mut reset_before_next = range.reset_before;
+
+            // Mirrors the streamed path's implicit previous-low state at
+            // sample zero. Later enabled ranges begin at a real position
+            // boundary and are handled by `next_edges` below.
+            if range_start == 0 && buffers.positions.is_empty() {
+                let value = strobe_query.value_at(0).map_err(query_err)?;
+                let triggered0 = match mode {
+                    StrobeMode::RisingEdge | StrobeMode::AnyEdge => value,
+                    StrobeMode::FallingEdge => false,
+                    StrobeMode::HighLevel | StrobeMode::LowLevel => {
+                        unreachable!("excluded from query mode by work()'s sparse_mode gate")
+                    }
+                };
+                if triggered0 {
+                    buffers.positions.push(0);
+                    buffers.gate_reset_before.push(reset_before_next);
+                    reset_before_next = false;
                 }
-            };
-            if triggered0 {
-                buffers.positions.push(0);
             }
-        }
 
-        let remaining = Self::QUERY_TRIGGERS_PER_CALL - buffers.positions.len();
-        let max_edges = match mode {
-            StrobeMode::AnyEdge => remaining,
-            StrobeMode::RisingEdge | StrobeMode::FallingEdge => remaining.saturating_mul(2),
-            StrobeMode::HighLevel | StrobeMode::LowLevel => {
-                unreachable!("excluded from query mode by work()'s sparse_mode gate")
-            }
-        };
-        strobe_query
-            .next_edges(raw_position, total_samples, max_edges, &mut buffers.edges)
-            .map_err(query_err)?;
-        let exhausted = buffers.edges.len() < max_edges;
-        if let Some(edge) = buffers.edges.last() {
-            raw_position = edge.sample;
-        }
-        buffers.positions.extend(
-            buffers
-                .edges
-                .iter()
-                .filter(|edge| match mode {
+            while buffers.positions.len() < Self::QUERY_TRIGGERS_PER_CALL {
+                let remaining = Self::QUERY_TRIGGERS_PER_CALL - buffers.positions.len();
+                let max_edges = match mode {
+                    StrobeMode::AnyEdge => remaining,
+                    StrobeMode::RisingEdge | StrobeMode::FallingEdge => remaining.saturating_mul(2),
+                    StrobeMode::HighLevel | StrobeMode::LowLevel => {
+                        unreachable!("excluded from query mode by work()'s sparse_mode gate")
+                    }
+                };
+                strobe_query
+                    .next_edges(raw_position, range_end, max_edges, &mut buffers.edges)
+                    .map_err(query_err)?;
+                let range_exhausted = buffers.edges.len() < max_edges;
+                if let Some(edge) = buffers.edges.last() {
+                    raw_position = edge.sample;
+                }
+                for edge in buffers.edges.iter().filter(|edge| match mode {
                     StrobeMode::RisingEdge => edge.value,
                     StrobeMode::FallingEdge => !edge.value,
                     StrobeMode::AnyEdge => true,
                     StrobeMode::HighLevel | StrobeMode::LowLevel => false,
-                })
-                .map(|edge| edge.sample)
-                .take(remaining),
-        );
+                }) {
+                    buffers.positions.push(edge.sample);
+                    buffers.gate_reset_before.push(reset_before_next);
+                    reset_before_next = false;
+                }
+
+                if range_exhausted {
+                    break;
+                }
+                if buffers.positions.len() >= Self::QUERY_TRIGGERS_PER_CALL {
+                    next_scan_position = raw_position.saturating_add(1);
+                    scan_complete = false;
+                    break;
+                }
+            }
+            if !scan_complete {
+                break;
+            }
+        }
+        let exhausted = scan_complete && scan_end >= total_samples;
 
         if cs_polarity != CsPolarity::Disabled {
             let query = cs_query.as_ref().ok_or_else(|| {
@@ -1056,17 +1077,8 @@ impl ParallelDecoder {
             buffers.cs_values.clear();
         }
 
-        if let Some(query) = &enable_query {
-            query
-                .values_at(&buffers.positions, &mut buffers.enable_values)
-                .map_err(query_err)?;
-        } else {
-            buffers.enable_values.clear();
-        }
-
-        // Apply gating before touching the data channels. reset_before
-        // preserves assembly semantics when a gated trigger separates two
-        // eligible triggers whose data values are read later as one batch.
+        // Enable gating was applied before the clock query. Apply CS after
+        // that, still before touching data channels.
         buffers.eligible_positions.clear();
         buffers.reset_before.clear();
         let mut reset_before_next = false;
@@ -1081,36 +1093,10 @@ impl ParallelDecoder {
                 continue;
             }
 
-            let timestamp_ns = position.saturating_mul(timestamp_step);
-            if enable_query.is_some() {
-                enable.current = buffers.enable_values[trigger_index];
-            } else if timestamp_ns >= enable.next_change_position
-                && let Some(enable_recv) = &mut enable.input
-            {
-                loop {
-                    match enable_recv.peek() {
-                        Ok(next_edge) if next_edge.start_time_ns <= timestamp_ns => {
-                            enable.current = enable_recv.recv()?.value;
-                        }
-                        Ok(next_edge) => {
-                            enable.next_change_position = next_edge.start_time_ns;
-                            break;
-                        }
-                        Err(WorkError::Shutdown) => {
-                            enable.next_change_position = u64::MAX;
-                            break;
-                        }
-                        Err(error) => return Err(error),
-                    }
-                }
-            }
-            if !enable.current {
-                reset_before_next = true;
-                continue;
-            }
-
             buffers.eligible_positions.push(position);
-            buffers.reset_before.push(reset_before_next);
+            buffers
+                .reset_before
+                .push(buffers.gate_reset_before[trigger_index] || reset_before_next);
             reset_before_next = false;
         }
 
@@ -1169,9 +1155,7 @@ impl ParallelDecoder {
             assembly.value = 0;
         }
 
-        self.query_strobe_position = raw_position;
-        self.current_enable_value = enable.current;
-        self.next_enable_change_position = enable.next_change_position;
+        self.query_strobe_position = next_scan_position;
         self.total_words_emitted += words_emitted;
         self.assembly_value = assembly.value;
         self.assembly_cycles = assembly.cycles;
@@ -1461,37 +1445,44 @@ mod tests {
         }
     }
 
-    fn auto_candidates(activity: f64) -> Vec<Option<InputProtocolCandidate>> {
+    fn auto_candidates(
+        activity: f64,
+        enable_connected: bool,
+    ) -> Vec<Option<InputProtocolCandidate>> {
         let query: Arc<dyn EdgeQuery> = Arc::new(DensityQuery(activity));
-        (0..5)
+        let mut candidates: Vec<_> = (0..5)
             .map(|_| {
                 Some(InputProtocolCandidate {
                     offered: vec![ProtocolKind::EdgeQuery, ProtocolKind::Stream],
                     edge_query: Some(Arc::clone(&query)),
                 })
             })
-            .collect()
+            .collect();
+        if !enable_connected {
+            candidates[4] = None;
+        }
+        candidates
     }
 
     #[test]
     fn auto_strategy_selects_one_protocol_for_the_complete_raw_group() {
         let decoder = ParallelDecoder::new(2, StrobeMode::AnyEdge, CsPolarity::Disabled);
-        let dense = decoder.select_input_protocols(&auto_candidates(0.9));
-        let sparse = decoder.select_input_protocols(&auto_candidates(0.01));
+        let dense = decoder.select_input_protocols(&auto_candidates(0.9, false));
+        let sparse = decoder.select_input_protocols(&auto_candidates(0.01, false));
 
         assert_eq!(&dense[..4], &[Some(ProtocolKind::Stream); 4]);
         assert_eq!(&sparse[..4], &[Some(ProtocolKind::EdgeQuery); 4]);
-        assert_eq!(
-            dense[4],
-            Some(ProtocolKind::EdgeQuery),
-            "enable transport remains independent"
-        );
+        assert_eq!(dense[4], None, "the fixture leaves enable disconnected");
+
+        let gated_dense = decoder.select_input_protocols(&auto_candidates(0.9, true));
+        assert_eq!(&gated_dense[..4], &[Some(ProtocolKind::Stream); 4]);
+        assert_eq!(gated_dense[4], Some(ProtocolKind::EdgeQuery));
     }
 
     #[test]
     fn auto_strategy_falls_back_as_a_group_when_one_input_lacks_preferred_protocol() {
         let decoder = ParallelDecoder::new(2, StrobeMode::AnyEdge, CsPolarity::Disabled);
-        let mut candidates = auto_candidates(0.01);
+        let mut candidates = auto_candidates(0.01, false);
         candidates[1].as_mut().unwrap().offered = vec![ProtocolKind::Stream];
 
         let selected = decoder.select_input_protocols(&candidates);
@@ -2240,13 +2231,10 @@ mod tests {
         );
     }
 
-    /// A long gated-off stretch makes no channel calls, so a `work()` call
-    /// stuck in it can only be interrupted between calls — the per-call
-    /// trigger budget is what keeps an index-driven run stoppable (and the
-    /// UI responsive). More triggers than one budget must take more than
-    /// one `work()` call.
+    /// A long gated-off stretch skips the clock index entirely instead of
+    /// consuming the per-call trigger budget.
     #[test]
-    fn query_mode_yields_between_trigger_batches() {
+    fn query_mode_skips_gated_strobe_batches() {
         let wd = Watchdog::new();
         let n = 2 * ParallelDecoder::QUERY_TRIGGERS_PER_CALL + 100;
         // Alternating strobe: every position ≥ 1 is an AnyEdge trigger.
@@ -2270,19 +2258,10 @@ mod tests {
         )];
 
         let mut decoder = ParallelDecoder::new(1, StrobeMode::AnyEdge, CsPolarity::Disabled);
-        let mut ok_calls = 0usize;
-        loop {
-            match decoder.work(&inputs, &outputs) {
-                Ok(_) => ok_calls += 1,
-                Err(WorkError::Shutdown) => break,
-                Err(e) => panic!("unexpected error: {e}"),
-            }
-            assert!(ok_calls < 100, "budget never exhausted the fixture");
-        }
-        assert!(
-            ok_calls >= 2,
-            "expected the scan to yield between trigger batches, got {ok_calls} Ok calls"
-        );
+        assert!(matches!(
+            decoder.work(&inputs, &outputs),
+            Err(WorkError::Shutdown)
+        ));
         assert_eq!(out_rx.try_iter().count(), 0, "everything was gated off");
     }
 

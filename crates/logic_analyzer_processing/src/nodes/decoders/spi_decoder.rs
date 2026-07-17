@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use tracing::{debug, trace};
 
+use signal_processing::capture::CaptureTransition;
 use signal_processing::edge_query::EdgeQuery;
 use signal_processing::errors::{WorkError, WorkResult};
 use signal_processing::events::Word;
@@ -61,6 +62,16 @@ pub struct SpiDecoder {
     /// index-query equivalent of the streaming CS `Receiver`'s implicit
     /// position). Unused in streaming mode.
     query_cs_position: u64,
+    /// End of the CS-active window currently being decoded. A window can
+    /// span several bounded query batches.
+    query_window_end: Option<u64>,
+    /// Last CLK transition consumed inside the current query window.
+    query_clk_position: u64,
+    /// Partially assembled query-mode word, retained across bounded batches.
+    query_mosi_word: u64,
+    query_miso_word: u64,
+    query_bits_collected: usize,
+    query_first_clock_edge: Option<u64>,
 }
 
 impl SpiDecoder {
@@ -96,6 +107,12 @@ impl SpiDecoder {
             prev_clk: false,
             tx_count: 0,
             query_cs_position: 0,
+            query_window_end: None,
+            query_clk_position: 0,
+            query_mosi_word: 0,
+            query_miso_word: 0,
+            query_bits_collected: 0,
+            query_first_clock_edge: None,
         }
     }
 
@@ -274,14 +291,16 @@ impl ProcessNode for SpiDecoder {
 }
 
 impl SpiDecoder {
-    /// Index-driven path: CS/CLK are located by direct skip-ahead queries
-    /// (no streaming, no discarding dead-time edges) and MOSI/MISO are
-    /// point-read at each CLK sampling edge. One `work()` call processes
-    /// exactly one CS active/inactive transaction window, mirroring
-    /// `work_streamed`'s per-call granularity so `self`'s persisted state
-    /// (`query_cs_position`, `prev_clk`-equivalent-free since sampling
-    /// edges are located directly, `tx_count`) behaves the same way across
-    /// repeated scheduler calls.
+    /// Sampling-edge budget for one index-driven `work()` call. Querying in
+    /// batches amortizes index/cache locking while keeping cancellation
+    /// responsive for long CS-active windows.
+    const QUERY_SAMPLING_EDGES_PER_CALL: usize = 65_536;
+
+    /// Index-driven path: CS locates active transaction windows, CLK edges
+    /// are fetched in batches within those windows, and MOSI/MISO values are
+    /// fetched in block-grouped batches at the sampling positions. This
+    /// avoids both streaming inactive capture regions and taking the shared
+    /// index/cache lock separately for every bit.
     fn work_indexed(
         &mut self,
         outputs: &[OutputPort],
@@ -345,112 +364,155 @@ impl SpiDecoder {
         // EdgeQuery methods return signal_processing::Result, not WorkResult.
         let query_err = |e: signal_processing::Error| WorkError::NodeError(e.to_string());
 
-        if self.query_cs_position >= total_samples {
-            return Err(WorkError::Shutdown);
-        }
-
-        // ── 1. Wait for CS to go active ──────────────────────────────────
-        debug!("Waiting for CS active (query mode)...");
-        let cs_active_start = cs_query
-            .next_edge_with_value(self.query_cs_position, active_value, total_samples)
-            .map_err(query_err)?
-            .ok_or(WorkError::Shutdown)?
-            .sample;
-
-        // ── 2. Get CS inactive edge to know the full CS window ───────────
-        let cs_inactive_time = cs_query
-            .next_edge_with_value(cs_active_start, inactive_value, total_samples)
-            .map_err(query_err)?
-            .ok_or(WorkError::Shutdown)?
-            .sample;
-
-        self.query_cs_position = cs_inactive_time;
-
-        debug!(
-            "CS window: {:.9}s — {:.9}s ({:.3}µs)",
-            position_to_ns(cs_active_start) as f64 / 1_000_000_000.0,
-            position_to_ns(cs_inactive_time) as f64 / 1_000_000_000.0,
-            (position_to_ns(cs_inactive_time) - position_to_ns(cs_active_start)) as f64 / 1_000.0,
-        );
-
-        // ── 3. No drain needed — CLK/MOSI/MISO were never streamed ───────
-
-        // ── 4. Collect words from CLK within the CS window ───────────────
         let mut words_emitted: usize = 0;
         let mut mosi_batch = Vec::new();
         let mut miso_batch = Vec::new();
-        let mut clk_position = cs_active_start;
+        let mut raw_edges = Vec::<CaptureTransition>::new();
+        let mut sample_positions = Vec::<u64>::new();
+        let mut mosi_values = Vec::<bool>::new();
+        let mut miso_values = Vec::<bool>::new();
+        let mut sampling_edges = 0usize;
+        let mut capture_exhausted = false;
 
-        'word_loop: loop {
-            let mut mosi_word: u64 = 0;
-            let mut miso_word: u64 = 0;
-            let mut bits_collected: usize = 0;
-            let mut first_clock_edge: Option<u64> = None;
-
-            loop {
-                let Some(edge) = clk_query
-                    .next_edge_with_value(clk_position, sampling_value, cs_inactive_time)
-                    .map_err(query_err)?
-                else {
-                    if bits_collected > 0 && bits_collected < bits_per_word {
-                        debug!("Incomplete word: {}/{} bits", bits_collected, bits_per_word);
-                    }
-                    break 'word_loop;
-                };
-                clk_position = edge.sample;
-
-                if first_clock_edge.is_none() {
-                    first_clock_edge = Some(edge.sample);
-                }
-
-                let sample_position = edge.sample.saturating_sub(1);
-                if let Some(ref q) = mosi_query {
-                    let mosi_val = q.value_at(sample_position).map_err(query_err)?;
-                    if mosi_val {
-                        mosi_word |= 1 << bit_position(bits_collected);
-                    }
-                    trace!(
-                        "bit {}: CLK edge at {:.9}s, MOSI={}",
-                        bits_collected,
-                        position_to_ns(edge.sample) as f64 / 1_000_000_000.0,
-                        mosi_val,
-                    );
-                }
-                if let Some(ref q) = miso_query {
-                    let miso_val = q.value_at(sample_position).map_err(query_err)?;
-                    if miso_val {
-                        miso_word |= 1 << bit_position(bits_collected);
-                    }
-                }
-
-                bits_collected += 1;
-                if bits_collected >= bits_per_word {
+        while sampling_edges < Self::QUERY_SAMPLING_EDGES_PER_CALL {
+            if self.query_window_end.is_none() {
+                if self.query_cs_position >= total_samples {
+                    capture_exhausted = true;
                     break;
                 }
+
+                debug!("Waiting for CS active (query mode)...");
+                let cs_active_start = if self.query_cs_position == 0
+                    && cs_query.value_at(0).map_err(query_err)? == active_value
+                {
+                    0
+                } else {
+                    let Some(edge) = cs_query
+                        .next_edge_with_value(self.query_cs_position, active_value, total_samples)
+                        .map_err(query_err)?
+                    else {
+                        capture_exhausted = true;
+                        break;
+                    };
+                    edge.sample
+                };
+                let inactive_time = cs_query
+                    .next_edge_with_value(cs_active_start, inactive_value, total_samples)
+                    .map_err(query_err)?
+                    .map_or(total_samples, |edge| edge.sample);
+
+                self.query_window_end = Some(inactive_time);
+                self.query_clk_position = cs_active_start;
+                debug!(
+                    "CS window: {:.9}s — {:.9}s ({:.3}µs)",
+                    position_to_ns(cs_active_start) as f64 / 1_000_000_000.0,
+                    position_to_ns(inactive_time) as f64 / 1_000_000_000.0,
+                    (position_to_ns(inactive_time) - position_to_ns(cs_active_start)) as f64
+                        / 1_000.0,
+                );
             }
 
-            if bits_collected == bits_per_word {
-                let timestamp = first_clock_edge
-                    .map(position_to_ns)
-                    .unwrap_or_else(|| position_to_ns(cs_active_start));
-                // `clk_position` is the word's last sampling edge — the
-                // word's real extent, first to last edge.
-                let duration = position_to_ns(clk_position).saturating_sub(timestamp);
+            let window_end = self.query_window_end.expect("opened above");
+            let remaining = Self::QUERY_SAMPLING_EDGES_PER_CALL - sampling_edges;
+            let max_raw_edges = remaining.saturating_mul(2).max(2);
+            clk_query
+                .next_edges(
+                    self.query_clk_position,
+                    window_end,
+                    max_raw_edges,
+                    &mut raw_edges,
+                )
+                .map_err(query_err)?;
+            let window_exhausted = raw_edges.len() < max_raw_edges;
+            if let Some(edge) = raw_edges.last() {
+                self.query_clk_position = edge.sample;
+            }
 
+            sample_positions.clear();
+            sample_positions.extend(
+                raw_edges
+                    .iter()
+                    .filter(|edge| edge.value == sampling_value)
+                    .map(|edge| edge.sample.saturating_sub(1)),
+            );
+            sampling_edges += sample_positions.len();
+
+            if let Some(query) = &mosi_query {
+                query
+                    .values_at(&sample_positions, &mut mosi_values)
+                    .map_err(query_err)?;
+            } else {
+                mosi_values.clear();
+            }
+            if let Some(query) = &miso_query {
+                query
+                    .values_at(&sample_positions, &mut miso_values)
+                    .map_err(query_err)?;
+            } else {
+                miso_values.clear();
+            }
+
+            for (index, &sample_position) in sample_positions.iter().enumerate() {
+                let clock_edge = sample_position.saturating_add(1);
+                if self.query_first_clock_edge.is_none() {
+                    self.query_first_clock_edge = Some(clock_edge);
+                }
+                if mosi_query.is_some() && mosi_values[index] {
+                    self.query_mosi_word |= 1 << bit_position(self.query_bits_collected);
+                }
+                if miso_query.is_some() && miso_values[index] {
+                    self.query_miso_word |= 1 << bit_position(self.query_bits_collected);
+                }
+                trace!(
+                    "bit {}: CLK edge at {:.9}s, MOSI={}",
+                    self.query_bits_collected,
+                    position_to_ns(clock_edge) as f64 / 1_000_000_000.0,
+                    mosi_query.is_some() && mosi_values[index],
+                );
+
+                self.query_bits_collected += 1;
+                if self.query_bits_collected < bits_per_word {
+                    continue;
+                }
+
+                let timestamp = position_to_ns(
+                    self.query_first_clock_edge
+                        .expect("a complete word has a first edge"),
+                );
+                let duration = position_to_ns(clock_edge).saturating_sub(timestamp);
                 words_emitted += 1;
                 debug!(
                     "#{}: mosi=0x{:06X} miso=0x{:06X} at {:.9}s",
                     self.tx_count + words_emitted as u64,
-                    mosi_word,
-                    miso_word,
+                    self.query_mosi_word,
+                    self.query_miso_word,
                     timestamp as f64 / 1_000_000_000.0
                 );
                 if mosi_output.is_some() {
-                    mosi_batch.push(Word::spanning(mosi_word, timestamp, duration));
+                    mosi_batch.push(Word::spanning(self.query_mosi_word, timestamp, duration));
                 }
                 if miso_output.is_some() {
-                    miso_batch.push(Word::spanning(miso_word, timestamp, duration));
+                    miso_batch.push(Word::spanning(self.query_miso_word, timestamp, duration));
                 }
+                self.query_mosi_word = 0;
+                self.query_miso_word = 0;
+                self.query_bits_collected = 0;
+                self.query_first_clock_edge = None;
+            }
+
+            if window_exhausted {
+                if self.query_bits_collected > 0 {
+                    debug!(
+                        "Incomplete word: {}/{} bits",
+                        self.query_bits_collected, bits_per_word
+                    );
+                }
+                self.query_mosi_word = 0;
+                self.query_miso_word = 0;
+                self.query_bits_collected = 0;
+                self.query_first_clock_edge = None;
+                self.query_cs_position = window_end;
+                self.query_window_end = None;
             }
         }
 
@@ -462,7 +524,11 @@ impl SpiDecoder {
         }
 
         self.tx_count += words_emitted as u64;
-        Ok(words_emitted)
+        if capture_exhausted {
+            Err(WorkError::Shutdown)
+        } else {
+            Ok(words_emitted)
+        }
     }
 
     /// Streaming path: unchanged behavior for live sources or any
@@ -723,7 +789,110 @@ impl SpiDecoder {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
+
+    #[derive(Default)]
+    struct QueryCalls {
+        next_edge: AtomicUsize,
+        next_edges: AtomicUsize,
+        value_at: AtomicUsize,
+        values_at: AtomicUsize,
+    }
+
+    struct BatchQuery {
+        bits: Vec<bool>,
+        calls: Arc<QueryCalls>,
+    }
+
+    impl BatchQuery {
+        fn transition_after(&self, position: u64, limit: u64) -> Option<CaptureTransition> {
+            let mut current = self.bits[position as usize];
+            for sample in position + 1..limit.min(self.bits.len() as u64) {
+                let value = self.bits[sample as usize];
+                if value != current {
+                    return Some(CaptureTransition { sample, value });
+                }
+                current = value;
+            }
+            None
+        }
+    }
+
+    impl EdgeQuery for BatchQuery {
+        fn sample_period(&self) -> f64 {
+            1e-9
+        }
+
+        fn samplerate_hz(&self) -> f64 {
+            1e9
+        }
+
+        fn total_samples(&self) -> u64 {
+            self.bits.len() as u64
+        }
+
+        fn value_at(&self, position: u64) -> signal_processing::Result<bool> {
+            self.calls.value_at.fetch_add(1, Ordering::Relaxed);
+            Ok(self.bits[position as usize])
+        }
+
+        fn next_edge(
+            &self,
+            position: u64,
+            limit: u64,
+        ) -> signal_processing::Result<Option<CaptureTransition>> {
+            self.calls.next_edge.fetch_add(1, Ordering::Relaxed);
+            Ok(self.transition_after(position, limit))
+        }
+
+        fn next_edges(
+            &self,
+            position: u64,
+            limit: u64,
+            max_edges: usize,
+            output: &mut Vec<CaptureTransition>,
+        ) -> signal_processing::Result<()> {
+            self.calls.next_edges.fetch_add(1, Ordering::Relaxed);
+            output.clear();
+            let mut cursor = position;
+            while output.len() < max_edges {
+                let Some(edge) = self.transition_after(cursor, limit) else {
+                    break;
+                };
+                cursor = edge.sample;
+                output.push(edge);
+            }
+            Ok(())
+        }
+
+        fn values_at(
+            &self,
+            positions: &[u64],
+            output: &mut Vec<bool>,
+        ) -> signal_processing::Result<()> {
+            self.calls.values_at.fetch_add(1, Ordering::Relaxed);
+            output.clear();
+            output.extend(
+                positions
+                    .iter()
+                    .map(|&position| self.bits[position as usize]),
+            );
+            Ok(())
+        }
+    }
+
+    fn query_input(
+        watchdog: &signal_processing::watchdog::Watchdog,
+        bits: Vec<bool>,
+        calls: Arc<QueryCalls>,
+        port: &str,
+    ) -> InputPort {
+        InputPort::disconnected()
+            .with_edge_query(Some(Arc::new(BatchQuery { bits, calls })))
+            .with_watchdog(watchdog.clone(), "spi".to_string(), port.to_string())
+    }
 
     #[test]
     fn test_decoder_creation() {
@@ -751,6 +920,58 @@ mod tests {
         let decoder_high =
             SpiDecoder::with_cs_polarity(SpiMode::Mode0, 8, true, false, CsPolarity::ActiveHigh);
         assert_eq!(decoder_high.cs_polarity, CsPolarity::ActiveHigh);
+    }
+
+    #[test]
+    fn work_indexed_batches_clock_edges_and_data_values() {
+        use crossbeam_channel::bounded;
+        use signal_processing::sender::{ChannelMessage, Sender};
+        use signal_processing::watchdog::Watchdog;
+
+        let samples = 100usize;
+        let cs_bits = (0..samples)
+            .map(|sample| !(10..90).contains(&sample))
+            .collect();
+        let clk_bits = (0..samples).map(|sample| sample % 2 == 1).collect();
+        let mosi_bits = vec![true; samples];
+        let cs_calls = Arc::new(QueryCalls::default());
+        let clk_calls = Arc::new(QueryCalls::default());
+        let mosi_calls = Arc::new(QueryCalls::default());
+        let watchdog = Watchdog::new();
+        let inputs = [
+            query_input(&watchdog, cs_bits, cs_calls, "cs"),
+            query_input(&watchdog, clk_bits, Arc::clone(&clk_calls), "clk"),
+            query_input(&watchdog, mosi_bits, Arc::clone(&mosi_calls), "mosi"),
+        ];
+        let (output_tx, output_rx) = bounded::<ChannelMessage<Word>>(4);
+        let outputs = [OutputPort::new_with_watchdog(
+            Sender::new(vec![output_tx]),
+            &watchdog,
+            "spi",
+            "mosi_words",
+        )];
+        let mut decoder = SpiDecoder::new(SpiMode::Mode0, 4, true, false);
+
+        assert!(matches!(
+            decoder.work(&inputs, &outputs),
+            Err(WorkError::Shutdown)
+        ));
+        let words: Vec<_> = output_rx
+            .try_iter()
+            .flat_map(|message| match message {
+                ChannelMessage::Sample(word) => vec![word],
+                ChannelMessage::Batch(words) => words,
+                ChannelMessage::EndOfStream => vec![],
+            })
+            .collect();
+
+        assert_eq!(words.len(), 10);
+        assert!(words.iter().all(|word| word.value == 0b1111));
+        assert_eq!(words[0], Word::spanning(0b1111, 11, 6));
+        assert!(clk_calls.next_edges.load(Ordering::Relaxed) > 0);
+        assert_eq!(clk_calls.next_edge.load(Ordering::Relaxed), 0);
+        assert!(mosi_calls.values_at.load(Ordering::Relaxed) > 0);
+        assert_eq!(mosi_calls.value_at.load(Ordering::Relaxed), 0);
     }
 
     /// MOSI and MISO are independent `Word` streams on independent output

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use signal_processing::{Annotation, AnnotationQuery, DerivedLaneData, WordPresenceBucket};
 
@@ -28,6 +29,7 @@ pub(crate) enum IndexedAnnotationSamples {
 #[derive(Debug, Clone)]
 pub(crate) struct IndexedAnnotationCacheEntry {
     key: IndexedAnnotationCacheKey,
+    sampled_at: Instant,
     pub(crate) samples: IndexedAnnotationSamples,
 }
 
@@ -62,6 +64,7 @@ impl LogicAnalyzerViewer {
         let (start_ns, end_ns) = self.visible_window_ns();
         let target_points = layout.wave_rect.width().max(1.0).round() as usize;
         let exact_limit = target_points.saturating_mul(2).max(32);
+        const LIVE_REFRESH_INTERVAL: Duration = Duration::from_millis(50);
         for (name, query) in queries {
             let metadata = query.metadata();
             let key = IndexedAnnotationCacheKey {
@@ -71,27 +74,51 @@ impl LogicAnalyzerViewer {
                 end_ns,
                 target_points,
             };
-            if self
-                .indexed_annotation_cache
-                .get(&name)
-                .is_some_and(|entry| entry.key == key)
-            {
-                continue;
+            if let Some(entry) = self.indexed_annotation_cache.get(&name) {
+                if entry.key == key {
+                    continue;
+                }
+                let same_view = entry.key.query_id == key.query_id
+                    && entry.key.start_ns == key.start_ns
+                    && entry.key.end_ns == key.end_ns
+                    && entry.key.target_points == key.target_points;
+                if metadata.is_live
+                    && same_view
+                    && entry.sampled_at.elapsed() < LIVE_REFRESH_INTERVAL
+                {
+                    continue;
+                }
             }
 
-            let samples = match query.exact_window(start_ns, end_ns, exact_limit) {
-                Ok(window) if window.complete => IndexedAnnotationSamples::Exact {
-                    annotations: window.annotations,
-                    last_timestamp_ns: metadata.last_timestamp_ns,
-                },
-                Ok(_) => match query.presence_window(start_ns, end_ns, target_points) {
-                    Ok(buckets) => IndexedAnnotationSamples::Presence(buckets),
-                    Err(_) => IndexedAnnotationSamples::Error,
-                },
+            let samples = match query.coarse_presence_window(start_ns, end_ns, target_points) {
+                Ok(buckets) => {
+                    let estimated_words = buckets
+                        .iter()
+                        .map(|bucket| bucket.word_count)
+                        .fold(0u64, u64::saturating_add);
+                    if estimated_words <= exact_limit as u64 {
+                        match query.exact_window(start_ns, end_ns, exact_limit) {
+                            Ok(window) if window.complete => IndexedAnnotationSamples::Exact {
+                                annotations: window.annotations,
+                                last_timestamp_ns: metadata.last_timestamp_ns,
+                            },
+                            Ok(_) => IndexedAnnotationSamples::Presence(buckets),
+                            Err(_) => IndexedAnnotationSamples::Error,
+                        }
+                    } else {
+                        IndexedAnnotationSamples::Presence(buckets)
+                    }
+                }
                 Err(_) => IndexedAnnotationSamples::Error,
             };
-            self.indexed_annotation_cache
-                .insert(name, IndexedAnnotationCacheEntry { key, samples });
+            self.indexed_annotation_cache.insert(
+                name,
+                IndexedAnnotationCacheEntry {
+                    key,
+                    sampled_at: Instant::now(),
+                    samples,
+                },
+            );
         }
     }
 }
@@ -269,6 +296,12 @@ mod tests {
         let first_generation = viewer.indexed_annotation_cache["words"].key.generation;
 
         writer.append(Word::new(2, 2_000)).unwrap();
+        viewer.sample_indexed_annotations(layout(1_000.0));
+        assert_eq!(
+            viewer.indexed_annotation_cache["words"].key.generation, first_generation,
+            "live refreshes within one display interval should be coalesced"
+        );
+        std::thread::sleep(Duration::from_millis(51));
         viewer.sample_indexed_annotations(layout(1_000.0));
         let entry = &viewer.indexed_annotation_cache["words"];
         assert!(entry.key.generation > first_generation);

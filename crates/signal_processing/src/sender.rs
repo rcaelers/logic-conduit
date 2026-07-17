@@ -218,6 +218,14 @@ impl<T: Clone + Send> SharedSenders<T> {
         self.send_message(ChannelMessage::Batch(values.to_vec()), values.last())
     }
 
+    fn send_batch_owned(&self, values: Vec<T>) -> Result<(), ()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        let sticky_last = values.last().cloned();
+        self.send_message(ChannelMessage::Batch(values), sticky_last.as_ref())
+    }
+
     fn send_message(&self, message: ChannelMessage<T>, sticky_last: Option<&T>) -> Result<(), ()> {
         struct BlockedSend<T> {
             id: u64,
@@ -235,7 +243,9 @@ impl<T: Clone + Send> SharedSenders<T> {
                 inner.last = Some(last.clone());
             }
             let mut dead: Vec<u64> = Vec::new();
-            for subscriber in &mut inner.subscribers {
+            let last_subscriber = inner.subscribers.len().saturating_sub(1);
+            let mut owned_message = Some(message);
+            for (index, subscriber) in inner.subscribers.iter_mut().enumerate() {
                 // Lossy: retry the pending value first so values stay ordered.
                 if let Some(pending) = subscriber.pending.take() {
                     match subscriber.tx.try_send(ChannelMessage::Sample(pending)) {
@@ -251,7 +261,17 @@ impl<T: Clone + Send> SharedSenders<T> {
                         }
                     }
                 }
-                match subscriber.tx.try_send(message.clone()) {
+                let message = if index == last_subscriber {
+                    owned_message
+                        .take()
+                        .expect("message retained for last subscriber")
+                } else {
+                    owned_message
+                        .as_ref()
+                        .expect("message retained until last subscriber")
+                        .clone()
+                };
+                match subscriber.tx.try_send(message) {
                     Ok(()) => {}
                     Err(TrySendError::Full(message)) => match subscriber.policy {
                         OverflowPolicy::Block => blocked.push(BlockedSend {
@@ -490,6 +510,10 @@ impl<T: Clone + Send> Sender<T> {
 
         let _guard = self.watchdog_handle.as_ref().map(OperationGuard::new);
         if let Some(shared) = &self.shared {
+            if self.destinations.is_empty() {
+                let _ = shared.send_batch_owned(values);
+                return Ok(());
+            }
             let _ = shared.send_batch(&values);
         }
         if self.destinations.is_empty() {

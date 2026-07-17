@@ -3,6 +3,8 @@ use crate::events::Annotation;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnnotationStoreMetadata {
     pub generation: u64,
+    /// Whether the producer can still append annotations to this store.
+    pub is_live: bool,
     pub total_word_count: u64,
     pub first_timestamp_ns: Option<u64>,
     pub last_timestamp_ns: Option<u64>,
@@ -59,6 +61,22 @@ pub trait AnnotationQuery: Send + Sync {
         _target_buckets: usize,
     ) -> AnnotationQueryResult<Vec<WordPresenceBucket>> {
         Err(AnnotationQueryError::PresenceUnavailable)
+    }
+
+    /// Returns the bounded, already-indexed overview without opportunistically
+    /// decoding exact annotations. Implementations that do not distinguish
+    /// the two modes can use [`Self::presence_window`].
+    ///
+    /// The viewer calls this before [`Self::exact_window`] so a dense viewport
+    /// never has to enumerate or decode exact values merely to discover that
+    /// they cannot be drawn individually.
+    fn coarse_presence_window(
+        &self,
+        start_ns: u64,
+        end_ns: u64,
+        target_buckets: usize,
+    ) -> AnnotationQueryResult<Vec<WordPresenceBucket>> {
+        self.presence_window(start_ns, end_ns, target_buckets)
     }
 
     fn exact_window(

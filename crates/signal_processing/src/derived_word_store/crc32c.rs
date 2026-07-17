@@ -1,9 +1,9 @@
 const POLYNOMIAL: u32 = 0x82f6_3b78;
 
-const fn table() -> [u32; 256] {
-    let mut result = [0u32; 256];
+const fn tables() -> [[u32; 256]; 8] {
+    let mut result = [[0u32; 256]; 8];
     let mut index = 0;
-    while index < result.len() {
+    while index < result[0].len() {
         let mut crc = index as u32;
         let mut bit = 0;
         while bit < 8 {
@@ -14,18 +14,41 @@ const fn table() -> [u32; 256] {
             };
             bit += 1;
         }
-        result[index] = crc;
+        result[0][index] = crc;
         index += 1;
+    }
+    let mut table = 1;
+    while table < result.len() {
+        let mut index = 0;
+        while index < result[table].len() {
+            let previous = result[table - 1][index];
+            result[table][index] =
+                result[0][(previous & 0xff) as usize] ^ (previous >> 8);
+            index += 1;
+        }
+        table += 1;
     }
     result
 }
 
-const TABLE: [u32; 256] = table();
+const TABLES: [[u32; 256]; 8] = tables();
 
 #[inline]
 fn update(mut crc: u32, bytes: &[u8]) -> u32 {
-    for &byte in bytes {
-        crc = TABLE[((crc ^ u32::from(byte)) & 0xff) as usize] ^ (crc >> 8);
+    let mut chunks = bytes.chunks_exact(8);
+    for chunk in &mut chunks {
+        crc ^= u32::from_le_bytes(chunk[..4].try_into().expect("four-byte CRC prefix"));
+        crc = TABLES[7][(crc & 0xff) as usize]
+            ^ TABLES[6][((crc >> 8) & 0xff) as usize]
+            ^ TABLES[5][((crc >> 16) & 0xff) as usize]
+            ^ TABLES[4][(crc >> 24) as usize]
+            ^ TABLES[3][chunk[4] as usize]
+            ^ TABLES[2][chunk[5] as usize]
+            ^ TABLES[1][chunk[6] as usize]
+            ^ TABLES[0][chunk[7] as usize];
+    }
+    for &byte in chunks.remainder() {
+        crc = TABLES[0][((crc ^ u32::from(byte)) & 0xff) as usize] ^ (crc >> 8);
     }
     crc
 }
@@ -47,8 +70,24 @@ pub(super) fn block_checksum(bytes: &[u8], checksum_offset: usize) -> u32 {
 mod tests {
     use super::*;
 
+    fn bytewise_checksum(bytes: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &byte in bytes {
+            crc = TABLES[0][((crc ^ u32::from(byte)) & 0xff) as usize] ^ (crc >> 8);
+        }
+        !crc
+    }
+
     #[test]
     fn crc32c_matches_the_standard_check_value() {
         assert_eq!(checksum(b"123456789"), 0xe306_9283);
+    }
+
+    #[test]
+    fn slicing_by_eight_matches_bytewise_for_all_tail_lengths() {
+        let bytes: Vec<_> = (0..=255).map(|value| value as u8).collect();
+        for length in 0..=bytes.len() {
+            assert_eq!(checksum(&bytes[..length]), bytewise_checksum(&bytes[..length]));
+        }
     }
 }

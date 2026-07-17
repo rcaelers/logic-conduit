@@ -17,6 +17,7 @@ pub struct WordPresenceIndex {
     pub(super) levels: Vec<Vec<WordSummaryRecord>>,
     extent_end_ns: Option<u64>,
     pub(super) prefix_max_end_ns: Vec<u64>,
+    prefix_word_counts: Vec<u64>,
 }
 
 impl Default for WordPresenceIndex {
@@ -31,6 +32,7 @@ impl WordPresenceIndex {
             levels: vec![Vec::new()],
             extent_end_ns: None,
             prefix_max_end_ns: Vec::new(),
+            prefix_word_counts: vec![0],
         }
     }
 
@@ -50,6 +52,13 @@ impl WordPresenceIndex {
                 .last()
                 .copied()
                 .map_or(record.end_ns, |end_ns| end_ns.max(record.end_ns)),
+        );
+        self.prefix_word_counts.push(
+            self.prefix_word_counts
+                .last()
+                .copied()
+                .unwrap_or(0)
+                .saturating_add(record.word_count),
         );
         self.levels[0].push(record);
 
@@ -141,32 +150,9 @@ impl WordPresenceIndex {
                 bucket_end_exclusive,
             ));
         }
-        count.saturating_add(self.count_full_leaf_range(full_start, full_end))
-    }
-
-    fn count_full_leaf_range(&self, mut first: usize, end: usize) -> u64 {
-        let mut count = 0u64;
-        while first < end {
-            let mut chosen_level = 0;
-            let mut chosen_span = 1usize;
-            let mut span = FAN_OUT;
-            for level in 1..self.levels.len() {
-                if first.is_multiple_of(span)
-                    && first.saturating_add(span) <= end
-                    && first / span < self.levels[level].len()
-                {
-                    chosen_level = level;
-                    chosen_span = span;
-                }
-                let Some(next_span) = span.checked_mul(FAN_OUT) else {
-                    break;
-                };
-                span = next_span;
-            }
-            count = count.saturating_add(self.levels[chosen_level][first / chosen_span].word_count);
-            first += chosen_span;
-        }
-        count
+        count.saturating_add(
+            self.prefix_word_counts[full_end].saturating_sub(self.prefix_word_counts[full_start]),
+        )
     }
 
     #[cfg(test)]

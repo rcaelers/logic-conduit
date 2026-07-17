@@ -9,7 +9,7 @@ use memmap2::{Mmap, MmapOptions};
 
 use super::super::super::cache::{cache_block, cached_block};
 use super::super::super::codec::{
-    DecodedWordBlock, PushResult, WordBlockBuilder, decode_word_block, decode_word_block_range,
+    DecodedWordBlock, WordBlockBuilder, decode_word_block, decode_word_block_range,
 };
 use super::super::super::config::{LiveStoreConfig, PersistentStoreConfig};
 use super::super::super::errors::CodecError;
@@ -394,6 +394,7 @@ impl AnnotationQuery for IndexedAnnotationStore {
         let snapshot = self.snapshot();
         AnnotationStoreMetadata {
             generation: snapshot.metadata.generation,
+            is_live: snapshot.metadata.status == StoreStatus::Live,
             total_word_count: snapshot.metadata.committed_word_count
                 + snapshot.metadata.hot_tail_word_count as u64,
             first_timestamp_ns: snapshot.metadata.first_timestamp_ns,
@@ -408,20 +409,7 @@ impl AnnotationQuery for IndexedAnnotationStore {
         end_ns: u64,
         target_buckets: usize,
     ) -> AnnotationQueryResult<Vec<WordPresenceBucket>> {
-        if start_ns > end_ns {
-            return Err(AnnotationQueryError::InvalidWindow { start_ns, end_ns });
-        }
-        if target_buckets == 0 {
-            return Err(AnnotationQueryError::ZeroBucketLimit);
-        }
-        let mut buckets = {
-            let state = self.shared.state.read().unwrap();
-            let mut buckets = state
-                .presence
-                .presence_window_all(start_ns, end_ns, target_buckets);
-            merge_hot_tail_presence(&mut buckets, &state.hot_tail);
-            buckets
-        };
+        let mut buckets = self.coarse_presence_window(start_ns, end_ns, target_buckets)?;
         // Exact boxes switch to presence at two words per pixel. Spend a
         // bounded amount of additional decode work here so moderately dense
         // burst traffic still preserves visible gaps instead of smearing one
@@ -443,6 +431,30 @@ impl AnnotationQuery for IndexedAnnotationStore {
                 target_buckets,
             ));
         }
+        buckets.retain(|bucket| bucket.word_count > 0);
+        Ok(buckets)
+    }
+
+    fn coarse_presence_window(
+        &self,
+        start_ns: u64,
+        end_ns: u64,
+        target_buckets: usize,
+    ) -> AnnotationQueryResult<Vec<WordPresenceBucket>> {
+        if start_ns > end_ns {
+            return Err(AnnotationQueryError::InvalidWindow { start_ns, end_ns });
+        }
+        if target_buckets == 0 {
+            return Err(AnnotationQueryError::ZeroBucketLimit);
+        }
+        let mut buckets = {
+            let state = self.shared.state.read().unwrap();
+            let mut buckets = state
+                .presence
+                .presence_window_all(start_ns, end_ns, target_buckets);
+            merge_hot_tail_presence(&mut buckets, &state.hot_tail);
+            buckets
+        };
         buckets.retain(|bucket| bucket.word_count > 0);
         Ok(buckets)
     }
@@ -945,14 +957,17 @@ impl IndexedAnnotationWriter {
                     timestamp_ns: word.timestamp_ns,
                 }));
             }
-
-            if self.builder.push(word)? == PushResult::BlockFull {
-                self.commit_current_block()?;
-                let result = self.builder.push(word)?;
-                debug_assert_eq!(result, PushResult::Appended);
-            }
             self.last_timestamp_ns = Some(word.timestamp_ns);
-            self.words_since_tail_publish += 1;
+        }
+
+        let mut remaining = words;
+        while !remaining.is_empty() {
+            let accepted = self.builder.extend_ordered(remaining);
+            self.words_since_tail_publish += accepted;
+            remaining = &remaining[accepted..];
+            if !remaining.is_empty() {
+                self.commit_current_block()?;
+            }
         }
 
         if !self.builder.is_empty()
@@ -1155,14 +1170,22 @@ fn coalesce_presence_summaries(
     if summaries.len() <= max_runs || max_runs == 0 {
         return summaries;
     }
+    let kept_gap_count = max_runs - 1;
     let mut gaps: Vec<_> = summaries
         .windows(2)
         .enumerate()
         .map(|(index, pair)| (pair[1].start_ns.saturating_sub(pair[0].end_ns), index))
         .collect();
-    gaps.sort_unstable_by(|left, right| right.cmp(left));
+    // Only the largest `max_runs - 1` gaps survive. Fully sorting every
+    // inter-word gap made dense decoder lanes O(words log words) per encoded
+    // block even though the index retains at most 256 runs. Partitioning the
+    // wanted prefix keeps the same `(gap, index)` tie-break while doing
+    // linear selection work.
+    if kept_gap_count > 0 && kept_gap_count < gaps.len() {
+        gaps.select_nth_unstable_by(kept_gap_count - 1, |left, right| right.cmp(left));
+    }
     let mut keep_gap = vec![false; summaries.len() - 1];
-    for &(_, index) in gaps.iter().take(max_runs - 1) {
+    for &(_, index) in gaps.iter().take(kept_gap_count) {
         keep_gap[index] = true;
     }
 

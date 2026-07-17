@@ -35,10 +35,18 @@ pub enum CsvValueFormat {
 }
 
 impl CsvValueFormat {
-    fn render(&self, value: u64) -> String {
+    fn append_row(
+        &self,
+        output: &mut Vec<u8>,
+        row_id: u64,
+        timestamp_ns: u64,
+        value: u64,
+    ) -> std::io::Result<()> {
         match *self {
-            CsvValueFormat::Decimal => value.to_string(),
-            CsvValueFormat::Hex { width } => format!("{value:0width$X}"),
+            CsvValueFormat::Decimal => writeln!(output, "{row_id},{timestamp_ns},{value}"),
+            CsvValueFormat::Hex { width } => {
+                writeln!(output, "{row_id},{timestamp_ns},{value:0width$X}")
+            }
         }
     }
 }
@@ -54,6 +62,8 @@ pub struct CsvWordWriter {
     value_format: CsvValueFormat,
 
     data_buffer: VecDeque<Word>,
+    data_batch: Vec<Word>,
+    encoded_batch: Vec<u8>,
     name_buffer: VecDeque<TextSample>,
     /// Drained but not yet applicable name changes (timestamps ahead of the
     /// data stream), in channel (= timestamp) order.
@@ -66,12 +76,16 @@ pub struct CsvWordWriter {
 }
 
 impl CsvWordWriter {
+    const DRAIN_BATCH_SIZE: usize = 65_536;
+
     pub fn new() -> Self {
         Self {
             name: "csv_word_writer".to_string(),
             header: Some("id,time_ns,value".to_string()),
             value_format: CsvValueFormat::default(),
             data_buffer: VecDeque::new(),
+            data_batch: Vec::with_capacity(Self::DRAIN_BATCH_SIZE),
+            encoded_batch: Vec::with_capacity(Self::DRAIN_BATCH_SIZE * 32),
             name_buffer: VecDeque::new(),
             pending_names: VecDeque::new(),
             current_name: None,
@@ -172,23 +186,40 @@ impl CsvWordWriter {
         Ok(self.current_file.as_mut().unwrap())
     }
 
-    fn write_word(&mut self, word: Word) -> WorkResult<()> {
+    fn flush_encoded_batch(&mut self) -> WorkResult<()> {
+        if self.encoded_batch.is_empty() {
+            return Ok(());
+        }
+
+        let mut encoded = std::mem::take(&mut self.encoded_batch);
+        let result = match self.ensure_file_open() {
+            Ok(writer) => writer
+                .write_all(&encoded)
+                .map_err(|error| WorkError::NodeError(format!("writing row batch: {error}"))),
+            Err(error) => Err(error),
+        };
+        encoded.clear();
+        self.encoded_batch = encoded;
+        result
+    }
+
+    fn stage_word(&mut self, word: Word) -> WorkResult<()> {
         let word_ts = word.timestamp_ns;
         while self
             .pending_names
             .front()
             .is_some_and(|change| change.start_time_ns <= word_ts)
         {
+            self.flush_encoded_batch()?;
             let change = self.pending_names.pop_front().unwrap();
             self.apply_name_change(change)?;
         }
         self.last_word_ts = word_ts;
 
         let row_id = self.rows_in_file + 1;
-        let value = self.value_format.render(word.value);
-        let writer = self.ensure_file_open()?;
-        writeln!(writer, "{row_id},{word_ts},{value}")
-            .map_err(|e| WorkError::NodeError(format!("writing row: {e}")))?;
+        self.value_format
+            .append_row(&mut self.encoded_batch, row_id, word_ts, word.value)
+            .map_err(|error| WorkError::NodeError(format!("encoding row: {error}")))?;
         self.rows_in_file += 1;
         Ok(())
     }
@@ -261,8 +292,10 @@ impl ProcessNode for CsvWordWriter {
             self.pending_names.push_back(initial);
         }
 
-        // Block for a word; on shutdown finalize the open file.
-        let word = match data.recv() {
+        // Block for the first word, then retain the decoder's batch envelope
+        // through formatting and file output.
+        self.data_batch.clear();
+        let first = match data.recv() {
             Ok(word) => word,
             Err(WorkError::Shutdown) => {
                 self.close_current()
@@ -271,16 +304,40 @@ impl ProcessNode for CsvWordWriter {
             }
             Err(e) => return Err(e),
         };
+        self.data_batch.push(first);
+        let _ = data.try_recv_many(
+            &mut self.data_batch,
+            Self::DRAIN_BATCH_SIZE.saturating_sub(1),
+        );
+        drop(data);
 
-        // Opportunistically drain name changes (never blocks).
+        // Establish the filename watermark for the complete word batch.
+        let batch_end_ns = self
+            .data_batch
+            .last()
+            .expect("the blocking receive populated the batch")
+            .timestamp_ns;
         if let Some(names) = &mut names {
-            while let Ok(change) = names.try_recv() {
-                self.pending_names.push_back(change);
+            loop {
+                match names.peek() {
+                    Ok(change) if change.start_time_ns <= batch_end_ns => {
+                        self.pending_names.push_back(names.recv()?);
+                    }
+                    Ok(_) | Err(WorkError::Shutdown) => break,
+                    Err(error) => return Err(error),
+                }
             }
         }
+        drop(names);
 
-        self.write_word(word)?;
-        Ok(1)
+        let mut batch = std::mem::take(&mut self.data_batch);
+        let count = batch.len();
+        for word in batch.drain(..) {
+            self.stage_word(word)?;
+        }
+        self.flush_encoded_batch()?;
+        self.data_batch = batch;
+        Ok(count)
     }
 }
 

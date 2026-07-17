@@ -8,6 +8,7 @@ use super::vlq::{decode_u64, encode_u64, encoded_len};
 use super::errors::{CodecError, CodecResult};
 use crate::events::Word;
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushResult {
     Appended,
@@ -71,8 +72,17 @@ impl WordBlockBuilder {
 
     /// Appends `word`, or reports that the current non-empty block should be
     /// committed first. `word` is not consumed when `BlockFull` is returned.
+    #[cfg(test)]
     pub fn push(&mut self, word: Word) -> CodecResult<PushResult> {
         self.validate_order(word)?;
+        self.push_ordered(word)
+    }
+
+    /// Appends a word whose global ordering was already checked by the
+    /// owning stream writer. This avoids validating every word twice on the
+    /// high-volume live-index path while retaining all block-size checks.
+    #[cfg(test)]
+    fn push_ordered(&mut self, word: Word) -> CodecResult<PushResult> {
         if !self.words.is_empty() && self.would_close_before(word) {
             return Ok(PushResult::BlockFull);
         }
@@ -83,8 +93,162 @@ impl WordBlockBuilder {
         Ok(PushResult::Appended)
     }
 
+    /// Extends this block with the largest prefix that fits. The caller owns
+    /// global timestamp validation. Sizing is accumulated in locals and the
+    /// accepted words are copied into the builder once, avoiding billions of
+    /// individual `Vec::push` and repeated projection calls for dense lanes.
+    pub(crate) fn extend_ordered(&mut self, words: &[Word]) -> usize {
+        if self.duration_count == 0
+            && words.iter().all(|word| word.duration_ns == 0)
+            && self.duration_free_payload_fits_at_max_words()
+        {
+            return self.extend_duration_free(words);
+        }
+
+        let original_len = self.words.len();
+        let mut accepted = 0usize;
+        let mut timestamp_bytes = self.timestamp_bytes;
+        let mut duration_bytes = self.duration_bytes;
+        let mut duration_count = self.duration_count;
+        let mut last_duration_index = self.last_duration_index;
+        let mut max_value = self.max_value;
+        let mut previous_timestamp = self.words.last().map(|word| word.timestamp_ns);
+        let first_timestamp = self
+            .words
+            .first()
+            .map(|word| word.timestamp_ns)
+            .or_else(|| words.first().map(|word| word.timestamp_ns));
+
+        for &word in words {
+            let next_index = original_len + accepted;
+            if let Some(previous_timestamp) = previous_timestamp {
+                if next_index >= self.config.max_words
+                    || word.timestamp_ns.saturating_sub(previous_timestamp)
+                        > self.config.max_inter_word_gap_ns
+                    || word
+                        .timestamp_ns
+                        .saturating_sub(first_timestamp.expect("non-empty block prefix"))
+                        > self.config.max_timestamp_span_ns
+                {
+                    break;
+                }
+
+                let next_timestamp_bytes = timestamp_bytes
+                    + encoded_len(word.timestamp_ns.saturating_sub(previous_timestamp));
+                let next_max_value = max_value.max(word.value);
+                let next_value_bytes = value_width(next_max_value);
+                let (next_duration_bytes, next_duration_count, next_last_duration_index) =
+                    if word.duration_ns == 0 {
+                        (duration_bytes, duration_count, last_duration_index)
+                    } else {
+                        let index_delta = if duration_count == 0 {
+                            next_index
+                        } else {
+                            next_index - last_duration_index
+                        };
+                        (
+                            duration_bytes
+                                + encoded_len(index_delta as u64)
+                                + encoded_len(word.duration_ns),
+                            duration_count + 1,
+                            next_index,
+                        )
+                    };
+                let word_count = next_index + 1;
+                let record_bytes = next_timestamp_bytes + word_count * next_value_bytes;
+                let restart_count = word_count.div_ceil(self.config.restart_interval);
+                if record_bytes
+                    + restart_count * RESTART_ENTRY_SIZE
+                    + next_duration_bytes
+                    > self.config.max_payload_bytes
+                {
+                    break;
+                }
+                timestamp_bytes = next_timestamp_bytes;
+                max_value = next_max_value;
+                duration_bytes = next_duration_bytes;
+                duration_count = next_duration_count;
+                last_duration_index = next_last_duration_index;
+            } else {
+                timestamp_bytes += encoded_len(0);
+                if word.duration_ns != 0 {
+                    duration_bytes += encoded_len(0) + encoded_len(word.duration_ns);
+                    duration_count = 1;
+                    last_duration_index = 0;
+                }
+                max_value = word.value;
+            }
+            previous_timestamp = Some(word.timestamp_ns);
+            accepted += 1;
+        }
+
+        self.timestamp_bytes = timestamp_bytes;
+        self.duration_bytes = duration_bytes;
+        self.duration_count = duration_count;
+        self.last_duration_index = last_duration_index;
+        self.max_value = max_value;
+        self.words.extend_from_slice(&words[..accepted]);
+        accepted
+    }
+
+    /// With no duration table, the worst possible timestamp/value record is
+    /// bounded (10-byte VLQ + 8-byte value). When that worst case fits at the
+    /// configured word limit, payload sizing cannot close the block and the
+    /// dense path only needs timestamp-boundary checks.
+    fn duration_free_payload_fits_at_max_words(&self) -> bool {
+        let max_words = self.config.max_words;
+        let restart_bytes = max_words
+            .div_ceil(self.config.restart_interval)
+            .saturating_mul(RESTART_ENTRY_SIZE);
+        max_words
+            .saturating_mul(10 + size_of::<u64>())
+            .saturating_add(restart_bytes)
+            <= self.config.max_payload_bytes
+    }
+
+    fn extend_duration_free(&mut self, words: &[Word]) -> usize {
+        let available = self.config.max_words.saturating_sub(self.words.len());
+        let candidates = &words[..words.len().min(available)];
+        let first_timestamp = self
+            .words
+            .first()
+            .map(|word| word.timestamp_ns)
+            .or_else(|| candidates.first().map(|word| word.timestamp_ns));
+        let mut previous_timestamp = self.words.last().map(|word| word.timestamp_ns);
+        let mut accepted = 0usize;
+        let mut timestamp_bytes = self.timestamp_bytes;
+        let mut max_value = self.max_value;
+        for &word in candidates {
+            if let Some(previous_timestamp) = previous_timestamp {
+                let delta = word.timestamp_ns.saturating_sub(previous_timestamp);
+                if delta > self.config.max_inter_word_gap_ns
+                    || word
+                        .timestamp_ns
+                        .saturating_sub(first_timestamp.expect("non-empty block prefix"))
+                        > self.config.max_timestamp_span_ns
+                {
+                    break;
+                }
+                timestamp_bytes += encoded_len(delta);
+            } else {
+                timestamp_bytes += encoded_len(0);
+            }
+            previous_timestamp = Some(word.timestamp_ns);
+            max_value = max_value.max(word.value);
+            accepted += 1;
+        }
+        self.timestamp_bytes = timestamp_bytes;
+        self.max_value = max_value;
+        self.words.extend_from_slice(&candidates[..accepted]);
+        accepted
+    }
+
     pub fn clear(&mut self) {
         self.words.clear();
+        self.reset_metadata();
+    }
+
+    fn reset_metadata(&mut self) {
         self.timestamp_bytes = 0;
         self.duration_bytes = 0;
         self.duration_count = 0;
@@ -93,9 +257,16 @@ impl WordBlockBuilder {
     }
 
     pub fn encode(&self, sequence: u64, output: &mut Vec<u8>) -> CodecResult<EncodedBlockMetadata> {
-        encode_word_block_with_interval(sequence, &self.words, self.config.restart_interval, output)
+        encode_validated_word_block_with_interval(
+            sequence,
+            &self.words,
+            self.config.restart_interval,
+            value_width(self.max_value),
+            output,
+        )
     }
 
+    #[cfg(test)]
     fn validate_order(&self, word: Word) -> CodecResult<()> {
         if let Some(previous) = self.words.last()
             && word.timestamp_ns < previous.timestamp_ns
@@ -109,6 +280,7 @@ impl WordBlockBuilder {
         Ok(())
     }
 
+    #[cfg(test)]
     fn would_close_before(&self, word: Word) -> bool {
         let first = self.words.first().expect("non-empty builder");
         let last = self.words.last().expect("non-empty builder");
@@ -140,6 +312,7 @@ impl WordBlockBuilder {
             > self.config.max_payload_bytes
     }
 
+    #[cfg(test)]
     fn append(&mut self, word: Word) {
         let index = self.words.len();
         let delta = self
@@ -189,6 +362,7 @@ pub struct DecodedWordRange {
     pub decoded_records: usize,
 }
 
+#[cfg(test)]
 fn encode_word_block_with_interval(
     sequence: u64,
     words: &[Word],
@@ -207,6 +381,24 @@ fn encode_word_block_with_interval(
     validate_order(words)?;
 
     let value_bytes = value_width(words.iter().map(|word| word.value).max().unwrap());
+    encode_validated_word_block_with_interval(
+        sequence,
+        words,
+        restart_interval,
+        value_bytes,
+        output,
+    )
+}
+
+fn encode_validated_word_block_with_interval(
+    sequence: u64,
+    words: &[Word],
+    restart_interval: usize,
+    value_bytes: usize,
+    output: &mut Vec<u8>,
+) -> CodecResult<EncodedBlockMetadata> {
+    debug_assert!(!words.is_empty());
+    debug_assert!(restart_interval > 0);
     let mut records = Vec::with_capacity(words.len() * (value_bytes + 1));
     let mut durations = Vec::new();
     let mut restarts = Vec::with_capacity(words.len().div_ceil(restart_interval));
@@ -553,6 +745,7 @@ fn apply_durations(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_order(words: &[Word]) -> CodecResult<()> {
     for (index, pair) in words.windows(2).enumerate() {
         if pair[1].timestamp_ns < pair[0].timestamp_ns {
@@ -836,6 +1029,37 @@ mod tests {
             PushResult::BlockFull
         );
         assert_eq!(builder.words(), &[Word::new(1, 0)]);
+    }
+
+    #[test]
+    fn builder_batch_extension_stops_at_the_same_boundaries() {
+        let config = BlockCodecConfig {
+            max_words: 3,
+            max_inter_word_gap_ns: 100,
+            ..BlockCodecConfig::default()
+        };
+        let words = [
+            Word::new(1, 0),
+            Word::spanning(2, 10, 3),
+            Word::new(3, 20),
+            Word::new(4, 200),
+        ];
+        let mut batch = WordBlockBuilder::new(config).unwrap();
+        assert_eq!(batch.extend_ordered(&words), 3);
+        assert_eq!(batch.words(), &words[..3]);
+        assert_eq!(batch.extend_ordered(&words[3..]), 0);
+
+        let mut scalar = WordBlockBuilder::new(config).unwrap();
+        for &word in &words[..3] {
+            assert_eq!(scalar.push(word).unwrap(), PushResult::Appended);
+        }
+        assert_eq!(scalar.push(words[3]).unwrap(), PushResult::BlockFull);
+
+        let mut batch_bytes = Vec::new();
+        let mut scalar_bytes = Vec::new();
+        batch.encode(0, &mut batch_bytes).unwrap();
+        scalar.encode(0, &mut scalar_bytes).unwrap();
+        assert_eq!(batch_bytes, scalar_bytes);
     }
 
     #[test]

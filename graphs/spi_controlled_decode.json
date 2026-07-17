@@ -1,251 +1,303 @@
 {
+  "connections": [
+    {
+      "from": {
+        "direction": "Output",
+        "index": 7,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 1
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 6,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 1,
+        "node": 1
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 8,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 3,
+        "node": 1
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 1
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 2
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 1
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 3
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 2
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 5
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 3
+      },
+      "to": {
+        "direction": "Input",
+        "index": 1,
+        "node": 5
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 2
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 4
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 4
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 6
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 6
+      },
+      "to": {
+        "direction": "Input",
+        "index": 1,
+        "node": 9
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 8,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 7
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 5
+      },
+      "to": {
+        "direction": "Input",
+        "index": 1,
+        "node": 7
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 7
+      },
+      "to": {
+        "direction": "Input",
+        "index": 11,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 10,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 1,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 1,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 2,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 2,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 3,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 3,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 4,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 4,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 5,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 5,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 6,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 6,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 7,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 7,
+        "node": 0
+      },
+      "to": {
+        "direction": "Input",
+        "index": 8,
+        "node": 8
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 8
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 9
+      }
+    }
+  ],
+  "frames": [],
+  "next_frame_id": 0,
+  "next_id": 12,
   "nodes": {
-    "10": {
-      "id": 10,
-      "kind": "Regular",
-      "title": "Viewer Buffer",
-      "type_name": "Buffer",
-      "header_color": [
-        60,
-        140,
-        100,
-        255
-      ],
-      "pos": {
-        "x": 1760.0,
-        "y": 420.0
-      },
-      "inputs": [
-        {
-          "resolved_type": "Words"
-        }
-      ],
-      "outputs": [
-        {}
-      ],
-      "collapsed": false,
-      "state": {
-        "capacity": {
-          "max": 2147483647,
-          "min": 1,
-          "value": 100000
-        },
-        "kind": {
-          "value": "Word",
-          "variants": [
-            "Signal",
-            "Block",
-            "Word",
-            "Number",
-            "Text",
-            "Trigger"
-          ]
-        }
-      },
-      "selected": false
-    },
-    "8": {
-      "id": 8,
-      "kind": "Regular",
-      "title": "Binary Decoder",
-      "type_name": "Binary Decoder",
-      "header_color": [
-        60,
-        100,
-        160,
-        255
-      ],
-      "pos": {
-        "x": 1440.0,
-        "y": 260.0
-      },
-      "inputs": [
-        {},
-        {
-          "def_index": 1
-        },
-        {
-          "def_index": 1
-        },
-        {
-          "def_index": 1
-        },
-        {
-          "def_index": 1
-        },
-        {
-          "def_index": 1
-        },
-        {
-          "def_index": 1
-        },
-        {
-          "def_index": 1
-        },
-        {
-          "def_index": 1
-        },
-        {
-          "def_index": 1
-        },
-        {
-          "def_index": 2
-        },
-        {
-          "def_index": 3
-        }
-      ],
-      "outputs": [
-        {}
-      ],
-      "collapsed": false,
-      "state": {
-        "cs_polarity": {
-          "value": "Disabled",
-          "variants": [
-            "Disabled",
-            "Active low",
-            "Active high"
-          ]
-        },
-        "endianness": {
-          "value": "Little",
-          "variants": [
-            "Little",
-            "Big"
-          ]
-        },
-        "sample_on": {
-          "value": "Both (DDR)",
-          "variants": [
-            "Rising (SDR)",
-            "Falling (SDR)",
-            "Both (DDR)",
-            "High level",
-            "Low level"
-          ]
-        },
-        "word_size": {
-          "max": 8,
-          "min": 1,
-          "value": 1
-        }
-      },
-      "selected": false
-    },
-    "11": {
-      "id": 11,
-      "kind": "Regular",
-      "title": "Viewer",
-      "type_name": "Viewer",
-      "header_color": [
-        160,
-        80,
-        60,
-        255
-      ],
-      "pos": {
-        "x": 2020.0,
-        "y": 420.0
-      },
-      "inputs": [
-        {},
-        {},
-        {
-          "resolved_type": "Trigger"
-        },
-        {
-          "resolved_type": "Trigger"
-        },
-        {},
-        {}
-      ],
-      "outputs": [],
-      "collapsed": false,
-      "state": {
-        "label": {
-          "value": ""
-        }
-      },
-      "selected": false
-    },
-    "2": {
-      "id": 2,
-      "kind": "Regular",
-      "title": "Match Start",
-      "type_name": "Word Matcher",
-      "header_color": [
-        60,
-        140,
-        100,
-        255
-      ],
-      "pos": {
-        "x": 620.0,
-        "y": 40.0
-      },
-      "inputs": [
-        {}
-      ],
-      "outputs": [
-        {},
-        {
-          "def_index": 1
-        }
-      ],
-      "collapsed": false,
-      "state": {
-        "mask": {
-          "value": "0xFFFFFF"
-        },
-        "op": {
-          "value": "==",
-          "variants": [
-            "==",
-            "≠",
-            "<",
-            "≤",
-            ">",
-            "≥"
-          ]
-        },
-        "pattern": {
-          "value": "0x600081"
-        },
-        "pulse_output": {
-          "value": false
-        },
-        "trigger_at": {
-          "value": "Word end",
-          "variants": [
-            "Word start",
-            "Word end"
-          ]
-        }
-      },
-      "selected": false
-    },
     "0": {
-      "id": 0,
-      "kind": "Regular",
-      "title": "DSL File Source",
-      "type_name": "DSL File Source",
+      "collapsed": false,
       "header_color": [
         100,
         75,
         140,
         255
       ],
-      "pos": {
-        "x": 40.0,
-        "y": 260.0
-      },
+      "id": 0,
       "inputs": [
         {},
         {
           "def_index": 1
         }
       ],
+      "kind": "Regular",
+      "muted": false,
       "outputs": [
         {},
         {
@@ -342,7 +394,11 @@
           "def_index": 31
         }
       ],
-      "collapsed": false,
+      "pos": {
+        "x": 40.0,
+        "y": 260.0
+      },
+      "selected": false,
       "state": {
         "channels": {
           "max": 32,
@@ -363,23 +419,18 @@
           "value": "_captures/wipneus5.dsl"
         }
       },
-      "selected": false
+      "title": "DSL File Source",
+      "type_name": "DSL File Source"
     },
     "1": {
-      "id": 1,
-      "kind": "Regular",
-      "title": "SPI Decoder",
-      "type_name": "SPI Decoder",
+      "collapsed": false,
       "header_color": [
         60,
         100,
         160,
         255
       ],
-      "pos": {
-        "x": 330.0,
-        "y": 120.0
-      },
+      "id": 1,
       "inputs": [
         {},
         {
@@ -392,13 +443,21 @@
           "def_index": 3
         }
       ],
+      "kind": "Regular",
+      "muted": false,
       "outputs": [
-        {},
+        {
+          "show_in_view": true
+        },
         {
           "def_index": 1
         }
       ],
-      "collapsed": false,
+      "pos": {
+        "x": 330.0,
+        "y": 120.0
+      },
+      "selected": false,
       "state": {
         "bit_order": {
           "value": "MSB first",
@@ -438,33 +497,95 @@
           "value": 24
         }
       },
-      "selected": false
+      "title": "SPI Decoder",
+      "type_name": "SPI Decoder"
     },
-    "3": {
-      "id": 3,
-      "kind": "Regular",
-      "title": "Match Stop",
-      "type_name": "Word Matcher",
+    "2": {
+      "collapsed": false,
       "header_color": [
         60,
         140,
         100,
         255
       ],
-      "pos": {
-        "x": 620.0,
-        "y": 230.0
-      },
+      "id": 2,
       "inputs": [
         {}
       ],
+      "kind": "Regular",
+      "muted": false,
       "outputs": [
-        {},
+        {
+          "show_in_view": true
+        },
         {
           "def_index": 1
         }
       ],
+      "pos": {
+        "x": 620.0,
+        "y": 40.0
+      },
+      "selected": false,
+      "state": {
+        "mask": {
+          "value": "0xFFFFFF"
+        },
+        "op": {
+          "value": "==",
+          "variants": [
+            "==",
+            "≠",
+            "<",
+            "≤",
+            ">",
+            "≥"
+          ]
+        },
+        "pattern": {
+          "value": "0x600081"
+        },
+        "pulse_output": {
+          "value": false
+        },
+        "trigger_at": {
+          "value": "Word end",
+          "variants": [
+            "Word start",
+            "Word end"
+          ]
+        }
+      },
+      "title": "Match Start",
+      "type_name": "Word Matcher"
+    },
+    "3": {
       "collapsed": false,
+      "header_color": [
+        60,
+        140,
+        100,
+        255
+      ],
+      "id": 3,
+      "inputs": [
+        {}
+      ],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [
+        {
+          "show_in_view": true
+        },
+        {
+          "def_index": 1
+        }
+      ],
+      "pos": {
+        "x": 620.0,
+        "y": 230.0
+      },
+      "selected": false,
       "state": {
         "mask": {
           "value": "0xFFFFFF"
@@ -494,30 +615,31 @@
           ]
         }
       },
-      "selected": false
+      "title": "Match Stop",
+      "type_name": "Word Matcher"
     },
     "4": {
-      "id": 4,
-      "kind": "Regular",
-      "title": "Counter",
-      "type_name": "Counter",
+      "collapsed": false,
       "header_color": [
         60,
         140,
         100,
         255
       ],
+      "id": 4,
+      "inputs": [
+        {}
+      ],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [
+        {}
+      ],
       "pos": {
         "x": 900.0,
         "y": 40.0
       },
-      "inputs": [
-        {}
-      ],
-      "outputs": [
-        {}
-      ],
-      "collapsed": false,
+      "selected": false,
       "state": {
         "start": {
           "max": 2147483647,
@@ -530,94 +652,101 @@
           "value": 1
         }
       },
-      "selected": false
+      "title": "Counter",
+      "type_name": "Counter"
     },
     "5": {
-      "id": 5,
-      "kind": "Regular",
-      "title": "SR Flip-Flop",
-      "type_name": "SR Flip-Flop",
+      "collapsed": false,
       "header_color": [
         60,
         140,
         100,
         255
       ],
-      "pos": {
-        "x": 900.0,
-        "y": 230.0
-      },
+      "id": 5,
       "inputs": [
         {},
         {
           "def_index": 1
         }
       ],
+      "kind": "Regular",
+      "muted": false,
       "outputs": [
-        {}
+        {
+          "show_in_view": true
+        }
       ],
-      "collapsed": false,
+      "pos": {
+        "x": 900.0,
+        "y": 230.0
+      },
+      "selected": false,
       "state": {
         "initial": {
           "value": false
         }
       },
-      "selected": false
+      "title": "SR Flip-Flop",
+      "type_name": "SR Flip-Flop"
     },
     "6": {
-      "id": 6,
-      "kind": "Regular",
-      "title": "String Formatter",
-      "type_name": "String Formatter",
+      "collapsed": false,
       "header_color": [
         60,
         140,
         100,
         255
+      ],
+      "id": 6,
+      "inputs": [
+        {},
+        {}
+      ],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [
+        {}
       ],
       "pos": {
         "x": 1160.0,
         "y": 40.0
       },
-      "inputs": [
-        {},
-        {}
-      ],
-      "outputs": [
-        {}
-      ],
-      "collapsed": false,
+      "selected": false,
       "state": {
         "template": {
           "value": "output/capture_{n:04}.bin"
         }
       },
-      "selected": false
+      "title": "String Formatter",
+      "type_name": "String Formatter"
     },
     "7": {
-      "id": 7,
-      "kind": "Regular",
-      "title": "Enable Gate",
-      "type_name": "Logic Gate",
+      "collapsed": false,
       "header_color": [
         60,
         140,
         100,
         255
       ],
-      "pos": {
-        "x": 1160.0,
-        "y": 400.0
-      },
+      "id": 7,
       "inputs": [
         {},
         {},
         {}
       ],
+      "kind": "Regular",
+      "muted": false,
       "outputs": [
-        {}
+        {
+          "show_in_view": true
+        }
       ],
-      "collapsed": false,
+      "pos": {
+        "x": 1122.45703125,
+        "y": 627.18359375
+      },
+      "selected": false,
       "state": {
         "op": {
           "value": "AND",
@@ -632,31 +761,143 @@
           ]
         }
       },
-      "selected": false
+      "title": "Enable Gate",
+      "type_name": "Logic Gate"
+    },
+    "8": {
+      "collapsed": false,
+      "header_color": [
+        60,
+        100,
+        160,
+        255
+      ],
+      "id": 8,
+      "inputs": [
+        {},
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 1
+        },
+        {
+          "def_index": 2
+        },
+        {
+          "def_index": 3
+        }
+      ],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [
+        {
+          "show_in_view": true
+        }
+      ],
+      "pos": {
+        "x": 1459.62890625,
+        "y": 354.41015625
+      },
+      "selected": true,
+      "state": {
+        "cs_polarity": {
+          "value": "Disabled",
+          "variants": [
+            "Disabled",
+            "Active low",
+            "Active high"
+          ]
+        },
+        "display_format": {
+          "value": "Hex",
+          "variants": [
+            "Hex",
+            "Binary",
+            "Octal",
+            "Decimal",
+            "ASCII",
+            "Hex + ASCII"
+          ]
+        },
+        "endianness": {
+          "value": "Little",
+          "variants": [
+            "Little",
+            "Big"
+          ]
+        },
+        "input_strategy": {
+          "value": "Auto",
+          "variants": [
+            "Auto",
+            "Packed stream",
+            "Indexed"
+          ]
+        },
+        "sample_on": {
+          "value": "Both (DDR)",
+          "variants": [
+            "Rising (SDR)",
+            "Falling (SDR)",
+            "Both (DDR)",
+            "High level",
+            "Low level"
+          ]
+        },
+        "word_size": {
+          "max": 8,
+          "min": 1,
+          "value": 1
+        }
+      },
+      "title": "Binary Decoder",
+      "type_name": "Binary Decoder"
     },
     "9": {
-      "id": 9,
-      "kind": "Regular",
-      "title": "File Writer",
-      "type_name": "File Writer",
+      "collapsed": false,
       "header_color": [
         160,
         80,
         60,
         255
       ],
-      "pos": {
-        "x": 1760.0,
-        "y": 120.0
-      },
+      "id": 9,
       "inputs": [
         {},
         {
           "def_index": 1
         }
       ],
+      "kind": "Regular",
+      "muted": false,
       "outputs": [],
-      "collapsed": false,
+      "pos": {
+        "x": 1760.0,
+        "y": 120.0
+      },
+      "selected": false,
       "state": {
         "filename": {
           "dialog_title": "Save capture as",
@@ -676,360 +917,8 @@
           ]
         }
       },
-      "selected": false
+      "title": "File Writer",
+      "type_name": "File Writer"
     }
-  },
-  "connections": [
-    {
-      "from": {
-        "node": 0,
-        "index": 7,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 1,
-        "index": 0,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 0,
-        "index": 6,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 1,
-        "index": 1,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 0,
-        "index": 8,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 1,
-        "index": 3,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 1,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 2,
-        "index": 0,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 1,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 3,
-        "index": 0,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 2,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 5,
-        "index": 0,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 3,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 5,
-        "index": 1,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 2,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 4,
-        "index": 0,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 4,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 6,
-        "index": 0,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 6,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 9,
-        "index": 1,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 0,
-        "index": 8,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 7,
-        "index": 0,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 5,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 7,
-        "index": 1,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 7,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 8,
-        "index": 11,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 0,
-        "index": 10,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 8,
-        "index": 0,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 0,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 8,
-        "index": 1,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 0,
-        "index": 1,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 8,
-        "index": 2,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 0,
-        "index": 2,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 8,
-        "index": 3,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 0,
-        "index": 3,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 8,
-        "index": 4,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 0,
-        "index": 4,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 8,
-        "index": 5,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 0,
-        "index": 5,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 8,
-        "index": 6,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 0,
-        "index": 6,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 8,
-        "index": 7,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 0,
-        "index": 7,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 8,
-        "index": 8,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 8,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 9,
-        "index": 0,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 8,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 10,
-        "index": 0,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 5,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 11,
-        "index": 0,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 7,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 11,
-        "index": 1,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 2,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 11,
-        "index": 2,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 3,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 11,
-        "index": 3,
-        "direction": "Input"
-      }
-    },
-    {
-      "from": {
-        "node": 10,
-        "index": 0,
-        "direction": "Output"
-      },
-      "to": {
-        "node": 11,
-        "index": 4,
-        "direction": "Input"
-      }
-    }
-  ],
-  "frames": [],
-  "next_id": 12,
-  "next_frame_id": 0
+  }
 }
