@@ -18,7 +18,8 @@ std::cfg_select! {
     use clap::{Parser, ValueEnum};
 
     use logic_analyzer_processing::{
-        CsPolarity, DslFileSource, ParallelDecoder, ParallelInputStrategy, StrobeMode,
+        BinaryFileWriter, CsPolarity, DslFileSource, ParallelDecoder, ParallelInputStrategy,
+        StrobeMode,
     };
     use signal_processing::{
         DecodedBlockCacheStats, DerivedLaneData, DerivedLanes, InputPort, LiveStoreConfig,
@@ -56,6 +57,7 @@ std::cfg_select! {
         Count,
         Retain,
         Viewer,
+        File,
     }
 
     #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -773,6 +775,14 @@ std::cfg_select! {
                 viewer_store = Some(store);
                 sink_port = Some("in0");
             }
+            SinkKind::File => {
+                let output = word_store_directory.path().join("decoded.bin");
+                pipeline.add_process(
+                    "sink",
+                    BinaryFileWriter::new().with_filename(output.display().to_string()),
+                )?;
+                sink_port = Some("data");
+            }
         }
 
         pipeline.connect("source", &format!("ch{}", args.strobe), "decoder", "strobe")?;
@@ -838,7 +848,10 @@ std::cfg_select! {
             samples,
             samplerate_hz,
             words: stats.count,
-            words_measured: !matches!(args.sink, SinkKind::Discard),
+            words_measured: matches!(
+                args.sink,
+                SinkKind::Count | SinkKind::Retain | SinkKind::Viewer
+            ),
             fingerprint: fingerprint_scope.map(|_| stats.fingerprint),
             fingerprint_scope,
             resources,

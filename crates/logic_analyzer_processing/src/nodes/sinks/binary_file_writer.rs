@@ -32,20 +32,11 @@ pub enum WriteWidth {
 }
 
 impl WriteWidth {
-    fn write_to(&self, writer: &mut impl Write, value: u64) -> std::io::Result<usize> {
+    fn append_to(&self, output: &mut Vec<u8>, value: u64) {
         match self {
-            WriteWidth::U8 => {
-                writer.write_all(&[value as u8])?;
-                Ok(1)
-            }
-            WriteWidth::U16Le => {
-                writer.write_all(&(value as u16).to_le_bytes())?;
-                Ok(2)
-            }
-            WriteWidth::U32Le => {
-                writer.write_all(&(value as u32).to_le_bytes())?;
-                Ok(4)
-            }
+            WriteWidth::U8 => output.push(value as u8),
+            WriteWidth::U16Le => output.extend_from_slice(&(value as u16).to_le_bytes()),
+            WriteWidth::U32Le => output.extend_from_slice(&(value as u32).to_le_bytes()),
         }
     }
 }
@@ -62,6 +53,7 @@ pub struct BinaryFileWriter {
 
     data_buffer: VecDeque<Word>,
     data_batch: Vec<Word>,
+    encoded_batch: Vec<u8>,
     name_buffer: VecDeque<TextSample>,
     /// Drained but not yet applicable name changes (timestamps ahead of the
     /// data stream), in channel (= timestamp) order.
@@ -87,6 +79,7 @@ impl BinaryFileWriter {
             index_csv: false,
             data_buffer: VecDeque::new(),
             data_batch: Vec::with_capacity(Self::DRAIN_BATCH_SIZE),
+            encoded_batch: Vec::with_capacity(Self::DRAIN_BATCH_SIZE * 4),
             name_buffer: VecDeque::new(),
             pending_names: VecDeque::new(),
             current_name: None,
@@ -229,13 +222,34 @@ impl BinaryFileWriter {
         Ok(self.current_file.as_mut().unwrap())
     }
 
-    fn write_word(&mut self, word: Word) -> WorkResult<()> {
+    fn flush_encoded_batch(&mut self) -> WorkResult<()> {
+        if self.encoded_batch.is_empty() {
+            return Ok(());
+        }
+
+        let mut encoded = std::mem::take(&mut self.encoded_batch);
+        let result = match self.ensure_file_open() {
+            Ok(writer) => writer
+                .write_all(&encoded)
+                .map_err(|error| WorkError::NodeError(format!("writing word batch: {error}"))),
+            Err(error) => Err(error),
+        };
+        if result.is_ok() {
+            self.bytes_in_file += encoded.len() as u64;
+        }
+        encoded.clear();
+        self.encoded_batch = encoded;
+        result
+    }
+
+    fn stage_word(&mut self, word: Word) -> WorkResult<()> {
         let word_ts = word.timestamp_ns;
         while self
             .pending_names
             .front()
             .is_some_and(|change| change.start_time_ns <= word_ts)
         {
+            self.flush_encoded_batch()?;
             let change = self.pending_names.pop_front().unwrap();
             self.apply_name_change(change)?;
         }
@@ -246,13 +260,7 @@ impl BinaryFileWriter {
         self.file_end_ns = word.timestamp_ns;
         self.last_word_ts = word_ts;
 
-        let width = self.width;
-        let value = word.value;
-        let writer = self.ensure_file_open()?;
-        let bytes = width
-            .write_to(writer, value)
-            .map_err(|e| WorkError::NodeError(format!("writing word: {e}")))?;
-        self.bytes_in_file += bytes as u64;
+        self.width.append_to(&mut self.encoded_batch, word.value);
         self.words_in_file += 1;
         Ok(())
     }
@@ -369,8 +377,9 @@ impl ProcessNode for BinaryFileWriter {
         let mut batch = std::mem::take(&mut self.data_batch);
         let count = batch.len();
         for word in batch.drain(..) {
-            self.write_word(word)?;
+            self.stage_word(word)?;
         }
+        self.flush_encoded_batch()?;
         self.data_batch = batch;
         Ok(count)
     }

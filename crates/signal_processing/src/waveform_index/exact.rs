@@ -854,6 +854,33 @@ mod tests {
     }
 
     #[test]
+    fn external_packed_stream_does_not_fill_sparse_raw_cache() -> Result<()> {
+        let samples_per_block = 4_096_u64;
+        let source = MemoryCaptureDataSource::new(
+            samples_per_block,
+            samples_per_block,
+            single_channel_blocks_from_fn(samples_per_block, samples_per_block, |sample| {
+                sample.is_multiple_of(3)
+            }),
+        );
+
+        let reads_after_build = {
+            let mut reader = IndexSampler::open_data_source(source.clone())?;
+            let reads_after_build = source.raw_reads();
+            reader.packed_block(0, 0)?;
+            assert_eq!(source.raw_reads(), reads_after_build + 1);
+            source.raw_reads()
+        };
+
+        let mut reopened = IndexSampler::open_data_source(source.clone())?;
+        reopened.packed_block(0, 0)?;
+        assert_eq!(source.raw_reads(), reads_after_build + 1);
+
+        source.remove_index();
+        Ok(())
+    }
+
+    #[test]
     fn activity_ratio_hint_distinguishes_sparse_and_dense_signals() -> Result<()> {
         let samples_per_block = 4_096_u64;
         let total_samples = 65_536_u64;

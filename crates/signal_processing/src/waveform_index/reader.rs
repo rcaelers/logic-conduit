@@ -563,12 +563,22 @@ where
         Ok(data)
     }
 
-    /// Return one packed capture block using the mmap-backed raw sidecar when
-    /// available. Block streaming sources use this to share the same
-    /// zero-copy cache as random-access waveform and edge queries.
     /// Returns one packed capture block for an external streaming source.
+    ///
+    /// Existing raw-cache entries are reused, but a miss is read directly
+    /// from the capture source without populating the cache. Sequential graph
+    /// processing may visit the complete capture, whereas the raw cache is
+    /// intentionally sparse and reserved for regions inspected through
+    /// random-access queries.
     pub fn packed_block(&mut self, channel: usize, block: u64) -> Result<BlockData> {
-        self.cached_packed_block(channel, block)
+        if let Some(data) = self
+            .raw_cache
+            .as_ref()
+            .and_then(|cache| cache.get(channel, block))
+        {
+            return Ok(data);
+        }
+        self.raw_reader.read_packed_block(channel, block)
     }
 
     fn sample_indexed_channel(
