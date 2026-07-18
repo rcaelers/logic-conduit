@@ -577,6 +577,7 @@ impl TriggerEditorSchema {
         let channel_set: HashSet<_> = channels.iter().collect();
         for (stage_index, stage) in program.stages.iter().enumerate() {
             let stage_path = format!("program.stages[{stage_index}]");
+            let mut digital_channels = HashSet::new();
             if stage.predicates.is_empty()
                 || stage.predicates.len() > self.maximum_predicates_per_stage
             {
@@ -606,6 +607,15 @@ impl TriggerEditorSchema {
             self.validate_count(stage.count, &stage_path, &mut diagnostics);
             for (predicate_index, predicate) in stage.predicates.iter().enumerate() {
                 let path = format!("{stage_path}.predicates[{predicate_index}]");
+                if let TriggerPredicate::Digital { channel, .. } = predicate
+                    && !digital_channels.insert(channel)
+                {
+                    diagnostics.push(diagnostic(
+                        format!("{path}.channel"),
+                        TriggerValidationCode::DuplicateChannel,
+                        format!("capture channel '{channel}' appears more than once in this trigger stage"),
+                    ));
+                }
                 self.validate_predicate(predicate, &path, &channel_set, &mut diagnostics);
             }
         }
@@ -841,6 +851,7 @@ pub enum TriggerValidationCode {
     UnsupportedCountMode,
     CountRange,
     UnknownChannel,
+    DuplicateChannel,
     UnsupportedDigitalCondition,
     UnknownPredicate,
     MissingOperand,
@@ -859,11 +870,31 @@ pub struct TriggerValidationDiagnostic {
     pub message: String,
 }
 
-#[derive(Clone, Debug, Error, PartialEq, Eq)]
-#[error("trigger program has {count} validation error(s)", count = .diagnostics.len())]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TriggerValidationErrors {
     diagnostics: Vec<TriggerValidationDiagnostic>,
 }
+
+impl fmt::Display for TriggerValidationErrors {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.diagnostics.len() != 1 {
+            write!(
+                formatter,
+                "trigger program has {} validation errors: ",
+                self.diagnostics.len()
+            )?;
+        }
+        for (index, diagnostic) in self.diagnostics.iter().enumerate() {
+            if index != 0 {
+                formatter.write_str("; ")?;
+            }
+            write!(formatter, "{}: {}", diagnostic.path, diagnostic.message)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for TriggerValidationErrors {}
 
 impl TriggerValidationErrors {
     pub fn diagnostics(&self) -> &[TriggerValidationDiagnostic] {
@@ -1320,6 +1351,23 @@ mod tests {
             )
             .unwrap();
         assert!(cleared.is_none());
+    }
+
+    #[test]
+    fn rejects_duplicate_digital_channels_within_one_stage() {
+        let schema = schema();
+        let mut program = valid_program();
+        let duplicate = program.stages[0].predicates[0].clone();
+        program.stages[0].predicates.push(duplicate);
+
+        let errors = schema.validate_program(&program, &channels()).unwrap_err();
+
+        assert!(
+            errors
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == TriggerValidationCode::DuplicateChannel)
+        );
     }
 
     #[test]

@@ -354,8 +354,9 @@ show the actual selected condition. Input bindings and status-bar hints come fro
 binding configuration rather than hardcoded shortcuts.
 
 The Triggers panel supplies advanced multi-stage programs through the same portable trigger
-model. When an advanced program is active, lane icons summarize its selected stage rather than
-maintaining a second, conflicting trigger program.
+model. When an advanced program is active, lane icons summarize the digital predicates in its
+first stage rather than maintaining a second, conflicting trigger program; the panel remains the
+complete representation.
 
 ### Advanced-trigger contract
 
@@ -377,7 +378,8 @@ Before a concrete feature may persist or lower a program, the schema validates i
 source's currently enabled opaque `CaptureChannelId` table. Validation checks schema identity and
 revision, every structural limit and capability, channel membership, registered predicate and
 operand identity, exact operand type, numeric steps/ranges, choice membership, and byte-length
-bounds. It returns either a `ValidatedTriggerProgram` or structured path/code/message diagnostics.
+bounds, and uniqueness of a digital channel within each stage. It returns either a
+`ValidatedTriggerProgram` or structured path/code/message diagnostics.
 Generic code cannot construct the validated wrapper directly.
 
 `LiveCaptureEdit::SetTriggerProgram` routes an optional neutral program to the concrete source
@@ -396,9 +398,22 @@ predicates, and typed operands without provider callbacks or built-in layouts.
 
 Lane controls and the Triggers panel edit the same saved program. Lane controls may update free-run
 or the common one-stage digital form; they refuse to replace a staged, counted, inverted, or
-registered-predicate program implicitly. Built-in source schemas advertise the common digital
-subset that their current execution paths can lower. Additional concrete execution and richer
-built-in schemas remain proposed Phase 13.4 work.
+registered-predicate program implicitly. Built-in source schemas advertise only programs their
+concrete execution paths can lower.
+
+The deterministic demo source supports up to four ordered digital stages, every neutral stage
+logic operator, inversion, and occurrence or consecutive-sample counts. Its provider-owned
+evaluator combines a stage's predicates at each sample, applies inversion, and advances to the next
+stage only after the current stage qualifies. An occurrence count advances on false-to-true stage
+matches; a consecutive count resets when the stage does not match. Evaluator state crosses capture
+chunk boundaries, so chunking cannot change the trigger sample.
+
+The U3Pro16 source advertises its hardware subset: up to sixteen ordered stages, up to sixteen
+digital channel predicates per stage, AND/OR combination, inversion, and occurrence or contiguous
+counting. Its graph feature validates opaque enabled channel identities and lowers directly to the
+processing driver's fixed hardware planes. The driver owns the AND/OR, inversion, contiguous, and
+count wire encoding. Unsupported neutral logic or registered predicates never enter the saved
+program because they are absent from this source's schema.
 
 ### Capture policy
 
@@ -1227,10 +1242,25 @@ wasm discovery do not require acquisition; lane and panel edits survive graph JS
 legacy simple states migrate to byte-equivalent common programs with visible warnings; malformed or
 incompatible saved programs reset explicitly; no generic crate branches on provider IDs or names.
 
-##### Proposed future phases 13.4–13.9
+##### Phase 13.4 — Concrete advanced-trigger execution
 
-- **13.4 Concrete advanced-trigger execution:** deterministic providers followed by hardware
-  lowering and fixtures.
+- Lower schema-validated programs in each owning source feature rather than interpreting trigger
+  IDs or capabilities in generic compiler, UI, or runtime code.
+- Execute the deterministic demo's staged digital algebra with state preserved across chunk
+  boundaries.
+- Lower the documented U3Pro16 subset into hardware stages and verify the exact settings packet
+  independently of attached hardware.
+
+Gate: deterministic tests cover every advertised logic operator, inversion, both count modes,
+ordered stages, and a stage/count transition crossing a chunk boundary; a graph edit reaches the
+provider and produces the same trigger sample after JSON reload; U3Pro16 tests cover schema limits,
+opaque-channel lowering, and a checked-in multi-stage packet fixture including mask, value, edge,
+logic, inversion, contiguous mode, and count words; legacy one-stage simple triggers retain their
+behavior; native and wasm builds retain the same saved-program contract without native execution
+leaking into wasm.
+
+##### Proposed future phases 13.5–13.9
+
 - **13.5 Repeated and segmented acquisition:** frame identity, per-frame origins/triggers, bounded
   storage, replay, and navigation.
 - **13.6 Live search and measurements:** committed-prefix coverage and lag.

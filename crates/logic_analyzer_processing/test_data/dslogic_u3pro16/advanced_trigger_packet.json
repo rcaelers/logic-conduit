@@ -1,0 +1,13 @@
+{
+  "sample_rate_hz": 100000000,
+  "input_mask": 37,
+  "sample_limit": 2048,
+  "expected": {
+    "channel_stage_word": 770,
+    "mask0": [65530, 65499],
+    "value0": [5, 0],
+    "edge0": [1, 32],
+    "logic0": [3, 4],
+    "count0": [3, 5]
+  }
+}

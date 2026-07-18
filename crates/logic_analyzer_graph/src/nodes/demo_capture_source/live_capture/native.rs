@@ -4,7 +4,9 @@ use serde_json::Value;
 
 use logic_analyzer_processing::{
     AcquisitionContext, AcquisitionResult, CaptureAnalysisChannel, CaptureAnalysisSource,
-    DeterministicFakeConfig, DeterministicFakeProvider, PreparedAcquisition,
+    DeterministicFakeConfig, DeterministicFakeProvider, DeterministicTrigger,
+    DeterministicTriggerCount, DeterministicTriggerCountMode, DeterministicTriggerLogic,
+    DeterministicTriggerPredicate, DeterministicTriggerStage, PreparedAcquisition,
 };
 use signal_processing::{
     CaptureCapacityRequest, CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery,
@@ -12,7 +14,8 @@ use signal_processing::{
     CaptureProviderCapabilities, CaptureSessionPlan, CaptureSettingCombination, CaptureStartMode,
     CaptureStoreCursor, CompletionPolicy, CompletionPolicyKind, ProcessNode, RecordingStart,
     RetentionPolicy, RetentionPolicyKind, TriggerPlacement, TriggerPlacementCapability,
-    TriggerProgram, TriggerTimeoutAction, estimate_capture_capacity,
+    TriggerCountMode, TriggerLogicOperator, TriggerPredicate, TriggerProgram, TriggerTimeoutAction,
+    estimate_capture_capacity,
 };
 
 use crate::compiler::{CaptureGraphSourceFactory, LiveCaptureFeature, SimpleTriggerChannel};
@@ -126,6 +129,63 @@ impl DemoLiveCaptureFeature {
     }
 }
 
+fn lower_trigger(program: Option<&TriggerProgram>) -> Result<Option<DeterministicTrigger>, String> {
+    super::super::trigger::validate_program(program)?;
+    program
+        .map(|program| {
+            let stages = program
+                .stages
+                .iter()
+                .map(|stage| {
+                    let predicates = stage
+                        .predicates
+                        .iter()
+                        .map(|predicate| {
+                            let TriggerPredicate::Digital { channel, condition } = predicate else {
+                                unreachable!("validated demo schemas contain only digital predicates");
+                            };
+                            let channel = channel
+                                .as_str()
+                                .strip_prefix("demo:")
+                                .and_then(|channel| channel.parse::<usize>().ok())
+                                .ok_or_else(|| format!("unknown demo capture channel {channel}"))?;
+                            Ok(DeterministicTriggerPredicate {
+                                channel,
+                                condition: *condition,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    let logic = match stage.logic {
+                        TriggerLogicOperator::And => DeterministicTriggerLogic::And,
+                        TriggerLogicOperator::Or => DeterministicTriggerLogic::Or,
+                        TriggerLogicOperator::Xor => DeterministicTriggerLogic::Xor,
+                        TriggerLogicOperator::Nand => DeterministicTriggerLogic::Nand,
+                        TriggerLogicOperator::Nor => DeterministicTriggerLogic::Nor,
+                    };
+                    let count = stage.count.map(|count| DeterministicTriggerCount {
+                        mode: match count.mode {
+                            TriggerCountMode::Occurrences => {
+                                DeterministicTriggerCountMode::Occurrences
+                            }
+                            TriggerCountMode::Consecutive => {
+                                DeterministicTriggerCountMode::Consecutive
+                            }
+                        },
+                        value: count.value,
+                    });
+                    Ok(DeterministicTriggerStage {
+                        predicates,
+                        logic,
+                        inverted: stage.inverted,
+                        count,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(DeterministicTrigger { stages })
+        })
+        .transpose()
+}
+
 pub(super) fn feature(
     state: &Value,
 ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
@@ -143,13 +203,7 @@ pub(super) fn feature(
         0x5a17_d3a0,
     )
     .map_err(|error| error.to_string())?
-    .with_simple_trigger(
-        trigger_conditions
-            .iter()
-            .copied()
-            .map(Some)
-            .collect::<Vec<_>>(),
-    )
+    .with_trigger(lower_trigger(state.trigger_program())?)
     .map_err(|error| error.to_string())?;
     let simple_trigger_channels: Arc<[SimpleTriggerChannel]> = channels
         .iter()
@@ -266,4 +320,103 @@ pub(super) fn feature(
         session_plan,
         config,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use signal_processing::{
+        SimpleTriggerCondition, TriggerCount, TriggerCountMode, TriggerLogicOperator,
+        TriggerPredicate, TriggerProgram, TriggerStage,
+    };
+
+    use super::*;
+
+    fn advanced_program() -> TriggerProgram {
+        let schema = super::super::super::trigger::schema();
+        TriggerProgram::new(
+            schema.id().clone(),
+            schema.revision(),
+            vec![
+                TriggerStage {
+                    predicates: vec![TriggerPredicate::Digital {
+                        channel: CaptureChannelId::new("demo:0"),
+                        condition: SimpleTriggerCondition::High,
+                    }],
+                    logic: TriggerLogicOperator::And,
+                    inverted: false,
+                    count: Some(TriggerCount {
+                        mode: TriggerCountMode::Occurrences,
+                        value: 2,
+                    }),
+                },
+                TriggerStage {
+                    predicates: vec![TriggerPredicate::Digital {
+                        channel: CaptureChannelId::new("demo:0"),
+                        condition: SimpleTriggerCondition::Falling,
+                    }],
+                    logic: TriggerLogicOperator::Or,
+                    inverted: true,
+                    count: Some(TriggerCount {
+                        mode: TriggerCountMode::Consecutive,
+                        value: 1,
+                    }),
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn advanced_program_lowers_and_executes_identically_after_state_json_reload() {
+        let mut state = DemoCaptureSourceState::default();
+        state
+            .set_trigger_program(Some(advanced_program()))
+            .unwrap();
+        let trigger = lower_trigger(state.trigger_program()).unwrap();
+        let before = DeterministicFakeConfig::new(
+            super::super::super::trigger::channel_ids(),
+            vec![3, 5],
+            0x5a17_d3a0,
+        )
+        .unwrap()
+        .with_trigger(trigger)
+        .unwrap()
+        .first_trigger_sample();
+
+        let restored: DemoCaptureSourceState =
+            serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        let after = DeterministicFakeConfig::new(
+            super::super::super::trigger::channel_ids(),
+            vec![3, 5],
+            0x5a17_d3a0,
+        )
+        .unwrap()
+        .with_trigger(lower_trigger(restored.trigger_program()).unwrap())
+        .unwrap()
+        .first_trigger_sample();
+
+        assert_eq!(before, Some(5));
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn demo_schema_advertises_every_lowered_digital_operation() {
+        let schema = super::super::super::trigger::schema();
+        assert_eq!(schema.maximum_stages(), 4);
+        assert_eq!(schema.maximum_predicates_per_stage(), 11);
+        assert_eq!(
+            schema.logic_operators(),
+            [
+                TriggerLogicOperator::And,
+                TriggerLogicOperator::Or,
+                TriggerLogicOperator::Xor,
+                TriggerLogicOperator::Nand,
+                TriggerLogicOperator::Nor,
+            ]
+        );
+        assert!(schema.supports_stage_inversion());
+        assert_eq!(
+            schema.count_capabilities().unwrap().modes(),
+            [TriggerCountMode::Occurrences, TriggerCountMode::Consecutive]
+        );
+    }
 }

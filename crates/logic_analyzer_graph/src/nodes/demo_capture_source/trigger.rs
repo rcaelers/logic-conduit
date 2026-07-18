@@ -1,6 +1,6 @@
 use signal_processing::{
-    CaptureChannelId, SimpleTriggerCondition, TriggerEditorSchema, TriggerIdentifier,
-    TriggerLogicOperator, TriggerProgram, TriggerProgramForm,
+    CaptureChannelId, SimpleTriggerCondition, TriggerCountCapabilities, TriggerCountMode,
+    TriggerEditorSchema, TriggerIdentifier, TriggerLogicOperator, TriggerPredicate, TriggerProgram,
 };
 
 use super::DemoCaptureSourceState;
@@ -13,9 +13,15 @@ pub(super) fn schema() -> TriggerEditorSchema {
     TriggerEditorSchema::new(
         TriggerIdentifier::new(SCHEMA_ID).expect("static trigger schema ID is valid"),
         1,
-        1,
+        4,
         DEMO_CAPTURE_CHANNELS,
-        vec![TriggerLogicOperator::And],
+        vec![
+            TriggerLogicOperator::And,
+            TriggerLogicOperator::Or,
+            TriggerLogicOperator::Xor,
+            TriggerLogicOperator::Nand,
+            TriggerLogicOperator::Nor,
+        ],
     )
     .expect("demo trigger schema is valid")
     .with_digital_conditions(vec![
@@ -26,6 +32,16 @@ pub(super) fn schema() -> TriggerEditorSchema {
         SimpleTriggerCondition::Either,
     ])
     .expect("demo trigger conditions are valid")
+    .with_stage_inversion(true)
+    .with_count(
+        TriggerCountCapabilities::new(
+            vec![TriggerCountMode::Occurrences, TriggerCountMode::Consecutive],
+            1,
+            1_000_000,
+            1,
+        )
+        .expect("demo trigger count capabilities are valid"),
+    )
 }
 
 pub(super) fn channel_ids() -> Vec<CaptureChannelId> {
@@ -44,16 +60,16 @@ pub(super) fn conditions(
     program: Option<&TriggerProgram>,
 ) -> Result<Vec<SimpleTriggerCondition>, String> {
     let channel_ids = channel_ids();
-    let form = schema()
-        .program_form(program, &channel_ids)
-        .map_err(|error| error.to_string())?;
-    let conditions = match form {
-        TriggerProgramForm::FreeRun => Default::default(),
-        TriggerProgramForm::CommonDigital(conditions) => conditions,
-        TriggerProgramForm::Advanced => {
-            return Err("demo advanced-trigger execution is not available".into());
+    validate_program(program)?;
+    let mut conditions = std::collections::BTreeMap::new();
+    if let Some(stage) = program.and_then(|program| program.stages.first()) {
+        for predicate in &stage.predicates {
+            let TriggerPredicate::Digital { channel, condition } = predicate else {
+                unreachable!("validated demo schemas contain only digital predicates");
+            };
+            conditions.insert(channel.clone(), *condition);
         }
-    };
+    }
     Ok(channel_ids
         .iter()
         .map(|channel| {

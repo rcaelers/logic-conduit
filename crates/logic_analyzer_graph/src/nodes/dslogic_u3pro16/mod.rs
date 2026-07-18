@@ -12,17 +12,13 @@ use serde_json::Value;
 
 use logic_analyzer_processing::{
     CaptureMode, ClockEdge, ClockSource, LogicCaptureConfig, LogicEncodingRequest, LogicTrigger,
-    LogicTriggerStage, TriggerCondition,
 };
 use signal_processing::{
     CaptureCapacityRequest, CaptureFraction, CapturePolicy, CompletionPolicy, RecordingStart,
-    RetentionPolicy, SimpleTriggerCondition, TriggerPlacement, TriggerTimeout,
-    TriggerTimeoutAction,
+    RetentionPolicy, TriggerPlacement, TriggerTimeout, TriggerTimeoutAction,
 };
 
 use crate::compiler::{LiveCaptureEdit, parse_state};
-
-use definition::U3PRO16_CHANNELS;
 
 fn selected_sample_rate_hz(state: &U3Pro16State) -> Result<u64, String> {
     state
@@ -53,37 +49,6 @@ fn physical_input_mask(state: &U3Pro16State) -> u64 {
         })
 }
 
-fn lower_trigger(state: &U3Pro16State) -> Result<LogicTrigger, String> {
-    let conditions = trigger::conditions(state)?;
-    let mut stage = LogicTriggerStage::default();
-    let mut active = false;
-    for physical_channel in 0..U3PRO16_CHANNELS {
-        let enabled = state
-            .channels
-            .enabled
-            .get(physical_channel)
-            .copied()
-            .unwrap_or(false);
-        let condition = enabled
-            .then(|| conditions.get(physical_channel).copied())
-            .flatten()
-            .unwrap_or(SimpleTriggerCondition::Ignore);
-        stage.plane0[physical_channel] = match condition {
-            SimpleTriggerCondition::Ignore => TriggerCondition::Ignore,
-            SimpleTriggerCondition::Low => TriggerCondition::Low,
-            SimpleTriggerCondition::High => TriggerCondition::High,
-            SimpleTriggerCondition::Rising => TriggerCondition::Rising,
-            SimpleTriggerCondition::Falling => TriggerCondition::Falling,
-            SimpleTriggerCondition::Either => TriggerCondition::Either,
-        };
-        active |= condition != SimpleTriggerCondition::Ignore;
-    }
-    Ok(LogicTrigger {
-        stages: active.then_some(stage).into_iter().collect(),
-        serial: false,
-    })
-}
-
 fn capture_config(state: &U3Pro16State) -> Result<LogicCaptureConfig, String> {
     let sample_rate_hz = selected_sample_rate_hz(state)?;
     let duration_ms = u64::try_from(state.duration_ms.value.max(1)).unwrap_or(1);
@@ -100,7 +65,7 @@ fn capture_config(state: &U3Pro16State) -> Result<LogicCaptureConfig, String> {
             .unwrap_or(50),
         threshold_volts: Some(state.threshold.value),
         trigger: if state.recording_start.selected() == "Trigger" {
-            lower_trigger(state)?
+            trigger::lower_program(state)?
         } else {
             LogicTrigger::default()
         },

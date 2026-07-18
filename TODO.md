@@ -121,8 +121,9 @@ Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN
         schema-driven neutral editing, concrete-owner persistence and migration diagnostics, and
         one-program interoperability between lane controls and the panel are implemented on native
         and wasm without acquisition-dependent UI state.
-      - **13.4 Concrete advanced-trigger execution:** lower supported programs in each owning
-        source feature, cover deterministic providers first, then add hardware fixture coverage.
+      - **13.4 Concrete advanced-trigger execution — complete:** supported programs lower in each
+        owning source feature; the deterministic provider executes staged programs across chunk
+        boundaries, and U3Pro16 hardware lowering has checked multi-stage packet coverage.
       - **13.5 Repeated and segmented acquisition:** introduce frame identity, per-frame origin and
         trigger metadata, bounded storage, replay, and viewer navigation.
       - **13.6 Live search and measurements:** operate over committed raw/derived prefixes with

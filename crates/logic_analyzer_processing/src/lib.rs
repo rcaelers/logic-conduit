@@ -32,6 +32,8 @@ std::cfg_select! {
         pub use live_capture::{
             BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider,
             DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,
+            DeterministicTrigger, DeterministicTriggerCount, DeterministicTriggerCountMode,
+            DeterministicTriggerLogic, DeterministicTriggerPredicate, DeterministicTriggerStage,
             DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider,
         };
         pub use nodes::{

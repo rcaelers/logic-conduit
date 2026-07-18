@@ -27,6 +27,8 @@ std::cfg_select! {
         };
         pub use fake_native::{
             DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,
+            DeterministicTrigger, DeterministicTriggerCount, DeterministicTriggerCountMode,
+            DeterministicTriggerLogic, DeterministicTriggerPredicate, DeterministicTriggerStage,
         };
         pub use u3pro16_buffered_native::DsLogicU3Pro16BufferedProvider;
         pub use u3pro16_streaming_native::DsLogicU3Pro16StreamingProvider;

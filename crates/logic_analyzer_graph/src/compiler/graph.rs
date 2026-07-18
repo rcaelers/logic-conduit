@@ -1947,8 +1947,9 @@ mod tests {
         CaptureChannelId, CaptureChunk, CaptureChunkWriter, CaptureDataDelivery,
         CaptureProviderCapabilities, CaptureSessionId, CaptureStoreCursor, ConfigValue,
         CooperativeManager, DerivedLaneData, NativeCaptureStore, NativeCaptureStoreConfig,
-        NodeSpec, Pipeline, Sample, Trigger, TriggerEditorSchema, TriggerIdentifier,
-        TriggerLogicOperator, TriggerPredicate, TriggerStage, Word,
+        NodeSpec, Pipeline, Sample, Trigger, TriggerCount, TriggerCountMode, TriggerEditorSchema,
+        TriggerIdentifier, TriggerLogicOperator, TriggerPlacement, TriggerPredicate, TriggerStage,
+        Word,
     };
 
     use super::*;
@@ -2825,6 +2826,85 @@ mod tests {
             configuration.feature.channels()[0].channel_id.as_str(),
             "plugin-bank:23"
         );
+    }
+
+    #[test]
+    fn advanced_demo_graph_edit_executes_identically_after_json_reload() {
+        let builders = BuilderRegistry::standard();
+        let mut widget = NodeGraphWidget::new(nodes::build_registry());
+        let source = widget
+            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::ZERO)
+            .unwrap();
+        let configuration = discover_trigger_configuration(widget.graph(), &builders)
+            .unwrap()
+            .unwrap();
+        let schema = configuration.feature.schema();
+        let program = TriggerProgram::new(
+            schema.id().clone(),
+            schema.revision(),
+            vec![
+                TriggerStage {
+                    predicates: vec![TriggerPredicate::Digital {
+                        channel: CaptureChannelId::new("demo:0"),
+                        condition: SimpleTriggerCondition::High,
+                    }],
+                    logic: TriggerLogicOperator::And,
+                    inverted: false,
+                    count: Some(TriggerCount {
+                        mode: TriggerCountMode::Occurrences,
+                        value: 2,
+                    }),
+                },
+                TriggerStage {
+                    predicates: vec![TriggerPredicate::Digital {
+                        channel: CaptureChannelId::new("demo:0"),
+                        condition: SimpleTriggerCondition::Falling,
+                    }],
+                    logic: TriggerLogicOperator::Or,
+                    inverted: true,
+                    count: Some(TriggerCount {
+                        mode: TriggerCountMode::Consecutive,
+                        value: 1,
+                    }),
+                },
+            ],
+        );
+        let state = apply_live_capture_edit(
+            widget.graph(),
+            &builders,
+            source,
+            &LiveCaptureEdit::SetTriggerProgram {
+                program: Some(program.clone()),
+            },
+        )
+        .unwrap();
+        assert!(widget.edit_node_state(source, state));
+
+        let before = discover_live_capture_feature(widget.graph(), &builders)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            before
+                .session_plan()
+                .unwrap()
+                .policy
+                .effective
+                .trigger_placement,
+            Some(TriggerPlacement::SamplesBefore(5))
+        );
+
+        let graph: GraphState =
+            serde_json::from_str(&serde_json::to_string(widget.graph()).unwrap()).unwrap();
+        let mut restored = NodeGraphWidget::new(nodes::build_registry());
+        restored.set_graph(graph);
+        let restored_configuration = discover_trigger_configuration(restored.graph(), &builders)
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored_configuration.feature.program(), Some(&program));
+        let after = discover_live_capture_feature(restored.graph(), &builders)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.session_plan(), before.session_plan());
     }
 
     #[test]

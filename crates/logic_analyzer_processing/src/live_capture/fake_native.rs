@@ -13,11 +13,114 @@ use super::{
     PreparedAcquisition,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeterministicTriggerLogic {
+    And,
+    Or,
+    Xor,
+    Nand,
+    Nor,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeterministicTriggerCountMode {
+    Occurrences,
+    Consecutive,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeterministicTriggerCount {
+    pub mode: DeterministicTriggerCountMode,
+    pub value: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeterministicTriggerPredicate {
+    pub channel: usize,
+    pub condition: SimpleTriggerCondition,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeterministicTriggerStage {
+    pub predicates: Vec<DeterministicTriggerPredicate>,
+    pub logic: DeterministicTriggerLogic,
+    pub inverted: bool,
+    pub count: Option<DeterministicTriggerCount>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeterministicTrigger {
+    pub stages: Vec<DeterministicTriggerStage>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct DeterministicTriggerEvaluator {
+    stage: usize,
+    matched_count: u64,
+    previous_stage_match: bool,
+}
+
+impl DeterministicTriggerEvaluator {
+    fn observe(&mut self, trigger: &DeterministicTrigger, config: &DeterministicFakeConfig, sample: u64) -> bool {
+        let Some(stage) = trigger.stages.get(self.stage) else {
+            return true;
+        };
+        let mut matches = stage.predicates.iter().map(|predicate| {
+            let previous = sample
+                .checked_sub(1)
+                .map(|previous| config.level_at(previous, predicate.channel));
+            predicate.condition.matches(
+                previous,
+                config.level_at(sample, predicate.channel),
+            )
+        });
+        let first = matches.next().expect("validated trigger stage is non-empty");
+        let matched = match stage.logic {
+            DeterministicTriggerLogic::And => matches.all(|matched| matched) && first,
+            DeterministicTriggerLogic::Or => matches.any(|matched| matched) || first,
+            DeterministicTriggerLogic::Xor => matches.fold(first, |parity, matched| parity ^ matched),
+            DeterministicTriggerLogic::Nand => !(matches.all(|matched| matched) && first),
+            DeterministicTriggerLogic::Nor => !(matches.any(|matched| matched) || first),
+        } ^ stage.inverted;
+        let qualified = match stage.count {
+            None => matched,
+            Some(count) => {
+                match count.mode {
+                    DeterministicTriggerCountMode::Occurrences => {
+                        if matched && !self.previous_stage_match {
+                            self.matched_count = self.matched_count.saturating_add(1);
+                        }
+                    }
+                    DeterministicTriggerCountMode::Consecutive => {
+                        self.matched_count = if matched {
+                            self.matched_count.saturating_add(1)
+                        } else {
+                            0
+                        };
+                    }
+                }
+                self.matched_count >= count.value
+            }
+        };
+        self.previous_stage_match = matched;
+        if !qualified {
+            return false;
+        }
+        if self.stage + 1 == trigger.stages.len() {
+            return true;
+        }
+        self.stage += 1;
+        self.matched_count = 0;
+        self.previous_stage_match = false;
+        false
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DeterministicFakeConfig {
     channels: Arc<[CaptureChannelId]>,
     chunk_sample_counts: Arc<[u64]>,
-    trigger_conditions: Arc<[Option<SimpleTriggerCondition>]>,
+    trigger: Option<Arc<DeterministicTrigger>>,
     seed: u64,
 }
 
@@ -45,7 +148,7 @@ impl DeterministicFakeConfig {
             })
         })?;
         let config = Self {
-            trigger_conditions: vec![None; channels.len()].into(),
+            trigger: None,
             channels,
             chunk_sample_counts,
             seed,
@@ -79,28 +182,83 @@ impl DeterministicFakeConfig {
                 self.channels.len()
             )));
         }
-        self.trigger_conditions = conditions;
+        let predicates = conditions
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(channel, condition)| {
+                condition
+                    .filter(|condition| *condition != SimpleTriggerCondition::Ignore)
+                    .map(|condition| DeterministicTriggerPredicate { channel, condition })
+            })
+            .collect::<Vec<_>>();
+        self.trigger = (!predicates.is_empty()).then(|| {
+            Arc::new(DeterministicTrigger {
+                stages: vec![DeterministicTriggerStage {
+                    predicates,
+                    logic: DeterministicTriggerLogic::And,
+                    inverted: false,
+                    count: None,
+                }],
+            })
+        });
         Ok(self)
     }
 
-    pub fn trigger_conditions(&self) -> &[Option<SimpleTriggerCondition>] {
-        &self.trigger_conditions
+    pub fn with_trigger(
+        mut self,
+        trigger: Option<DeterministicTrigger>,
+    ) -> AcquisitionResult<Self> {
+        if let Some(trigger) = &trigger {
+            if trigger.stages.is_empty() {
+                return Err(AcquisitionError::InvalidRequest(
+                    "fake trigger requires at least one stage".into(),
+                ));
+            }
+            for (stage_index, stage) in trigger.stages.iter().enumerate() {
+                if stage.predicates.is_empty() {
+                    return Err(AcquisitionError::InvalidRequest(format!(
+                        "fake trigger stage {stage_index} requires at least one predicate"
+                    )));
+                }
+                if let Some(predicate) = stage
+                    .predicates
+                    .iter()
+                    .find(|predicate| predicate.channel >= self.channels.len())
+                {
+                    return Err(AcquisitionError::InvalidRequest(format!(
+                        "fake trigger channel {} is outside 0..{}",
+                        predicate.channel,
+                        self.channels.len()
+                    )));
+                }
+                if stage.count.is_some_and(|count| count.value == 0) {
+                    return Err(AcquisitionError::InvalidRequest(format!(
+                        "fake trigger stage {stage_index} count must be non-zero"
+                    )));
+                }
+            }
+        }
+        self.trigger = trigger.map(Arc::new);
+        Ok(self)
+    }
+
+    pub fn trigger(&self) -> Option<&DeterministicTrigger> {
+        self.trigger.as_deref()
     }
 
     pub fn without_trigger(mut self) -> Self {
-        self.trigger_conditions = vec![None; self.channels.len()].into();
+        self.trigger = None;
         self
     }
 
     pub fn has_trigger(&self) -> bool {
-        self.trigger_conditions
-            .iter()
-            .flatten()
-            .any(|condition| *condition != SimpleTriggerCondition::Ignore)
+        self.trigger.is_some()
     }
 
     pub fn first_trigger_sample(&self) -> Option<u64> {
-        self.first_trigger_sample_in(0, self.total_samples())
+        let mut evaluator = DeterministicTriggerEvaluator::default();
+        self.first_trigger_sample_in(0, self.total_samples(), &mut evaluator)
     }
 
     pub fn level_at(&self, sample: u64, channel: usize) -> bool {
@@ -113,25 +271,15 @@ impl DeterministicFakeConfig {
         (mixed ^ (mixed >> 17) ^ (mixed >> 41)) & 1 != 0
     }
 
-    fn first_trigger_sample_in(&self, start_sample: u64, sample_count: u64) -> Option<u64> {
-        if !self.has_trigger() {
-            return None;
-        }
+    fn first_trigger_sample_in(
+        &self,
+        start_sample: u64,
+        sample_count: u64,
+        evaluator: &mut DeterministicTriggerEvaluator,
+    ) -> Option<u64> {
+        let trigger = self.trigger.as_deref()?;
         let end_sample = start_sample.checked_add(sample_count)?;
-        (start_sample..end_sample).find(|sample| {
-            self.trigger_conditions
-                .iter()
-                .enumerate()
-                .all(|(channel, condition)| {
-                    let Some(condition) = condition else {
-                        return true;
-                    };
-                    let previous = sample
-                        .checked_sub(1)
-                        .map(|previous| self.level_at(previous, channel));
-                    condition.matches(previous, self.level_at(*sample, channel))
-                })
-        })
+        (start_sample..end_sample).find(|sample| evaluator.observe(trigger, self, *sample))
     }
 
     fn maximum_chunk_bytes(&self) -> AcquisitionResult<usize> {
@@ -399,6 +547,7 @@ impl PreparedFakeAcquisition {
         let mut transferred_bytes = 0_u64;
         let mut chunk_count = 0_u64;
         let mut stopped = false;
+        let mut trigger_evaluator = DeterministicTriggerEvaluator::default();
         for (sequence, sample_count) in config.chunk_sample_counts.iter().copied().enumerate() {
             loop {
                 match control.wait_for_chunk() {
@@ -433,7 +582,13 @@ impl PreparedFakeAcquisition {
                 sample_count,
             )?;
             let trigger_sample = (!triggered)
-                .then(|| config.first_trigger_sample_in(captured_samples, sample_count))
+                .then(|| {
+                    config.first_trigger_sample_in(
+                        captured_samples,
+                        sample_count,
+                        &mut trigger_evaluator,
+                    )
+                })
                 .flatten();
             transferred_bytes = transferred_bytes
                 .checked_add(chunk.encoded_byte_len() as u64)
@@ -559,7 +714,11 @@ mod tests {
         NativeFinalizedCapture, bounded_capture_event_queue, bounded_capture_queue,
     };
 
-    use super::{DeterministicFakeConfig, DeterministicFakeProvider};
+    use super::{
+        DeterministicFakeConfig, DeterministicFakeProvider, DeterministicTrigger,
+        DeterministicTriggerCount, DeterministicTriggerCountMode, DeterministicTriggerLogic,
+        DeterministicTriggerPredicate, DeterministicTriggerStage,
+    };
     use crate::live_capture::{AcquisitionContext, AcquisitionError};
 
     const TIMEOUT: Duration = Duration::from_secs(2);
@@ -575,6 +734,25 @@ mod tests {
             0x5a17,
         )
         .unwrap()
+    }
+
+    fn predicate(
+        channel: usize,
+        condition: signal_processing::SimpleTriggerCondition,
+    ) -> DeterministicTriggerPredicate {
+        DeterministicTriggerPredicate { channel, condition }
+    }
+
+    fn stage(
+        logic: DeterministicTriggerLogic,
+        predicates: Vec<DeterministicTriggerPredicate>,
+    ) -> DeterministicTriggerStage {
+        DeterministicTriggerStage {
+            predicates,
+            logic,
+            inverted: false,
+            count: None,
+        }
     }
 
     #[test]
@@ -796,6 +974,88 @@ mod tests {
                 ]
             }));
         }
+    }
+
+    #[test]
+    fn staged_trigger_executes_every_logic_operator_and_inversion() {
+        use signal_processing::SimpleTriggerCondition::High;
+
+        let predicates = vec![predicate(0, High), predicate(2, High)];
+        for (logic, expected) in [
+            (DeterministicTriggerLogic::And, 1),
+            (DeterministicTriggerLogic::Or, 0),
+            (DeterministicTriggerLogic::Xor, 0),
+            (DeterministicTriggerLogic::Nand, 0),
+            (DeterministicTriggerLogic::Nor, 11),
+        ] {
+            let configured = config()
+                .with_trigger(Some(DeterministicTrigger {
+                    stages: vec![stage(logic, predicates.clone())],
+                }))
+                .unwrap();
+            assert_eq!(configured.first_trigger_sample(), Some(expected), "{logic:?}");
+        }
+
+        let mut inverted = stage(DeterministicTriggerLogic::Or, predicates);
+        inverted.inverted = true;
+        let configured = config()
+            .with_trigger(Some(DeterministicTrigger {
+                stages: vec![inverted],
+            }))
+            .unwrap();
+        assert_eq!(configured.first_trigger_sample(), Some(11));
+    }
+
+    #[test]
+    fn staged_trigger_counts_and_stage_progress_cross_chunk_boundaries() {
+        use signal_processing::SimpleTriggerCondition::{Falling, High, Rising};
+
+        let mut occurrences = stage(
+            DeterministicTriggerLogic::And,
+            vec![predicate(0, High)],
+        );
+        occurrences.count = Some(DeterministicTriggerCount {
+            mode: DeterministicTriggerCountMode::Occurrences,
+            value: 2,
+        });
+        let configured = config()
+            .with_trigger(Some(DeterministicTrigger {
+                stages: vec![occurrences],
+            }))
+            .unwrap();
+        assert_eq!(configured.chunk_sample_counts()[0], 3);
+        assert_eq!(configured.first_trigger_sample(), Some(3));
+
+        let mut consecutive = stage(
+            DeterministicTriggerLogic::And,
+            vec![predicate(0, High)],
+        );
+        consecutive.count = Some(DeterministicTriggerCount {
+            mode: DeterministicTriggerCountMode::Consecutive,
+            value: 2,
+        });
+        let configured = config()
+            .with_trigger(Some(DeterministicTrigger {
+                stages: vec![consecutive],
+            }))
+            .unwrap();
+        assert_eq!(configured.first_trigger_sample(), Some(1));
+
+        let configured = config()
+            .with_trigger(Some(DeterministicTrigger {
+                stages: vec![
+                    stage(
+                        DeterministicTriggerLogic::And,
+                        vec![predicate(0, Falling)],
+                    ),
+                    stage(
+                        DeterministicTriggerLogic::And,
+                        vec![predicate(0, Rising)],
+                    ),
+                ],
+            }))
+            .unwrap();
+        assert_eq!(configured.first_trigger_sample(), Some(3));
     }
 
     #[test]

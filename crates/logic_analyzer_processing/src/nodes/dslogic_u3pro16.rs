@@ -10,10 +10,12 @@ use std::time::{Duration, Instant};
 
 use rusb::{Context, DeviceHandle, UsbContext};
 
+use signal_processing::TriggerCountMode;
+
 use super::logic_analyzer::{
     CaptureMode, ClockEdge, ClockSource, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
     LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
-    LogicEncodingRequest, LogicTrigger, LogicTriggerStage, TriggerCondition,
+    LogicEncodingRequest, LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic,
 };
 
 const VID: u16 = 0x2a0e;
@@ -1264,9 +1266,17 @@ fn trigger_words(
         mask,
         value,
         edge,
-        (stage.logic.wire() << 1) | u16::from(stage.inverted),
+        trigger_logic_word(stage),
         stage.count,
     )
+}
+fn trigger_logic_word(stage: &LogicTriggerStage) -> u16 {
+    let logic = match stage.logic {
+        TriggerLogic::Or => 0,
+        TriggerLogic::And => 1,
+    };
+    let contiguous = u16::from(stage.count_mode == TriggerCountMode::Consecutive);
+    ((logic + 2 * contiguous) << 1) | u16::from(stage.inverted)
 }
 fn replicate_1g(word: u16, settings: &DsLogicCaptureSettings, stage: usize) -> u16 {
     if settings.sample_rate_hz == 1_000_000_000 && !(settings.trigger.serial && stage == 3) {
@@ -1331,9 +1341,34 @@ mod tests {
         trigger_logic0: u16,
     }
 
+    #[derive(Deserialize)]
+    struct AdvancedTriggerPacketFixture {
+        sample_rate_hz: u64,
+        input_mask: u16,
+        sample_limit: u64,
+        expected: AdvancedTriggerPacketExpected,
+    }
+
+    #[derive(Deserialize)]
+    struct AdvancedTriggerPacketExpected {
+        channel_stage_word: u16,
+        mask0: [u16; 2],
+        value0: [u16; 2],
+        edge0: [u16; 2],
+        logic0: [u16; 2],
+        count0: [u32; 2],
+    }
+
     fn packet_fixture() -> PacketFixture {
         serde_json::from_str(include_str!(
             "../../test_data/dslogic_u3pro16/buffered_packet.json"
+        ))
+        .unwrap()
+    }
+
+    fn advanced_trigger_packet_fixture() -> AdvancedTriggerPacketFixture {
+        serde_json::from_str(include_str!(
+            "../../test_data/dslogic_u3pro16/advanced_trigger_packet.json"
         ))
         .unwrap()
     }
@@ -1628,6 +1663,45 @@ mod tests {
         assert_eq!(header.captured_samples(), fixture.sample_limit);
         assert_eq!(header.remaining_samples(), fixture.remaining_samples);
         assert_eq!(header.ram_start(), fixture.ram_start);
+    }
+
+    #[test]
+    fn advanced_trigger_stages_match_checked_in_packet_fixture() {
+        let fixture = advanced_trigger_packet_fixture();
+        let mut first = LogicTriggerStage::default();
+        first.plane0[0] = TriggerCondition::Rising;
+        first.plane0[2] = TriggerCondition::High;
+        first.logic = TriggerLogic::And;
+        first.inverted = true;
+        first.count = 3;
+        let mut second = LogicTriggerStage::default();
+        second.plane0[2] = TriggerCondition::Low;
+        second.plane0[5] = TriggerCondition::Falling;
+        second.logic = TriggerLogic::Or;
+        second.count_mode = TriggerCountMode::Consecutive;
+        second.count = 5;
+        let mut settings = DsLogicCaptureSettings::finite(
+            fixture.sample_rate_hz,
+            fixture.input_mask,
+            fixture.sample_limit,
+        );
+        settings.trigger = LogicTrigger {
+            stages: vec![first, second],
+            serial: false,
+        };
+
+        let plan = build_plan(LinkSpeed::Super, &settings).unwrap();
+        let packet = build_settings_packet(LinkSpeed::Super, &settings, plan).unwrap();
+        let expected = fixture.expected;
+
+        assert_eq!(get16(&packet, 28), expected.channel_stage_word);
+        for stage in 0..2 {
+            assert_eq!(get16(&packet, 48 + stage * 2), expected.mask0[stage]);
+            assert_eq!(get16(&packet, 112 + stage * 2), expected.value0[stage]);
+            assert_eq!(get16(&packet, 176 + stage * 2), expected.edge0[stage]);
+            assert_eq!(get16(&packet, 240 + stage * 2), expected.logic0[stage]);
+            assert_eq!(get32(&packet, 304 + stage * 4), expected.count0[stage]);
+        }
     }
 
     #[test]

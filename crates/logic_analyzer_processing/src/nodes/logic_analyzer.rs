@@ -12,6 +12,7 @@ use std::thread::JoinHandle;
 
 use thiserror::Error;
 
+use signal_processing::TriggerCountMode;
 use signal_processing::sender::Sender;
 use signal_processing::errors::{WorkError, WorkResult};
 use signal_processing::node::{ProcessNode};
@@ -55,21 +56,6 @@ pub enum TriggerCondition {
 pub enum TriggerLogic {
     And,
     Or,
-    Xor,
-    Nand,
-    Nor,
-}
-
-impl TriggerLogic {
-    pub(crate) fn wire(self) -> u16 {
-        match self {
-            Self::And => 0,
-            Self::Or => 1,
-            Self::Xor => 2,
-            Self::Nand => 3,
-            Self::Nor => 4,
-        }
-    }
 }
 
 /// One stage of a portable logic trigger. Two planes accommodate analyzers
@@ -80,6 +66,7 @@ pub struct LogicTriggerStage {
     pub plane1: [TriggerCondition; 16],
     pub logic: TriggerLogic,
     pub inverted: bool,
+    pub count_mode: TriggerCountMode,
     pub count: u32,
 }
 
@@ -90,6 +77,7 @@ impl Default for LogicTriggerStage {
             plane1: [TriggerCondition::Ignore; 16],
             logic: TriggerLogic::And,
             inverted: false,
+            count_mode: TriggerCountMode::Occurrences,
             count: 0,
         }
     }

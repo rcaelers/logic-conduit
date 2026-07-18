@@ -506,12 +506,25 @@ impl<'a> TriggerEditor<'a> {
                 }
             });
         }
+        let unused_digital_channel = self.channels.iter().find(|channel| {
+            !stage.predicates.iter().any(|predicate| {
+                matches!(
+                    predicate,
+                    TriggerPredicate::Digital { channel: used, .. } if *used == channel.id
+                )
+            })
+        });
+        let can_add_digital =
+            unused_digital_channel.is_some() && !self.schema.digital_conditions().is_empty();
+        let has_condition_kind = can_add_digital || !self.schema.registered_predicates().is_empty();
         ui.add_enabled_ui(
-            self.enabled && stage.predicates.len() < self.schema.maximum_predicates_per_stage(),
+            self.enabled
+                && has_condition_kind
+                && stage.predicates.len() < self.schema.maximum_predicates_per_stage(),
             |ui| {
                 ui.menu_button("+ Condition", |ui| {
                     if let (Some(channel), Some(condition)) = (
-                        self.channels.first(),
+                        unused_digital_channel,
                         self.schema.digital_conditions().first(),
                     ) && ui.button("Digital condition").clicked()
                     {
@@ -1075,6 +1088,19 @@ mod tests {
                 },
             )
             .unwrap();
+        assert!(
+            model
+                .apply(
+                    program.as_ref(),
+                    TriggerEditorAction::AddDigitalPredicate {
+                        stage: 0,
+                        channel: channels[0].id.clone(),
+                        condition: SimpleTriggerCondition::Rising,
+                    },
+                )
+                .unwrap_err()
+                .contains("more than once")
+        );
         program = model
             .apply(
                 program.as_ref(),

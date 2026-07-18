@@ -16,6 +16,6 @@
     "trigger_mask0": 65530,
     "trigger_value0": 5,
     "trigger_edge0": 1,
-    "trigger_logic0": 0
+    "trigger_logic0": 2
   }
 }
