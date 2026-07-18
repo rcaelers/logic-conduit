@@ -2408,6 +2408,42 @@ mod tests {
     }
 
     #[test]
+    fn raw_only_capture_completes_after_its_analysis_attachment_is_dropped() {
+        let mut graph = NodeGraphWidget::new(nodes::build_registry());
+        graph
+            .add_node_at(nodes::DemoCaptureSource::name(), egui::Pos2::ZERO)
+            .unwrap();
+        let feature = compiler::discover_live_capture_feature(
+            graph.graph(),
+            &compiler::BuilderRegistry::standard(),
+        )
+        .unwrap()
+        .unwrap();
+
+        let mut coordinator = CaptureCoordinator::new();
+        coordinator
+            .start(feature, CaptureStartMode::SavedPolicy)
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            coordinator.poll();
+            if coordinator.take_analysis_attachment().is_some() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "analysis attachment was not delivered");
+            std::thread::yield_now();
+        }
+        poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
+
+        assert_eq!(
+            coordinator.status().unwrap().state,
+            CaptureSessionState::Complete,
+            "{:?}",
+            coordinator.status().unwrap().error
+        );
+    }
+
+    #[test]
     fn finalized_session_can_be_kept_reopened_replayed_and_explicitly_discarded() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         let source = graph

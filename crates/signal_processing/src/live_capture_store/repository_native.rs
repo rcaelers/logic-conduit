@@ -109,6 +109,10 @@ impl NativeCaptureSessionRepository {
         &self,
         session_id: CaptureSessionId,
     ) -> CaptureStoreResult<NativeCaptureSessionPin> {
+        // Cache roots may be cleared after the application has initialized
+        // the repository. Recreate the root at the point of reservation so
+        // the next capture does not fail with ENOENT.
+        fs::create_dir_all(self.root())?;
         let directory = self.session_directory(session_id);
         fs::create_dir(&directory)?;
         Ok(self.pin_unchecked(session_id, directory))
@@ -418,6 +422,7 @@ fn directory_size(directory: &Path) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::time::Duration;
 
     use tempfile::tempdir;
@@ -476,6 +481,22 @@ mod tests {
         drop(pin);
         repository.discard(id).unwrap();
         assert!(!repository.session_directory(id).exists());
+    }
+
+    #[test]
+    fn reserve_recreates_a_cache_root_removed_after_initialization() {
+        let temporary = tempdir().unwrap();
+        let root = temporary.path().join("captures");
+        let repository = NativeCaptureSessionRepository::new(
+            NativeCaptureSessionRepositoryConfig::new(&root),
+        )
+        .unwrap();
+        fs::remove_dir(&root).unwrap();
+
+        let session = CaptureSessionId::new(42);
+        let pin = repository.reserve(session).unwrap();
+
+        assert!(pin.directory().is_dir());
     }
 
     #[test]
