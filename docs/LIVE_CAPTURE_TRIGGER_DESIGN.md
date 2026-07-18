@@ -357,6 +357,40 @@ The later Triggers panel supplies advanced multi-stage programs through the same
 model. When an advanced program is active, lane icons summarize its selected stage rather than
 maintaining a second, conflicting trigger program.
 
+### Advanced-trigger contract
+
+`CaptureProviderCapabilities` optionally carries a `TriggerEditorSchema` for the discovered
+device/profile. The schema has a stable registered ID and revision, structural limits, supported
+stage logic, inversion and counting capabilities, common digital conditions, and registered
+predicate schemas. Registered predicates are declarative data with stable IDs, labels, and typed
+operands; they cannot contain provider callbacks. Operand kinds cover booleans, bounded signed and
+unsigned integers, durations, choices, physical-channel identities, and bounded byte strings.
+
+The serializable neutral `TriggerProgram` identifies the schema revision and contains an ordered
+sequence of stages. Each stage contains common per-channel digital predicates or registered
+predicates, one supported logic operation, optional inversion, and an optional count qualifier. An
+absent program means free run. The contract converts a simple trigger to one AND stage containing
+its non-Ignore digital predicates, so the lane controls and advanced editor do not need competing
+program models.
+
+Before a concrete feature may persist or lower a program, the schema validates it against the
+source's currently enabled opaque `CaptureChannelId` table. Validation checks schema identity and
+revision, every structural limit and capability, channel membership, registered predicate and
+operand identity, exact operand type, numeric steps/ranges, choice membership, and byte-length
+bounds. It returns either a `ValidatedTriggerProgram` or structured path/code/message diagnostics.
+Generic code cannot construct the validated wrapper directly.
+
+`LiveCaptureEdit::SetTriggerProgram` routes an optional neutral program to the concrete source
+builder that owns the selected live feature. The builder owns saved-state migration and, in the
+execution phase, translation from the validated program to its processing/provider representation.
+Generic compiler, application, viewer, and capture runtime code neither inspect registered IDs nor
+branch on a device, protocol, port label, or predicate name. A schema revision mismatch is an
+explicit compatibility diagnostic until that owning builder migrates the program.
+
+The Triggers panel, concrete saved programs, and device execution are proposed future Phases 13.3
+and 13.4. Phase 13.2 establishes only the portable contract, validation/negotiation, neutral edit
+routing, and conformance tests.
+
 ### Capture policy
 
 Capture behavior is an explicit, generic policy rather than an implicit consequence of the Start
@@ -1154,10 +1188,20 @@ boundary use the old configuration and events at/after it use the new configurat
 pending records recover explicitly, retention preserves their original coordinate, and native/wasm
 builds retain the same platform-neutral scheduling contract.
 
-##### Proposed future phases 13.2–13.9
+##### Phase 13.2 — Advanced-trigger contract
 
-- **13.2 Advanced-trigger contract:** provider-neutral schema, validation, capabilities, and
-  lowering boundary.
+- Add the provider-neutral schema/program model, typed registered operands, structured validation,
+  capability negotiation, common-digital/simple-program bridge, and neutral concrete-owner edit
+  routing.
+- Keep panel widgets, concrete saved programs/migrations, and provider execution out of this phase.
+
+Gate: two deliberately different schemas accept every supported composition and reject schema,
+limit, channel, predicate, operand, range, count, and revision violations with stable diagnostics;
+serde round trips preserve neutral programs; routing tests prove a plugin builder receives the
+program without generic name/ID interpretation; native and wasm builds use the same data contract.
+
+##### Proposed future phases 13.3–13.9
+
 - **13.3 Advanced Triggers panel:** neutral editing, persistence, migration, and simple-trigger
   interoperability.
 - **13.4 Concrete advanced-trigger execution:** deterministic providers followed by hardware

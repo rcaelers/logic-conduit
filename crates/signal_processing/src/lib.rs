@@ -11,6 +11,7 @@
 //! - **Scheduler**: Manages node lifecycle and parallel execution
 //! - **Derived data**: Generic viewer-lane storage and queries
 
+pub mod advanced_trigger;
 pub mod capture;
 mod capture_policy;
 mod cooperative_manager;
@@ -62,6 +63,13 @@ std::cfg_select! {
     }
 }
 
+pub use advanced_trigger::{
+    RegisteredTriggerPredicateSchema, TRIGGER_PROGRAM_FORMAT_VERSION, TriggerChoice, TriggerCount,
+    TriggerCountCapabilities, TriggerCountMode, TriggerEditorSchema, TriggerIdentifier,
+    TriggerLogicOperator, TriggerOperandKind, TriggerOperandSchema, TriggerOperandValue,
+    TriggerPredicate, TriggerProgram, TriggerStage, TriggerValidationCode,
+    TriggerValidationDiagnostic, TriggerValidationErrors, ValidatedTriggerProgram,
+};
 pub use capture::{
     BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureIndex,
     CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,

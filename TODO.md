@@ -113,9 +113,10 @@ Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN
         explicit durable-source/analysis-time boundary; pending and resolved graph revisions are
         durable, interrupted attempts recover visibly, and structural/source/acquisition edits are
         deferred.
-      - **13.2 Advanced-trigger contract:** define the provider-neutral staged/counted/serial
-        trigger schema, validation, capability negotiation, and concrete lowering boundary without
-        adding device-specific cases to generic UI/compiler code.
+      - **13.2 Advanced-trigger contract — complete:** the provider-neutral staged/counted and
+        registered-predicate schema, typed programs, structured validation, capability
+        negotiation, simple-trigger bridge, and concrete-owner edit-routing boundary are
+        implemented without device-specific cases in generic UI/compiler/runtime code.
       - **13.3 Advanced Triggers panel:** edit and persist the registered schema through neutral
         operations, with migration diagnostics and simple-trigger interoperability.
       - **13.4 Concrete advanced-trigger execution:** lower supported programs in each owning

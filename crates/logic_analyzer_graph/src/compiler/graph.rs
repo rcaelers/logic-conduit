@@ -31,7 +31,7 @@ use signal_processing::{
     AppManager, CaptureChannelId, CaptureProviderCapabilities, CaptureSessionPlan,
     CaptureStartMode, CaptureStoreCursor, ConfigurationBoundary, DerivedLanes, DisconnectEvent,
     InputSub, NodeConfig, OverflowPolicy, PersistentStoreConfig, ProcessNode, SampleBlock,
-    SamplingActivity, SimpleTriggerCondition, ViewerRetention,
+    SamplingActivity, SimpleTriggerCondition, TriggerProgram, ViewerRetention,
 };
 
 use super::cache_platform;
@@ -164,6 +164,9 @@ pub enum LiveCaptureEdit {
     SetSimpleTrigger {
         channel_id: CaptureChannelId,
         condition: SimpleTriggerCondition,
+    },
+    SetTriggerProgram {
+        program: Option<TriggerProgram>,
     },
 }
 
@@ -1809,7 +1812,8 @@ mod tests {
         CaptureChannelId, CaptureChunk, CaptureChunkWriter, CaptureDataDelivery,
         CaptureProviderCapabilities, CaptureSessionId, CaptureStoreCursor, ConfigValue,
         CooperativeManager, DerivedLaneData, NativeCaptureStore, NativeCaptureStoreConfig,
-        NodeSpec, Pipeline, Sample, Trigger, Word,
+        NodeSpec, Pipeline, Sample, Trigger, TriggerIdentifier, TriggerLogicOperator,
+        TriggerPredicate, TriggerStage, Word,
     };
 
     use super::*;
@@ -1964,6 +1968,20 @@ mod tests {
                 capabilities,
                 provider: BufferedFakeProvider::new(config),
             })))
+        }
+
+        fn apply_live_capture_edit(
+            &self,
+            state: &Value,
+            edit: &LiveCaptureEdit,
+        ) -> Result<Option<Value>, String> {
+            match edit {
+                LiveCaptureEdit::SetTriggerProgram { program } => Ok(Some(serde_json::json!({
+                    "previous_state": state,
+                    "received_program": program,
+                }))),
+                LiveCaptureEdit::SetSimpleTrigger { .. } => Ok(None),
+            }
         }
 
         fn input_required(&self, socket: &Socket, state: &Value) -> bool {
@@ -3241,6 +3259,49 @@ mod tests {
                 .supports(feature.channels(), feature.sample_rate_hz())
         );
         assert!(!feature.capabilities().supports_force_trigger());
+    }
+
+    #[test]
+    fn advanced_trigger_program_routes_unchanged_to_the_registered_builder() {
+        let mut node_types = nodes::build_registry();
+        let mut builders = BuilderRegistry::standard();
+        crate::compiler::PluginContext::new(&mut node_types, &mut builders).register_builder(
+            nodes::DemoCaptureSource::name(),
+            Box::new(BufferedPluginBuilder),
+        );
+        let mut widget = NodeGraphWidget::new(node_types);
+        let source = widget
+            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::ZERO)
+            .unwrap();
+        let program = TriggerProgram::new(
+            TriggerIdentifier::new("plugin.vendor-neutral.engine").unwrap(),
+            17,
+            vec![TriggerStage {
+                predicates: vec![TriggerPredicate::Digital {
+                    channel: CaptureChannelId::new("pod-q:41"),
+                    condition: SimpleTriggerCondition::Falling,
+                }],
+                logic: TriggerLogicOperator::And,
+                inverted: false,
+                count: None,
+            }],
+        );
+
+        let state = apply_live_capture_edit(
+            widget.graph(),
+            &builders,
+            source,
+            &LiveCaptureEdit::SetTriggerProgram {
+                program: Some(program.clone()),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            state["received_program"],
+            serde_json::to_value(Some(program)).unwrap()
+        );
+        assert_eq!(state["previous_state"], widget.graph().nodes[&source].state);
     }
 
     #[test]

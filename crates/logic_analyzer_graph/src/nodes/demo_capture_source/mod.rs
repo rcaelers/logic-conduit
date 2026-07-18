@@ -14,7 +14,10 @@ fn apply_live_capture_edit(state: &Value, edit: &LiveCaptureEdit) -> Result<Valu
     let LiveCaptureEdit::SetSimpleTrigger {
         channel_id,
         condition,
-    } = edit;
+    } = edit
+    else {
+        return Err("the demo capture source has no advanced trigger program state".into());
+    };
     let channel = channel_id
         .as_str()
         .strip_prefix("demo:")

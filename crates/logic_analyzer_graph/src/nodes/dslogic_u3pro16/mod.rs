@@ -202,7 +202,10 @@ fn apply_live_capture_edit(state: &Value, edit: &LiveCaptureEdit) -> Result<Valu
     let LiveCaptureEdit::SetSimpleTrigger {
         channel_id,
         condition,
-    } = edit;
+    } = edit
+    else {
+        return Err("U3Pro16 saved state has no advanced trigger program".into());
+    };
     let physical_channel = channel_id
         .as_str()
         .strip_prefix("u3pro16:input:")

@@ -11,9 +11,12 @@ use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
+use crate::advanced_trigger::{
+    TriggerEditorSchema, TriggerProgram, TriggerValidationErrors, ValidatedTriggerProgram,
+};
 use crate::{CapturePolicyCapabilities, CaptureSessionPlan};
 
 pub const CAPTURE_CHUNK_FORMAT_VERSION: u16 = 1;
@@ -22,7 +25,7 @@ pub const CAPTURE_CHUNK_FORMAT_VERSION: u16 = 1;
 ///
 /// Providers may lower this contract into a native device representation, or evaluate it in a
 /// host-side acquisition implementation. Multiple enabled conditions are combined with AND.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SimpleTriggerCondition {
     #[default]
@@ -93,6 +96,24 @@ impl fmt::Display for CaptureChannelId {
     }
 }
 
+impl Serialize for CaptureChannelId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for CaptureChannelId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(Self::new)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaptureDataDelivery {
     /// Canonical chunks become available while acquisition is still sampling.
@@ -157,6 +178,7 @@ pub struct CaptureProviderCapabilities {
     setting_matrix: Arc<[CaptureSettingCombination]>,
     commands: CaptureCommandCapabilities,
     policy: CapturePolicyCapabilities,
+    trigger_schema: Option<Arc<TriggerEditorSchema>>,
 }
 
 impl CaptureProviderCapabilities {
@@ -179,6 +201,7 @@ impl CaptureProviderCapabilities {
                 capture_now: true,
             },
             policy: CapturePolicyCapabilities::finite_default(),
+            trigger_schema: None,
         })
     }
 
@@ -221,6 +244,29 @@ impl CaptureProviderCapabilities {
     pub fn with_policy(mut self, policy: CapturePolicyCapabilities) -> Self {
         self.policy = policy;
         self
+    }
+
+    pub fn with_trigger_schema(mut self, schema: TriggerEditorSchema) -> Self {
+        self.trigger_schema = Some(Arc::new(schema));
+        self
+    }
+
+    pub fn trigger_schema(&self) -> Option<&TriggerEditorSchema> {
+        self.trigger_schema.as_deref()
+    }
+
+    pub fn negotiate_trigger_program(
+        &self,
+        program: Option<&TriggerProgram>,
+        channels: &[CaptureChannelId],
+    ) -> Result<Option<ValidatedTriggerProgram>, TriggerValidationErrors> {
+        let Some(program) = program else {
+            return Ok(None);
+        };
+        let schema = self
+            .trigger_schema()
+            .ok_or_else(TriggerValidationErrors::schema_unavailable)?;
+        schema.validate_program(program, channels).map(Some)
     }
 
     pub fn supports(&self, channels: &[CaptureChannelId], sample_rate_hz: f64) -> bool {
@@ -1045,6 +1091,10 @@ mod tests {
         CaptureSettingCombination, CaptureWriteError, SimpleTriggerCondition,
         bounded_capture_queue,
     };
+    use crate::{
+        TriggerEditorSchema, TriggerIdentifier, TriggerLogicOperator, TriggerProgram,
+        TriggerValidationCode,
+    };
 
     fn channels() -> Arc<[CaptureChannelId]> {
         vec![
@@ -1140,6 +1190,74 @@ mod tests {
                 false,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn provider_capabilities_negotiate_only_advertised_trigger_programs() {
+        let channels = channels();
+        let schema = TriggerEditorSchema::new(
+            TriggerIdentifier::new("test.capture-trigger").unwrap(),
+            2,
+            1,
+            3,
+            vec![TriggerLogicOperator::And],
+        )
+        .unwrap()
+        .with_digital_conditions(vec![SimpleTriggerCondition::Rising])
+        .unwrap();
+        let program = schema
+            .simple_program([(channels[1].clone(), SimpleTriggerCondition::Rising)])
+            .unwrap()
+            .unwrap();
+        let capabilities = CaptureProviderCapabilities::single(
+            CaptureDataDelivery::DuringAcquisition,
+            Arc::clone(&channels),
+            1_000_000,
+        )
+        .with_trigger_schema(schema);
+
+        assert!(
+            capabilities
+                .negotiate_trigger_program(None, &channels)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            capabilities
+                .negotiate_trigger_program(Some(&program), &channels)
+                .unwrap()
+                .unwrap()
+                .program(),
+            &program
+        );
+
+        let without_schema = CaptureProviderCapabilities::single(
+            CaptureDataDelivery::DuringAcquisition,
+            Arc::clone(&channels),
+            1_000_000,
+        );
+        let error = without_schema
+            .negotiate_trigger_program(Some(&program), &channels)
+            .unwrap_err();
+        assert_eq!(
+            error.diagnostics()[0].code,
+            TriggerValidationCode::SchemaUnavailable
+        );
+
+        let wrong_schema = TriggerProgram::new(
+            TriggerIdentifier::new("test.other-trigger").unwrap(),
+            2,
+            program.stages.clone(),
+        );
+        let error = capabilities
+            .negotiate_trigger_program(Some(&wrong_schema), &channels)
+            .unwrap_err();
+        assert!(
+            error
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == TriggerValidationCode::SchemaIdentity)
         );
     }
 
