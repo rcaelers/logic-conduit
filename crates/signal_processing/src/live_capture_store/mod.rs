@@ -3,6 +3,7 @@
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{CaptureChannelId, CaptureChunk, CaptureSessionId};
@@ -12,10 +13,17 @@ std::cfg_select! {
     _ => {
         #[path = "native.rs"]
         mod native;
+        #[path = "repository_native.rs"]
+        mod repository_native;
 
         pub use native::{
             NativeCaptureCursor, NativeCaptureRandomReader, NativeCaptureStore,
             NativeCaptureStoreConfig, NativeCaptureStoreWriter, NativeFinalizedCapture,
+        };
+        pub use repository_native::{
+            CaptureSessionCleanupPlan, NativeCaptureSessionPin, NativeCaptureSessionRepository,
+            NativeCaptureSessionRepositoryConfig, NativeCaptureSessionSummary,
+            default_capture_session_directory,
         };
     }
 }
@@ -74,6 +82,56 @@ pub struct CaptureStoreManifest {
     pub committed_chunks: u64,
     pub committed_samples: u64,
     pub committed_data_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureSessionOutcome {
+    InProgress,
+    Complete,
+    Stopped,
+    CancelledBeforeTrigger,
+    Incomplete,
+    Aborted,
+    Corrupt,
+}
+
+impl CaptureSessionOutcome {
+    pub const fn is_terminal(self) -> bool {
+        !matches!(self, Self::InProgress)
+    }
+
+    pub const fn is_incomplete(self) -> bool {
+        matches!(
+            self,
+            Self::CancelledBeforeTrigger | Self::Incomplete | Self::Aborted
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CaptureSessionMetadata {
+    pub descriptor: CaptureStoreDescriptor,
+    pub outcome: CaptureSessionOutcome,
+    pub created_unix_ns: u64,
+    pub accessed_unix_ns: u64,
+    pub recording_origin: Option<u64>,
+    pub retained_start_sample: u64,
+    pub kept: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CaptureRecoveryReport {
+    pub recovered: bool,
+    pub truncated_data_bytes: u64,
+    pub truncated_commit_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CaptureReclamationReport {
+    pub reclaimed_chunks: u64,
+    pub reclaimed_samples: u64,
+    pub reclaimed_data_bytes: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -297,6 +355,10 @@ pub enum CaptureStoreError {
     WriterFailed(String),
     #[error("corrupt capture store: {0}")]
     Corrupt(String),
+    #[error("capture session {0} is pinned and cannot be removed")]
+    SessionPinned(CaptureSessionId),
+    #[error("capture session {0} was not found")]
+    SessionNotFound(CaptureSessionId),
     #[error("capture-store I/O failed: {0}")]
     Io(#[from] std::io::Error),
 }

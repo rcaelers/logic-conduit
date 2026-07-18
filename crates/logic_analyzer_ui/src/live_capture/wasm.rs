@@ -1,16 +1,69 @@
-use logic_analyzer_graph::compiler::DiscoveredLiveCaptureFeature;
-use signal_processing::CaptureStartMode;
+use logic_analyzer_graph::compiler::{BuilderRegistry, DiscoveredLiveCaptureFeature};
+use signal_processing::{CaptureSessionId, CaptureStartMode};
 
 use super::{
-    CaptureAnalysisAttachment, CaptureCoordinatorContract, CaptureReplayAttachment,
-    CaptureSessionStatus, CaptureWaveformUpdate,
+    CaptureAnalysisAttachment, CaptureCleanupAdvisory, CaptureCoordinatorContract,
+    CaptureReplayAttachment, CaptureSessionStatus, CaptureWaveformUpdate, RecentCaptureSession,
 };
 
 pub(crate) struct CaptureCoordinator;
 
 impl CaptureCoordinator {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn configured(_max_recent_sessions: usize, _max_total_bytes: u64) -> Self {
         Self
+    }
+
+    pub(crate) fn start_with_graph(
+        &mut self,
+        _feature: DiscoveredLiveCaptureFeature,
+        _graph: &node_graph::GraphState,
+        _mode: CaptureStartMode,
+    ) -> Result<(), String> {
+        Err(Self::backend_unavailable_reason().into())
+    }
+
+    pub(crate) fn recent_session_views(&self) -> Vec<RecentCaptureSession> {
+        Vec::new()
+    }
+
+    pub(crate) fn current_session_id(&self) -> Option<CaptureSessionId> {
+        None
+    }
+
+    pub(crate) fn clear_completed(&mut self) {}
+
+    pub(crate) fn cleanup_advisory(&self) -> Result<CaptureCleanupAdvisory, String> {
+        Ok(CaptureCleanupAdvisory::default())
+    }
+
+    pub(crate) fn set_session_kept(
+        &mut self,
+        _session_id: CaptureSessionId,
+        _kept: bool,
+    ) -> Result<(), String> {
+        Err(Self::backend_unavailable_reason().into())
+    }
+
+    pub(crate) fn discard_session(
+        &mut self,
+        _session_id: CaptureSessionId,
+    ) -> Result<(), String> {
+        Err(Self::backend_unavailable_reason().into())
+    }
+
+    pub(crate) fn reclaim_session(
+        &mut self,
+        _session_id: CaptureSessionId,
+    ) -> Result<(), String> {
+        Err(Self::backend_unavailable_reason().into())
+    }
+
+    pub(crate) fn open_recent_session(
+        &mut self,
+        _session_id: CaptureSessionId,
+        _builders: &BuilderRegistry,
+    ) -> Result<(), String> {
+        Err(Self::backend_unavailable_reason().into())
     }
 }
 
@@ -23,6 +76,7 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
         "Live capture is not available in this web build"
     }
 
+    #[cfg(test)]
     fn start(
         &mut self,
         _feature: DiscoveredLiveCaptureFeature,

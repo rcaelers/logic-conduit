@@ -1,14 +1,17 @@
 //! Application-level coordination for immediate live capture.
 
+#[cfg(test)]
+use logic_analyzer_graph::compiler::DiscoveredLiveCaptureFeature;
 use logic_analyzer_graph::compiler::{
-    BuilderRegistry, DiscoveredLiveCaptureFeature, SimpleTriggerChannel,
-    discover_compiled_live_capture_feature, lower,
+    BuilderRegistry, SimpleTriggerChannel, discover_compiled_live_capture_feature, lower,
 };
 use node_graph::{GraphState, NodeId};
+#[cfg(test)]
+use signal_processing::CaptureStartMode;
 use signal_processing::{
     CaptureAcquisitionPhase, CaptureCommandCapabilities, CaptureCompletion, CaptureHealth,
     CaptureIndex, CaptureProgress, CaptureProviderCapabilities, CaptureSessionId,
-    CaptureSessionPlan, CaptureSessionState, CaptureStartMode, ProcessNode,
+    CaptureSessionOutcome, CaptureSessionPlan, CaptureSessionState, ProcessNode,
 };
 
 std::cfg_select! {
@@ -114,13 +117,35 @@ pub(crate) struct CaptureSessionStatus {
     pub session_plan: Option<CaptureSessionPlan>,
     pub trigger_sample: Option<u64>,
     pub recording_origin: Option<u64>,
+    pub outcome: CaptureSessionOutcome,
     pub completion: Option<CaptureCompletion>,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RecentCaptureSession {
+    pub session_id: Option<CaptureSessionId>,
+    pub outcome: CaptureSessionOutcome,
+    pub committed_samples: u64,
+    pub bytes: u64,
+    pub kept: bool,
+    pub recovered: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CaptureCleanupAdvisory {
+    pub total_sessions: usize,
+    pub total_bytes: u64,
+    pub over_session_limit: usize,
+    pub over_byte_limit: u64,
+    pub discard_candidates: Vec<CaptureSessionId>,
 }
 
 pub(crate) trait CaptureCoordinatorContract {
     fn backend_available() -> bool;
     fn backend_unavailable_reason() -> &'static str;
+    #[cfg(test)]
     fn start(
         &mut self,
         feature: DiscoveredLiveCaptureFeature,

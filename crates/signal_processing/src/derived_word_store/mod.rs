@@ -19,7 +19,7 @@ std::cfg_select! {
     _ => {
         mod cache;
         mod codec;
-        mod crc32c;
+        pub(crate) mod crc32c;
         mod format;
         mod persistent;
         mod vlq;

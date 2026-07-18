@@ -51,7 +51,10 @@ mod tests {
         let path = directory.path().join("application.json");
         std::fs::write(
             &path,
-            r#"{"logic_analyzer_viewer":{"color_profile":"classic"}}"#,
+            r#"{
+                "logic_analyzer_viewer":{"color_profile":"classic"},
+                "live_capture":{"max_recent_sessions":7,"max_storage_gib":12}
+            }"#,
         )
         .unwrap();
 
@@ -60,6 +63,8 @@ mod tests {
             ColorProfile::from(config.logic_analyzer_viewer.color_profile),
             ColorProfile::Classic
         );
+        assert_eq!(config.live_capture.max_recent_sessions, 7);
+        assert_eq!(config.live_capture.max_storage_gib, 12);
     }
 
     #[test]

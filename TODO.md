@@ -68,7 +68,7 @@ Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN
 ## Capture sources
 
 - Implement the dependency-ordered delivery plan in
-  [Live Capture and Trigger Control](docs/LIVE_CAPTURE_TRIGGER_DESIGN.md). Continue with Phase 11 and do
+  [Live Capture and Trigger Control](docs/LIVE_CAPTURE_TRIGGER_DESIGN.md). Continue with Phase 12 and do
   not begin a later phase until the preceding completion gate passes:
   1. **Minimal authoritative store — complete:** sequential staging, committed-prefix cursors,
      finalization, byte-exact replay, bounded memory, and slow-reader isolation are implemented.
@@ -100,8 +100,10 @@ Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN
       rolling-retention policy and safe-boundary planning, trigger placement, timeout and one-shot
       controls, capacity estimates, telemetry, persisted effective plans, and reclamation-safety
       tests are implemented.
-  11. **Recovery and session ownership:** add commit-boundary recovery, durable bounded
-      reclamation, incomplete-session handling, pinning, cleanup, and recent-session ownership.
+  11. **Recovery and session ownership — complete:** checksummed commit-boundary recovery,
+      interruption-safe bounded reclamation, durable outcomes, incomplete-session presentation,
+      pinning, explicit keep/discard cleanup, configurable recent-session ownership, reopening,
+      and replay are implemented.
   12. **Export:** add raw DSL/portable export first and capability-aware derived export afterward.
   13. **Extended workflows:** scope configuration epochs, advanced triggers, segmented acquisition,
       automation, synchronization, and related features as separate follow-up amendments rather

@@ -19,6 +19,23 @@ pub(crate) use imp::{load, path};
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct ApplicationConfig {
     pub(crate) logic_analyzer_viewer: LogicAnalyzerViewerConfig,
+    pub(crate) live_capture: LiveCaptureConfig,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct LiveCaptureConfig {
+    pub(crate) max_recent_sessions: usize,
+    pub(crate) max_storage_gib: u64,
+}
+
+impl Default for LiveCaptureConfig {
+    fn default() -> Self {
+        Self {
+            max_recent_sessions: 10,
+            max_storage_gib: 20,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]

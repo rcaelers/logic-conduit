@@ -35,6 +35,14 @@ use self::font_platform::load_symbol_fonts;
 
 const SAMPLING_OVERLAY_EXTENSION: &str = "logic_analyzer_ui.sampling_overlay";
 
+enum RecentCaptureAction {
+    Open(signal_processing::CaptureSessionId),
+    Close,
+    SetKept(signal_processing::CaptureSessionId, bool),
+    Reclaim(signal_processing::CaptureSessionId),
+    Discard(signal_processing::CaptureSessionId),
+}
+
 fn saved_sampling_overlay(graph: &GraphState) -> Result<Option<NodeId>, serde_json::Error> {
     graph.extension(SAMPLING_OVERLAY_EXTENSION)
 }
@@ -242,6 +250,13 @@ impl App {
                 .into(),
         );
         logic_analyzer.set_channels(demo_signals::channels());
+        let capture = CaptureCoordinator::configured(
+            application_config.live_capture.max_recent_sessions,
+            application_config
+                .live_capture
+                .max_storage_gib
+                .saturating_mul(1024 * 1024 * 1024),
+        );
         Self {
             node_graph: widget,
             logic_analyzer,
@@ -256,7 +271,7 @@ impl App {
                 PanelLayout::from_state,
             ),
             builders,
-            capture: CaptureCoordinator::new(),
+            capture,
             capture_availability: CaptureAvailability::Unavailable {
                 reason: "Checking the graph for a live capture source".into(),
             },
@@ -545,7 +560,10 @@ impl App {
         self.capture_graph = Some(self.node_graph.graph().clone());
         self.capture_analysis = None;
         self.capture_analysis_error = None;
-        match self.capture.start(feature, mode) {
+        match self
+            .capture
+            .start_with_graph(feature, self.node_graph.graph(), mode)
+        {
             Ok(()) => self.node_graph.set_editing_enabled(false),
             Err(error) => {
                 self.capture_graph = None;
@@ -839,17 +857,15 @@ impl App {
             }
         }
 
+        self.show_recent_capture_menu(ui);
+
         if let Some(status) = self.capture.status() {
             let mut summary = capture_state_name(status.state).to_owned();
-            if let Some(completion) = status.completion {
-                summary = match completion {
-                    signal_processing::CaptureCompletion::Finished => "Complete".into(),
-                    signal_processing::CaptureCompletion::Stopped => "Stopped".into(),
-                    signal_processing::CaptureCompletion::CancelledBeforeTrigger => {
-                        "Cancelled before trigger".into()
-                    }
-                    signal_processing::CaptureCompletion::Aborted => "Aborted · incomplete".into(),
-                };
+            if status.outcome.is_terminal() {
+                summary = capture_outcome_name(status.outcome).into();
+                if status.outcome.is_incomplete() {
+                    summary.push_str(" · incomplete");
+                }
             }
             if let Some(samples) = status.progress.captured_samples {
                 summary.push_str(&format!(" · {samples} samples"));
@@ -929,6 +945,166 @@ impl App {
             } else if self.capture.is_active() {
                 ui.label("Analysis · waiting for committed data");
             }
+        }
+    }
+
+    fn show_recent_capture_menu(&mut self, ui: &mut egui::Ui) {
+        let sessions = self.capture.recent_session_views();
+        if sessions.is_empty() {
+            return;
+        }
+        let current = self.capture.current_session_id();
+        let can_manage =
+            !self.capture.is_active() && !self.is_running() && !self.is_capture_analysis_active();
+        let advisory = self.capture.cleanup_advisory().ok();
+        let mut action = None;
+        ui.menu_button("Captures", |ui| {
+            if let Some(advisory) = &advisory
+                && (advisory.over_session_limit != 0 || advisory.over_byte_limit != 0)
+            {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 170, 90),
+                    format!(
+                        "Storage limit exceeded · {} sessions · {}",
+                        advisory.total_sessions,
+                        format_bytes(advisory.total_bytes)
+                    ),
+                );
+                ui.label("Choose captures to keep or discard; cleanup is never automatic.");
+                ui.separator();
+            }
+            for (index, session) in sessions.iter().enumerate() {
+                let identifier = session.session_id.map_or_else(
+                    || "unknown".to_owned(),
+                    |id| format!("{:08x}", id.get() & 0xffff_ffff),
+                );
+                let mut label = format!(
+                    "{} · {} · {} samples · {}",
+                    capture_outcome_name(session.outcome),
+                    identifier,
+                    session.committed_samples,
+                    format_bytes(session.bytes)
+                );
+                if session.kept {
+                    label.push_str(" · kept");
+                }
+                if session.recovered {
+                    label.push_str(" · recovered");
+                }
+                if session.session_id == current {
+                    label.push_str(" · displayed");
+                }
+                if session.session_id.is_some_and(|session_id| {
+                    advisory
+                        .as_ref()
+                        .is_some_and(|advisory| advisory.discard_candidates.contains(&session_id))
+                }) {
+                    label.push_str(" · cleanup candidate");
+                }
+                ui.menu_button(label, |ui| {
+                    if let Some(error) = &session.error {
+                        ui.colored_label(egui::Color32::from_rgb(230, 120, 120), error);
+                    }
+                    let Some(session_id) = session.session_id else {
+                        ui.label("This corrupt directory has no recoverable session identity.");
+                        return;
+                    };
+                    if current == Some(session_id) {
+                        if ui
+                            .add_enabled(can_manage, egui::Button::new("Close Capture"))
+                            .clicked()
+                        {
+                            action = Some(RecentCaptureAction::Close);
+                            ui.close();
+                        }
+                    } else if ui
+                        .add_enabled(
+                            can_manage
+                                && !matches!(
+                                    session.outcome,
+                                    signal_processing::CaptureSessionOutcome::Corrupt
+                                ),
+                            egui::Button::new("Open Capture"),
+                        )
+                        .clicked()
+                    {
+                        action = Some(RecentCaptureAction::Open(session_id));
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(
+                            can_manage
+                                && !matches!(
+                                    session.outcome,
+                                    signal_processing::CaptureSessionOutcome::Corrupt
+                                ),
+                            egui::Button::new(if session.kept {
+                                "Release Keep"
+                            } else {
+                                "Keep Capture"
+                            }),
+                        )
+                        .clicked()
+                    {
+                        action = Some(RecentCaptureAction::SetKept(session_id, !session.kept));
+                        ui.close();
+                    }
+                    let not_displayed = current != Some(session_id);
+                    if ui
+                        .add_enabled(
+                            can_manage
+                                && not_displayed
+                                && !matches!(
+                                    session.outcome,
+                                    signal_processing::CaptureSessionOutcome::Corrupt
+                                ),
+                            egui::Button::new("Apply Retention Policy"),
+                        )
+                        .on_disabled_hover_text("Close a displayed capture before reclaiming it")
+                        .clicked()
+                    {
+                        action = Some(RecentCaptureAction::Reclaim(session_id));
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(
+                            can_manage && not_displayed,
+                            egui::Button::new("Discard Capture"),
+                        )
+                        .on_disabled_hover_text("Close a displayed capture before discarding it")
+                        .clicked()
+                    {
+                        action = Some(RecentCaptureAction::Discard(session_id));
+                        ui.close();
+                    }
+                });
+                if index + 1 != sessions.len() {
+                    ui.separator();
+                }
+            }
+        });
+
+        let result = match action {
+            Some(RecentCaptureAction::Open(session_id)) => {
+                self.capture.open_recent_session(session_id, &self.builders)
+            }
+            Some(RecentCaptureAction::Close) => {
+                self.capture.clear_completed();
+                Ok(())
+            }
+            Some(RecentCaptureAction::SetKept(session_id, kept)) => {
+                self.capture.set_session_kept(session_id, kept)
+            }
+            Some(RecentCaptureAction::Reclaim(session_id)) => {
+                self.capture.reclaim_session(session_id)
+            }
+            Some(RecentCaptureAction::Discard(session_id)) => {
+                self.capture.discard_session(session_id)
+            }
+            None => Ok(()),
+        };
+        if let Err(error) = result {
+            self.toasts.error(error);
         }
     }
 
@@ -1372,6 +1548,20 @@ fn capture_state_name(state: signal_processing::CaptureSessionState) -> &'static
         signal_processing::CaptureSessionState::Stopping => "Stopping…",
         signal_processing::CaptureSessionState::Complete => "Complete",
         signal_processing::CaptureSessionState::Error => "Error",
+    }
+}
+
+fn capture_outcome_name(outcome: signal_processing::CaptureSessionOutcome) -> &'static str {
+    match outcome {
+        signal_processing::CaptureSessionOutcome::InProgress => "In progress",
+        signal_processing::CaptureSessionOutcome::Complete => "Complete",
+        signal_processing::CaptureSessionOutcome::Stopped => "Stopped",
+        signal_processing::CaptureSessionOutcome::CancelledBeforeTrigger => {
+            "Cancelled before trigger"
+        }
+        signal_processing::CaptureSessionOutcome::Incomplete => "Incomplete",
+        signal_processing::CaptureSessionOutcome::Aborted => "Aborted",
+        signal_processing::CaptureSessionOutcome::Corrupt => "Corrupt",
     }
 }
 

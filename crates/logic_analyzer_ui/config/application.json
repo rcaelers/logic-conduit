@@ -1,5 +1,9 @@
 {
   "logic_analyzer_viewer": {
     "color_profile": "ds_view"
+  },
+  "live_capture": {
+    "max_recent_sessions": 10,
+    "max_storage_gib": 20
   }
 }

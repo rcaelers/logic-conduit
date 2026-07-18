@@ -53,9 +53,17 @@ fn update(mut crc: u32, bytes: &[u8]) -> u32 {
     crc
 }
 
+pub(crate) fn checksum_parts(parts: &[&[u8]]) -> u32 {
+    let mut crc = !0;
+    for part in parts {
+        crc = update(crc, part);
+    }
+    !crc
+}
+
 #[cfg(test)]
 pub(super) fn checksum(bytes: &[u8]) -> u32 {
-    !update(!0, bytes)
+    checksum_parts(&[bytes])
 }
 
 /// Computes a block checksum while treating its stored checksum field as zero.

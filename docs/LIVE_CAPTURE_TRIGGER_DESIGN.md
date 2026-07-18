@@ -148,9 +148,9 @@ The UI-independent live-capture foundation is also present:
 
 The native fakes, U3Pro16 buffered and streaming providers, and application coordinator are
 selected as complete platform modules. The streaming fake is reachable through the existing
-development/demo node and both fakes are used by conformance composition. Durable execution of
-the safe-reclamation boundary, interrupted-session recovery and ownership cleanup remain part of
-the recovery/session-ownership work; export also remains outside the current architecture. The
+development/demo node and both fakes are used by conformance composition. Native capture sessions
+use checksummed commit records, interruption-safe bounded reclamation, explicit pinning, and a
+configurable recent-session repository. Export remains outside the current architecture. The
 existing `LogicAnalyzerSource` direct graph-run path remains available.
 
 ## Proposed future design
@@ -633,16 +633,18 @@ that sample. Thus hardware capture/upload can be active while Armed, whereas gra
 derived output begin only when the trigger activates. A later pre-trigger-display option can query
 the retained raw prefix without changing analysis semantics.
 
-The current native store supplies the sequential raw file, fixed-size commit log, and finalized
-manifest core. The complete native store adds:
+The native store supplies:
 
-- metadata with physical-channel mapping, sample rate, trigger position, and recording origin;
+- a sequential raw file, checksummed fixed-size commit log, and finalized manifest;
+- metadata with physical-channel mapping, sample rate, trigger position, recording origin, durable
+  outcome, keep state, and retained start;
 - an incremental per-channel waveform summary built from committed chunks; and
-- explicit temporary-session ownership and cleanup.
+- explicit temporary-session ownership, pinning, recovery, and bounded reclamation.
 
-The store initially uses an application cache/session directory, not the graph directory. A later
-Save Capture operation can atomically export or move it. Temporary sessions have explicit cleanup
-and pinning rules so an open viewer or replay cursor cannot be deleted.
+The store uses the platform application-cache directory, not the graph directory. A proposed Save
+Capture operation can atomically export or move it in Phase 12. Temporary sessions have explicit
+cleanup and pinning rules so an open viewer, replay cursor, background waveform rebuild, or future
+exporter cannot be deleted.
 
 Waveform summaries may lag raw commit, but their covered extent is explicit. The viewer shows raw
 session progress and never invents waveform data beyond the summary's committed extent. Summary
@@ -854,14 +856,16 @@ original live analysis from its epoch log is a separate explicit mode.
 
 Starting a capture does not destroy the current completed session. The previous session remains
 viewable throughout Preparing and until the new session has its first valid data commit. The viewer
-then switches to the new session, and the prior session moves into a bounded recent-captures list.
-A failed preparation therefore leaves the previous display and Run input unchanged.
+then switches to the new session, and the prior session moves into the budgeted recent-captures
+list. A failed preparation therefore leaves the previous display and Run input unchanged.
 
-Each session has a durable identity and one explicit outcome: Complete, CancelledBeforeTrigger,
-Incomplete, or Corrupt. Clean completion does not imply that the session has been saved to a user
-location. The application shows an unsaved marker and asks before evicting the last reference to an
-unsaved session. The recent list supports reopening a session, making it the Run input, saving it,
-or explicitly discarding it. Its count and storage budget are configurable.
+Each session has a durable identity and one explicit outcome: InProgress, Complete, Stopped,
+CancelledBeforeTrigger, Incomplete, Aborted, or Corrupt. Clean completion does not imply that the
+session has been saved to a user location. The recent list marks sessions the user explicitly
+keeps, supports reopening a session and making it the Run input, and requires an explicit discard
+decision. It never evicts a session automatically. Its count and storage budgets are configurable;
+exceeding either budget produces cleanup advice with unkept, unpinned candidates. Saving a capture
+is proposed for Phase 12.
 
 The append-only commit log and manifest are recovery records as well as live indexes. Metadata and
 commit records are flushed at bounded intervals, with the interval chosen so it does not stall the

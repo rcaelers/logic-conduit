@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::{
     CaptureCursorItem, CaptureIndex, CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow,
     CaptureStoreCursor, CaptureWaveformSegment, Error, NativeCaptureRandomReader,
-    NativeCaptureStore, Result, exact_window_sample_limit,
+    NativeCaptureStore, NativeFinalizedCapture, Result, exact_window_sample_limit,
 };
 
 const LEAF_SAMPLES: u64 = 64;
@@ -527,6 +527,30 @@ impl Clone for NativeGrowingCaptureIndex {
 }
 
 impl NativeGrowingCaptureIndex {
+    pub fn rebuild(
+        capture: &NativeFinalizedCapture,
+        display_name: impl Into<String>,
+        sample_rate_hz: f64,
+        probe_names: Vec<String>,
+    ) -> Result<(Self, NativeGrowingCaptureIndexWorker)> {
+        for entry in std::fs::read_dir(capture.directory())? {
+            let entry = entry?;
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("capture.waveform."))
+            {
+                std::fs::remove_file(entry.path())?;
+            }
+        }
+        Self::spawn(
+            capture.store_handle(),
+            display_name,
+            sample_rate_hz,
+            probe_names,
+        )
+    }
+
     pub fn spawn(
         store: NativeCaptureStore,
         display_name: impl Into<String>,
@@ -739,6 +763,12 @@ pub struct NativeGrowingCaptureIndexWorker {
 }
 
 impl NativeGrowingCaptureIndexWorker {
+    pub fn is_finished(&self) -> bool {
+        self.handle
+            .as_ref()
+            .is_none_or(std::thread::JoinHandle::is_finished)
+    }
+
     pub fn join(mut self) -> Result<()> {
         self.handle
             .take()
