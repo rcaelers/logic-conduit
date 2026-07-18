@@ -17,7 +17,7 @@ use crate::{
 use super::{
     CaptureCursorItem, CaptureReclamationReport, CaptureRecoveryReport, CaptureSessionMetadata,
     CaptureSessionOutcome, CaptureStoreCursor, CaptureStoreDescriptor, CaptureStoreError,
-    CaptureStoreManifest, CaptureStoreResult, CaptureStoreSnapshot,
+    CaptureStoreManifest, CaptureStoreResult, CaptureStoreSnapshot, CaptureTimelineMetadata,
 };
 
 const DATA_FILE_NAME: &str = "capture.data";
@@ -39,7 +39,7 @@ const MANIFEST_MAGIC: &[u8; 8] = b"DSLSES01";
 const LEGACY_COMMIT_FORMAT_VERSION: u16 = 1;
 const COMMIT_FORMAT_VERSION: u16 = 2;
 const MANIFEST_FORMAT_VERSION: u16 = 1;
-const SESSION_FORMAT_VERSION: u16 = 1;
+const SESSION_FORMAT_VERSION: u16 = 2;
 const RECLAIM_FORMAT_VERSION: u16 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -195,6 +195,7 @@ impl NativeCaptureStore {
             &config.directory,
             &CaptureSessionMetadata {
                 descriptor: config.descriptor.clone(),
+                timeline: None,
                 outcome: CaptureSessionOutcome::InProgress,
                 created_unix_ns: unix_ns(),
                 accessed_unix_ns: unix_ns(),
@@ -274,6 +275,38 @@ impl NativeCaptureStore {
         write_session_plan(&self.shared.directory, plan)
     }
 
+    pub fn write_timeline_metadata(
+        &self,
+        timeline: CaptureTimelineMetadata,
+    ) -> CaptureStoreResult<()> {
+        if timeline.channel_names().len() != self.shared.descriptor.channels().len() {
+            return Err(CaptureStoreError::InvalidConfig(format!(
+                "capture timeline has {} channel names for {} channels",
+                timeline.channel_names().len(),
+                self.shared.descriptor.channels().len()
+            )));
+        }
+        {
+            let state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if state.finalized {
+                return Err(CaptureStoreError::AlreadyFinalized);
+            }
+            if let Some(error) = &state.writer_failure {
+                return Err(CaptureStoreError::WriterFailed(error.clone()));
+            }
+        }
+        let mut metadata = read_session_metadata(&self.shared.directory)?.ok_or_else(|| {
+            CaptureStoreError::Corrupt("capture session metadata is missing".into())
+        })?;
+        metadata.timeline = Some(timeline);
+        metadata.accessed_unix_ns = unix_ns();
+        write_session_metadata(&self.shared.directory, &metadata)
+    }
+
     pub fn finalize(&self) -> CaptureStoreResult<NativeFinalizedCapture> {
         self.finalize_with_outcome(CaptureSessionOutcome::Complete, None)
     }
@@ -282,6 +315,15 @@ impl NativeCaptureStore {
         &self,
         outcome: CaptureSessionOutcome,
         recording_origin: Option<u64>,
+    ) -> CaptureStoreResult<NativeFinalizedCapture> {
+        self.finalize_with_details(outcome, recording_origin, None)
+    }
+
+    pub fn finalize_with_details(
+        &self,
+        outcome: CaptureSessionOutcome,
+        recording_origin: Option<u64>,
+        trigger_sample: Option<u64>,
     ) -> CaptureStoreResult<NativeFinalizedCapture> {
         if !outcome.is_terminal() || outcome == CaptureSessionOutcome::Corrupt {
             return Err(CaptureStoreError::InvalidConfig(
@@ -313,6 +355,20 @@ impl NativeCaptureStore {
         let mut metadata = read_session_metadata(&self.shared.directory)?.ok_or_else(|| {
             CaptureStoreError::Corrupt("capture session metadata is missing".into())
         })?;
+        if let Some(trigger_sample) = trigger_sample {
+            if trigger_sample >= manifest.committed_samples {
+                return Err(CaptureStoreError::InvalidConfig(format!(
+                    "trigger sample {trigger_sample} is outside the {}-sample capture",
+                    manifest.committed_samples
+                )));
+            }
+            let timeline = metadata.timeline.as_mut().ok_or_else(|| {
+                CaptureStoreError::InvalidConfig(
+                    "a trigger sample requires durable capture timeline metadata".into(),
+                )
+            })?;
+            timeline.set_trigger_sample(Some(trigger_sample));
+        }
         metadata.outcome = outcome;
         metadata.recording_origin = recording_origin;
         metadata.accessed_unix_ns = unix_ns();
@@ -636,6 +692,13 @@ impl NativeFinalizedCapture {
         metadata.recording_origin = metadata
             .recording_origin
             .map(|origin| origin.saturating_sub(reclaimed_sample));
+        if let Some(timeline) = &mut metadata.timeline {
+            timeline.set_trigger_sample(
+                timeline
+                    .trigger_sample()
+                    .map(|trigger| trigger.saturating_sub(reclaimed_sample)),
+            );
+        }
         metadata.accessed_unix_ns = unix_ns();
         let mut plan = capture.session_plan()?;
         if let Some(plan) = &mut plan
@@ -1388,12 +1451,22 @@ struct PersistedSessionMetadata {
     format_version: u16,
     session_id: String,
     channels: Vec<String>,
+    #[serde(default)]
+    timeline: Option<PersistedCaptureTimelineMetadata>,
     outcome: CaptureSessionOutcome,
     created_unix_ns: u64,
     accessed_unix_ns: u64,
     recording_origin: Option<u64>,
     retained_start_sample: u64,
     kept: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedCaptureTimelineMetadata {
+    sample_rate_hz: f64,
+    channel_names: Vec<String>,
+    trigger_sample: Option<u64>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1418,6 +1491,13 @@ impl PersistedSessionMetadata {
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
+            timeline: metadata.timeline.as_ref().map(|timeline| {
+                PersistedCaptureTimelineMetadata {
+                    sample_rate_hz: timeline.sample_rate_hz(),
+                    channel_names: timeline.channel_names().to_vec(),
+                    trigger_sample: timeline.trigger_sample(),
+                }
+            }),
             outcome: metadata.outcome,
             created_unix_ns: metadata.created_unix_ns,
             accessed_unix_ns: metadata.accessed_unix_ns,
@@ -1428,7 +1508,7 @@ impl PersistedSessionMetadata {
     }
 
     fn into_metadata(self) -> CaptureStoreResult<CaptureSessionMetadata> {
-        if self.format_version != SESSION_FORMAT_VERSION {
+        if self.format_version != 1 && self.format_version != SESSION_FORMAT_VERSION {
             return Err(CaptureStoreError::Corrupt(format!(
                 "unsupported capture session metadata version {}",
                 self.format_version
@@ -1444,8 +1524,27 @@ impl PersistedSessionMetadata {
                 .map(crate::CaptureChannelId::new)
                 .collect::<Vec<_>>(),
         )?;
+        let timeline = self
+            .timeline
+            .map(|timeline| {
+                let mut decoded = CaptureTimelineMetadata::new(
+                    timeline.sample_rate_hz,
+                    timeline.channel_names,
+                )?;
+                if decoded.channel_names().len() != descriptor.channels().len() {
+                    return Err(CaptureStoreError::Corrupt(format!(
+                        "capture timeline has {} channel names for {} channels",
+                        decoded.channel_names().len(),
+                        descriptor.channels().len()
+                    )));
+                }
+                decoded.set_trigger_sample(timeline.trigger_sample);
+                Ok(decoded)
+            })
+            .transpose()?;
         Ok(CaptureSessionMetadata {
             descriptor,
+            timeline,
             outcome: self.outcome,
             created_unix_ns: self.created_unix_ns,
             accessed_unix_ns: self.accessed_unix_ns,
@@ -1794,8 +1893,8 @@ mod tests {
     use crate::{
         CaptureCapacityEstimate, CaptureChannelId, CaptureChunk, CaptureChunkWriter,
         CaptureFraction, CapturePolicy, CaptureSessionId, CaptureSessionPlan, CaptureStoreCursor,
-        CaptureSessionOutcome, CompletionPolicy, EffectiveCapturePolicy, RecordingStart,
-        RetentionPolicy, TriggerPlacement,
+        CaptureSessionOutcome, CaptureTimelineMetadata, CompletionPolicy, EffectiveCapturePolicy,
+        RecordingStart, RetentionPolicy, TriggerPlacement,
     };
 
     use super::{
@@ -2115,6 +2214,78 @@ mod tests {
         let metadata = recovered.session_metadata().unwrap().unwrap();
         assert_eq!(metadata.outcome, CaptureSessionOutcome::Stopped);
         assert_eq!(metadata.recording_origin, Some(3));
+    }
+
+    #[test]
+    fn timeline_metadata_is_durable_and_tracks_reclamation() {
+        let temporary = tempdir().unwrap();
+        let descriptor = descriptor();
+        let (store, mut writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
+            temporary.path(),
+            descriptor.clone(),
+        ))
+        .unwrap();
+        store
+            .write_timeline_metadata(
+                CaptureTimelineMetadata::new(
+                    500_000_000.0,
+                    vec!["Clock".into(), "Data".into(), "Enable".into()],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        writer.append(chunk(&descriptor, 0, 0, 7)).unwrap();
+        writer.append(chunk(&descriptor, 1, 7, 7)).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+        let finalized = store
+            .finalize_with_details(CaptureSessionOutcome::Complete, Some(9), Some(9))
+            .unwrap();
+        let timeline = finalized
+            .session_metadata()
+            .unwrap()
+            .unwrap()
+            .timeline
+            .unwrap();
+        assert_eq!(timeline.sample_rate_hz(), 500_000_000.0);
+        assert_eq!(timeline.channel_names(), ["Clock", "Data", "Enable"]);
+        assert_eq!(timeline.trigger_sample(), Some(9));
+
+        let (reclaimed, report) =
+            NativeFinalizedCapture::reclaim_directory_before(temporary.path(), 7).unwrap();
+        assert_eq!(report.reclaimed_samples, 7);
+        let timeline = reclaimed
+            .session_metadata()
+            .unwrap()
+            .unwrap()
+            .timeline
+            .unwrap();
+        assert_eq!(timeline.trigger_sample(), Some(2));
+    }
+
+    #[test]
+    fn version_one_session_metadata_without_a_timeline_still_loads() {
+        let temporary = tempdir().unwrap();
+        let (_store, writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
+            temporary.path(),
+            descriptor(),
+        ))
+        .unwrap();
+        drop(writer);
+        let path = temporary.path().join(super::SESSION_FILE_NAME);
+        let mut persisted = serde_json::from_slice::<serde_json::Value>(
+            &std::fs::read(&path).unwrap(),
+        )
+        .unwrap();
+        persisted["format_version"] = serde_json::json!(1);
+        persisted.as_object_mut().unwrap().remove("timeline");
+        std::fs::write(&path, serde_json::to_vec_pretty(&persisted).unwrap()).unwrap();
+
+        let metadata = super::read_session_metadata(temporary.path())
+            .unwrap()
+            .unwrap();
+        assert!(metadata.timeline.is_none());
+        assert_eq!(metadata.descriptor, descriptor());
     }
 
     #[test]

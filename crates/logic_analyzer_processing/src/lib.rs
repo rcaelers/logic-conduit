@@ -21,6 +21,14 @@ pub use nodes::{DemoCaptureSource, UartDemoSource};
 std::cfg_select! {
     target_arch = "wasm32" => {}
     _ => {
+        mod capture_export;
+
+        pub use capture_export::{
+            CaptureExportError, CaptureExportFormatDescriptor, CaptureExportObserver,
+            CaptureExportProgress, CaptureExportReport, CaptureExportRequest,
+            CaptureExportWarning, DerivedExportSupport, IgnoreCaptureExportProgress,
+            RawCaptureExportFormat, TriggerMetadataSupport, export_finalized_capture,
+        };
         pub use live_capture::{
             BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider,
             DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,

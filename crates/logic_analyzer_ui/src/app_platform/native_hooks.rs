@@ -4,6 +4,7 @@ use logic_analyzer_processing::{DslFileCaptureDataSource, SigrokFileCaptureDataS
 
 use super::*;
 use crate::app_platform::{FileCommand, GuardedAction};
+use crate::live_capture::CaptureRawExportFormat;
 #[cfg(target_os = "macos")]
 use crate::app_platform::{NativeMenuCommand, notify_recent_files_changed};
 
@@ -78,6 +79,8 @@ impl App {
                 NativeMenuCommand::ClearRecent => FileCommand::ClearRecent,
                 NativeMenuCommand::Save => FileCommand::Save,
                 NativeMenuCommand::SaveAs => FileCommand::SaveAs,
+                NativeMenuCommand::ExportDslCapture => FileCommand::ExportDslCapture,
+                NativeMenuCommand::ExportPortableCapture => FileCommand::ExportPortableCapture,
                 NativeMenuCommand::Quit => FileCommand::Quit,
             };
             self.execute_file_command(command, ctx);
@@ -299,6 +302,36 @@ impl App {
         }
     }
 
+    fn choose_and_export_capture(&mut self, format: CaptureRawExportFormat) {
+        let (extension, title, file_name) = match format {
+            CaptureRawExportFormat::Dsl => ("dsl", "Export raw DSL capture", "capture.dsl"),
+            CaptureRawExportFormat::Portable => {
+                ("sr", "Export raw portable session", "capture.sr")
+            }
+        };
+        let mut dialog = rfd::FileDialog::new()
+            .set_title(title)
+            .set_file_name(file_name)
+            .add_filter(format.label(), &[extension]);
+        if let Some(parent) = self
+            .platform
+            .current_file
+            .as_ref()
+            .and_then(|path| path.parent())
+        {
+            dialog = dialog.set_directory(parent);
+        }
+        let Some(mut path) = dialog.save_file() else {
+            return;
+        };
+        if path.extension().is_none() {
+            path.set_extension(extension);
+        }
+        if let Err(error) = self.capture.start_export_current(format, path) {
+            self.toasts.error(error);
+        }
+    }
+
     pub(super) fn mark_graph_saved(&mut self) {
         match self.node_graph.snapshot_value() {
             Ok(graph) => self.platform.saved_graph = graph,
@@ -332,6 +365,12 @@ impl App {
             }
             FileCommand::SaveAs => {
                 self.save_file_as();
+            }
+            FileCommand::ExportDslCapture => {
+                self.choose_and_export_capture(CaptureRawExportFormat::Dsl);
+            }
+            FileCommand::ExportPortableCapture => {
+                self.choose_and_export_capture(CaptureRawExportFormat::Portable);
             }
             FileCommand::Quit => self.request_quit(ctx),
         }
@@ -578,6 +617,29 @@ impl App {
                     command = Some(FileCommand::SaveAs);
                     ui.close();
                 }
+                ui.separator();
+                ui.menu_button("Export Raw Capture", |ui| {
+                    let can_export = self.capture.current_session_id().is_some()
+                        && !self.capture.is_active()
+                        && self.capture.export_status().is_none();
+                    if ui
+                        .add_enabled(can_export, egui::Button::new("DSL Capture..."))
+                        .clicked()
+                    {
+                        command = Some(FileCommand::ExportDslCapture);
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(can_export, egui::Button::new("Portable Session..."))
+                        .clicked()
+                    {
+                        command = Some(FileCommand::ExportPortableCapture);
+                        ui.close();
+                    }
+                    if !can_export {
+                        ui.weak("Display a finalized capture before exporting raw data.");
+                    }
+                });
                 ui.separator();
                 if ui
                     .add(

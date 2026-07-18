@@ -10,6 +10,7 @@ use egui::{Color32, Context};
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Severity {
     Info,
+    Warning,
     Error,
 }
 
@@ -52,6 +53,16 @@ impl Toasts {
         });
     }
 
+    /// Persists until dismissed, without presenting a successful operation as a failure.
+    pub fn warning(&mut self, text: impl Into<String>) {
+        self.0.push(Toast {
+            text: text.into(),
+            severity: Severity::Warning,
+            created: None,
+            dismissed: false,
+        });
+    }
+
     /// Draws the toast stack bottom-right and prunes expired/dismissed
     /// entries. Call once per frame; cheap no-op when nothing's pending.
     pub fn show(&mut self, ctx: &Context) {
@@ -66,7 +77,7 @@ impl Toasts {
         }
         self.0.retain(|toast| {
             !toast.dismissed
-                && (toast.severity == Severity::Error
+                && (toast.severity != Severity::Info
                     || now - toast.created.unwrap_or(now) < FADE_AFTER_S)
         });
         if self.0.is_empty() {
@@ -82,7 +93,7 @@ impl Toasts {
                 ui.vertical(|ui| {
                     for (index, toast) in self.0.iter().enumerate().rev() {
                         let elapsed = now - toast.created.unwrap_or(now);
-                        let alpha = if toast.severity == Severity::Error {
+                        let alpha = if toast.severity != Severity::Info {
                             1.0
                         } else {
                             ((FADE_AFTER_S - elapsed) / FADE_RAMP_S).clamp(0.0, 1.0) as f32
@@ -96,6 +107,10 @@ impl Toasts {
                                     220,
                                     (alpha * 255.0) as u8,
                                 ),
+                            ),
+                            Severity::Warning => (
+                                Color32::from_rgb(91, 67, 27),
+                                Color32::from_rgb(245, 222, 177),
                             ),
                             Severity::Error => (
                                 Color32::from_rgb(92, 38, 38),
@@ -114,7 +129,7 @@ impl Toasts {
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.colored_label(fg, &toast.text);
-                                    if toast.severity == Severity::Error
+                                    if toast.severity != Severity::Info
                                         && ui
                                             .add(egui::Button::new("✕").small().frame(false))
                                             .clicked()

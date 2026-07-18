@@ -84,6 +84,16 @@ mod macos_menu {
                 dispatch_native_menu_command(NativeMenuCommand::SaveAs);
             }
 
+            #[unsafe(method(exportDslCapture:))]
+            fn export_dsl_capture(&self, _sender: &AnyObject) {
+                dispatch_native_menu_command(NativeMenuCommand::ExportDslCapture);
+            }
+
+            #[unsafe(method(exportPortableCapture:))]
+            fn export_portable_capture(&self, _sender: &AnyObject) {
+                dispatch_native_menu_command(NativeMenuCommand::ExportPortableCapture);
+            }
+
             #[unsafe(method(quitApplication:))]
             fn quit_application(&self, _sender: &AnyObject) {
                 dispatch_native_menu_command(NativeMenuCommand::Quit);
@@ -309,6 +319,26 @@ mod macos_menu {
                 &shortcut("save_as"),
                 &handler,
             ));
+            file_menu.addItem(&NSMenuItem::separatorItem(mtm));
+            let export_menu_item = NSMenuItem::new(mtm);
+            export_menu_item.setTitle(ns_string!("Export Raw Capture"));
+            let export_menu = NSMenu::initWithTitle(mtm.alloc(), ns_string!("Export Raw Capture"));
+            export_menu.addItem(&menu_item(
+                mtm,
+                ns_string!("DSL Capture..."),
+                sel!(exportDslCapture:),
+                ns_string!(""),
+                &handler,
+            ));
+            export_menu.addItem(&menu_item(
+                mtm,
+                ns_string!("Portable Session..."),
+                sel!(exportPortableCapture:),
+                ns_string!(""),
+                &handler,
+            ));
+            export_menu_item.setSubmenu(Some(&export_menu));
+            file_menu.addItem(&export_menu_item);
         }
         file_menu_item.setSubmenu(Some(&file_menu));
         menu_bar.addItem(&file_menu_item);

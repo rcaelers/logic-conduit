@@ -3,7 +3,8 @@ use signal_processing::{CaptureSessionId, CaptureStartMode};
 
 use super::{
     CaptureAnalysisAttachment, CaptureCleanupAdvisory, CaptureCoordinatorContract,
-    CaptureReplayAttachment, CaptureSessionStatus, CaptureWaveformUpdate, RecentCaptureSession,
+    CaptureExportCompletion, CaptureExportStatus, CaptureReplayAttachment, CaptureSessionStatus,
+    CaptureWaveformUpdate, RecentCaptureSession,
 };
 
 pub(crate) struct CaptureCoordinator;
@@ -29,6 +30,18 @@ impl CaptureCoordinator {
     pub(crate) fn current_session_id(&self) -> Option<CaptureSessionId> {
         None
     }
+
+    pub(crate) fn export_status(&self) -> Option<&CaptureExportStatus> {
+        None
+    }
+
+    pub(crate) fn take_export_notice(
+        &mut self,
+    ) -> Option<Result<CaptureExportCompletion, String>> {
+        None
+    }
+
+    pub(crate) fn request_cancel_export(&mut self) {}
 
     pub(crate) fn clear_completed(&mut self) {}
 

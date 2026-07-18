@@ -112,12 +112,60 @@ impl CaptureSessionOutcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureSessionMetadata {
     pub descriptor: CaptureStoreDescriptor,
+    pub timeline: Option<CaptureTimelineMetadata>,
     pub outcome: CaptureSessionOutcome,
     pub created_unix_ns: u64,
     pub accessed_unix_ns: u64,
     pub recording_origin: Option<u64>,
     pub retained_start_sample: u64,
     pub kept: bool,
+}
+
+/// Durable, format-neutral presentation metadata for reopening and exporting a capture.
+///
+/// The sample rate is retained by its IEEE-754 representation so equality is exact while
+/// callers continue to use the same `f64` timebase contract as capture sources and viewers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CaptureTimelineMetadata {
+    sample_rate_hz_bits: u64,
+    channel_names: Vec<String>,
+    trigger_sample: Option<u64>,
+}
+
+impl CaptureTimelineMetadata {
+    pub fn new(sample_rate_hz: f64, channel_names: Vec<String>) -> CaptureStoreResult<Self> {
+        if !sample_rate_hz.is_finite() || sample_rate_hz <= 0.0 {
+            return Err(CaptureStoreError::InvalidConfig(
+                "capture sample rate must be finite and positive".into(),
+            ));
+        }
+        if channel_names.is_empty() {
+            return Err(CaptureStoreError::InvalidConfig(
+                "capture timeline requires at least one channel name".into(),
+            ));
+        }
+        Ok(Self {
+            sample_rate_hz_bits: sample_rate_hz.to_bits(),
+            channel_names,
+            trigger_sample: None,
+        })
+    }
+
+    pub fn sample_rate_hz(&self) -> f64 {
+        f64::from_bits(self.sample_rate_hz_bits)
+    }
+
+    pub fn channel_names(&self) -> &[String] {
+        &self.channel_names
+    }
+
+    pub const fn trigger_sample(&self) -> Option<u64> {
+        self.trigger_sample
+    }
+
+    pub fn set_trigger_sample(&mut self, trigger_sample: Option<u64>) {
+        self.trigger_sample = trigger_sample;
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

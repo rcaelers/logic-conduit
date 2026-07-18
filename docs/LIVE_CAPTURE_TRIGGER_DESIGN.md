@@ -150,8 +150,9 @@ The native fakes, U3Pro16 buffered and streaming providers, and application coor
 selected as complete platform modules. The streaming fake is reachable through the existing
 development/demo node and both fakes are used by conformance composition. Native capture sessions
 use checksummed commit records, interruption-safe bounded reclamation, explicit pinning, and a
-configurable recent-session repository. Export remains outside the current architecture. The
-existing `LogicAnalyzerSource` direct graph-run path remains available.
+configurable recent-session repository. Finalized sessions expose pinned, cancellable background
+raw export without routing format logic through the UI. The existing `LogicAnalyzerSource` direct
+graph-run path remains available.
 
 ## Proposed future design
 
@@ -609,7 +610,7 @@ The uploaded raw stream is the authority for both display and analysis:
           │                              │
           │                              ├─ incremental waveform summaries
           │                              ├─ viewer viewport queries
-          │                              └─ finalized capture / future export
+          │                              └─ finalized capture / pinned background export
           ▼
   advance committed cursor
           │
@@ -641,10 +642,10 @@ The native store supplies:
 - an incremental per-channel waveform summary built from committed chunks; and
 - explicit temporary-session ownership, pinning, recovery, and bounded reclamation.
 
-The store uses the platform application-cache directory, not the graph directory. A proposed Save
-Capture operation can atomically export or move it in Phase 12. Temporary sessions have explicit
-cleanup and pinning rules so an open viewer, replay cursor, background waveform rebuild, or future
-exporter cannot be deleted.
+The store uses the platform application-cache directory, not the graph directory. Save Capture
+streams a pinned finalized session through a temporary destination file and installs the completed
+archive only after the writer succeeds. Temporary sessions have explicit cleanup and pinning rules
+so an open viewer, replay cursor, background waveform rebuild, or exporter cannot be deleted.
 
 Waveform summaries may lag raw commit, but their covered extent is explicit. The viewer shows raw
 session progress and never invents waveform data beyond the summary's committed extent. Summary
@@ -864,8 +865,8 @@ CancelledBeforeTrigger, Incomplete, Aborted, or Corrupt. Clean completion does n
 session has been saved to a user location. The recent list marks sessions the user explicitly
 keeps, supports reopening a session and making it the Run input, and requires an explicit discard
 decision. It never evicts a session automatically. Its count and storage budgets are configurable;
-exceeding either budget produces cleanup advice with unkept, unpinned candidates. Saving a capture
-is proposed for Phase 12.
+exceeding either budget produces cleanup advice with unkept, unpinned candidates. A displayed
+finalized capture can be exported without changing recent-session ownership.
 
 The append-only commit log and manifest are recovery records as well as live indexes. Metadata and
 commit records are flushed at bounded intervals, with the interval chosen so it does not stall the
@@ -909,23 +910,26 @@ limits, defaults, and validation messages using stable registered IDs. Concrete 
 serialize the resulting program. The panel contains no built-in driver layouts, model checks, port
 label inference, or arbitrary device callbacks.
 
-### Persistence and future export
+### Persistence and export
 
 The graph file stores capture and trigger *configuration*, not temporary raw bytes. Simple trigger
 conditions are part of `U3Pro16State`. Application document metadata may record the current capture
 reference, source node ID, and session manifest once the capture has a durable location.
 
-Each session manifest stores both the requested policy and negotiated effective plan, acquisition
-profile, device/firmware identifiers needed to interpret the stream, internal or external timebase,
-logical sample count, encoded byte count, trigger placement and actual trigger sample, phase/outcome
-history, and frame metadata. Replay uses these facts rather than current node defaults.
+The generic session record stores its opaque physical-channel table, exact sample rate, channel
+names, actual trigger sample, recording origin, retained start, logical sample count, encoded byte
+count, outcome, and ownership state. The negotiated effective capture plan is stored alongside it.
+The application sidecar stores the graph snapshot and source identity needed for replay; exporters
+do not depend on that application-specific sidecar.
 
 The finalized internal session is the lossless source for exporters:
 
 - a DSL exporter writes raw physical channels, names, sample rate, and trigger position;
-- portable capture exporters write the equivalent session to supported interchange formats; and
-- derived-data export uses explicit format capabilities rather than silently dropping unsupported
-  lane types.
+- the portable exporter writes sigrok v2 digital logic data and preserves the trigger in an
+  optional compatible metadata key, with an explicit warning because v2 has no standard trigger
+  position field; and
+- each format publishes its derived-data capability. The current raw formats report derived data
+  as unsupported, and the UI exposes them only as raw export rather than silently dropping lanes.
 
 Saving raw capture and saving derived analysis are separate checkable operations even when one
 dialog offers both. The application warns when a target format cannot represent a derived payload.
@@ -1123,8 +1127,10 @@ error, and no pinned viewer, analysis, or future-export session can be removed.
 
 #### Phase 12 — Export
 
-- Add raw DSL and supported portable interchange export from finalized sessions.
-- Add capability-aware derived export only after raw export is reliable.
+- Raw DSL and supported portable interchange export stream from pinned finalized sessions on a
+  background worker with bounded buffers, progress, cancellation, and temporary-file installation.
+- Format descriptors make trigger and derived-data representation capabilities explicit; raw-only
+  actions never imply that derived lanes were included.
 
 Gate: exported raw captures reopen with identical channels, sample rate/timebase, samples, and
 trigger position; unsupported derived values produce an explicit warning rather than omission.

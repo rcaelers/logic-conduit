@@ -1,5 +1,7 @@
 //! Application-level coordination for immediate live capture.
 
+use std::path::PathBuf;
+
 #[cfg(test)]
 use logic_analyzer_graph::compiler::DiscoveredLiveCaptureFeature;
 use logic_analyzer_graph::compiler::{
@@ -25,7 +27,14 @@ std::cfg_select! {
     }
 }
 
-pub(crate) use imp::CaptureCoordinator;
+std::cfg_select! {
+    target_arch = "wasm32" => {
+        pub(crate) use imp::CaptureCoordinator;
+    }
+    _ => {
+        pub(crate) use imp::{CaptureCoordinator, CaptureRawExportFormat};
+    }
+}
 
 #[cfg(test)]
 mod architecture_tests;
@@ -140,6 +149,21 @@ pub(crate) struct CaptureCleanupAdvisory {
     pub over_session_limit: usize,
     pub over_byte_limit: u64,
     pub discard_candidates: Vec<CaptureSessionId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CaptureExportStatus {
+    pub format_label: String,
+    pub destination: PathBuf,
+    pub samples_written: u64,
+    pub total_samples: u64,
+    pub cancelling: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CaptureExportCompletion {
+    pub destination: PathBuf,
+    pub warnings: Vec<String>,
 }
 
 pub(crate) trait CaptureCoordinatorContract {

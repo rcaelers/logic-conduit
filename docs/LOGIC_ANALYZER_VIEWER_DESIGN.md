@@ -57,7 +57,7 @@ A `.dsl` file is a ZIP archive containing:
 
 | Entry | Description |
 |---|---|
-| header/metadata | Sample rate, total sample count, channel list, block size |
+| header/metadata | Sample rate, total sample count, channel list, block size, optional trigger sample |
 | `L-{channel}/{block}` | Packed logic bits for one (channel, block) pair (deflate-compressed) |
 
 Samples are divided into fixed-size **blocks** (`samples_per_block`, commonly `2^24 =

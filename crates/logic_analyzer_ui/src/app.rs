@@ -613,7 +613,7 @@ impl App {
         self.logic_analyzer.set_simple_trigger_editing_enabled(
             self.capture.graph_editing_enabled() && !analysis_active,
         );
-        if self.capture.is_active() || analysis_active {
+        if self.capture.is_active() || analysis_active || self.capture.export_status().is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         } else if self.capture_analysis.is_none() {
             self.capture_graph = None;
@@ -693,6 +693,23 @@ impl App {
     }
 
     fn show_capture_controls(&mut self, ui: &mut egui::Ui) {
+        if let Some(notice) = self.capture.take_export_notice() {
+            match notice {
+                Ok(completion) => {
+                    self.toasts.info(format!(
+                        "Exported raw capture to {}",
+                        completion.destination.display()
+                    ));
+                    for warning in completion.warnings {
+                        self.toasts.warning(format!("Export warning: {warning}"));
+                    }
+                }
+                Err(error) if error == "capture export was cancelled" => {
+                    self.toasts.info("Capture export cancelled");
+                }
+                Err(error) => self.toasts.error(format!("Capture export failed: {error}")),
+            }
+        }
         let status = self.capture.status().cloned();
         if self.capture.is_active() {
             let state = status.as_ref().map(|status| status.state);
@@ -858,6 +875,30 @@ impl App {
         }
 
         self.show_recent_capture_menu(ui);
+
+        if let Some(export) = self.capture.export_status().cloned() {
+            ui.separator();
+            let fraction = if export.total_samples == 0 {
+                0.0
+            } else {
+                export.samples_written as f32 / export.total_samples as f32
+            };
+            ui.add(
+                egui::ProgressBar::new(fraction.clamp(0.0, 1.0))
+                    .desired_width(120.0)
+                    .text(format!(
+                        "Exporting {} · {}/{} samples",
+                        export.format_label, export.samples_written, export.total_samples
+                    )),
+            )
+            .on_hover_text(export.destination.display().to_string());
+            if ui
+                .add_enabled(!export.cancelling, egui::Button::new("Cancel Export"))
+                .clicked()
+            {
+                self.capture.request_cancel_export();
+            }
+        }
 
         if let Some(status) = self.capture.status() {
             let mut summary = capture_state_name(status.state).to_owned();

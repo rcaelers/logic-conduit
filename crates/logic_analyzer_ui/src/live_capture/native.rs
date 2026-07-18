@@ -1,7 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -14,7 +14,10 @@ use logic_analyzer_graph::compiler::{
     BuilderRegistry, CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature,
     discover_live_capture_feature,
 };
-use logic_analyzer_processing::AcquisitionContext;
+use logic_analyzer_processing::{
+    AcquisitionContext, CaptureExportObserver, CaptureExportProgress, CaptureExportReport,
+    CaptureExportRequest, RawCaptureExportFormat, export_finalized_capture,
+};
 use signal_processing::{
     CaptureAcquisitionPhase, CaptureCompletion, CaptureEvent, CaptureEventPublishError,
     CaptureEventPublisher, CaptureEventQueueReader, CaptureHealth, CaptureIndex, CaptureMetadata,
@@ -23,8 +26,8 @@ use signal_processing::{
     CaptureSessionState, CaptureStartMode, CaptureStoreDescriptor, NativeCaptureSessionPin,
     NativeCaptureSessionRepository, NativeCaptureSessionRepositoryConfig,
     NativeCaptureSessionSummary, NativeCaptureStore, NativeCaptureStoreConfig,
-    NativeFinalizedCapture, RecordingStart, TriggerTimeoutAction, bounded_capture_event_queue,
-    default_capture_session_directory,
+    NativeFinalizedCapture, RecordingStart, TriggerTimeoutAction, CaptureTimelineMetadata,
+    bounded_capture_event_queue, default_capture_session_directory,
 };
 use signal_processing::live_capture_waveform::{
     NativeGrowingCaptureIndex, NativeGrowingCaptureIndexWorker,
@@ -32,7 +35,8 @@ use signal_processing::live_capture_waveform::{
 
 use super::{
     CaptureAnalysisAttachment, CaptureCleanupAdvisory, CaptureCoordinatorContract,
-    CaptureReplayAttachment, CaptureSessionStatus, CaptureWaveformUpdate, RecentCaptureSession,
+    CaptureExportCompletion, CaptureExportStatus, CaptureReplayAttachment, CaptureSessionStatus,
+    CaptureWaveformUpdate, RecentCaptureSession,
 };
 
 const EVENT_QUEUE_CAPACITY: usize = 1_024;
@@ -41,6 +45,21 @@ const APPLICATION_METADATA_FILE: &str = "capture.application.json";
 const APPLICATION_METADATA_TEMP_FILE: &str = "capture.application.json.tmp";
 const APPLICATION_METADATA_VERSION: u16 = 1;
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CaptureRawExportFormat {
+    Dsl,
+    Portable,
+}
+
+impl CaptureRawExportFormat {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Dsl => "DSL capture",
+            Self::Portable => "portable session",
+        }
+    }
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -218,6 +237,28 @@ struct CaptureWorkerSession {
     application_metadata: Option<CaptureApplicationMetadata>,
 }
 
+struct ExportObserver {
+    cancellation: Arc<AtomicBool>,
+    progress: Sender<CaptureExportProgress>,
+}
+
+impl CaptureExportObserver for ExportObserver {
+    fn is_cancelled(&self) -> bool {
+        self.cancellation.load(Ordering::Relaxed)
+    }
+
+    fn on_progress(&mut self, progress: CaptureExportProgress) {
+        let _ = self.progress.try_send(progress);
+    }
+}
+
+struct ActiveExport {
+    cancellation: Arc<AtomicBool>,
+    progress: Receiver<CaptureExportProgress>,
+    completion: Receiver<Result<CaptureExportReport, String>>,
+    worker: Option<JoinHandle<()>>,
+}
+
 pub(crate) struct CaptureCoordinator {
     repository: NativeCaptureSessionRepository,
     recent_sessions: Vec<NativeCaptureSessionSummary>,
@@ -229,6 +270,9 @@ pub(crate) struct CaptureCoordinator {
     retired: Vec<CompletedCapture>,
     waveform_update: Option<CaptureWaveformUpdate>,
     analysis_attachment: Option<CaptureAnalysisAttachment>,
+    export_status: Option<CaptureExportStatus>,
+    export_notice: Option<Result<CaptureExportCompletion, String>>,
+    active_export: Option<ActiveExport>,
     state_history: Vec<CaptureSessionState>,
 }
 
@@ -270,6 +314,9 @@ impl CaptureCoordinator {
             retired: Vec::new(),
             waveform_update: None,
             analysis_attachment: None,
+            export_status: None,
+            export_notice: None,
+            active_export: None,
             state_history: Vec::new(),
         }
     }
@@ -293,6 +340,130 @@ impl CaptureCoordinator {
         self.completed
             .as_ref()
             .map(|completed| completed.capture.manifest().descriptor.session_id())
+    }
+
+    pub(crate) fn export_status(&self) -> Option<&CaptureExportStatus> {
+        self.export_status.as_ref()
+    }
+
+    pub(crate) fn take_export_notice(
+        &mut self,
+    ) -> Option<Result<CaptureExportCompletion, String>> {
+        self.export_notice.take()
+    }
+
+    pub(crate) fn start_export_current(
+        &mut self,
+        format: CaptureRawExportFormat,
+        destination: PathBuf,
+    ) -> Result<(), String> {
+        if self.active_export.is_some() {
+            return Err("a capture export is already active".into());
+        }
+        if self.is_active() {
+            return Err("finish the live capture before exporting it".into());
+        }
+        let session_id = self
+            .current_session_id()
+            .ok_or_else(|| "there is no displayed capture to export".to_owned())?;
+        let (capture, session_pin) = self
+            .repository
+            .open(session_id)
+            .map_err(|error| format!("could not pin capture for export: {error}"))?;
+        let total_samples = capture.manifest().committed_samples;
+        let raw_format = match format {
+            CaptureRawExportFormat::Dsl => RawCaptureExportFormat::Dsl,
+            CaptureRawExportFormat::Portable => RawCaptureExportFormat::SigrokV2,
+        };
+        let request = CaptureExportRequest {
+            destination: destination.clone(),
+            format: raw_format,
+            overwrite: true,
+        };
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let (progress_sender, progress) = crossbeam_channel::bounded(1);
+        let (completion_sender, completion) = crossbeam_channel::bounded(1);
+        let worker_cancellation = Arc::clone(&cancellation);
+        let worker = std::thread::Builder::new()
+            .name("capture-export".into())
+            .spawn(move || {
+                let _session_pin = session_pin;
+                let mut observer = ExportObserver {
+                    cancellation: worker_cancellation,
+                    progress: progress_sender,
+                };
+                let result = export_finalized_capture(&capture, &request, &mut observer)
+                    .map_err(|error| error.to_string());
+                let _ = completion_sender.send(result);
+            })
+            .map_err(|error| format!("could not start capture export: {error}"))?;
+        self.export_notice = None;
+        self.export_status = Some(CaptureExportStatus {
+            format_label: format.label().to_owned(),
+            destination,
+            samples_written: 0,
+            total_samples,
+            cancelling: false,
+        });
+        self.active_export = Some(ActiveExport {
+            cancellation,
+            progress,
+            completion,
+            worker: Some(worker),
+        });
+        Ok(())
+    }
+
+    pub(crate) fn request_cancel_export(&mut self) {
+        let Some(active) = &self.active_export else {
+            return;
+        };
+        active.cancellation.store(true, Ordering::Relaxed);
+        if let Some(status) = &mut self.export_status {
+            status.cancelling = true;
+        }
+    }
+
+    fn poll_export(&mut self) {
+        let mut latest_progress = None;
+        if let Some(active) = &self.active_export {
+            while let Ok(progress) = active.progress.try_recv() {
+                latest_progress = Some(progress);
+            }
+        }
+        if let Some(progress) = latest_progress
+            && let Some(status) = &mut self.export_status
+        {
+            status.samples_written = progress.samples_written;
+            status.total_samples = progress.total_samples;
+        }
+
+        let completion = self.active_export.as_ref().and_then(|active| {
+            match active.completion.try_recv() {
+                Ok(completion) => Some(completion),
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => {
+                    Some(Err("capture export worker stopped without a result".into()))
+                }
+            }
+        });
+        let Some(completion) = completion else {
+            return;
+        };
+        if let Some(mut active) = self.active_export.take()
+            && let Some(worker) = active.worker.take()
+        {
+            let _ = worker.join();
+        }
+        self.export_status = None;
+        self.export_notice = Some(completion.map(|report| CaptureExportCompletion {
+            destination: report.destination,
+            warnings: report
+                .warnings
+                .into_iter()
+                .map(|warning| warning.message().to_owned())
+                .collect(),
+        }));
     }
 
     pub(crate) fn cleanup_advisory(&self) -> Result<CaptureCleanupAdvisory, String> {
@@ -379,27 +550,51 @@ impl CaptureCoordinator {
             .session_metadata()
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "the capture has no durable session metadata".to_owned())?;
+        let sample_rate_hz = metadata
+            .timeline
+            .as_ref()
+            .map(CaptureTimelineMetadata::sample_rate_hz)
+            .unwrap_or(application.sample_rate_hz);
+        let channel_names = metadata
+            .timeline
+            .as_ref()
+            .map(|timeline| timeline.channel_names().to_vec())
+            .unwrap_or(application.channel_names);
+        if feature.sample_rate_hz().to_bits() != sample_rate_hz.to_bits() {
+            return Err("the captured sample rate differs from its timeline metadata".into());
+        }
+        if channel_names.len() != manifest.descriptor.channels().len() {
+            return Err("the captured channel names do not match its channel table".into());
+        }
         let session_plan = capture.session_plan().map_err(|error| error.to_string())?;
         if let Some(plan) = &session_plan
-            && plan.sample_rate_hz as f64 != application.sample_rate_hz
+            && plan.sample_rate_hz as f64 != sample_rate_hz
         {
             return Err("the captured sample rate differs from its session plan".into());
         }
-        let trigger_sample = session_plan.as_ref().and_then(|plan| {
-            (plan.policy.effective.start == RecordingStart::Trigger)
-                .then_some(plan.policy.effective.trigger_placement)
-                .flatten()
-                .and_then(|placement| match placement {
-                    signal_processing::TriggerPlacement::SamplesBefore(sample) => Some(sample),
-                    signal_processing::TriggerPlacement::Fraction(_)
-                    | signal_processing::TriggerPlacement::DurationBefore(_) => None,
+        let trigger_sample = metadata
+            .timeline
+            .as_ref()
+            .and_then(CaptureTimelineMetadata::trigger_sample)
+            .or_else(|| {
+                session_plan.as_ref().and_then(|plan| {
+                    (plan.policy.effective.start == RecordingStart::Trigger)
+                        .then_some(plan.policy.effective.trigger_placement)
+                        .flatten()
+                        .and_then(|placement| match placement {
+                            signal_processing::TriggerPlacement::SamplesBefore(sample) => {
+                                Some(sample)
+                            }
+                            signal_processing::TriggerPlacement::Fraction(_)
+                            | signal_processing::TriggerPlacement::DurationBefore(_) => None,
+                        })
                 })
-        });
+            });
         let (waveform, waveform_worker) = NativeGrowingCaptureIndex::rebuild(
             &capture,
             application.source_title,
-            application.sample_rate_hz,
-            application.channel_names,
+            sample_rate_hz,
+            channel_names,
         )
         .map_err(|error| error.to_string())?;
         if let Some(trigger_sample) = trigger_sample {
@@ -891,6 +1086,7 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
     }
 
     fn poll(&mut self) {
+        self.poll_export();
         self.reap_waveform_workers();
         if let Some(analysis) = self
             .active
@@ -996,6 +1192,12 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
 
 impl Drop for CaptureCoordinator {
     fn drop(&mut self) {
+        if let Some(mut export) = self.active_export.take() {
+            export.cancellation.store(true, Ordering::Relaxed);
+            if let Some(worker) = export.worker.take() {
+                let _ = worker.join();
+            }
+        }
         if let Some(mut active) = self.active.take() {
             let _ = active.commands.try_send(CaptureCommand::Stop);
             if let Some(worker) = active.worker.take() {
@@ -1098,6 +1300,14 @@ fn run_capture_worker(
     let (store, writer) =
         NativeCaptureStore::create(NativeCaptureStoreConfig::new(session_pin.directory(), descriptor))
             .map_err(|error| error.to_string())?;
+    let timeline = CaptureTimelineMetadata::new(
+        feature.sample_rate_hz(),
+        feature.channel_names().to_vec(),
+    )
+    .map_err(|error| error.to_string())?;
+    store
+        .write_timeline_metadata(timeline)
+        .map_err(|error| error.to_string())?;
     let graph_source_factory = feature.graph_source_factory();
     let analysis_cursor = store.open_cursor().map_err(|error| error.to_string())?;
     let analysis_cursor = recording_gate.cursor(Box::new(analysis_cursor));
@@ -1243,8 +1453,16 @@ fn run_capture_worker(
         }
         CaptureCompletion::Aborted => CaptureSessionOutcome::Aborted,
     };
+    let trigger_sample = runtime
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .trigger_sample;
     let capture = store
-        .finalize_with_outcome(session_outcome, recording_gate.recording_origin())
+        .finalize_with_details(
+            session_outcome,
+            recording_gate.recording_origin(),
+            trigger_sample,
+        )
         .map_err(|error| error.to_string())?;
     Ok(CompletedCapture {
         _session_pin: session_pin,
@@ -1289,18 +1507,18 @@ mod tests {
         AcquisitionContext, AcquisitionError, AcquisitionResult, CaptureAnalysisChannel,
         CaptureAnalysisSource, BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider,
         DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,
-        PreparedAcquisition,
+        DslCaptureReader, PreparedAcquisition,
     };
     use node_graph::{NodeDef, NodeGraphWidget, NodeId};
     use signal_processing::{
         CaptureCapacityEstimate, CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery,
         CapturePolicy, CaptureProviderCapabilities, CaptureSessionOutcome, CaptureSessionPlan,
-        CaptureSessionState, CaptureStartMode, CaptureStoreCursor, CompletionPolicy,
+        CaptureSessionState, CaptureSource, CaptureStartMode, CaptureStoreCursor, CompletionPolicy,
         EffectiveCapturePolicy, ProcessNode, RecordingStart, RetentionPolicy,
         SimpleTriggerCondition, TriggerTimeout, TriggerTimeoutAction,
     };
 
-    use super::{CaptureCoordinator, CaptureCoordinatorContract};
+    use super::{CaptureCoordinator, CaptureCoordinatorContract, CaptureRawExportFormat};
 
     type PrepareCapture = Box<
         dyn FnOnce(AcquisitionContext) -> AcquisitionResult<Box<dyn PreparedAcquisition>> + Send,
@@ -1722,6 +1940,34 @@ mod tests {
         assert_eq!(analysis_schema, replay_schema(first_replay.process.as_ref()));
         assert_eq!(analysis_schema, replay_schema(second_replay.process.as_ref()));
         assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn finalized_capture_exports_in_background_and_reopens() {
+        let (feature, controller) = manual_feature();
+        let mut coordinator = CaptureCoordinator::new();
+        coordinator
+            .start(feature, CaptureStartMode::SavedPolicy)
+            .unwrap();
+        controller.grant_chunks(4);
+        poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
+
+        let output_dir = tempfile::tempdir().unwrap();
+        let output = output_dir.path().join("background.dsl");
+        coordinator
+            .start_export_current(CaptureRawExportFormat::Dsl, output.clone())
+            .unwrap();
+        poll_until(&mut coordinator, |coordinator| {
+            coordinator.export_status().is_none()
+        });
+        let completion = coordinator.take_export_notice().unwrap().unwrap();
+        assert_eq!(completion.destination, output);
+        assert!(completion.warnings.is_empty());
+
+        let reader = DslCaptureReader::open(&completion.destination).unwrap();
+        assert_eq!(reader.metadata().samplerate_hz, 1_000_000_000.0);
+        assert_eq!(reader.metadata().probe_names, ["Bank A 7", "Bank C 2"]);
+        assert_eq!(reader.metadata().total_samples, 17);
     }
 
     #[test]

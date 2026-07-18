@@ -241,6 +241,14 @@ impl SigrokFileSource {
         let samplerate = required(values, "samplerate")?.to_string();
         let samplerate_hz = parse_sample_rate(&samplerate)
             .ok_or_else(|| Error::ParseHeader(format!("Invalid sample rate: {samplerate}")))?;
+        let trigger_sample = values
+            .get("trigger sample")
+            .map(|sample| {
+                sample.parse::<u64>().map_err(|_| {
+                    Error::ParseHeader("invalid device X.trigger sample".to_string())
+                })
+            })
+            .transpose()?;
 
         let mut logic_entries: Vec<String> = archive
             .file_names()
@@ -298,7 +306,7 @@ impl SigrokFileSource {
             total_blocks: 1,
             samples_per_block: total_samples,
             probe_names,
-            trigger_sample: None,
+            trigger_sample,
         };
 
         Ok(Self {

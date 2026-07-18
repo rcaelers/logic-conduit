@@ -525,6 +525,7 @@ impl DslFileSource {
         let mut samplerate: Option<String> = None;
         let mut total_samples: Option<u64> = None;
         let mut total_blocks: Option<u64> = None;
+        let mut trigger_sample: Option<u64> = None;
         let mut probe_names_map: HashMap<usize, String> = HashMap::new();
 
         for line in header_content.lines() {
@@ -541,6 +542,8 @@ impl DslFileSource {
                 total_samples = value.parse().ok();
             } else if let Some(value) = line.strip_prefix("total blocks = ") {
                 total_blocks = value.parse().ok();
+            } else if let Some(value) = line.strip_prefix("trigger sample = ") {
+                trigger_sample = value.parse().ok();
             } else if line.starts_with("probe")
                 && let Some((probe_part, name)) = line.split_once(" = ")
                 && let Some(num_str) = probe_part.strip_prefix("probe")
@@ -595,7 +598,7 @@ impl DslFileSource {
             total_blocks,
             samples_per_block,
             probe_names,
-            trigger_sample: None,
+            trigger_sample,
         })
     }
 
