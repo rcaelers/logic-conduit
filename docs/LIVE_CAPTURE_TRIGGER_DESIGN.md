@@ -12,10 +12,9 @@ can keep the graph fixed during acquisition without creating an architectural de
 ## Current baseline
 
 The U3Pro16 graph node owns device settings and lowers to the UI-independent
-`LogicAnalyzerSource<DsLogicU3Pro16>` for an ordinary direct graph run. In buffered mode it also
-registers a native live-capture feature that uses the authoritative capture-store path. The
-portable `LogicCaptureConfig` and U3Pro16 packet builder represent the hardware trigger stage;
-host-streamed live capture remains the hardware-path limitation addressed by Phase 9.
+`LogicAnalyzerSource<DsLogicU3Pro16>` for an ordinary direct graph run. Both buffered and streamed
+modes register native live-capture profiles that use the authoritative capture-store path. The
+portable `LogicCaptureConfig` and U3Pro16 packet builder represent the hardware trigger stage.
 
 The existing live graph manager already supplies one important future invariant: hot changes and
 branch restarts take effect from the current stream position and do not rewrite previously emitted
@@ -118,15 +117,22 @@ The UI-independent live-capture foundation is also present:
   USB transfer boundaries and writes only complete canonical samples; and
 - U3 hardware RLE is an on-device memory-retention mode: the FPGA expands its upload to ordinary
   interleaved sample bits, so the canonical store records that expanded, driver-independent stream
-  without a device-specific decoder.
+  without a device-specific decoder;
+- the host-streaming profile validates its immutable plan against the connected High-Speed or
+  SuperSpeed link, publishes canonical chunks during acquisition, stops at the configured host
+  sample limit or a cooperative manual Stop, and reports hardware overflow and bit-sequence gaps as
+  explicit integrity failures;
+- aligned U3 transfers share their immutable payload with the canonical chunk without repacking,
+  while narrow transfers use one byte-wise transformation with a sub-sample carry; and
+- growing waveform summaries store historical fixed-size records in sequential per-channel tier
+  files. RAM retains only incomplete fold groups and active tails, and packed-word summary building
+  processes at most 64 channels without creating per-sample objects.
 
-The native fakes, U3Pro16 buffered provider, and application coordinator are selected as complete
-platform modules. The streaming fake is reachable through the existing development/demo node and
-both fakes are used by conformance composition. U3Pro16 host streaming, native store recovery,
-retention and reclamation, cleanup, and export do not yet exist. The growing summary is currently
-an in-memory index over durable raw storage; sustained-ingest measurement and
-duration-independent summary storage remain Phase 9. The existing `LogicAnalyzerSource` direct
-graph-run path remains available.
+The native fakes, U3Pro16 buffered and streaming providers, and application coordinator are
+selected as complete platform modules. The streaming fake is reachable through the existing
+development/demo node and both fakes are used by conformance composition. Native store recovery,
+retention and reclamation, cleanup, capture-policy controls, and export do not yet exist. The
+existing `LogicAnalyzerSource` direct graph-run path remains available.
 
 ## Proposed future design
 
@@ -633,9 +639,10 @@ not determine resident memory usage.
 
 The first implementation consequently establishes these invariants:
 
-- acquisition uses a fixed-size pool of reusable, relatively large chunks and bounded queues;
-- one immutable canonical chunk is shared by the staging writer, incremental index/summary
-  builder, and any consumer that is caught up, rather than copied into separate subsystem queues;
+- acquisition holds only the current relatively large transport chunk and its canonical form; an
+  aligned U3 transfer is adopted directly, while an unaligned transfer is transformed once;
+- the synchronous staging append is the sole mandatory downstream operation; summaries, graph
+  analysis, viewers, and other optional consumers follow independent committed-store cursors;
 - the staging file remains authoritative once a chunk is committed; a lagging graph or viewer
   releases hot chunks and catches up from the committed store instead of retaining acquisition
   memory;
@@ -643,8 +650,18 @@ The first implementation consequently establishes these invariants:
   performs at most one canonical transformation before publication;
 - the hot path keeps samples bit-packed or run-encoded and does not allocate per-sample objects or
   eagerly demultiplex the entire capture into per-channel arrays; and
-- queue occupancy, writer throughput, summary lag, graph lag, and raw input rate remain observable
-  so a bottleneck produces a useful warning or integrity error.
+- writer throughput, summary lag, graph lag, and raw input rate are reported by the sustained-ingest
+  benchmark so a bottleneck produces a useful measurement or integrity error.
+
+The release benchmark exercises the production provider adapter, canonicalization, staging store,
+file-backed waveform summary, and an intentionally slow independent consumer for representative
+3-input/1 GHz and 16-input/125 MHz profiles:
+
+```bash
+cargo test --release -p logic-analyzer-processing \
+  benchmark_streaming_ingest_store_summary_and_consumer_lag --lib -- \
+  --ignored --nocapture
+```
 
 The initial vertical slice remains replayable and retains raw data according to `RetentionPolicy`.
 It does not require an optimal compression format, a zero-copy path for every provider, or a fully
@@ -1043,6 +1060,8 @@ test completes one buffered capture and replay; generic crates contain no U3/mod
 branches.
 
 #### Phase 9 — U3Pro16 host streaming and sustained ingest
+
+Status: **complete**.
 
 - Add the separate host-streamed acquisition profile, its channel/rate/link matrix, live delivery,
   stop behavior, and explicit overflow/integrity handling.

@@ -18,6 +18,8 @@ std::cfg_select! {
         mod buffered_fake_native;
         mod fake_native;
         mod u3pro16_buffered_native;
+        mod u3pro16_common_native;
+        mod u3pro16_streaming_native;
 
         pub use buffered_fake_native::{
             BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider,
@@ -26,6 +28,7 @@ std::cfg_select! {
             DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,
         };
         pub use u3pro16_buffered_native::DsLogicU3Pro16BufferedProvider;
+        pub use u3pro16_streaming_native::DsLogicU3Pro16StreamingProvider;
     }
 }
 
@@ -48,6 +51,8 @@ pub enum AcquisitionError {
     Transport(String),
     #[error("acquisition protocol failed: {0}")]
     Protocol(String),
+    #[error("capture integrity was lost: {0}")]
+    Integrity(String),
     #[error("acquisition was cancelled")]
     Cancelled,
     #[error("acquisition worker panicked")]
@@ -65,6 +70,7 @@ impl AcquisitionError {
             Self::Writer(_) => CaptureFailureKind::Writer,
             Self::Transport(_) => CaptureFailureKind::Transport,
             Self::Protocol(_) => CaptureFailureKind::Protocol,
+            Self::Integrity(_) => CaptureFailureKind::Integrity,
             Self::Cancelled => CaptureFailureKind::Cancelled,
             Self::AlreadyStarted
             | Self::NotStarted

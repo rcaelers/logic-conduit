@@ -1,3 +1,5 @@
+use std::fs::{File, OpenOptions};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
@@ -12,6 +14,7 @@ use crate::{
 const LEAF_SAMPLES: u64 = 64;
 const FAN_OUT: usize = 64;
 const QUERY_WAIT: Duration = Duration::from_millis(50);
+const WAVEFORM_RECORD_SIZE: usize = 17;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct WaveformRecord {
@@ -37,30 +40,134 @@ impl WaveformRecord {
             activity: boundary_activity || records.iter().any(|record| record.activity),
         }
     }
+
+    fn encode(self) -> [u8; WAVEFORM_RECORD_SIZE] {
+        let mut bytes = [0_u8; WAVEFORM_RECORD_SIZE];
+        bytes[0..8].copy_from_slice(&self.start_sample.to_le_bytes());
+        bytes[8..16].copy_from_slice(&self.end_sample.to_le_bytes());
+        bytes[16] = u8::from(self.first)
+            | (u8::from(self.last) << 1)
+            | (u8::from(self.activity) << 2);
+        bytes
+    }
+
+    fn decode(bytes: [u8; WAVEFORM_RECORD_SIZE]) -> Self {
+        let flags = bytes[16];
+        Self {
+            start_sample: u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
+            end_sample: u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+            first: flags & 1 != 0,
+            last: flags & 2 != 0,
+            activity: flags & 4 != 0,
+        }
+    }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
+struct WaveformTier {
+    path: PathBuf,
+    writer: BufWriter<File>,
+    records: u64,
+    pending: Vec<WaveformRecord>,
+}
+
+impl WaveformTier {
+    fn create(path: PathBuf) -> Result<Self> {
+        let writer = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)?;
+        Ok(Self {
+            path,
+            writer: BufWriter::new(writer),
+            records: 0,
+            pending: Vec::with_capacity(FAN_OUT),
+        })
+    }
+
+    fn push(&mut self, record: WaveformRecord) -> Result<Option<WaveformRecord>> {
+        self.writer.write_all(&record.encode())?;
+        self.records += 1;
+        self.pending.push(record);
+        if self.pending.len() == FAN_OUT {
+            let combined = WaveformRecord::combine(&self.pending);
+            self.pending.clear();
+            Ok(Some(combined))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn read_range(&self, first: u64, last: u64) -> Result<Vec<WaveformRecord>> {
+        if first >= last || last > self.records {
+            return Ok(Vec::new());
+        }
+        let record_size = WAVEFORM_RECORD_SIZE as u64;
+        let offset = first
+            .checked_mul(record_size)
+            .ok_or_else(|| Error::ParseError("waveform summary offset overflow".into()))?;
+        let count = usize::try_from(last - first)
+            .map_err(|_| Error::ParseError("waveform summary window is too large".into()))?;
+        let mut reader = File::open(&self.path)?;
+        reader.seek(SeekFrom::Start(offset))?;
+        let mut records = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut bytes = [0_u8; WAVEFORM_RECORD_SIZE];
+            reader.read_exact(&mut bytes)?;
+            records.push(WaveformRecord::decode(bytes));
+        }
+        Ok(records)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.writer.flush()?;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
 struct WaveformMipmap {
-    tiers: Vec<Vec<WaveformRecord>>,
-    leaves: usize,
+    directory: PathBuf,
+    channel: usize,
+    tiers: Vec<WaveformTier>,
 }
 
 impl WaveformMipmap {
-    fn push(&mut self, record: WaveformRecord) {
-        self.push_at(0, record);
-        self.leaves += 1;
+    fn new(directory: &Path, channel: usize) -> Self {
+        Self {
+            directory: directory.to_path_buf(),
+            channel,
+            tiers: Vec::new(),
+        }
     }
 
-    fn push_at(&mut self, tier: usize, record: WaveformRecord) {
+    fn push(&mut self, record: WaveformRecord) -> Result<()> {
+        self.push_at(0, record)
+    }
+
+    fn push_at(&mut self, tier: usize, record: WaveformRecord) -> Result<()> {
         if tier == self.tiers.len() {
-            self.tiers.push(Vec::new());
+            let path = self
+                .directory
+                .join(format!("capture.waveform.{}.{}", self.channel, tier));
+            self.tiers.push(WaveformTier::create(path)?);
         }
-        self.tiers[tier].push(record);
-        if self.tiers[tier].len().is_multiple_of(FAN_OUT) {
-            let start = self.tiers[tier].len() - FAN_OUT;
-            let combined = WaveformRecord::combine(&self.tiers[tier][start..]);
-            self.push_at(tier + 1, combined);
+        let folded = self.tiers[tier].push(record)?;
+        if let Some(folded) = folded {
+            self.push_at(tier + 1, folded)?;
         }
+        Ok(())
+    }
+
+    fn resident_records(&self) -> usize {
+        self.tiers.iter().map(|tier| tier.pending.len()).sum()
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        for tier in &mut self.tiers {
+            tier.flush()?;
+        }
+        Ok(())
     }
 
     fn sampled_window(
@@ -69,31 +176,32 @@ impl WaveformMipmap {
         end_sample: u64,
         target_points: usize,
         tail: Option<WaveformRecord>,
-    ) -> Vec<WaveformRecord> {
+    ) -> Result<Vec<WaveformRecord>> {
         let budget = target_points.max(1).saturating_mul(2);
         for tier_index in (0..self.tiers.len()).rev() {
             let tier = &self.tiers[tier_index];
-            let (first, last) = window_range(tier, start_sample, end_sample);
-            if last - first <= budget || tier_index == 0 {
-                let mut result = tier[first..last].to_vec();
-                self.append_uncovered_tail(
-                    tier_index,
-                    start_sample,
-                    end_sample,
-                    &mut result,
-                );
+            if tier.records == 0 {
+                continue;
+            }
+            let span = tier_span(tier_index).unwrap_or(u64::MAX);
+            let first = (start_sample / span).min(tier.records);
+            let last = end_sample.div_ceil(span).min(tier.records);
+            if last.saturating_sub(first) <= budget as u64 || tier_index == 0 {
+                let mut result = tier.read_range(first, last)?;
+                self.append_uncovered_tail(tier_index, start_sample, end_sample, &mut result);
                 if let Some(tail) = tail
                     && tail.end_sample > start_sample
                     && tail.start_sample < end_sample
                 {
                     result.push(tail);
                 }
-                return result;
+                return Ok(result);
             }
         }
-        tail.into_iter()
+        Ok(tail
+            .into_iter()
             .filter(|tail| tail.end_sample > start_sample && tail.start_sample < end_sample)
-            .collect()
+            .collect())
     }
 
     fn append_uncovered_tail(
@@ -103,33 +211,24 @@ impl WaveformMipmap {
         end_sample: u64,
         output: &mut Vec<WaveformRecord>,
     ) {
-        if tier_index == 0 || self.tiers.is_empty() {
+        if tier_index == 0 {
             return;
         }
-        let Some(group_size) = FAN_OUT.checked_pow(tier_index as u32) else {
-            return;
-        };
-        let covered = self.tiers[tier_index].len().saturating_mul(group_size);
-        if covered >= self.leaves {
-            return;
-        }
-        let raw = &self.tiers[0][covered..];
-        let (first, last) = window_range(raw, start_sample, end_sample);
-        if last > first {
-            output.push(WaveformRecord::combine(&raw[first..last]));
+        let uncovered = (0..tier_index)
+            .rev()
+            .flat_map(|lower| self.tiers[lower].pending.iter().copied())
+            .filter(|record| record.end_sample > start_sample && record.start_sample < end_sample)
+            .collect::<Vec<_>>();
+        if !uncovered.is_empty() {
+            output.push(WaveformRecord::combine(&uncovered));
         }
     }
 }
 
-fn window_range(
-    records: &[WaveformRecord],
-    start_sample: u64,
-    end_sample: u64,
-) -> (usize, usize) {
-    let first = records.partition_point(|record| record.end_sample <= start_sample);
-    let last = first
-        + records[first..].partition_point(|record| record.start_sample < end_sample);
-    (first, last)
+fn tier_span(tier: usize) -> Option<u64> {
+    (FAN_OUT as u64)
+        .checked_pow(tier as u32)
+        .and_then(|scale| LEAF_SAMPLES.checked_mul(scale))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -185,6 +284,56 @@ impl SummaryBuilder {
                 "growing waveform received a discontinuous capture chunk".into(),
             ));
         }
+        if self.active.len() > 64 {
+            return self.append_chunk_scalar(chunk);
+        }
+        let mut completed = vec![Vec::new(); self.active.len()];
+        let mut relative = 0_u64;
+        while relative < chunk.sample_count() {
+            let sample = chunk.start_sample() + relative;
+            let leaf_remaining = LEAF_SAMPLES - sample % LEAF_SAMPLES;
+            let sample_count = leaf_remaining.min(chunk.sample_count() - relative);
+            let (first, last, activity) = summary_masks(chunk, relative, sample_count);
+            for (channel, active) in self.active.iter_mut().enumerate() {
+                let first = first & (1 << channel) != 0;
+                let last = last & (1 << channel) != 0;
+                let activity = activity & (1 << channel) != 0;
+                match active {
+                    Some(record) => {
+                        record.activity |= record.last != first || activity;
+                        record.last = last;
+                    }
+                    None => {
+                        *active = Some(ActiveRecord {
+                            start_sample: sample,
+                            first,
+                            last,
+                            activity,
+                        });
+                    }
+                }
+            }
+            relative += sample_count;
+            let end_sample = sample + sample_count;
+            if end_sample.is_multiple_of(LEAF_SAMPLES) {
+                for (channel, active) in self.active.iter_mut().enumerate() {
+                    completed[channel].push(
+                        active
+                            .take()
+                            .expect("every channel has an active summary")
+                            .finish(end_sample),
+                    );
+                }
+            }
+        }
+        self.next_sample = chunk.end_sample();
+        Ok(completed)
+    }
+
+    fn append_chunk_scalar(
+        &mut self,
+        chunk: &crate::CaptureChunk,
+    ) -> Result<Vec<Vec<WaveformRecord>>> {
         let mut completed = vec![Vec::new(); self.active.len()];
         for relative in 0..chunk.sample_count() {
             let sample = chunk.start_sample() + relative;
@@ -231,6 +380,71 @@ impl SummaryBuilder {
     }
 }
 
+fn summary_masks(chunk: &crate::CaptureChunk, start: u64, sample_count: u64) -> (u64, u64, u64) {
+    debug_assert!(sample_count > 0 && sample_count <= LEAF_SAMPLES);
+    let channels = chunk.channels().len();
+    let first_bit = start as usize * channels;
+    let first = packed_bits(chunk, first_bit, channels);
+    let last = packed_bits(
+        chunk,
+        (start + sample_count - 1) as usize * channels,
+        channels,
+    );
+    let mut activity = 0_u64;
+    let comparison_bits = (sample_count as usize - 1) * channels;
+    let mut offset = 0_usize;
+    while offset < comparison_bits {
+        let bits = (comparison_bits - offset).min(64);
+        let current = packed_bits(chunk, first_bit + channels + offset, bits);
+        let previous = packed_bits(chunk, first_bit + offset, bits);
+        let mut differences = current ^ previous;
+        while differences != 0 {
+            let bit = differences.trailing_zeros() as usize;
+            activity |= 1 << ((offset + bit) % channels);
+            differences &= differences - 1;
+        }
+        if activity == channel_mask(channels) {
+            break;
+        }
+        offset += bits;
+    }
+    (first, last, activity)
+}
+
+fn packed_bits(chunk: &crate::CaptureChunk, relative_bit: usize, bit_count: usize) -> u64 {
+    debug_assert!(bit_count <= 64);
+    if bit_count == 0 {
+        return 0;
+    }
+    let crate::CaptureChunkPayload::PackedLsbFirst { bytes, bit_offset } = chunk.payload();
+    let absolute_bit = usize::from(*bit_offset) + relative_bit;
+    let first_byte = absolute_bit / 8;
+    let shift = absolute_bit % 8;
+    let needed_bytes = (shift + bit_count).div_ceil(8);
+    let mut packed = 0_u128;
+    for (index, byte) in bytes.as_slice()[first_byte..]
+        .iter()
+        .take(needed_bytes)
+        .enumerate()
+    {
+        packed |= u128::from(*byte) << (index * 8);
+    }
+    let mask = if bit_count == 64 {
+        u64::MAX
+    } else {
+        (1_u64 << bit_count) - 1
+    };
+    ((packed >> shift) as u64) & mask
+}
+
+fn channel_mask(channels: usize) -> u64 {
+    if channels == 64 {
+        u64::MAX
+    } else {
+        (1_u64 << channels) - 1
+    }
+}
+
 struct GrowingState {
     channels: Vec<WaveformMipmap>,
     tails: Vec<Option<WaveformRecord>>,
@@ -243,9 +457,11 @@ struct GrowingState {
 }
 
 impl GrowingState {
-    fn new(channels: usize) -> Self {
+    fn new(channels: usize, directory: &Path) -> Self {
         Self {
-            channels: (0..channels).map(|_| WaveformMipmap::default()).collect(),
+            channels: (0..channels)
+                .map(|channel| WaveformMipmap::new(directory, channel))
+                .collect(),
             tails: vec![None; channels],
             indexed_samples: 0,
             committed_chunks: 0,
@@ -261,16 +477,28 @@ impl GrowingState {
         completed: Vec<Vec<WaveformRecord>>,
         tails: Vec<Option<WaveformRecord>>,
         indexed_samples: u64,
-    ) {
+    ) -> Result<()> {
         for (mipmap, records) in self.channels.iter_mut().zip(completed) {
             for record in records {
-                mipmap.push(record);
+                mipmap.push(record)?;
             }
+        }
+        for mipmap in &mut self.channels {
+            mipmap.flush()?;
         }
         self.tails = tails;
         self.indexed_samples = indexed_samples;
         self.committed_chunks += 1;
         self.generation = self.generation.wrapping_add(1);
+        Ok(())
+    }
+
+    fn resident_summary_records(&self) -> usize {
+        self.channels
+            .iter()
+            .map(WaveformMipmap::resident_records)
+            .sum::<usize>()
+            + self.tails.iter().flatten().count()
     }
 }
 
@@ -326,7 +554,10 @@ impl NativeGrowingCaptureIndex {
             probe_names,
             trigger_sample: None,
         };
-        let state = Arc::new(RwLock::new(GrowingState::new(header.total_probes)));
+        let state = Arc::new(RwLock::new(GrowingState::new(
+            header.total_probes,
+            store.directory(),
+        )));
         let cursor = store
             .open_cursor()
             .map_err(|error| Error::ParseError(error.to_string()))?;
@@ -364,6 +595,15 @@ impl NativeGrowingCaptureIndex {
             state.trigger_sample = Some(sample);
             state.generation = state.generation.wrapping_add(1);
         }
+    }
+
+    /// Number of summary records retained in RAM. Historical records are in
+    /// fixed-size tier files beside the authoritative raw capture.
+    pub fn resident_summary_records(&self) -> usize {
+        self.state
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .resident_summary_records()
     }
 
     fn exact_window(
@@ -412,7 +652,7 @@ impl NativeGrowingCaptureIndex {
                 end_sample,
                 target_points,
                 state.tails[channel],
-            );
+            )?;
             sample_step = sample_step.max(
                 records
                     .iter()
@@ -522,10 +762,18 @@ fn run_index_worker(
             Ok(CaptureCursorItem::Chunk(chunk)) => {
                 let completed = builder.append_chunk(&chunk)?;
                 let tails = builder.active_records();
-                state
+                if let Err(error) = state
                     .write()
                     .unwrap_or_else(|error| error.into_inner())
-                    .publish(completed, tails, chunk.end_sample());
+                    .publish(completed, tails, chunk.end_sample())
+                {
+                    let message = error.to_string();
+                    let mut state = state.write().unwrap_or_else(|error| error.into_inner());
+                    state.error = Some(message);
+                    state.complete = true;
+                    state.generation = state.generation.wrapping_add(1);
+                    return Err(error);
+                }
             }
             Ok(CaptureCursorItem::Pending) => {}
             Ok(CaptureCursorItem::End) => {
@@ -533,7 +781,20 @@ fn run_index_worker(
                 let mut state = state.write().unwrap_or_else(|error| error.into_inner());
                 for (mipmap, records) in state.channels.iter_mut().zip(completed) {
                     for record in records {
-                        mipmap.push(record);
+                        if let Err(error) = mipmap.push(record) {
+                            state.error = Some(error.to_string());
+                            state.complete = true;
+                            state.generation = state.generation.wrapping_add(1);
+                            return Err(error);
+                        }
+                    }
+                }
+                for mipmap in &mut state.channels {
+                    if let Err(error) = mipmap.flush() {
+                        state.error = Some(error.to_string());
+                        state.complete = true;
+                        state.generation = state.generation.wrapping_add(1);
+                        return Err(error);
                     }
                 }
                 state.tails.fill(None);
@@ -609,7 +870,7 @@ mod tests {
         NativeCaptureStoreConfig,
     };
 
-    use super::NativeGrowingCaptureIndex;
+    use super::{FAN_OUT, NativeGrowingCaptureIndex, summary_masks};
 
     fn level_at(sample: u64, channel: usize) -> bool {
         (sample / (37 + channel as u64 * 11) + channel as u64).is_multiple_of(2)
@@ -650,6 +911,41 @@ mod tests {
         while index.generation() < generation {
             assert!(Instant::now() < deadline, "growing index timed out");
             std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn packed_summary_masks_match_scalar_levels_for_varied_channel_widths() {
+        let session = CaptureSessionId::new(0x5a77);
+        for channel_count in [1, 3, 6, 16, 19, 64] {
+            let channels: Arc<[CaptureChannelId]> = (0..channel_count)
+                .map(|channel| CaptureChannelId::new(format!("input:{channel}")))
+                .collect::<Vec<_>>()
+                .into();
+            let chunk = chunk(session, channels, 5, 0, 137);
+            for (start, sample_count) in [(0, 1), (0, 64), (1, 63), (63, 64), (70, 17)] {
+                let (first, last, activity) = summary_masks(&chunk, start, sample_count);
+                for channel in 0..channel_count {
+                    assert_eq!(
+                        first & (1 << channel) != 0,
+                        level_at(start, channel),
+                        "first: {channel_count} channels, sample {start}, channel {channel}"
+                    );
+                    assert_eq!(
+                        last & (1 << channel) != 0,
+                        level_at(start + sample_count - 1, channel),
+                        "last: {channel_count} channels, sample {start}, channel {channel}"
+                    );
+                    let expected_activity = (start + 1..start + sample_count).any(|sample| {
+                        level_at(sample - 1, channel) != level_at(sample, channel)
+                    });
+                    assert_eq!(
+                        activity & (1 << channel) != 0,
+                        expected_activity,
+                        "activity: {channel_count} channels, sample {start}, channel {channel}"
+                    );
+                }
+            }
         }
     }
 
@@ -767,5 +1063,56 @@ mod tests {
             }
             assert_eq!(next, total_samples);
         }
+    }
+
+    #[test]
+    fn long_capture_keeps_only_bounded_summary_fold_state_in_memory() {
+        let temporary = tempdir().unwrap();
+        let session = CaptureSessionId::new(0x71a4);
+        let channels: Arc<[CaptureChannelId]> = vec![
+            CaptureChannelId::new("bank-a:0"),
+            CaptureChannelId::new("bank-a:1"),
+        ]
+        .into();
+        let descriptor = CaptureStoreDescriptor::new(session, Arc::clone(&channels)).unwrap();
+        let config = NativeCaptureStoreConfig::new(temporary.path(), descriptor)
+            .with_commit_batch_chunks(1)
+            .unwrap();
+        let (store, mut writer) = NativeCaptureStore::create(config).unwrap();
+        let (mut index, worker) = NativeGrowingCaptureIndex::spawn(
+            store.clone(),
+            "Bounded summary test",
+            100_000_000.0,
+            vec!["A0".into(), "A1".into()],
+        )
+        .unwrap();
+        let mut start = 0_u64;
+        for sequence in 0..256 {
+            writer
+                .append(chunk(
+                    session,
+                    Arc::clone(&channels),
+                    sequence,
+                    start,
+                    4096,
+                ))
+                .unwrap();
+            start += 4096;
+        }
+        writer.finish().unwrap();
+        drop(writer);
+        worker.join().unwrap();
+        store.finalize().unwrap();
+
+        assert_eq!(index.current_metadata().total_samples, 1_048_576);
+        assert!(
+            index.resident_summary_records() <= channels.len() * FAN_OUT * 12,
+            "summary RAM must be bounded by fold state, not capture duration"
+        );
+        assert_eq!(store.snapshot().resident_commit_records, 0);
+        assert!(temporary.path().join("capture.waveform.0.0").is_file());
+        let old_window = index.sampled_window(&[0, 1], 0, 4096, 8).unwrap();
+        assert_eq!(old_window.start_sample, 0);
+        assert_eq!(old_window.end_sample, 4096);
     }
 }

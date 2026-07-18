@@ -1,7 +1,7 @@
-//! Device-buffered live-acquisition adapter for the concrete U3Pro16 driver.
+//! Host-streamed live-acquisition adapter for the concrete U3Pro16 driver.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
 use signal_processing::{
@@ -14,19 +14,19 @@ use crate::nodes::{
     RusbTransport, UsbTransport,
 };
 
+use super::u3pro16_common_native::{CanonicalTransferAssembler, map_analyzer_error};
 use super::{
     AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult,
     PreparedAcquisition,
 };
-use super::u3pro16_common_native::{CanonicalTransferAssembler, map_analyzer_error};
 
-pub struct DsLogicU3Pro16BufferedProvider<T: UsbTransport = RusbTransport> {
+pub struct DsLogicU3Pro16StreamingProvider<T: UsbTransport = RusbTransport> {
     analyzer: DsLogicU3Pro16<T>,
     config: LogicCaptureConfig,
     channels: Arc<[CaptureChannelId]>,
 }
 
-impl DsLogicU3Pro16BufferedProvider<RusbTransport> {
+impl DsLogicU3Pro16StreamingProvider<RusbTransport> {
     pub fn open_first(
         config: LogicCaptureConfig,
         channels: impl Into<Arc<[CaptureChannelId]>>,
@@ -36,7 +36,7 @@ impl DsLogicU3Pro16BufferedProvider<RusbTransport> {
     }
 }
 
-impl<T: UsbTransport> DsLogicU3Pro16BufferedProvider<T> {
+impl<T: UsbTransport> DsLogicU3Pro16StreamingProvider<T> {
     pub fn new(
         analyzer: DsLogicU3Pro16<T>,
         config: LogicCaptureConfig,
@@ -65,7 +65,7 @@ impl<T: UsbTransport> DsLogicU3Pro16BufferedProvider<T> {
         )?;
         let plan = self
             .analyzer
-            .prepare_buffered_capture(&self.config)
+            .prepare_streaming_capture(&self.config)
             .map_err(map_analyzer_error)?;
         if usize::from(plan.channel_count()) != self.channels.len() {
             return Err(AcquisitionError::Protocol(
@@ -76,7 +76,7 @@ impl<T: UsbTransport> DsLogicU3Pro16BufferedProvider<T> {
             CaptureSessionState::Prepared,
             CaptureAcquisitionPhase::Ready,
         )?;
-        Ok(Box::new(PreparedBufferedAcquisition {
+        Ok(Box::new(PreparedStreamingAcquisition {
             session_id: context.session_id(),
             context: Some(context),
             analyzer: Some(self.analyzer),
@@ -90,7 +90,7 @@ impl<T: UsbTransport> DsLogicU3Pro16BufferedProvider<T> {
     }
 }
 
-struct PreparedBufferedAcquisition<T: UsbTransport> {
+struct PreparedStreamingAcquisition<T: UsbTransport> {
     session_id: CaptureSessionId,
     context: Option<AcquisitionContext>,
     analyzer: Option<DsLogicU3Pro16<T>>,
@@ -102,7 +102,7 @@ struct PreparedBufferedAcquisition<T: UsbTransport> {
     started: bool,
 }
 
-impl<T: UsbTransport> PreparedBufferedAcquisition<T> {
+impl<T: UsbTransport> PreparedStreamingAcquisition<T> {
     fn run(
         mut context: AcquisitionContext,
         mut analyzer: DsLogicU3Pro16<T>,
@@ -143,19 +143,18 @@ impl<T: UsbTransport> PreparedBufferedAcquisition<T> {
             if armed {
                 CaptureAcquisitionPhase::WaitingForTrigger
             } else {
-                CaptureAcquisitionPhase::CapturingOnDevice
+                CaptureAcquisitionPhase::ReceivingLiveData
             },
         )?;
         analyzer.start_capture().map_err(map_analyzer_error)?;
 
         let mut header_seen = false;
-        let mut expected_samples = None;
         let mut captured_samples = 0_u64;
         let mut transferred_bytes = 0_u64;
         let mut sequence = 0_u64;
         let mut canonicalizer = CanonicalTransferAssembler::default();
         let mut stopped = false;
-        loop {
+        while captured_samples < plan.actual_samples() {
             if stop_requested.load(Ordering::Relaxed) {
                 stopped = true;
                 break;
@@ -172,34 +171,37 @@ impl<T: UsbTransport> PreparedBufferedAcquisition<T> {
                 && let Some(header) = analyzer.take_trigger_header()
             {
                 header_seen = true;
-                expected_samples = Some(header.captured_samples());
                 if let Some(trigger_sample) = header.trigger_sample() {
                     context.publish_triggered(trigger_sample)?;
                     context.publish_status(
                         CaptureSessionState::Triggered,
-                        CaptureAcquisitionPhase::CapturingOnDevice,
+                        CaptureAcquisitionPhase::ReceivingLiveData,
                     )?;
                 }
                 context.publish_status(
                     CaptureSessionState::Recording,
-                    CaptureAcquisitionPhase::UploadingBufferedData,
+                    CaptureAcquisitionPhase::ReceivingLiveData,
                 )?;
             }
 
             let Some(chunk) = next else {
-                break;
+                return Err(AcquisitionError::Integrity(
+                    "U3Pro16 streaming data ended before the host sample limit".into(),
+                ));
             };
             if chunk.bit_len == 0 {
                 continue;
             }
             if !header_seen {
                 return Err(AcquisitionError::Protocol(
-                    "U3Pro16 data arrived before its trigger header".into(),
+                    "U3Pro16 streaming data arrived before its trigger header".into(),
                 ));
             }
             let Some(transfer) = canonicalizer.push(&chunk, channels.len())? else {
                 continue;
             };
+            let remaining = plan.actual_samples() - captured_samples;
+            let transfer = transfer.limit_samples(remaining, channels.len())?;
             let canonical = CaptureChunk::packed_lsb_first(
                 context.session_id(),
                 sequence,
@@ -212,7 +214,7 @@ impl<T: UsbTransport> PreparedBufferedAcquisition<T> {
             .map_err(|error| AcquisitionError::Protocol(error.to_string()))?;
             transferred_bytes = transferred_bytes
                 .checked_add(canonical.encoded_byte_len() as u64)
-                .ok_or_else(|| AcquisitionError::Protocol("upload byte count overflow".into()))?;
+                .ok_or_else(|| AcquisitionError::Protocol("stream byte count overflow".into()))?;
             context.append(canonical)?;
             captured_samples += transfer.sample_count;
             sequence += 1;
@@ -221,26 +223,11 @@ impl<T: UsbTransport> PreparedBufferedAcquisition<T> {
                 transferred_bytes: Some(transferred_bytes),
             })?;
         }
+
         analyzer.stop_capture().map_err(map_analyzer_error)?;
         if !stopped && !header_seen {
             return Err(AcquisitionError::Protocol(
-                "U3Pro16 capture ended without a trigger header".into(),
-            ));
-        }
-        if !stopped
-            && let Some(expected_samples) = expected_samples
-            && captured_samples != expected_samples
-        {
-            return Err(AcquisitionError::Protocol(format!(
-                "U3Pro16 uploaded {captured_samples} samples, header promised {expected_samples}"
-            )));
-        }
-        if !stopped {
-            canonicalizer.finish()?;
-        }
-        if captured_samples > plan.actual_samples() {
-            return Err(AcquisitionError::Protocol(
-                "U3Pro16 uploaded more samples than its immutable plan".into(),
+                "U3Pro16 stream ended without a trigger header".into(),
             ));
         }
         context.finish_writer()?;
@@ -266,7 +253,7 @@ impl<T: UsbTransport> PreparedBufferedAcquisition<T> {
     }
 }
 
-impl<T: UsbTransport> PreparedAcquisition for PreparedBufferedAcquisition<T> {
+impl<T: UsbTransport> PreparedAcquisition for PreparedStreamingAcquisition<T> {
     fn session_id(&self) -> CaptureSessionId {
         self.session_id
     }
@@ -283,7 +270,7 @@ impl<T: UsbTransport> PreparedAcquisition for PreparedBufferedAcquisition<T> {
         let stop_requested = Arc::clone(&self.stop_requested);
         self.handle = Some(
             std::thread::Builder::new()
-                .name("u3pro16-buffered-capture".into())
+                .name("u3pro16-streaming-capture".into())
                 .spawn(move || {
                     Self::run(context, analyzer, config, channels, plan, stop_requested)
                 })
@@ -307,7 +294,7 @@ impl<T: UsbTransport> PreparedAcquisition for PreparedBufferedAcquisition<T> {
     }
 }
 
-impl<T: UsbTransport> Drop for PreparedBufferedAcquisition<T> {
+impl<T: UsbTransport> Drop for PreparedStreamingAcquisition<T> {
     fn drop(&mut self) {
         self.stop_requested.store(true, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {

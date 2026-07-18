@@ -98,11 +98,13 @@ mod tests {
         let source = widget
             .add_node_at(DsLogicU3Pro16::name(), Pos2::ZERO)
             .unwrap();
-        assert!(
+        let streaming =
             discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
                 .unwrap()
-                .is_none(),
-            "host streaming remains a separate later profile"
+                .expect("stream mode should expose a live feature");
+        assert_eq!(
+            streaming.capabilities().data_delivery(),
+            CaptureDataDelivery::DuringAcquisition
         );
         let mut state = serde_json::from_value::<U3Pro16State>(
             widget.graph().nodes[&source].state.clone(),
@@ -180,6 +182,32 @@ mod tests {
             .expect("wide 1 GHz buffered capture must be rejected before opening hardware");
 
         assert!(error.message.contains("outside this mode"));
+    }
+
+    #[test]
+    fn streaming_hardware_discovery_rejects_a_tuple_unsupported_on_every_link() {
+        let mut widget = NodeGraphWidget::new(build_registry());
+        let source = widget
+            .add_node_at(DsLogicU3Pro16::name(), Pos2::ZERO)
+            .unwrap();
+        let mut state = serde_json::from_value::<U3Pro16State>(
+            widget.graph().nodes[&source].state.clone(),
+        )
+        .unwrap();
+        state.mode.select("Stream");
+        state.sample_rate.select("1 GHz");
+        state.channels.enabled.fill(false);
+        state.channels.enabled[0] = true;
+        state.channels.enabled[3] = true;
+        widget.graph_mut().nodes.get_mut(&source).unwrap().state =
+            serde_json::to_value(state).unwrap();
+
+        let error = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
+            .err()
+            .expect("four-input 1 GHz stream must be rejected before opening hardware");
+
+        assert!(error.message.contains("High Speed"));
+        assert!(error.message.contains("SuperSpeed"));
     }
 
     #[test]

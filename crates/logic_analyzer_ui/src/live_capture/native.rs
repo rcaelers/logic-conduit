@@ -1137,4 +1137,54 @@ mod tests {
         assert_eq!(replay.source_node, source);
         assert_eq!(replay.process.output_schema().len(), 2);
     }
+
+    #[test]
+    #[ignore = "requires a connected SuperSpeed DSLogic U3Pro16 with runtime firmware and FPGA image"]
+    fn u3pro16_streaming_hardware_capture_stops_at_the_host_limit_and_replays() {
+        let mut graph = NodeGraphWidget::new(nodes::build_registry());
+        let source = graph
+            .add_node_at(nodes::DsLogicU3Pro16::name(), egui::Pos2::ZERO)
+            .unwrap();
+        let mut state = serde_json::from_value::<nodes::U3Pro16State>(
+            graph.graph().nodes[&source].state.clone(),
+        )
+        .unwrap();
+        state.mode.select("Stream");
+        state.sample_rate.select("1 MHz");
+        state.duration_ms.value = 10;
+        state.channels.enabled.fill(false);
+        state.channels.enabled[0] = true;
+        state.channels.enabled[1] = true;
+        graph.graph_mut().nodes.get_mut(&source).unwrap().state =
+            serde_json::to_value(state).unwrap();
+        let feature = compiler::discover_live_capture_feature(
+            graph.graph(),
+            &compiler::BuilderRegistry::standard(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            feature.capabilities().data_delivery(),
+            signal_processing::CaptureDataDelivery::DuringAcquisition
+        );
+        let mut coordinator = CaptureCoordinator::new();
+        coordinator.start(feature).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while coordinator.is_active() {
+            assert!(Instant::now() < deadline, "hardware stream timed out");
+            coordinator.poll();
+            std::thread::yield_now();
+        }
+
+        let status = coordinator.status().unwrap();
+        assert_eq!(status.state, CaptureSessionState::Complete, "{:?}", status.error);
+        assert_eq!(coordinator.completed_manifest().unwrap().committed_samples, 10_000);
+        let replay = coordinator
+            .create_replay_attachment()
+            .unwrap()
+            .expect("finalized hardware stream should be replayable");
+        assert_eq!(replay.source_node, source);
+        assert_eq!(replay.process.output_schema().len(), 2);
+    }
 }

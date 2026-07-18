@@ -24,7 +24,7 @@ std::cfg_select! {
         };
         pub use dslogic_u3pro16::{
             DsLogicCapturePlan, DsLogicTriggerHeader, DsLogicU3Pro16, LinkSpeed,
-            RusbTransport, UsbTransport, u3pro16_buffered_plan,
+            RusbTransport, UsbTransport, u3pro16_buffered_plan, u3pro16_streaming_plan,
         };
         pub use logic_analyzer::{
             CaptureMode, ClockEdge, ClockSource, DsLogicU3Pro16Source, LogicAnalyzer,

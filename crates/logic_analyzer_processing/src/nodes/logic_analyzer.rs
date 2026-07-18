@@ -210,6 +210,8 @@ pub enum LogicAnalyzerError {
     Transport(String),
     #[error("protocol error: {0}")]
     Protocol(String),
+    #[error("capture integrity error: {0}")]
+    Integrity(String),
     #[error("operation timed out: {0}")]
     Timeout(String),
     #[error("capture is not active")]

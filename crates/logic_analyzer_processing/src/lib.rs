@@ -24,7 +24,7 @@ std::cfg_select! {
         pub use live_capture::{
             BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider,
             DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,
-            DsLogicU3Pro16BufferedProvider,
+            DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider,
         };
         pub use nodes::{
             CaptureMode, ClockEdge, ClockSource, DeferredDslFileSource, DsLogicCapturePlan,
@@ -36,7 +36,7 @@ std::cfg_select! {
             LogicTriggerStage, RusbTransport, SigrokCaptureReader, SigrokChunkedCaptureReader,
             SigrokFileCaptureDataSource, SigrokFileSource, TriggerCondition, TriggerLogic,
             UsbTransport, open_dsl_chunked_capture, open_dsl_chunked_capture_with_progress,
-            open_sigrok_chunked_capture, u3pro16_buffered_plan,
+            open_sigrok_chunked_capture, u3pro16_buffered_plan, u3pro16_streaming_plan,
         };
         pub use nodes::sinks::{
             BinaryFileWriter, CsvValueFormat, CsvWordWriter, TextFileWriter, WriteWidth,

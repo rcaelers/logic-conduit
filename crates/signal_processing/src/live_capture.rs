@@ -245,6 +245,7 @@ pub enum CaptureFailureKind {
     InvalidRequest,
     Transport,
     Protocol,
+    Integrity,
     Writer,
     Cancelled,
     Internal,

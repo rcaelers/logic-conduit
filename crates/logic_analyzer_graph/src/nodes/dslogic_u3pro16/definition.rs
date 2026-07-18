@@ -35,9 +35,10 @@ fn u3_rate_names() -> Vec<&'static str> {
     U3_RATES.iter().map(|(name, _)| *name).collect()
 }
 
-/// Stream mode: ≤16 ch @ 125 MHz, ≤12 @ 250 MHz, ≤6 @ 500 MHz, ≤3 @ 1 GHz.
-fn u3_max_stream_rate(enabled_channels: usize) -> u64 {
-    match enabled_channels {
+/// Stream mode by highest selected physical input: ≤16 @ 125 MHz, ≤12 @ 250 MHz,
+/// ≤6 @ 500 MHz, and ≤3 @ 1 GHz.
+fn u3_max_stream_rate(input_width: usize) -> u64 {
+    match input_width {
         0..=3 => 1_000_000_000,
         4..=6 => 500_000_000,
         7..=12 => 250_000_000,
@@ -331,7 +332,13 @@ impl NodeDef for DsLogicU3Pro16 {
         // down and explain why via the badge.
         state.clamp_note = None;
         if state.mode.index == 0 && enabled > 0 {
-            let max_hz = u3_max_stream_rate(enabled);
+            let input_width = state
+                .channels
+                .enabled
+                .iter()
+                .rposition(|enabled| *enabled)
+                .map_or(0, |channel| channel + 1);
+            let max_hz = u3_max_stream_rate(input_width);
             let selected_hz = U3_RATES
                 .get(state.sample_rate.index)
                 .map_or(0, |(_, hz)| *hz);
@@ -342,7 +349,7 @@ impl NodeDef for DsLogicU3Pro16 {
                     .unwrap_or(0);
                 state.sample_rate.index = clamped;
                 state.clamp_note = Some(format!(
-                    "Rate limited to {} for {enabled} channels (stream mode)",
+                    "Rate limited to {} for this input selection (stream mode)",
                     U3_RATES[clamped].0
                 ));
             }
@@ -376,7 +383,15 @@ mod tests {
     use node_graph::NodeDef;
     use signal_processing::SimpleTriggerCondition::{Falling, High, Ignore};
 
-    use super::{DsLogicU3Pro16, U3PRO16_CHANNELS, U3Pro16State};
+    use super::{DsLogicU3Pro16, U3PRO16_CHANNELS, U3Pro16State, u3_max_stream_rate};
+
+    #[test]
+    fn streaming_rate_limit_uses_highest_enabled_input_not_population_count() {
+        assert_eq!(u3_max_stream_rate(3), 1_000_000_000);
+        assert_eq!(u3_max_stream_rate(6), 500_000_000);
+        assert_eq!(u3_max_stream_rate(12), 250_000_000);
+        assert_eq!(u3_max_stream_rate(16), 125_000_000);
+    }
 
     #[test]
     fn current_state_round_trips_simple_triggers_without_a_warning() {

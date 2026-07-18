@@ -4,8 +4,9 @@ use serde_json::Value;
 
 use logic_analyzer_processing::{
     AcquisitionContext, AcquisitionResult, CaptureAnalysisChannel, CaptureAnalysisSource,
-    DsLogicU3Pro16BufferedProvider, LogicCaptureConfig, PreparedAcquisition,
-    u3pro16_buffered_plan,
+    DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider, LinkSpeed,
+    LogicCaptureConfig, PreparedAcquisition, u3pro16_buffered_plan,
+    u3pro16_streaming_plan,
 };
 use signal_processing::{
     CaptureChannelId, CaptureDataDelivery, CaptureProviderCapabilities, CaptureStoreCursor,
@@ -29,7 +30,7 @@ impl CaptureGraphSourceFactory for U3Pro16GraphSourceFactory {
         cursor: Box<dyn CaptureStoreCursor>,
     ) -> Result<Box<dyn ProcessNode>, String> {
         CaptureAnalysisSource::new(
-            "u3pro16-buffered-analysis",
+            "u3pro16-captured-analysis",
             cursor,
             self.sample_rate_hz,
             self.channels.to_vec(),
@@ -45,7 +46,14 @@ struct U3Pro16LiveCaptureFeature {
     simple_trigger_channels: Arc<[SimpleTriggerChannel]>,
     analysis_channels: Arc<[CaptureAnalysisChannel]>,
     capabilities: CaptureProviderCapabilities,
+    profile: U3Pro16AcquisitionProfile,
     config: LogicCaptureConfig,
+}
+
+#[derive(Clone, Copy)]
+enum U3Pro16AcquisitionProfile {
+    Buffered,
+    Streaming,
 }
 
 impl LiveCaptureFeature for U3Pro16LiveCaptureFeature {
@@ -80,7 +88,16 @@ impl LiveCaptureFeature for U3Pro16LiveCaptureFeature {
         self: Box<Self>,
         context: AcquisitionContext,
     ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
-        DsLogicU3Pro16BufferedProvider::open_first(self.config, self.channels)?.prepare(context)
+        match self.profile {
+            U3Pro16AcquisitionProfile::Buffered => {
+                DsLogicU3Pro16BufferedProvider::open_first(self.config, self.channels)?
+                    .prepare(context)
+            }
+            U3Pro16AcquisitionProfile::Streaming => {
+                DsLogicU3Pro16StreamingProvider::open_first(self.config, self.channels)?
+                    .prepare(context)
+            }
+        }
     }
 }
 
@@ -88,11 +105,26 @@ pub(super) fn feature(
     state: &Value,
 ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
     let state = parse_state::<U3Pro16State>(state)?;
-    if state.mode.selected() != "Buffer" {
-        return Ok(None);
-    }
     let config = capture_config(&state)?;
-    u3pro16_buffered_plan(&config).map_err(|error| error.to_string())?;
+    let (profile, delivery) = if state.mode.selected() == "Buffer" {
+        u3pro16_buffered_plan(&config).map_err(|error| error.to_string())?;
+        (
+            U3Pro16AcquisitionProfile::Buffered,
+            CaptureDataDelivery::BufferedUpload,
+        )
+    } else {
+        let high = u3pro16_streaming_plan(&config, LinkSpeed::High);
+        let super_speed = u3pro16_streaming_plan(&config, LinkSpeed::Super);
+        if let (Err(high), Err(super_speed)) = (high, super_speed) {
+            return Err(format!(
+                "U3Pro16 stream is unsupported on High Speed ({high}) and SuperSpeed ({super_speed})"
+            ));
+        }
+        (
+            U3Pro16AcquisitionProfile::Streaming,
+            CaptureDataDelivery::DuringAcquisition,
+        )
+    };
     let mut channels = Vec::new();
     let mut channel_names = Vec::new();
     let mut simple_trigger_channels = Vec::new();
@@ -120,7 +152,7 @@ pub(super) fn feature(
     }
     let channels: Arc<[CaptureChannelId]> = channels.into();
     let capabilities = CaptureProviderCapabilities::single(
-        CaptureDataDelivery::BufferedUpload,
+        delivery,
         Arc::clone(&channels),
         config.sample_rate_hz,
     );
@@ -131,6 +163,7 @@ pub(super) fn feature(
         simple_trigger_channels: simple_trigger_channels.into(),
         channels,
         capabilities,
+        profile,
         config,
     })))
 }

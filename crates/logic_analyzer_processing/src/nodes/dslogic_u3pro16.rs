@@ -154,6 +154,19 @@ pub fn u3pro16_buffered_plan(
     build_plan(LinkSpeed::Super, &settings_from_config(config)?)
 }
 
+/// Validates a host-streamed request against one concrete USB link speed.
+pub fn u3pro16_streaming_plan(
+    config: &LogicCaptureConfig,
+    link_speed: LinkSpeed,
+) -> LogicAnalyzerResult<DsLogicCapturePlan> {
+    if config.mode != CaptureMode::Streaming {
+        return Err(LogicAnalyzerError::InvalidSettings(
+            "host-streamed acquisition requires streaming capture mode".into(),
+        ));
+    }
+    build_plan(link_speed, &settings_from_config(config)?)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsbError {
     Timeout,
@@ -395,6 +408,10 @@ impl DsLogicCapturePlan {
     pub const fn actual_bytes(self) -> usize {
         self.actual_bytes
     }
+
+    pub const fn stream_buffer_bytes(self) -> usize {
+        self.stream_buffer
+    }
 }
 
 /// Device header translated into the capture timeline used by the application.
@@ -533,6 +550,24 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         config: &LogicCaptureConfig,
     ) -> LogicAnalyzerResult<DsLogicCapturePlan> {
         let plan = self.negotiate_buffered_capture(config)?;
+        self.configure_device_capture(plan)?;
+        Ok(plan)
+    }
+
+    /// Validates a host-streamed request against the connected link and
+    /// configures the device without issuing the final Start command.
+    pub fn prepare_streaming_capture(
+        &mut self,
+        config: &LogicCaptureConfig,
+    ) -> LogicAnalyzerResult<DsLogicCapturePlan> {
+        if config.mode != CaptureMode::Streaming {
+            return Err(LogicAnalyzerError::InvalidSettings(
+                "host-streamed acquisition requires streaming capture mode".into(),
+            ));
+        }
+        self.configure_capture(config)?;
+        let plan = self.plan()?;
+        self.plan = Some(plan);
         self.configure_device_capture(plan)?;
         Ok(plan)
     }
@@ -755,6 +790,16 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         self.prepared = true;
         Ok(())
     }
+
+    fn check_streaming_integrity(&mut self) -> LogicAnalyzerResult<()> {
+        let status = self.command_read_byte(2, 0)?;
+        if status & 0x10 != 0 {
+            return Err(LogicAnalyzerError::Integrity(
+                "U3Pro16 reported a streaming overflow".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
@@ -854,6 +899,7 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
         let read = match self.transport.bulk_read(BULK_IN, &mut data, timeout) {
             Ok(read) => read,
             Err(UsbError::Timeout) if self.settings.mode == CaptureMode::Streaming => {
+                self.check_streaming_integrity()?;
                 return Ok(Some(self.empty_chunk(plan)));
             }
             Err(error) => {
@@ -864,11 +910,11 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
             }
         };
         if read == 0 {
-            return if self.settings.mode == CaptureMode::Streaming {
-                Ok(Some(self.empty_chunk(plan)))
-            } else {
-                Ok(None)
-            };
+            if self.settings.mode == CaptureMode::Streaming {
+                self.check_streaming_integrity()?;
+                return Ok(Some(self.empty_chunk(plan)));
+            }
+            return Ok(None);
         }
         data.truncate(read);
         if let Some(left) = self.bytes_remaining.as_mut() {
@@ -983,7 +1029,7 @@ fn build_plan(
     let channels = settings.input_mask.count_ones() as u8;
     if channels == 0 || settings.sample_limit == 0 {
         return Err(LogicAnalyzerError::InvalidSettings(
-            "buffered capture requires enabled inputs and a non-zero sample limit".into(),
+            "capture requires enabled inputs and a non-zero sample limit".into(),
         ));
     }
     let width = 16 - settings.input_mask.leading_zeros() as u8;
@@ -1010,9 +1056,9 @@ fn build_plan(
         )));
     }
     let actual_bytes = actual_samples
-        .checked_div(64)
-        .and_then(|v| v.checked_mul(u64::from(channels)))
-        .and_then(|v| v.checked_mul(8))
+        .checked_mul(u64::from(channels))
+        .and_then(|bits| bits.checked_add(7))
+        .map(|bits| bits / 8)
         .ok_or_else(|| LogicAnalyzerError::InvalidSettings("capture size overflows".into()))?;
     let bytes_per_ms = div_ceil(
         settings
@@ -1239,17 +1285,23 @@ fn put32(buffer: &mut [u8], offset: usize, value: u32) {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::Instant;
 
     use serde::Deserialize;
 
     use signal_processing::{
-        CaptureAcquisitionPhase, CaptureCursorItem, CaptureEvent, CaptureQueueReceiveError,
-        CaptureSessionId, CaptureStoreCursor, CaptureStoreDescriptor, NativeCaptureStore,
-        NativeCaptureStoreConfig, bounded_capture_event_queue,
+        CaptureAcquisitionPhase, CaptureCursorItem, CaptureEvent, CaptureFailureKind,
+        CaptureQueueReceiveError, CaptureSessionId, CaptureStoreCursor,
+        CaptureStoreDescriptor, NativeCaptureStore, NativeCaptureStoreConfig,
+        bounded_capture_event_queue,
     };
 
-    use crate::live_capture::{AcquisitionContext, DsLogicU3Pro16BufferedProvider};
+    use crate::live_capture::{
+        AcquisitionContext, DsLogicU3Pro16BufferedProvider,
+        DsLogicU3Pro16StreamingProvider,
+    };
 
     use super::*;
 
@@ -1328,9 +1380,21 @@ mod tests {
         control_reads: VecDeque<Vec<u8>>,
         bulk_reads: VecDeque<Vec<u8>>,
         bulk_writes: Arc<Mutex<Vec<Vec<u8>>>>,
+        idle_stream: bool,
     }
 
     impl FixtureTransport {
+        fn control_reads() -> VecDeque<Vec<u8>> {
+            VecDeque::from([
+                vec![0x40],
+                vec![0x0e],
+                vec![0x0e],
+                vec![2, 0],
+                vec![0x08],
+                vec![0x80],
+            ])
+        }
+
         fn new(header: Vec<u8>, data: Vec<u8>) -> (Self, Arc<Mutex<Vec<Vec<u8>>>>) {
             const UNALIGNED_TRANSFER_BYTES: usize = 257;
 
@@ -1338,27 +1402,135 @@ mod tests {
             let bulk_writes = Arc::new(Mutex::new(Vec::new()));
             (
                 Self {
-                    control_reads: VecDeque::from([
-                        vec![0x40],
-                        vec![0x0e],
-                        vec![0x0e],
-                        vec![2, 0],
-                        vec![0x08],
-                        vec![0x80],
-                    ]),
+                    control_reads: Self::control_reads(),
                     bulk_reads: VecDeque::from([
                         header,
                         data[..UNALIGNED_TRANSFER_BYTES].to_vec(),
                         data[UNALIGNED_TRANSFER_BYTES..].to_vec(),
                     ]),
                     bulk_writes: Arc::clone(&bulk_writes),
+                    idle_stream: false,
                 },
                 bulk_writes,
             )
         }
+
+        fn overflowing_stream(
+            header: Vec<u8>,
+        ) -> (Self, Arc<Mutex<Vec<Vec<u8>>>>) {
+            let bulk_writes = Arc::new(Mutex::new(Vec::new()));
+            let mut control_reads = Self::control_reads();
+            control_reads.push_back(vec![0x10]);
+            (
+                Self {
+                    control_reads,
+                    bulk_reads: VecDeque::from([header]),
+                    bulk_writes: Arc::clone(&bulk_writes),
+                    idle_stream: false,
+                },
+                bulk_writes,
+            )
+        }
+
+        fn idle_stream(header: Vec<u8>) -> Self {
+            Self {
+                control_reads: Self::control_reads(),
+                bulk_reads: VecDeque::from([header]),
+                bulk_writes: Arc::new(Mutex::new(Vec::new())),
+                idle_stream: true,
+            }
+        }
     }
 
     impl UsbTransport for FixtureTransport {
+        fn link_speed(&self) -> LinkSpeed {
+            LinkSpeed::Super
+        }
+
+        fn control_write(
+            &mut self,
+            _request_type: u8,
+            _request: u8,
+            _value: u16,
+            _index: u16,
+            data: &[u8],
+            _timeout: Duration,
+        ) -> Result<usize, UsbError> {
+            Ok(data.len())
+        }
+
+        fn control_read(
+            &mut self,
+            _request_type: u8,
+            _request: u8,
+            _value: u16,
+            _index: u16,
+            data: &mut [u8],
+            _timeout: Duration,
+        ) -> Result<usize, UsbError> {
+            let response = match self.control_reads.pop_front() {
+                Some(response) => response,
+                None if self.idle_stream => vec![0; data.len()],
+                None => return Err(UsbError::Other),
+            };
+            if response.len() != data.len() {
+                return Err(UsbError::Other);
+            }
+            data.copy_from_slice(&response);
+            Ok(data.len())
+        }
+
+        fn bulk_write(
+            &mut self,
+            _endpoint: u8,
+            data: &[u8],
+            _timeout: Duration,
+        ) -> Result<usize, UsbError> {
+            self.bulk_writes.lock().unwrap().push(data.to_vec());
+            Ok(data.len())
+        }
+
+        fn bulk_read(
+            &mut self,
+            _endpoint: u8,
+            data: &mut [u8],
+            _timeout: Duration,
+        ) -> Result<usize, UsbError> {
+            let response = match self.bulk_reads.pop_front() {
+                Some(response) => response,
+                None if self.idle_stream => {
+                    std::thread::sleep(Duration::from_millis(20));
+                    return Err(UsbError::Timeout);
+                }
+                None => return Err(UsbError::Timeout),
+            };
+            if response.len() > data.len() {
+                return Err(UsbError::Other);
+            }
+            data[..response.len()].copy_from_slice(&response);
+            Ok(response.len())
+        }
+    }
+
+    struct GeneratedStreamingTransport {
+        control_reads: VecDeque<Vec<u8>>,
+        header_pending: bool,
+        data_bytes: usize,
+        data_offset: usize,
+    }
+
+    impl GeneratedStreamingTransport {
+        fn new(data_bytes: usize) -> Self {
+            Self {
+                control_reads: FixtureTransport::control_reads(),
+                header_pending: true,
+                data_bytes,
+                data_offset: 0,
+            }
+        }
+    }
+
+    impl UsbTransport for GeneratedStreamingTransport {
         fn link_speed(&self) -> LinkSpeed {
             LinkSpeed::Super
         }
@@ -1398,7 +1570,6 @@ mod tests {
             data: &[u8],
             _timeout: Duration,
         ) -> Result<usize, UsbError> {
-            self.bulk_writes.lock().unwrap().push(data.to_vec());
             Ok(data.len())
         }
 
@@ -1408,12 +1579,19 @@ mod tests {
             data: &mut [u8],
             _timeout: Duration,
         ) -> Result<usize, UsbError> {
-            let response = self.bulk_reads.pop_front().ok_or(UsbError::Timeout)?;
-            if response.len() > data.len() {
-                return Err(UsbError::Other);
+            if self.header_pending {
+                if data.len() != 1024 {
+                    return Err(UsbError::Other);
+                }
+                data.fill(0);
+                put32(data, 0, 0x5555_5555);
+                self.header_pending = false;
+                return Ok(data.len());
             }
-            data[..response.len()].copy_from_slice(&response);
-            Ok(response.len())
+            let read = data.len().min(self.data_bytes - self.data_offset);
+            data[..read].fill(0xa5);
+            self.data_offset += read;
+            Ok(read)
         }
     }
 
@@ -1477,6 +1655,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
+        let _paused_cursor = store.open_cursor().unwrap();
         let (events, event_reader) = bounded_capture_event_queue(64).unwrap();
         let context = AcquisitionContext::new(session_id, Box::new(writer), Box::new(events));
         let mut acquisition = provider.prepare(context).unwrap();
@@ -1486,6 +1665,7 @@ mod tests {
         assert_eq!(outcome.captured_samples, fixture.sample_limit);
         assert_eq!(outcome.chunk_count, 2);
         assert!(!outcome.stopped);
+        assert_eq!(store.snapshot().resident_commit_records, 0);
         assert_eq!(settings_writes.lock().unwrap()[0].len(), 672);
 
         let finalized = store.finalize().unwrap();
@@ -1531,6 +1711,287 @@ mod tests {
         assert_eq!(trigger_sample, Some(u64::from(fixture.trigger_sample)));
         assert!(phases.contains(&CaptureAcquisitionPhase::CapturingOnDevice));
         assert!(phases.contains(&CaptureAcquisitionPhase::UploadingBufferedData));
+    }
+
+    #[test]
+    fn streaming_provider_commits_live_fixture_and_stops_at_the_host_limit() {
+        let fixture = packet_fixture();
+        let mut config = fixture_config(&fixture);
+        config.mode = CaptureMode::Streaming;
+        let data = (0..768).map(|index| (index * 37) as u8).collect::<Vec<_>>();
+        let expected_data = data.clone();
+        let (transport, _) = FixtureTransport::new(fixture_header(&fixture), data);
+        let analyzer = DsLogicU3Pro16::new(transport).unwrap();
+        let channels = vec![
+            signal_processing::CaptureChannelId::new("u3pro16:input:0"),
+            signal_processing::CaptureChannelId::new("u3pro16:input:2"),
+            signal_processing::CaptureChannelId::new("u3pro16:input:5"),
+        ];
+        let provider =
+            DsLogicU3Pro16StreamingProvider::new(analyzer, config, channels.clone()).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let session_id = CaptureSessionId::new(0x8317);
+        let descriptor = CaptureStoreDescriptor::new(session_id, channels).unwrap();
+        let (store, writer) = NativeCaptureStore::create(
+            NativeCaptureStoreConfig::new(directory.path(), descriptor)
+                .with_commit_batch_chunks(1)
+                .unwrap(),
+        )
+        .unwrap();
+        let _paused_cursor = store.open_cursor().unwrap();
+        let (events, event_reader) = bounded_capture_event_queue(64).unwrap();
+        let context = AcquisitionContext::new(session_id, Box::new(writer), Box::new(events));
+        let mut acquisition = provider.prepare(context).unwrap();
+
+        acquisition.start().unwrap();
+        let outcome = acquisition.join().unwrap();
+        assert_eq!(outcome.captured_samples, fixture.sample_limit);
+        assert_eq!(outcome.chunk_count, 2);
+        assert!(!outcome.stopped);
+        assert_eq!(store.snapshot().resident_commit_records, 0);
+
+        let finalized = store.finalize().unwrap();
+        let mut cursor = finalized.open_cursor().unwrap();
+        let mut sample = 0_u64;
+        loop {
+            match cursor.next().unwrap() {
+                CaptureCursorItem::Chunk(chunk) => {
+                    assert_eq!(chunk.start_sample(), sample);
+                    for relative_sample in 0..chunk.sample_count() {
+                        for channel in 0..3 {
+                            let source_bit = ((sample + relative_sample) * 3) as usize + channel;
+                            let expected =
+                                expected_data[source_bit / 8] & (1 << (source_bit % 8)) != 0;
+                            assert_eq!(
+                                chunk.packed_level(relative_sample, channel),
+                                Some(expected)
+                            );
+                        }
+                    }
+                    sample += chunk.sample_count();
+                }
+                CaptureCursorItem::End => break,
+                CaptureCursorItem::Pending => panic!("finalized stream cannot be pending"),
+            }
+        }
+        assert_eq!(sample, fixture.sample_limit);
+
+        let mut phases = Vec::new();
+        loop {
+            match event_reader.try_recv() {
+                Ok(CaptureEvent::Status(status)) => phases.push(status.phase),
+                Ok(CaptureEvent::Triggered { .. } | CaptureEvent::Progress { .. }) => {}
+                Ok(CaptureEvent::Failed(failure)) => panic!("stream failed: {failure:?}"),
+                Err(CaptureQueueReceiveError::Closed) => break,
+                Err(CaptureQueueReceiveError::Empty) => std::thread::yield_now(),
+                Err(CaptureQueueReceiveError::Timeout) => unreachable!(),
+            }
+        }
+        assert!(phases.contains(&CaptureAcquisitionPhase::ReceivingLiveData));
+    }
+
+    #[test]
+    fn streaming_overflow_is_an_explicit_integrity_error() {
+        let fixture = packet_fixture();
+        let mut config = fixture_config(&fixture);
+        config.mode = CaptureMode::Streaming;
+        let (transport, _) = FixtureTransport::overflowing_stream(fixture_header(&fixture));
+        let mut analyzer = DsLogicU3Pro16::new(transport).unwrap();
+        analyzer.prepare_streaming_capture(&config).unwrap();
+        analyzer.start_capture().unwrap();
+
+        let error = analyzer.next_chunk().unwrap_err();
+
+        assert!(matches!(error, LogicAnalyzerError::Integrity(_)));
+        assert!(error.to_string().contains("overflow"));
+    }
+
+    #[test]
+    fn streaming_provider_publishes_overflow_as_an_integrity_failure() {
+        let fixture = packet_fixture();
+        let mut config = fixture_config(&fixture);
+        config.mode = CaptureMode::Streaming;
+        let (transport, _) = FixtureTransport::overflowing_stream(fixture_header(&fixture));
+        let analyzer = DsLogicU3Pro16::new(transport).unwrap();
+        let channels = vec![
+            signal_processing::CaptureChannelId::new("u3pro16:input:0"),
+            signal_processing::CaptureChannelId::new("u3pro16:input:2"),
+            signal_processing::CaptureChannelId::new("u3pro16:input:5"),
+        ];
+        let provider =
+            DsLogicU3Pro16StreamingProvider::new(analyzer, config, channels.clone()).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let session_id = CaptureSessionId::new(0x8319);
+        let descriptor = CaptureStoreDescriptor::new(session_id, channels).unwrap();
+        let (_store, writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
+            directory.path(),
+            descriptor,
+        ))
+        .unwrap();
+        let (events, event_reader) = bounded_capture_event_queue(64).unwrap();
+        let context = AcquisitionContext::new(session_id, Box::new(writer), Box::new(events));
+        let mut acquisition = provider.prepare(context).unwrap();
+        acquisition.start().unwrap();
+
+        let error = acquisition.join().unwrap_err();
+
+        assert!(matches!(error, crate::live_capture::AcquisitionError::Integrity(_)));
+        let mut failure = None;
+        loop {
+            match event_reader.try_recv() {
+                Ok(CaptureEvent::Failed(event)) => failure = Some(event),
+                Ok(_) => {}
+                Err(CaptureQueueReceiveError::Closed) => break,
+                Err(CaptureQueueReceiveError::Empty) => std::thread::yield_now(),
+                Err(CaptureQueueReceiveError::Timeout) => unreachable!(),
+            }
+        }
+        assert_eq!(failure.unwrap().kind, CaptureFailureKind::Integrity);
+    }
+
+    #[test]
+    fn streaming_stop_interrupts_an_idle_capture_after_a_bounded_read() {
+        let fixture = packet_fixture();
+        let mut config = fixture_config(&fixture);
+        config.mode = CaptureMode::Streaming;
+        config.sample_limit = 1_000_000;
+        let transport = FixtureTransport::idle_stream(fixture_header(&fixture));
+        let analyzer = DsLogicU3Pro16::new(transport).unwrap();
+        let channels = vec![
+            signal_processing::CaptureChannelId::new("u3pro16:input:0"),
+            signal_processing::CaptureChannelId::new("u3pro16:input:2"),
+            signal_processing::CaptureChannelId::new("u3pro16:input:5"),
+        ];
+        let provider =
+            DsLogicU3Pro16StreamingProvider::new(analyzer, config, channels.clone()).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let session_id = CaptureSessionId::new(0x8318);
+        let descriptor = CaptureStoreDescriptor::new(session_id, channels).unwrap();
+        let (store, writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
+            directory.path(),
+            descriptor,
+        ))
+        .unwrap();
+        let (events, _event_reader) = bounded_capture_event_queue(64).unwrap();
+        let context = AcquisitionContext::new(session_id, Box::new(writer), Box::new(events));
+        let mut acquisition = provider.prepare(context).unwrap();
+        acquisition.start().unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+
+        acquisition.request_stop().unwrap();
+        let outcome = acquisition.join().unwrap();
+
+        assert!(outcome.stopped);
+        assert_eq!(outcome.captured_samples, 0);
+        assert_eq!(store.finalize().unwrap().manifest().committed_samples, 0);
+    }
+
+    #[test]
+    fn streaming_plan_enforces_link_speed_and_highest_enabled_input() {
+        let mut config = LogicCaptureConfig::finite(100_000_000, 0b111, 4096);
+        config.mode = CaptureMode::Streaming;
+        assert!(u3pro16_streaming_plan(&config, LinkSpeed::High).is_ok());
+
+        config.input_mask = 0b1001;
+        assert!(u3pro16_streaming_plan(&config, LinkSpeed::High).is_err());
+        assert!(u3pro16_streaming_plan(&config, LinkSpeed::Super).is_ok());
+
+        config.sample_rate_hz = 250_000_000;
+        config.input_mask = 1 << 12;
+        assert!(u3pro16_streaming_plan(&config, LinkSpeed::Super).is_err());
+
+        config.sample_rate_hz = 100_000;
+        config.input_mask = 1;
+        assert!(u3pro16_streaming_plan(&config, LinkSpeed::High).is_ok());
+        assert!(u3pro16_streaming_plan(&config, LinkSpeed::Super).is_err());
+    }
+
+    #[test]
+    #[ignore = "release-mode sustained-ingest benchmark; run with --release --ignored benchmark_streaming_ingest"]
+    fn benchmark_streaming_ingest_store_summary_and_consumer_lag() {
+        use signal_processing::live_capture_waveform::NativeGrowingCaptureIndex;
+
+        for (channels_count, rate_hz, samples) in [
+            (3_usize, 1_000_000_000_u64, 32_000_000_u64),
+            (16, 125_000_000, 32_000_000),
+        ] {
+            let input_mask = (1_u64 << channels_count) - 1;
+            let mut config = LogicCaptureConfig::finite(rate_hz, input_mask, samples);
+            config.mode = CaptureMode::Streaming;
+            let data_bytes = usize::try_from(
+                u128::from(samples)
+                    .checked_mul(channels_count as u128)
+                    .unwrap()
+                    .div_ceil(8),
+            )
+            .unwrap();
+            let analyzer =
+                DsLogicU3Pro16::new(GeneratedStreamingTransport::new(data_bytes)).unwrap();
+            let channels = (0..channels_count)
+                .map(|channel| {
+                    signal_processing::CaptureChannelId::new(format!(
+                        "u3pro16:input:{channel}"
+                    ))
+                })
+                .collect::<Vec<_>>();
+            let provider =
+                DsLogicU3Pro16StreamingProvider::new(analyzer, config, channels.clone()).unwrap();
+            let directory = tempfile::tempdir().unwrap();
+            let session_id = CaptureSessionId::new(0x9000 + channels_count as u128);
+            let descriptor = CaptureStoreDescriptor::new(session_id, channels.clone()).unwrap();
+            let (store, writer) = NativeCaptureStore::create(
+                NativeCaptureStoreConfig::new(directory.path(), descriptor),
+            )
+            .unwrap();
+            let (index, index_worker) = NativeGrowingCaptureIndex::spawn(
+                store.clone(),
+                "U3 streaming benchmark",
+                rate_hz as f64,
+                (0..channels_count)
+                    .map(|channel| format!("Ch {channel}"))
+                    .collect(),
+            )
+            .unwrap();
+            let analyzed_samples = Arc::new(AtomicU64::new(0));
+            let analyzed_samples_worker = Arc::clone(&analyzed_samples);
+            let mut slow_cursor = store.open_cursor().unwrap();
+            let slow_consumer = std::thread::spawn(move || loop {
+                match slow_cursor.wait_next(Duration::from_millis(50)).unwrap() {
+                    CaptureCursorItem::Chunk(chunk) => {
+                        analyzed_samples_worker.store(chunk.end_sample(), Ordering::Relaxed);
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    CaptureCursorItem::Pending => {}
+                    CaptureCursorItem::End => break,
+                }
+            });
+            let (events, _event_reader) = bounded_capture_event_queue(4096).unwrap();
+            let context = AcquisitionContext::new(session_id, Box::new(writer), Box::new(events));
+            let mut acquisition = provider.prepare(context).unwrap();
+
+            let started = Instant::now();
+            acquisition.start().unwrap();
+            let outcome = acquisition.join().unwrap();
+            let acquisition_elapsed = started.elapsed();
+            let lag_at_finish = samples.saturating_sub(analyzed_samples.load(Ordering::Relaxed));
+            let summary_started = Instant::now();
+            index_worker.join().unwrap();
+            slow_consumer.join().unwrap();
+            let catch_up_elapsed = summary_started.elapsed();
+            store.finalize().unwrap();
+
+            let mib = data_bytes as f64 / (1024.0 * 1024.0);
+            eprintln!(
+                "u3-stream channels={channels_count} rate_hz={rate_hz} samples={samples} data_mib={mib:.1} acquisition_s={:.3} ingest_mib_s={:.1} optional_consumer_lag_samples={lag_at_finish} summary_catchup_s={:.3} resident_summary_records={}",
+                acquisition_elapsed.as_secs_f64(),
+                mib / acquisition_elapsed.as_secs_f64(),
+                catch_up_elapsed.as_secs_f64(),
+                index.resident_summary_records(),
+            );
+            assert_eq!(outcome.captured_samples, samples);
+            assert_eq!(store.snapshot().resident_commit_records, 0);
+            assert!(index.resident_summary_records() <= channels_count * 64 * 12);
+        }
     }
 
     #[test]
