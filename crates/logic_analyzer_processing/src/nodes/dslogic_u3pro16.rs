@@ -506,7 +506,7 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         // Some U3Pro16 firmware revisions leave the configured-status bit
         // clear after a successful upload. The logic-version register is the
         // authoritative compatibility check in that case.
-        if let Err(status_error) = self.poll_status_for(0x40, Duration::from_millis(500)) {
+        if let Err(status_error) = self.poll_status_for(0x40, STATUS_TIMEOUT) {
             let logic_version = self.command_read_byte(15, 0x04)?;
             if logic_version != 0x0e {
                 return Err(LogicAnalyzerError::Protocol(format!(
