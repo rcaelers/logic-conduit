@@ -1,5 +1,52 @@
 use clap::Parser;
 
+const DSL_LOG_TARGETS: &[&str] = &[
+    "dsl_ui",
+    "logic_analyzer_ui",
+    "logic_analyzer_graph",
+    "logic_analyzer_processing",
+    "logic_analyzer_viewer",
+    "node_graph",
+    "panel_layout",
+    "trigger_editor",
+    "input_bindings",
+    "signal_processing",
+];
+
+/// Expands the public `dsl` logging namespace to the workspace's local
+/// tracing targets. Individual crates keep their natural tracing targets;
+/// this application boundary owns the user-facing filter alias.
+fn expand_dsl_log_directives(directives: &str) -> String {
+    directives
+        .split(',')
+        .flat_map(|directive| {
+            let directive = directive.trim();
+            let Some((target, filter)) = directive.split_once('=') else {
+                return vec![directive.to_owned()];
+            };
+            if target == "dsl" {
+                return DSL_LOG_TARGETS
+                    .iter()
+                    .map(|target| format!("{target}={filter}"))
+                    .collect();
+            }
+            vec![directive.to_owned()]
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn application_env_filter() -> tracing_subscriber::EnvFilter {
+    let Ok(directives) = std::env::var("RUST_LOG") else {
+        return tracing_subscriber::EnvFilter::from_default_env();
+    };
+    let directives = expand_dsl_log_directives(&directives);
+    tracing_subscriber::EnvFilter::try_new(directives).unwrap_or_else(|error| {
+        eprintln!("invalid RUST_LOG filter: {error}");
+        tracing_subscriber::EnvFilter::from_default_env()
+    })
+}
+
 #[cfg(target_os = "macos")]
 mod macos_menu {
     use std::cell::RefCell;
@@ -265,7 +312,8 @@ mod macos_menu {
     }
 
     pub fn disable_automatic_window_tabbing() {
-        let mtm = MainThreadMarker::new().expect("must configure window tabbing on the main thread");
+        let mtm =
+            MainThreadMarker::new().expect("must configure window tabbing on the main thread");
         NSWindow::setAllowsAutomaticWindowTabbing(false, mtm);
     }
 
@@ -451,7 +499,7 @@ pub type MainResult = eframe::Result;
 
 pub fn run() -> MainResult {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(application_env_filter())
         .init();
 
     let args = Args::parse();
@@ -482,6 +530,36 @@ pub fn run() -> MainResult {
             Ok(Box::new(app))
         }),
     )
+}
+
+#[cfg(test)]
+mod logging_tests {
+    use super::expand_dsl_log_directives;
+
+    #[test]
+    fn expands_the_dsl_root_filter_to_workspace_targets() {
+        let directives = expand_dsl_log_directives("dsl=debug");
+
+        assert!(directives.contains("logic_analyzer_processing=debug"));
+        assert!(directives.contains("signal_processing=debug"));
+        assert!(!directives.contains("dsl=debug"));
+    }
+
+    #[test]
+    fn expands_a_dsl_subsystem_filter_to_its_local_target() {
+        assert_eq!(
+            expand_dsl_log_directives("dsl.logic_analyzer_processing=debug"),
+            "logic_analyzer_processing=debug"
+        );
+    }
+
+    #[test]
+    fn retains_non_dsl_directives() {
+        assert_eq!(
+            expand_dsl_log_directives("warn,eframe=info,dsl=debug"),
+            "warn,eframe=info,dsl_ui=debug,logic_analyzer_ui=debug,logic_analyzer_graph=debug,logic_analyzer_processing=debug,logic_analyzer_viewer=debug,node_graph=debug,panel_layout=debug,trigger_editor=debug,input_bindings=debug,signal_processing=debug"
+        );
+    }
 }
 
 #[cfg(test)]

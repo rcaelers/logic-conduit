@@ -485,6 +485,7 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
                 "FPGA image must be 1..=0x00ffffff bytes".into(),
             ));
         }
+        tracing::debug!(image_bytes = image.len(), "starting FPGA configuration");
         self.command_write(3, 0, &[0xfb])?;
         self.command_write(5, 0, &[0xfc])?;
         self.command_write(3, 0, &[0x04])?;
@@ -499,7 +500,8 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
                 ((image.len() >> 16) & 0xff) as u8,
             ],
         )?;
-        self.bulk_write_all(image, BULK_TIMEOUT)?;
+        self.bulk_write_exact(image, BULK_TIMEOUT)?;
+        tracing::debug!(image_bytes = image.len(), "FPGA bitstream uploaded");
         self.command_write(6, 0, &[0x80])?;
         self.poll_status(0x80)?;
         self.command_write(6, 0, &[0x7f])?;
@@ -509,6 +511,11 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         if let Err(status_error) = self.poll_status_for(0x40, STATUS_TIMEOUT) {
             let logic_version = self.command_read_byte(15, 0x04)?;
             if logic_version != 0x0e {
+                tracing::debug!(
+                    logic_version = format_args!("{logic_version:#04x}"),
+                    %status_error,
+                    "FPGA configuration did not complete"
+                );
                 return Err(LogicAnalyzerError::Protocol(format!(
                     "FPGA did not configure (logic version {logic_version:#04x}): {status_error}"
                 )));
@@ -669,10 +676,20 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         while Instant::now() < until {
             status = self.command_read_byte(2, 0)?;
             if status & required == required {
+                tracing::debug!(
+                    required_status_bits = format_args!("{required:#04x}"),
+                    status = format_args!("{status:#04x}"),
+                    "device status reached expected state"
+                );
                 return Ok(status);
             }
             thread::sleep(Duration::from_millis(10));
         }
+        tracing::debug!(
+            required_status_bits = format_args!("{required:#04x}"),
+            final_status = format_args!("{status:#04x}"),
+            "device status timed out"
+        );
         Err(LogicAnalyzerError::Timeout(format!(
             "status bit(s) {required:#04x}; final status {status:#04x}"
         )))
@@ -693,14 +710,44 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         Ok(())
     }
 
+    /// The FPGA loader treats the configured byte count as one bulk-transfer
+    /// transaction. A short write terminates that transaction; retrying the
+    /// remainder as a second transfer can leave the FPGA unconfigured.
+    fn bulk_write_exact(&mut self, data: &[u8], timeout: Duration) -> LogicAnalyzerResult<()> {
+        let written = usb(
+            self.transport.bulk_write(BULK_OUT, data, timeout),
+            "FPGA bulk write",
+        )?;
+        if written != data.len() {
+            return Err(LogicAnalyzerError::Protocol(format!(
+                "short FPGA bulk write: {written}/{} bytes",
+                data.len()
+            )));
+        }
+        Ok(())
+    }
+
     /// Ensure the capture FPGA is ready without exposing image management to
     /// callers. A normal runtime device is already configured. After power-up
     /// or a reset, the driver looks for the exact image in the environment or
     /// well-known local locations.
     fn ensure_fpga_configured(&mut self) -> LogicAnalyzerResult<()> {
         let status = self.command_read_byte(2, 0)?;
-        if status & 0x40 != 0 && self.command_read_byte(15, 0x04)? == 0x0e {
-            return Ok(());
+        if status & 0x40 != 0 {
+            let logic_version = self.command_read_byte(15, 0x04)?;
+            tracing::debug!(
+                status = format_args!("{status:#04x}"),
+                logic_version = format_args!("{logic_version:#04x}"),
+                "checked FPGA state"
+            );
+            if logic_version == 0x0e {
+                return Ok(());
+            }
+        } else {
+            tracing::debug!(
+                status = format_args!("{status:#04x}"),
+                "checked FPGA state"
+            );
         }
 
         let mut candidates = vec![
@@ -1416,6 +1463,7 @@ mod tests {
         bulk_reads: VecDeque<Vec<u8>>,
         bulk_writes: Arc<Mutex<Vec<Vec<u8>>>>,
         idle_stream: bool,
+        short_bulk_write: bool,
     }
 
     impl FixtureTransport {
@@ -1445,6 +1493,7 @@ mod tests {
                     ]),
                     bulk_writes: Arc::clone(&bulk_writes),
                     idle_stream: false,
+                    short_bulk_write: false,
                 },
                 bulk_writes,
             )
@@ -1462,6 +1511,7 @@ mod tests {
                     bulk_reads: VecDeque::from([header]),
                     bulk_writes: Arc::clone(&bulk_writes),
                     idle_stream: false,
+                    short_bulk_write: false,
                 },
                 bulk_writes,
             )
@@ -1473,6 +1523,7 @@ mod tests {
                 bulk_reads: VecDeque::from([header]),
                 bulk_writes: Arc::new(Mutex::new(Vec::new())),
                 idle_stream: true,
+                short_bulk_write: false,
             }
         }
     }
@@ -1522,7 +1573,11 @@ mod tests {
             _timeout: Duration,
         ) -> Result<usize, UsbError> {
             self.bulk_writes.lock().unwrap().push(data.to_vec());
-            Ok(data.len())
+            Ok(if self.short_bulk_write && !data.is_empty() {
+                data.len() - 1
+            } else {
+                data.len()
+            })
         }
 
         fn bulk_read(
@@ -1702,6 +1757,26 @@ mod tests {
             assert_eq!(get16(&packet, 240 + stage * 2), expected.logic0[stage]);
             assert_eq!(get32(&packet, 304 + stage * 4), expected.count0[stage]);
         }
+    }
+
+    #[test]
+    fn fpga_configuration_rejects_a_short_bitstream_upload() {
+        let transport = FixtureTransport {
+            control_reads: VecDeque::from([vec![0x20]]),
+            bulk_reads: VecDeque::new(),
+            bulk_writes: Arc::new(Mutex::new(Vec::new())),
+            idle_stream: false,
+            short_bulk_write: true,
+        };
+        let mut analyzer = DsLogicU3Pro16::new(transport).unwrap();
+
+        let error = analyzer.configure_fpga(&[0xaa, 0x55]).unwrap_err();
+
+        assert!(matches!(
+            error,
+            LogicAnalyzerError::Protocol(message)
+                if message == "short FPGA bulk write: 1/2 bytes"
+        ));
     }
 
     #[test]
