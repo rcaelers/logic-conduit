@@ -8,6 +8,16 @@ use crate::app_platform::{FileCommand, GuardedAction};
 use crate::app_platform::{NativeMenuCommand, notify_recent_files_changed};
 
 impl App {
+    fn can_replace_graph(&mut self) -> bool {
+        if self.capture.is_active() {
+            self.toasts
+                .error("Stop live capture before replacing the graph");
+            false
+        } else {
+            true
+        }
+    }
+
     pub(super) fn platform_load_startup_file(&mut self, file: Option<&std::path::Path>) {
         if let Some(file) = file {
             self.load_file(file.to_owned());
@@ -152,6 +162,9 @@ impl App {
         self.show_clear_derived_caches_dialog(ctx);
     }
     pub(super) fn load_file(&mut self, path: PathBuf) {
+        if !self.can_replace_graph() {
+            return;
+        }
         match self.node_graph.load_from_path(&path) {
             Ok(()) => {
                 if let Some(run) = &mut self.run {
@@ -181,6 +194,9 @@ impl App {
     /// Resets to a fresh, empty graph — File → New (Phase 5.1). Assumes the
     /// unsaved-changes guard has already been resolved by the caller.
     pub(super) fn do_new(&mut self) {
+        if !self.can_replace_graph() {
+            return;
+        }
         if let Some(run) = &mut self.run {
             run.stop();
         }
@@ -587,7 +603,8 @@ impl App {
             });
             ui.menu_button("Pipeline", |ui| {
                 if ui
-                    .add(
+                    .add_enabled(
+                        !self.capture.is_active(),
                         egui::Button::new("Run")
                             .shortcut_text(ui.ctx().format_shortcut(&run_shortcut)),
                     )

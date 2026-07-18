@@ -4,6 +4,7 @@ mod app_platform;
 mod application_config;
 mod demo_signals;
 mod input_binding_config;
+mod live_capture;
 mod toast;
 
 use std::sync::OnceLock;

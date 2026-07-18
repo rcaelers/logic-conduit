@@ -249,17 +249,20 @@ impl NodeGraphWidget {
                     self.graph.nodes.get(&id),
                     self.runtime.get_mut(&id),
                 ) {
-                    widget.show_controls(
-                        ui,
-                        id,
-                        node,
-                        instance.as_mut(),
-                        NodeControlContext {
-                            graph: &self.graph,
-                            view: &self.view,
-                            origin,
-                        },
-                    )
+                    ui.add_enabled_ui(self.editing_enabled, |ui| {
+                        widget.show_controls(
+                            ui,
+                            id,
+                            node,
+                            instance.as_mut(),
+                            NodeControlContext {
+                                graph: &self.graph,
+                                view: &self.view,
+                                origin,
+                            },
+                        )
+                    })
+                    .inner
                 } else {
                     false
                 };

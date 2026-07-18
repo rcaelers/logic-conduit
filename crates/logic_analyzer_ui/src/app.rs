@@ -10,6 +10,9 @@ use panel_layout::{BoundaryInteraction, PanelIcon, PanelLayout, PanelSlot, Panel
 
 use crate::about::AboutWindow;
 use crate::demo_signals;
+use crate::live_capture::{
+    CaptureAvailability, CaptureCoordinator, CaptureCoordinatorContract, capture_availability,
+};
 use crate::toast::Toasts;
 
 std::cfg_select! {
@@ -54,6 +57,8 @@ pub struct App {
     input_bindings: Arc<InputBindings>,
     panel_layout: PanelLayout,
     builders: compiler::BuilderRegistry,
+    capture: CaptureCoordinator,
+    capture_availability: CaptureAvailability,
     run: Option<compiler::AppRun>,
     /// Persistent run *state* shown in the status bar next to Run/Stop — the
     /// current compile-error summary, or "stop & rerun to apply" while a
@@ -180,6 +185,10 @@ impl App {
                 PanelLayout::from_state,
             ),
             builders,
+            capture: CaptureCoordinator::new(),
+            capture_availability: CaptureAvailability::Unavailable {
+                reason: "Checking the graph for a live capture source".into(),
+            },
             run: None,
             run_message: None,
             toasts: Toasts::default(),
@@ -293,7 +302,8 @@ impl App {
         ));
     }
 
-    fn show_logic_analyzer_status(&self, ui: &mut egui::Ui) {
+    fn show_logic_analyzer_status(&mut self, ui: &mut egui::Ui) {
+        self.show_capture_controls(ui);
         ui.separator();
         ui.label(egui::RichText::new(self.logic_analyzer.status_summary()).weak());
         if let Some(progress) = self.logic_analyzer.index_progress_fraction() {
@@ -347,7 +357,7 @@ impl App {
     /// while it doesn't apply (Run while already running, Stop while not)
     /// is a safe no-op rather than double-starting or double-stopping.
     fn run_command(&mut self) {
-        if !self.is_running() {
+        if !self.is_running() && !self.capture.is_active() {
             self.start_run();
         }
     }
@@ -358,6 +368,121 @@ impl App {
             && let Some(run) = &mut self.run
         {
             run.stop();
+        }
+    }
+
+    fn start_capture_command(&mut self) {
+        if self.capture.is_active() || self.is_running() {
+            return;
+        }
+        for id in self.error_badges.drain(..) {
+            self.node_graph.set_node_badge(id, None);
+        }
+        self.node_graph.clear_node_statuses();
+        self.run_message = None;
+        self.node_graph.sync_node_states();
+        let compiled = match compiler::lower(self.node_graph.graph(), &self.builders) {
+            Ok(compiled) => compiled,
+            Err(errors) => {
+                self.report_compile_errors(&errors);
+                return;
+            }
+        };
+        let feature = match compiler::discover_compiled_live_capture_feature(
+            self.node_graph.graph(),
+            &compiled,
+            &self.builders,
+        ) {
+            Ok(Some(feature)) => feature,
+            Ok(None) => {
+                self.toasts.error("The graph has no live capture source");
+                return;
+            }
+            Err(error) => {
+                self.toasts.error(error.message);
+                return;
+            }
+        };
+        match self.capture.start(feature) {
+            Ok(()) => self.node_graph.set_editing_enabled(false),
+            Err(error) => self.toasts.error(error),
+        }
+    }
+
+    fn stop_capture_command(&mut self) {
+        self.capture.request_stop();
+    }
+
+    fn poll_capture(&mut self, ctx: &egui::Context) {
+        self.capture.poll();
+        self.node_graph
+            .set_editing_enabled(self.capture.graph_editing_enabled());
+        if self.capture.is_active() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+    }
+
+    fn show_capture_controls(&mut self, ui: &mut egui::Ui) {
+        let status = self.capture.status().cloned();
+        if self.capture.is_active() {
+            let state = status.as_ref().map(|status| status.state);
+            if matches!(
+                state,
+                Some(
+                    signal_processing::CaptureSessionState::Stopping
+                        | signal_processing::CaptureSessionState::Error
+                )
+            ) {
+                ui.add_enabled(false, egui::Button::new("⏹ Stop"));
+                ui.spinner();
+            } else if ui.small_button("⏹ Stop").clicked() {
+                self.stop_capture_command();
+            }
+        } else {
+            let availability = if self.is_running() {
+                CaptureAvailability::Unavailable {
+                    reason: "Stop the pipeline before starting capture".into(),
+                }
+            } else {
+                self.capture_availability.clone()
+            };
+            let enabled = matches!(availability, CaptureAvailability::Available { .. });
+            let response = ui.add_enabled(enabled, egui::Button::new("● Start"));
+            match &availability {
+                CaptureAvailability::Available {
+                    source_node,
+                    source_title,
+                } => {
+                    response.clone().on_hover_text(format!(
+                        "Start capture from {source_title} (node {})",
+                        source_node.0
+                    ));
+                }
+                CaptureAvailability::Unavailable { .. } => {
+                    if let Some(reason) = availability.reason() {
+                        response.clone().on_disabled_hover_text(reason);
+                    }
+                }
+            }
+            if response.clicked() {
+                self.start_capture_command();
+                ui.ctx().request_repaint();
+            }
+        }
+
+        if let Some(status) = self.capture.status() {
+            let mut summary = capture_state_name(status.state).to_owned();
+            if let Some(samples) = status.progress.captured_samples {
+                summary.push_str(&format!(" · {samples} samples"));
+            }
+            if let Some(error) = &status.error {
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 120, 120),
+                    format!("Error · {error}"),
+                );
+            } else {
+                ui.label(summary);
+            }
         }
     }
 
@@ -375,8 +500,13 @@ impl App {
         const SYNC_INTERVAL_S: f64 = 0.5;
         let now = ctx.input(|input| input.time);
         if self.run.is_none() {
+            if self.capture.is_active() {
+                return;
+            }
             if now - self.last_live_sync >= SYNC_INTERVAL_S {
                 self.last_live_sync = now;
+                self.capture_availability =
+                    capture_availability(self.node_graph.graph(), &self.builders);
                 if let Ok(candidates) =
                     compiler::sampling_overlay_candidates(self.node_graph.graph(), &self.builders)
                 {
@@ -503,7 +633,15 @@ impl App {
             ui.spinner();
             ui.label("Live");
         } else {
-            if ui.small_button("▶ Run").clicked() {
+            let run = ui.add_enabled(
+                !self.capture.is_active(),
+                egui::Button::new("▶ Run").small(),
+            );
+            if self.capture.is_active() {
+                run.clone()
+                    .on_disabled_hover_text("Stop live capture before running the pipeline");
+            }
+            if run.clicked() {
                 self.run_command();
             }
             if self.run.is_some() {
@@ -734,6 +872,19 @@ fn format_count(items: u64) -> String {
     }
 }
 
+fn capture_state_name(state: signal_processing::CaptureSessionState) -> &'static str {
+    match state {
+        signal_processing::CaptureSessionState::Preparing => "Preparing",
+        signal_processing::CaptureSessionState::Prepared => "Prepared",
+        signal_processing::CaptureSessionState::Armed => "Armed",
+        signal_processing::CaptureSessionState::Triggered => "Triggered",
+        signal_processing::CaptureSessionState::Recording => "Recording",
+        signal_processing::CaptureSessionState::Stopping => "Stopping…",
+        signal_processing::CaptureSessionState::Complete => "Complete",
+        signal_processing::CaptureSessionState::Error => "Error",
+    }
+}
+
 /// Adds the platform's native symbol fonts as fallbacks for menu icon glyphs
 /// that egui's bundled fonts don't cover.
 fn install_fonts(ctx: &egui::Context) {
@@ -770,6 +921,7 @@ impl eframe::App for App {
         self.platform_before_ui(ui);
 
         let viewport_rect = ui.available_rect_before_wrap();
+        self.poll_capture(ui.ctx());
         self.platform_sync_capture();
         self.sync_run(ui.ctx());
         let specs = [

@@ -1,5 +1,6 @@
 mod builder;
 mod definition;
+mod live_capture;
 
 pub(crate) use builder::DemoCaptureSourceBuilder;
 pub use definition::{DemoCaptureSource, DemoCaptureSourceState};

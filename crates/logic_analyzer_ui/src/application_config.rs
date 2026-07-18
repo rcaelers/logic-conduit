@@ -15,18 +15,10 @@ std::cfg_select! {
 
 pub(crate) use imp::{load, path};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct ApplicationConfig {
     pub(crate) logic_analyzer_viewer: LogicAnalyzerViewerConfig,
-}
-
-impl Default for ApplicationConfig {
-    fn default() -> Self {
-        Self {
-            logic_analyzer_viewer: LogicAnalyzerViewerConfig::default(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]

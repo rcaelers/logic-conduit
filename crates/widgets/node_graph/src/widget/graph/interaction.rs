@@ -552,6 +552,9 @@ impl NodeGraphWidget {
         let Some(pc) = pointer_canvas else {
             return InteractionState::Idle;
         };
+        if !self.editing_enabled {
+            return self.read_only_idle_transition(ui, responses, pc, origin, layout);
+        }
         let primary_button = self
             .input_bindings
             .pointer_button(&["node_graph"], "select_move")
@@ -702,6 +705,54 @@ impl NodeGraphWidget {
             };
         }
 
+        InteractionState::Idle
+    }
+
+    fn read_only_idle_transition(
+        &mut self,
+        ui: &egui::Ui,
+        responses: &GraphResponses,
+        pointer_canvas: Pos2,
+        origin: Pos2,
+        layout: &GraphWidgetLayout,
+    ) -> InteractionState {
+        let primary_button = self
+            .input_bindings
+            .pointer_button(&["node_graph"], "select_move")
+            .unwrap_or(egui::PointerButton::Primary);
+        let ctrl = ui.input(|input| input.modifiers.ctrl);
+        for (&id, response) in &responses.nodes {
+            if response.body.clicked_by(primary_button)
+                || response.header.clicked_by(primary_button)
+            {
+                self.select_node(id, ctrl);
+                return InteractionState::Idle;
+            }
+        }
+
+        let screen_pos = self.view.canvas_to_screen(origin, pointer_canvas);
+        if responses.frames.values().any(egui::Response::clicked)
+            && self.node_at_screen_pos(responses, screen_pos).is_none()
+            && let Some(id) = self.frame_at_screen_pos(responses, layout, screen_pos)
+        {
+            self.select_frame(id, ctrl);
+            return InteractionState::Idle;
+        }
+
+        if responses.canvas.clicked_by(primary_button) && !ctrl {
+            for node in self.graph.nodes.values_mut() {
+                node.selected = false;
+            }
+            for frame in &mut self.graph.frames {
+                frame.selected = false;
+            }
+        }
+        if responses.canvas.drag_started_by(primary_button) {
+            return InteractionState::BoxSelecting {
+                start_canvas: pointer_canvas,
+                current_canvas: pointer_canvas,
+            };
+        }
         InteractionState::Idle
     }
 
@@ -1380,6 +1431,7 @@ impl NodeGraphWidget {
         }
 
         if no_focus
+            && self.editing_enabled
             && self
                 .input_bindings
                 .consume_shortcut(ui, &["node_graph"], "rename")
@@ -1409,6 +1461,7 @@ impl NodeGraphWidget {
                 can_paste: self.can_paste_nodes(),
                 can_undo: self.can_undo(),
                 can_redo: self.can_redo(),
+                editing_enabled: self.editing_enabled,
                 input_bindings: &self.input_bindings,
             });
             if let Some(action) = dispatch_menu_shortcut(ui, &shortcut_entries) {
@@ -1427,6 +1480,7 @@ impl NodeGraphWidget {
             InteractionState::PlacingNodes { .. }
         );
         if no_focus
+            && self.editing_enabled
             && !placing
             && self
                 .input_bindings
@@ -1508,6 +1562,7 @@ impl NodeGraphWidget {
                 can_paste,
                 can_undo: self.can_undo(),
                 can_redo: self.can_redo(),
+                editing_enabled: self.editing_enabled,
                 input_bindings: &self.input_bindings,
             });
             self.menu.open_popup(context_screen_pos, entries);
@@ -1520,6 +1575,7 @@ impl NodeGraphWidget {
         // pointer and canvas origin, which the generic action dispatch
         // doesn't carry.
         if no_focus
+            && self.editing_enabled
             && !placing
             && self
                 .input_bindings
@@ -1866,7 +1922,8 @@ impl NodeGraphWidget {
             InteractionState::Idle | InteractionState::CuttingWire { .. }
         );
         let cutting = matches!(self.interaction_state, InteractionState::CuttingWire { .. });
-        let right_down = can_cut
+        let right_down = self.editing_enabled
+            && can_cut
             && cut_trigger.is_some_and(|(button, _)| {
                 ui.input(|input| {
                     input.pointer.button_down(button)

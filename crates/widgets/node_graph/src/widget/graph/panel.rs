@@ -288,6 +288,7 @@ impl NodeGraphWidget {
             .unwrap_or("")
             .to_owned();
         let sections = instance.panel_sections();
+        let editing_enabled = self.editing_enabled;
 
         let content = panel_rect.shrink2(Vec2::new(10.0, 8.0));
         let mut changed = false;
@@ -314,13 +315,15 @@ impl NodeGraphWidget {
                             egui::CollapsingHeader::new("Node")
                                 .default_open(true)
                                 .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.label(RichText::new("Name").size(11.0));
-                                        ui.text_edit_singleline(&mut node.title);
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label(RichText::new("Color").size(11.0));
-                                        ui.color_edit_button_srgba(&mut node.header_color);
+                                    ui.add_enabled_ui(editing_enabled, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(RichText::new("Name").size(11.0));
+                                            ui.text_edit_singleline(&mut node.title);
+                                        });
+                                        ui.horizontal(|ui| {
+                                            ui.label(RichText::new("Color").size(11.0));
+                                            ui.color_edit_button_srgba(&mut node.header_color);
+                                        });
                                     });
                                 });
 
@@ -343,7 +346,13 @@ impl NodeGraphWidget {
                                         for index in watchable {
                                             let output = &mut node.outputs[index];
                                             if ui
-                                                .checkbox(&mut output.show_in_view, &output.name)
+                                                .add_enabled(
+                                                    editing_enabled,
+                                                    egui::Checkbox::new(
+                                                        &mut output.show_in_view,
+                                                        &output.name,
+                                                    ),
+                                                )
                                                 .changed()
                                             {
                                                 changed = true;
@@ -374,13 +383,18 @@ impl NodeGraphWidget {
                                                         Vec2::new(width, height),
                                                         Sense::hover(),
                                                     );
-                                                    if instance.draw_panel_prop(
-                                                        section_index,
-                                                        prop_index,
-                                                        ui,
-                                                        rect,
-                                                        panel_rect,
-                                                    ) {
+                                                    if ui
+                                                        .add_enabled_ui(editing_enabled, |ui| {
+                                                            instance.draw_panel_prop(
+                                                                section_index,
+                                                                prop_index,
+                                                                ui,
+                                                                rect,
+                                                                panel_rect,
+                                                            )
+                                                        })
+                                                        .inner
+                                                    {
                                                         changed = true;
                                                     }
                                                 },

@@ -53,6 +53,9 @@ pub struct NodeGraphWidget {
     /// Host-provided, application-neutral node context actions.
     pub(super) node_context_actions: HashMap<NodeId, Vec<NodeContextAction>>,
     pub(super) node_context_action_request: Option<(NodeId, String)>,
+    /// Host-controlled edit gate. View navigation, selection, inspection,
+    /// and copy remain available while graph mutations are disabled.
+    pub(super) editing_enabled: bool,
 }
 
 /// A context-menu action contributed by the host application. Both the ID
@@ -176,6 +179,7 @@ impl NodeGraphWidget {
             clear_derived_cache_request: None,
             node_context_actions: HashMap::new(),
             node_context_action_request: None,
+            editing_enabled: true,
         }
     }
 
@@ -191,6 +195,52 @@ impl NodeGraphWidget {
 
     pub fn graph_mut(&mut self) -> &mut GraphState {
         &mut self.graph
+    }
+
+    pub fn editing_enabled(&self) -> bool {
+        self.editing_enabled
+    }
+
+    /// Enables or disables graph mutations initiated through the widget.
+    /// Disabling during a modal edit restores its pre-edit snapshot.
+    pub fn set_editing_enabled(&mut self, enabled: bool) {
+        if self.editing_enabled == enabled {
+            return;
+        }
+        self.editing_enabled = enabled;
+        if enabled {
+            return;
+        }
+
+        let restore_snapshot = match self.interaction_state {
+            InteractionState::DraggingNode { .. }
+            | InteractionState::DraggingFrame { .. }
+            | InteractionState::PlacingNodes { .. } => true,
+            InteractionState::DraggingWire {
+                restore_on_cancel, ..
+            } => restore_on_cancel,
+            InteractionState::Idle
+            | InteractionState::Panning { .. }
+            | InteractionState::BoxSelecting { .. }
+            | InteractionState::CuttingWire { .. } => false,
+        };
+        if restore_snapshot {
+            self.cancel_undo_snapshot();
+        }
+        if !matches!(
+            self.interaction_state,
+            InteractionState::Panning { .. } | InteractionState::BoxSelecting { .. }
+        ) {
+            self.interaction_state = InteractionState::Idle;
+        }
+        self.frame_rename = None;
+        self.node_rename = None;
+    }
+
+    /// Flushes inline control state into the graph before an external
+    /// operation snapshots or validates it.
+    pub fn sync_node_states(&mut self) {
+        self.sync_all_node_state();
     }
 
     /// Takes the pending copy/paste confirmation message, if any — call
@@ -574,6 +624,7 @@ mod tests {
     use super::{GraphPanelTab, GraphUiPrefs, NodeGraphWidget, graph_pointer};
     use crate::model::NodeId;
     use crate::runtime::NodeTypeRegistry;
+    use crate::widget::graph::action::GraphAction;
     use crate::widget::graph::interaction::InteractionState;
 
     #[test]
@@ -623,5 +674,43 @@ mod tests {
             constraint: None,
         };
         assert_eq!(widget.active_input_context(), Some("node_graph.drag_node"));
+    }
+
+    #[test]
+    fn read_only_mode_blocks_mutations_but_keeps_selection_actions() {
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        let node = widget.add_node_at("Reroute", Pos2::ZERO).unwrap();
+        widget.set_editing_enabled(false);
+
+        widget.execute_action(
+            GraphAction::Delete { target: Some(node) },
+            &egui::Context::default(),
+            None,
+        );
+        assert!(widget.graph().nodes.contains_key(&node));
+
+        widget.execute_action(GraphAction::SelectAll, &egui::Context::default(), None);
+        assert!(widget.graph().nodes[&node].selected);
+    }
+
+    #[test]
+    fn entering_read_only_mode_reverts_an_active_node_drag() {
+        let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+        let node = widget
+            .add_node_at("Reroute", Pos2::new(10.0, 20.0))
+            .unwrap();
+        widget.push_undo_snapshot();
+        widget.graph.nodes.get_mut(&node).unwrap().pos = Pos2::new(80.0, 90.0);
+        widget.interaction_state = InteractionState::DraggingNode {
+            node_id: node,
+            offset: Vec2::ZERO,
+            constraint: None,
+        };
+
+        widget.set_editing_enabled(false);
+
+        assert!(!widget.editing_enabled());
+        assert_eq!(widget.graph().nodes[&node].pos, Pos2::new(10.0, 20.0));
+        assert!(matches!(widget.interaction_state, InteractionState::Idle));
     }
 }

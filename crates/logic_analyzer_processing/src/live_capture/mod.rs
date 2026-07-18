@@ -157,5 +157,8 @@ pub trait PreparedAcquisition: Send {
     fn session_id(&self) -> CaptureSessionId;
     fn start(&mut self) -> AcquisitionResult<()>;
     fn request_stop(&self) -> AcquisitionResult<()>;
+    /// Non-blocking completion probe used by an acquisition supervisor so
+    /// Stop remains available while Join runs off the UI thread.
+    fn is_finished(&self) -> bool;
     fn join(self: Box<Self>) -> AcquisitionResult<AcquisitionOutcome>;
 }

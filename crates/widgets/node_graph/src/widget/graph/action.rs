@@ -110,6 +110,19 @@ pub(super) enum GraphAction {
     DeselectAll,
 }
 
+impl GraphAction {
+    fn requires_editing(&self) -> bool {
+        !matches!(
+            self,
+            Self::Copy { .. }
+                | Self::ToggleMinimap
+                | Self::TogglePanel
+                | Self::SelectAll
+                | Self::DeselectAll
+        )
+    }
+}
+
 pub(super) struct HotkeyRegistry {
     bindings: Vec<(&'static str, GraphAction)>,
 }
@@ -160,9 +173,11 @@ impl HotkeyRegistry {
         self.bindings
             .iter()
             .filter_map(|(action_id, action)| {
-                input_bindings
-                    .consume_shortcut(ui, &["node_graph"], action_id)
-                    .then(|| action.clone())
+                if input_bindings.consume_shortcut(ui, &["node_graph"], action_id) {
+                    Some(action.clone())
+                } else {
+                    None
+                }
             })
             .collect()
     }
@@ -181,6 +196,9 @@ impl NodeGraphWidget {
         egui_ctx: &egui::Context,
         pointer_canvas: Option<Pos2>,
     ) -> ActionEffect {
+        if !self.editing_enabled && action.requires_editing() {
+            return ActionEffect::None;
+        }
         match action {
             GraphAction::Undo => {
                 self.undo();

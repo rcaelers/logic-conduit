@@ -54,7 +54,8 @@ impl App {
             });
             ui.menu_button("Pipeline", |ui| {
                 if ui
-                    .add(
+                    .add_enabled(
+                        !self.capture.is_active(),
                         egui::Button::new("Run")
                             .shortcut_text(ui.ctx().format_shortcut(&run_shortcut)),
                     )

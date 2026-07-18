@@ -181,6 +181,7 @@ pub(super) struct ContextMenuState<'a> {
     pub can_paste: bool,
     pub can_undo: bool,
     pub can_redo: bool,
+    pub editing_enabled: bool,
     pub input_bindings: &'a InputBindings,
 }
 
@@ -201,8 +202,26 @@ pub(super) fn build_context_entries(context: ContextMenuState<'_>) -> Vec<MenuEn
         can_paste,
         can_undo,
         can_redo,
+        editing_enabled,
         input_bindings,
     } = context;
+    if !editing_enabled {
+        return if context_node.is_some() || any_selected {
+            vec![configured_shortcut(
+                MenuEntry::action(
+                    "Copy",
+                    GraphAction::Copy {
+                        target: context_node,
+                    },
+                )
+                .with_icon("🗐"),
+                input_bindings,
+                "copy",
+            )]
+        } else {
+            Vec::new()
+        };
+    }
     if context_node.is_some() || any_selected {
         let mut entries = Vec::new();
         add_undo_redo_entries(&mut entries, can_undo, can_redo, input_bindings);

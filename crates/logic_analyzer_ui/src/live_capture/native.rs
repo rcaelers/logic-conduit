@@ -1,0 +1,487 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread::JoinHandle;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crossbeam_channel::{Receiver, Sender, TryRecvError};
+use tempfile::TempDir;
+
+use logic_analyzer_graph::compiler::DiscoveredLiveCaptureFeature;
+use logic_analyzer_processing::AcquisitionContext;
+use signal_processing::{
+    CaptureAcquisitionPhase, CaptureEvent, CaptureEventQueueReader, CaptureProgress,
+    CaptureQueueReceiveError, CaptureSessionId, CaptureSessionState, CaptureStoreDescriptor,
+    NativeCaptureStore, NativeCaptureStoreConfig, NativeFinalizedCapture,
+    bounded_capture_event_queue,
+};
+
+use super::{CaptureCoordinatorContract, CaptureSessionStatus};
+
+const EVENT_QUEUE_CAPACITY: usize = 1_024;
+const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(5);
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
+enum CaptureCommand {
+    Stop,
+}
+
+struct CompletedCapture {
+    _directory: TempDir,
+    _capture: NativeFinalizedCapture,
+}
+
+enum WorkerCompletion {
+    Complete(CompletedCapture),
+    Failed(String),
+}
+
+struct ActiveCapture {
+    commands: Sender<CaptureCommand>,
+    completion: Receiver<WorkerCompletion>,
+    events: CaptureEventQueueReader,
+    worker: Option<JoinHandle<()>>,
+    stop_requested: bool,
+}
+
+pub(crate) struct CaptureCoordinator {
+    status: Option<CaptureSessionStatus>,
+    active: Option<ActiveCapture>,
+    completed: Option<CompletedCapture>,
+    state_history: Vec<CaptureSessionState>,
+}
+
+impl CaptureCoordinator {
+    pub(crate) fn new() -> Self {
+        Self {
+            status: None,
+            active: None,
+            completed: None,
+            state_history: Vec::new(),
+        }
+    }
+
+    fn record_state(&mut self, state: CaptureSessionState) {
+        if self.state_history.last().copied() != Some(state) {
+            self.state_history.push(state);
+        }
+    }
+
+    fn apply_event(&mut self, event: CaptureEvent) {
+        let Some(status) = &mut self.status else {
+            return;
+        };
+        match event {
+            CaptureEvent::Status(event) if event.session_id == status.session_id => {
+                let stop_requested = self
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.stop_requested);
+                if stop_requested
+                    && !matches!(
+                        event.state,
+                        CaptureSessionState::Stopping
+                            | CaptureSessionState::Complete
+                            | CaptureSessionState::Error
+                    )
+                {
+                    return;
+                }
+                status.state = event.state;
+                status.phase = event.phase;
+                self.record_state(event.state);
+            }
+            CaptureEvent::Progress {
+                session_id,
+                progress,
+            } if session_id == status.session_id => status.progress = progress,
+            CaptureEvent::Failed(failure) if failure.session_id == status.session_id => {
+                status.state = CaptureSessionState::Error;
+                status.phase = CaptureAcquisitionPhase::Finalizing;
+                status.error = Some(failure.message);
+                self.record_state(CaptureSessionState::Error);
+            }
+            _ => {}
+        }
+    }
+
+    fn finish_worker(&mut self, completion: WorkerCompletion) {
+        let Some(mut active) = self.active.take() else {
+            return;
+        };
+        if let Some(worker) = active.worker.take() {
+            let _ = worker.join();
+        }
+        match completion {
+            WorkerCompletion::Complete(capture) => {
+                if let Some(status) = &mut self.status {
+                    status.state = CaptureSessionState::Complete;
+                    status.phase = CaptureAcquisitionPhase::Finalizing;
+                }
+                self.record_state(CaptureSessionState::Complete);
+                self.completed = Some(capture);
+            }
+            WorkerCompletion::Failed(error) => {
+                if let Some(status) = &mut self.status {
+                    status.state = CaptureSessionState::Error;
+                    status.phase = CaptureAcquisitionPhase::Finalizing;
+                    status.error = Some(error);
+                }
+                self.record_state(CaptureSessionState::Error);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn completed_manifest(&self) -> Option<signal_processing::CaptureStoreManifest> {
+        self.completed
+            .as_ref()
+            .map(|completed| completed._capture.manifest())
+    }
+
+    #[cfg(test)]
+    fn state_history(&self) -> &[CaptureSessionState] {
+        &self.state_history
+    }
+}
+
+impl CaptureCoordinatorContract for CaptureCoordinator {
+    fn backend_available() -> bool {
+        true
+    }
+
+    fn backend_unavailable_reason() -> &'static str {
+        ""
+    }
+
+    fn start(&mut self, feature: DiscoveredLiveCaptureFeature) -> Result<(), String> {
+        if self.is_active() {
+            return Err("a live capture is already active".into());
+        }
+        let session_id = fresh_session_id();
+        let source_node = feature.source_node;
+        let source_title = feature.source_title.clone();
+        let (event_publisher, events) = bounded_capture_event_queue(EVENT_QUEUE_CAPACITY)
+            .expect("capture event queue capacity is non-zero");
+        let (command_sender, command_receiver) = crossbeam_channel::bounded(1);
+        let (completion_sender, completion_receiver) = crossbeam_channel::bounded(1);
+        let worker = std::thread::Builder::new()
+            .name("live-capture-supervisor".into())
+            .spawn(move || {
+                let completion = match run_capture_worker(
+                    session_id,
+                    feature,
+                    Box::new(event_publisher),
+                    command_receiver,
+                ) {
+                    Ok(capture) => WorkerCompletion::Complete(capture),
+                    Err(error) => WorkerCompletion::Failed(error),
+                };
+                let _ = completion_sender.send(completion);
+            })
+            .map_err(|error| format!("could not start capture supervisor: {error}"))?;
+
+        self.status = Some(CaptureSessionStatus {
+            session_id,
+            source_node,
+            source_title,
+            state: CaptureSessionState::Preparing,
+            phase: CaptureAcquisitionPhase::Preparing,
+            progress: CaptureProgress::default(),
+            error: None,
+        });
+        self.state_history.clear();
+        self.record_state(CaptureSessionState::Preparing);
+        self.active = Some(ActiveCapture {
+            commands: command_sender,
+            completion: completion_receiver,
+            events,
+            worker: Some(worker),
+            stop_requested: false,
+        });
+        Ok(())
+    }
+
+    fn request_stop(&mut self) {
+        let Some(active) = &mut self.active else {
+            return;
+        };
+        if active.stop_requested {
+            return;
+        }
+        active.stop_requested = true;
+        let _ = active.commands.try_send(CaptureCommand::Stop);
+        if let Some(status) = &mut self.status {
+            status.state = CaptureSessionState::Stopping;
+            status.phase = CaptureAcquisitionPhase::Finalizing;
+        }
+        self.record_state(CaptureSessionState::Stopping);
+    }
+
+    fn poll(&mut self) {
+        loop {
+            let event = self
+                .active
+                .as_ref()
+                .map(|active| active.events.try_recv());
+            match event {
+                Some(Ok(event)) => self.apply_event(event),
+                Some(Err(CaptureQueueReceiveError::Empty | CaptureQueueReceiveError::Closed))
+                | None => break,
+                Some(Err(CaptureQueueReceiveError::Timeout)) => unreachable!(),
+            }
+        }
+
+        let completion = self
+            .active
+            .as_ref()
+            .map(|active| active.completion.try_recv());
+        match completion {
+            Some(Ok(completion)) => self.finish_worker(completion),
+            Some(Err(TryRecvError::Disconnected)) => self.finish_worker(WorkerCompletion::Failed(
+                "capture supervisor stopped without a result".into(),
+            )),
+            Some(Err(TryRecvError::Empty)) | None => {}
+        }
+    }
+
+    fn status(&self) -> Option<&CaptureSessionStatus> {
+        self.status.as_ref()
+    }
+
+    fn is_active(&self) -> bool {
+        self.active.is_some()
+    }
+}
+
+impl Drop for CaptureCoordinator {
+    fn drop(&mut self) {
+        if let Some(mut active) = self.active.take() {
+            let _ = active.commands.try_send(CaptureCommand::Stop);
+            if let Some(worker) = active.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+}
+
+fn fresh_session_id() -> CaptureSessionId {
+    let time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let sequence = u128::from(NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed));
+    CaptureSessionId::new(time.rotate_left(37) ^ sequence)
+}
+
+fn run_capture_worker(
+    session_id: CaptureSessionId,
+    feature: DiscoveredLiveCaptureFeature,
+    events: Box<dyn signal_processing::CaptureEventPublisher>,
+    commands: Receiver<CaptureCommand>,
+) -> Result<CompletedCapture, String> {
+    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let descriptor = CaptureStoreDescriptor::new(session_id, feature.channels().to_vec())
+        .map_err(|error| error.to_string())?;
+    let (store, writer) =
+        NativeCaptureStore::create(NativeCaptureStoreConfig::new(directory.path(), descriptor))
+            .map_err(|error| error.to_string())?;
+    let context = AcquisitionContext::new(session_id, Box::new(writer), events);
+    let mut acquisition = feature
+        .prepare(context)
+        .map_err(|error| error.to_string())?;
+    acquisition.start().map_err(|error| error.to_string())?;
+
+    let mut stop_requested = false;
+    while !acquisition.is_finished() {
+        match commands.recv_timeout(SUPERVISOR_POLL_INTERVAL) {
+            Ok(CaptureCommand::Stop) if !stop_requested => {
+                stop_requested = true;
+                acquisition
+                    .request_stop()
+                    .map_err(|error| error.to_string())?;
+            }
+            Ok(CaptureCommand::Stop) | Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) if !stop_requested => {
+                stop_requested = true;
+                acquisition
+                    .request_stop()
+                    .map_err(|error| error.to_string())?;
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {}
+        }
+    }
+    acquisition.join().map_err(|error| error.to_string())?;
+    let capture = store.finalize().map_err(|error| error.to_string())?;
+    Ok(CompletedCapture {
+        _directory: directory,
+        _capture: capture,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use logic_analyzer_graph::compiler::{DiscoveredLiveCaptureFeature, LiveCaptureFeature};
+    use logic_analyzer_graph::{compiler, nodes};
+    use logic_analyzer_processing::{
+        AcquisitionContext, AcquisitionError, AcquisitionResult, DeterministicFakeConfig,
+        DeterministicFakeController, DeterministicFakeProvider, PreparedAcquisition,
+    };
+    use node_graph::{NodeDef, NodeGraphWidget, NodeId};
+    use signal_processing::{CaptureChannelId, CaptureSessionState};
+
+    use super::{CaptureCoordinator, CaptureCoordinatorContract};
+
+    struct FakeFeature {
+        channels: Vec<CaptureChannelId>,
+        provider: DeterministicFakeProvider,
+    }
+
+    impl LiveCaptureFeature for FakeFeature {
+        fn channels(&self) -> &[CaptureChannelId] {
+            &self.channels
+        }
+
+        fn prepare(
+            self: Box<Self>,
+            context: AcquisitionContext,
+        ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
+            self.provider.prepare(context)
+        }
+    }
+
+    struct FailingFeature {
+        channels: Vec<CaptureChannelId>,
+    }
+
+    impl LiveCaptureFeature for FailingFeature {
+        fn channels(&self) -> &[CaptureChannelId] {
+            &self.channels
+        }
+
+        fn prepare(
+            self: Box<Self>,
+            _context: AcquisitionContext,
+        ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
+            Err(AcquisitionError::InvalidRequest(
+                "intentional preparation failure".into(),
+            ))
+        }
+    }
+
+    fn manual_feature() -> (DiscoveredLiveCaptureFeature, DeterministicFakeController) {
+        let channels = vec![
+            CaptureChannelId::new("bank-a:7"),
+            CaptureChannelId::new("bank-c:2"),
+        ];
+        let config = DeterministicFakeConfig::new(channels.clone(), vec![3, 5, 2, 7], 0x5a17)
+            .unwrap();
+        let (provider, controller) = DeterministicFakeProvider::manually_paced(config);
+        (
+            DiscoveredLiveCaptureFeature::new(
+                NodeId(41),
+                "Contract Fake",
+                Box::new(FakeFeature { channels, provider }),
+            ),
+            controller,
+        )
+    }
+
+    fn poll_until(coordinator: &mut CaptureCoordinator, condition: impl Fn(&CaptureCoordinator) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !condition(coordinator) {
+            assert!(Instant::now() < deadline, "capture coordinator timed out");
+            coordinator.poll();
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn development_registration_discovers_and_completes_a_capture() {
+        let mut graph = NodeGraphWidget::new(nodes::build_registry());
+        let source = graph
+            .add_node_at(nodes::DemoCaptureSource::name(), egui::Pos2::ZERO)
+            .unwrap();
+        let feature = compiler::discover_live_capture_feature(
+            graph.graph(),
+            &compiler::BuilderRegistry::standard(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(feature.source_node, source);
+
+        let mut coordinator = CaptureCoordinator::new();
+        coordinator.start(feature).unwrap();
+        poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
+
+        let manifest = coordinator.completed_manifest().unwrap();
+        assert_eq!(manifest.committed_chunks, 64);
+        assert_eq!(manifest.committed_samples, 64 * 4_096);
+        assert_eq!(manifest.descriptor.channels().len(), 11);
+    }
+
+    #[test]
+    fn immediate_capture_uses_commands_and_restores_editing_after_finalization() {
+        let (feature, controller) = manual_feature();
+        let mut coordinator = CaptureCoordinator::new();
+        coordinator.start(feature).unwrap();
+        assert!(!coordinator.graph_editing_enabled());
+
+        controller.grant_chunks(2);
+        poll_until(&mut coordinator, |coordinator| {
+            coordinator
+                .status()
+                .is_some_and(|status| status.progress.captured_samples == Some(8))
+        });
+        coordinator.request_stop();
+        coordinator.request_stop();
+        poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
+
+        assert!(coordinator.graph_editing_enabled());
+        assert_eq!(
+            coordinator.state_history(),
+            [
+                CaptureSessionState::Preparing,
+                CaptureSessionState::Prepared,
+                CaptureSessionState::Recording,
+                CaptureSessionState::Stopping,
+                CaptureSessionState::Complete,
+            ]
+        );
+        let manifest = coordinator.completed_manifest().unwrap();
+        assert_eq!(manifest.descriptor.session_id(), coordinator.status().unwrap().session_id);
+        assert_eq!(manifest.committed_chunks, 2);
+        assert_eq!(manifest.committed_samples, 8);
+    }
+
+    #[test]
+    fn preparation_failure_keeps_editing_locked_until_cleanup_returns() {
+        let feature = DiscoveredLiveCaptureFeature::new(
+            NodeId(99),
+            "Failing Fake",
+            Box::new(FailingFeature {
+                channels: vec![CaptureChannelId::new("fake:0")],
+            }),
+        );
+        let mut coordinator = CaptureCoordinator::new();
+        coordinator.start(feature).unwrap();
+        assert!(!coordinator.graph_editing_enabled());
+
+        poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
+
+        assert!(coordinator.graph_editing_enabled());
+        assert_eq!(
+            coordinator.status().unwrap().state,
+            CaptureSessionState::Error
+        );
+        assert!(
+            coordinator
+                .status()
+                .unwrap()
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("intentional preparation failure"))
+        );
+        assert!(coordinator.completed_manifest().is_none());
+    }
+}

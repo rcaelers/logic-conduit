@@ -18,6 +18,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use egui::{Color32, Pos2};
 use serde_json::Value;
 
+use logic_analyzer_processing::{AcquisitionContext, AcquisitionResult, PreparedAcquisition};
 use logic_analyzer_viewer::{
     SamplingEdge, SamplingOverlay, SamplingQualifier, ViewerLaneRegistry, ViewerOutputPresentation,
 };
@@ -26,8 +27,9 @@ use node_graph::{
     VariadicInfo,
 };
 use signal_processing::{
-    AppManager, DerivedLanes, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy,
-    PersistentStoreConfig, ProcessNode, SampleBlock, SamplingActivity, ViewerRetention,
+    AppManager, CaptureChannelId, DerivedLanes, DisconnectEvent, InputSub, NodeConfig,
+    OverflowPolicy, PersistentStoreConfig, ProcessNode, SampleBlock, SamplingActivity,
+    ViewerRetention,
 };
 
 use super::cache_platform;
@@ -136,6 +138,56 @@ impl ResolvedInputs {
 
 // ── Builder trait & registry ─────────────────────────────────────────────────
 
+/// State-bound live-acquisition capability supplied by a concrete graph node.
+///
+/// The compiler and application treat channel identities as opaque and do not
+/// know which provider, transport, or protocol implements this feature.
+pub trait LiveCaptureFeature: Send {
+    fn channels(&self) -> &[CaptureChannelId];
+
+    fn prepare(
+        self: Box<Self>,
+        context: AcquisitionContext,
+    ) -> AcquisitionResult<Box<dyn PreparedAcquisition>>;
+}
+
+pub struct DiscoveredLiveCaptureFeature {
+    pub source_node: NodeId,
+    pub source_title: String,
+    feature: Box<dyn LiveCaptureFeature>,
+}
+
+impl DiscoveredLiveCaptureFeature {
+    pub fn new(
+        source_node: NodeId,
+        source_title: impl Into<String>,
+        feature: Box<dyn LiveCaptureFeature>,
+    ) -> Self {
+        Self {
+            source_node,
+            source_title: source_title.into(),
+            feature,
+        }
+    }
+
+    pub fn channels(&self) -> &[CaptureChannelId] {
+        self.feature.channels()
+    }
+
+    pub fn prepare(
+        self,
+        context: AcquisitionContext,
+    ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
+        self.feature.prepare(context)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveCaptureDiscoveryError {
+    pub source_nodes: Vec<NodeId>,
+    pub message: String,
+}
+
 pub trait RuntimeBuilder {
     /// Produces the graph's time domain (exactly one per graph).
     fn is_source(&self) -> bool {
@@ -190,6 +242,15 @@ pub trait RuntimeBuilder {
     fn sampling_overlay(&self, _state: &Value) -> Option<SamplingOverlayDescriptor> {
         None
     }
+    /// Optional state-bound live acquisition exposed by this concrete node.
+    /// Implementations parse their own state and return generic capability
+    /// metadata plus a provider preparation boundary.
+    fn live_capture_feature(
+        &self,
+        _state: &Value,
+    ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
+        Ok(None)
+    }
     /// Whether an unconnected input is a compile error (given the state:
     /// e.g. CS is only required while its polarity isn't Disabled).
     fn input_required(&self, _socket: &Socket, _state: &Value) -> bool {
@@ -243,6 +304,74 @@ impl BuilderRegistry {
 
     pub(super) fn get(&self, def_name: &str) -> Option<&dyn RuntimeBuilder> {
         self.0.get(def_name).map(|b| b.as_ref())
+    }
+}
+
+/// Resolves exactly one enabled live-capture feature without identifying a
+/// concrete node type. Muted nodes do not participate in acquisition.
+pub fn discover_live_capture_feature(
+    graph: &GraphState,
+    builders: &BuilderRegistry,
+) -> Result<Option<DiscoveredLiveCaptureFeature>, LiveCaptureDiscoveryError> {
+    discover_live_capture_feature_from(graph, builders, |_| true)
+}
+
+/// Resolves a live feature only from nodes retained by a successfully
+/// compiled graph. This prevents a disconnected development or hardware node
+/// from becoming the acquisition source for a different active time domain.
+pub fn discover_compiled_live_capture_feature(
+    graph: &GraphState,
+    compiled: &CompiledGraph,
+    builders: &BuilderRegistry,
+) -> Result<Option<DiscoveredLiveCaptureFeature>, LiveCaptureDiscoveryError> {
+    let retained: HashSet<_> = compiled.nodes.iter().map(|node| node.id).collect();
+    discover_live_capture_feature_from(graph, builders, |node| retained.contains(&node.id))
+}
+
+fn discover_live_capture_feature_from(
+    graph: &GraphState,
+    builders: &BuilderRegistry,
+    include: impl Fn(&Node) -> bool,
+) -> Result<Option<DiscoveredLiveCaptureFeature>, LiveCaptureDiscoveryError> {
+    let mut candidates = Vec::new();
+    for node in graph
+        .nodes
+        .values()
+        .filter(|node| node.kind == NodeKind::Regular && !node.muted && include(node))
+    {
+        let Some(builder) = builders.get(node.def_name()) else {
+            continue;
+        };
+        match builder.live_capture_feature(&node.state) {
+            Ok(Some(feature)) => candidates.push(DiscoveredLiveCaptureFeature::new(
+                node.id,
+                node.title.clone(),
+                feature,
+            )),
+            Ok(None) => {}
+            Err(message) => {
+                return Err(LiveCaptureDiscoveryError {
+                    source_nodes: vec![node.id],
+                    message: format!("{}: {message}", node.title),
+                });
+            }
+        }
+    }
+
+    match candidates.len() {
+        0 => Ok(None),
+        1 => Ok(candidates.pop()),
+        _ => {
+            let mut source_nodes: Vec<_> = candidates
+                .iter()
+                .map(|candidate| candidate.source_node)
+                .collect();
+            source_nodes.sort_unstable_by_key(|node| node.0);
+            Err(LiveCaptureDiscoveryError {
+                source_nodes,
+                message: "the graph contains multiple live capture sources".into(),
+            })
+        }
     }
 }
 
@@ -1520,6 +1649,54 @@ mod tests {
                 .edges
                 .iter()
                 .any(|e| e.to.1 == "enable_signal" && e.buffer == 1_000)
+        );
+    }
+
+    #[test]
+    fn development_capture_feature_is_discovered_without_node_name_matching() {
+        let mut widget = NodeGraphWidget::new(nodes::build_registry());
+        let source = widget
+            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::ZERO)
+            .unwrap();
+        let feature = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(feature.source_node, source);
+        assert_eq!(feature.channels().len(), 11);
+        assert_eq!(feature.channels()[7].as_str(), "demo:7");
+    }
+
+    #[test]
+    fn discovery_rejects_multiple_live_capture_features() {
+        let mut widget = NodeGraphWidget::new(nodes::build_registry());
+        let first = widget
+            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::ZERO)
+            .unwrap();
+        let second = widget
+            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::new(100.0, 0.0))
+            .unwrap();
+
+        let error = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
+            .err()
+            .unwrap();
+        assert_eq!(error.source_nodes, [first, second]);
+        assert!(error.message.contains("multiple"));
+    }
+
+    #[test]
+    fn compiled_discovery_ignores_a_disconnected_live_feature() {
+        let mut widget = uart_demo_widget();
+        widget
+            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::new(1_000.0, 0.0))
+            .unwrap();
+        let builders = BuilderRegistry::standard();
+        let compiled = lower(widget.graph(), &builders).unwrap();
+
+        assert!(
+            discover_compiled_live_capture_feature(widget.graph(), &compiled, &builders)
+                .unwrap()
+                .is_none()
         );
     }
 

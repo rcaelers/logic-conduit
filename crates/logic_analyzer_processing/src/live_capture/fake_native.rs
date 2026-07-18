@@ -366,6 +366,10 @@ impl PreparedAcquisition for PreparedFakeAcquisition {
         Ok(())
     }
 
+    fn is_finished(&self) -> bool {
+        self.handle.as_ref().is_some_and(JoinHandle::is_finished)
+    }
+
     fn join(mut self: Box<Self>) -> AcquisitionResult<AcquisitionOutcome> {
         self.join_worker()
     }
