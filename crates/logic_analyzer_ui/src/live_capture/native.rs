@@ -43,7 +43,8 @@ const EVENT_QUEUE_CAPACITY: usize = 1_024;
 const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const APPLICATION_METADATA_FILE: &str = "capture.application.json";
 const APPLICATION_METADATA_TEMP_FILE: &str = "capture.application.json.tmp";
-const APPLICATION_METADATA_VERSION: u16 = 1;
+const APPLICATION_METADATA_OLD_FILE: &str = "capture.application.json.old";
+const APPLICATION_METADATA_VERSION: u16 = 2;
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,12 +71,50 @@ struct CaptureApplicationMetadata {
     sample_rate_hz: f64,
     channel_names: Vec<String>,
     graph: node_graph::GraphState,
+    #[serde(default)]
+    configuration_epochs: Vec<PersistedConfigurationEpoch>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedConfigurationEpoch {
+    epoch_id: u64,
+    source_sample: u64,
+    analysis_sample: u64,
+    timestamp_ns: u64,
+    graph: node_graph::GraphState,
+    outcome: PersistedConfigurationEpochOutcome,
+    message: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum PersistedConfigurationEpochOutcome {
+    Pending,
+    Applied,
+    Deferred,
+    Failed,
+}
+
+struct WorkerPreparedConfigurationEpoch {
+    epoch_id: u64,
+    source_sample: u64,
+    boundary: signal_processing::ConfigurationBoundary,
 }
 
 enum CaptureCommand {
     Stop,
     Abort,
     ForceTrigger,
+    PrepareConfigurationEpoch {
+        graph: Box<node_graph::GraphState>,
+        response: Sender<Result<WorkerPreparedConfigurationEpoch, String>>,
+    },
+    ResolveConfigurationEpoch {
+        epoch_id: u64,
+        resolution: super::ConfigurationEpochResolution,
+        response: Sender<Result<(), String>>,
+    },
 }
 
 struct CompletedCapture {
@@ -225,6 +264,11 @@ struct ActiveCapture {
     abort_requested: bool,
 }
 
+struct PendingConfigurationEpoch {
+    graph: node_graph::GraphState,
+    response: Receiver<Result<WorkerPreparedConfigurationEpoch, String>>,
+}
+
 struct CaptureWorkerPorts {
     events: Box<dyn CaptureEventPublisher>,
     commands: Receiver<CaptureCommand>,
@@ -273,6 +317,11 @@ pub(crate) struct CaptureCoordinator {
     export_status: Option<CaptureExportStatus>,
     export_notice: Option<Result<CaptureExportCompletion, String>>,
     active_export: Option<ActiveExport>,
+    pending_configuration_epoch: Option<PendingConfigurationEpoch>,
+    configuration_epoch_preparation:
+        Option<Result<super::PreparedConfigurationEpoch, String>>,
+    configuration_epoch_resolutions: Vec<Receiver<Result<(), String>>>,
+    configuration_epoch_notice: Option<Result<(), String>>,
     state_history: Vec<CaptureSessionState>,
 }
 
@@ -317,6 +366,10 @@ impl CaptureCoordinator {
             export_status: None,
             export_notice: None,
             active_export: None,
+            pending_configuration_epoch: None,
+            configuration_epoch_preparation: None,
+            configuration_epoch_resolutions: Vec::new(),
+            configuration_epoch_notice: None,
             state_history: Vec::new(),
         }
     }
@@ -464,6 +517,50 @@ impl CaptureCoordinator {
                 .map(|warning| warning.message().to_owned())
                 .collect(),
         }));
+    }
+
+    fn poll_configuration_epochs(&mut self) {
+        let preparation = self
+            .pending_configuration_epoch
+            .as_ref()
+            .and_then(|pending| match pending.response.try_recv() {
+                Ok(result) => Some(result),
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => Some(Err(
+                    "capture supervisor stopped while preparing a configuration epoch".into(),
+                )),
+            });
+        if let Some(preparation) = preparation {
+            let pending = self
+                .pending_configuration_epoch
+                .take()
+                .expect("preparation came from a pending epoch");
+            self.configuration_epoch_preparation = Some(preparation.map(|prepared| {
+                super::PreparedConfigurationEpoch {
+                    epoch_id: prepared.epoch_id,
+                    source_sample: prepared.source_sample,
+                    boundary: prepared.boundary,
+                    graph: pending.graph,
+                }
+            }));
+        }
+
+        let mut index = 0;
+        while index < self.configuration_epoch_resolutions.len() {
+            let result = match self.configuration_epoch_resolutions[index].try_recv() {
+                Ok(result) => Some(result),
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => Some(Err(
+                    "capture supervisor stopped before resolving a configuration epoch".into(),
+                )),
+            };
+            if let Some(result) = result {
+                self.configuration_epoch_resolutions.swap_remove(index);
+                self.configuration_epoch_notice = Some(result);
+            } else {
+                index += 1;
+            }
+        }
     }
 
     pub(crate) fn cleanup_advisory(&self) -> Result<CaptureCleanupAdvisory, String> {
@@ -706,11 +803,12 @@ impl CaptureCoordinator {
                     sample_rate_hz: feature.sample_rate_hz(),
                     channel_names: feature.channel_names().to_vec(),
                     graph: graph.clone(),
+                    configuration_epochs: Vec::new(),
                 });
         let repository = self.repository.clone();
         let (event_publisher, events) = bounded_capture_event_queue(EVENT_QUEUE_CAPACITY)
             .expect("capture event queue capacity is non-zero");
-        let (command_sender, command_receiver) = crossbeam_channel::bounded(1);
+        let (command_sender, command_receiver) = crossbeam_channel::unbounded();
         let (completion_sender, completion_receiver) = crossbeam_channel::bounded(1);
         let (waveform_sender, waveform_receiver) = crossbeam_channel::bounded(1);
         let (analysis_sender, analysis_receiver) = crossbeam_channel::bounded(1);
@@ -1087,6 +1185,7 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
 
     fn poll(&mut self) {
         self.poll_export();
+        self.poll_configuration_epochs();
         self.reap_waveform_workers();
         if let Some(analysis) = self
             .active
@@ -1161,6 +1260,70 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
         self.analysis_attachment.take()
     }
 
+    fn request_configuration_epoch(
+        &mut self,
+        graph: node_graph::GraphState,
+    ) -> Result<(), String> {
+        if self.pending_configuration_epoch.is_some()
+            || self.configuration_epoch_preparation.is_some()
+        {
+            return Err("a configuration epoch is already being prepared".into());
+        }
+        let status = self
+            .status
+            .as_ref()
+            .ok_or_else(|| "capture status is unavailable".to_owned())?;
+        if status.state != CaptureSessionState::Recording {
+            return Err("configuration changes are accepted only while recording".into());
+        }
+        let active = self
+            .active
+            .as_ref()
+            .ok_or_else(|| "there is no active capture".to_owned())?;
+        let (response_sender, response) = crossbeam_channel::bounded(1);
+        active
+            .commands
+            .send(CaptureCommand::PrepareConfigurationEpoch {
+                graph: Box::new(graph.clone()),
+                response: response_sender,
+            })
+            .map_err(|_| "capture supervisor no longer accepts configuration changes".to_owned())?;
+        self.pending_configuration_epoch = Some(PendingConfigurationEpoch { graph, response });
+        Ok(())
+    }
+
+    fn take_configuration_epoch_preparation(
+        &mut self,
+    ) -> Option<Result<super::PreparedConfigurationEpoch, String>> {
+        self.configuration_epoch_preparation.take()
+    }
+
+    fn resolve_configuration_epoch(
+        &mut self,
+        epoch_id: u64,
+        resolution: super::ConfigurationEpochResolution,
+    ) -> Result<(), String> {
+        let active = self
+            .active
+            .as_ref()
+            .ok_or_else(|| "capture ended before the configuration epoch was resolved".to_owned())?;
+        let (response_sender, response) = crossbeam_channel::bounded(1);
+        active
+            .commands
+            .send(CaptureCommand::ResolveConfigurationEpoch {
+                epoch_id,
+                resolution,
+                response: response_sender,
+            })
+            .map_err(|_| "capture supervisor no longer accepts epoch outcomes".to_owned())?;
+        self.configuration_epoch_resolutions.push(response);
+        Ok(())
+    }
+
+    fn take_configuration_epoch_notice(&mut self) -> Option<Result<(), String>> {
+        self.configuration_epoch_notice.take()
+    }
+
     fn replay_source_node(&self) -> Option<node_graph::NodeId> {
         self.completed.as_ref().map(|capture| capture.source_node)
     }
@@ -1188,6 +1351,14 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
     fn is_active(&self) -> bool {
         self.active.is_some()
     }
+
+    fn graph_editing_enabled(&self) -> bool {
+        !self.is_active()
+            || self
+                .status
+                .as_ref()
+                .is_some_and(|status| status.state == CaptureSessionState::Recording)
+    }
 }
 
 impl Drop for CaptureCoordinator {
@@ -1200,6 +1371,7 @@ impl Drop for CaptureCoordinator {
         }
         if let Some(mut active) = self.active.take() {
             let _ = active.commands.try_send(CaptureCommand::Stop);
+            drop(active.commands);
             if let Some(worker) = active.worker.take() {
                 let _ = worker.join();
             }
@@ -1225,6 +1397,7 @@ fn write_application_metadata(
     bytes.push(b'\n');
     let temporary = directory.join(APPLICATION_METADATA_TEMP_FILE);
     let final_path = directory.join(APPLICATION_METADATA_FILE);
+    let old_path = directory.join(APPLICATION_METADATA_OLD_FILE);
     let _ = fs::remove_file(&temporary);
     let mut file = OpenOptions::new()
         .create_new(true)
@@ -1234,22 +1407,66 @@ fn write_application_metadata(
     file.write_all(&bytes).map_err(|error| error.to_string())?;
     file.sync_data().map_err(|error| error.to_string())?;
     drop(file);
-    fs::rename(temporary, final_path).map_err(|error| error.to_string())
+    let _ = fs::remove_file(&old_path);
+    if final_path.exists() {
+        fs::rename(&final_path, &old_path).map_err(|error| error.to_string())?;
+    }
+    if let Err(error) = fs::rename(&temporary, &final_path) {
+        if old_path.exists() {
+            let _ = fs::rename(&old_path, &final_path);
+        }
+        return Err(error.to_string());
+    }
+    let _ = fs::remove_file(old_path);
+    Ok(())
 }
 
 fn read_application_metadata(directory: &Path) -> Result<CaptureApplicationMetadata, String> {
     let path = directory.join(APPLICATION_METADATA_FILE);
+    recover_application_metadata_file(directory)?;
     let bytes = fs::read(&path)
         .map_err(|error| format!("could not read {}: {error}", path.display()))?;
-    let metadata = serde_json::from_slice::<CaptureApplicationMetadata>(&bytes)
+    let mut metadata = serde_json::from_slice::<CaptureApplicationMetadata>(&bytes)
         .map_err(|error| format!("invalid {}: {error}", path.display()))?;
-    if metadata.format_version != APPLICATION_METADATA_VERSION {
+    if metadata.format_version != 1 && metadata.format_version != APPLICATION_METADATA_VERSION {
         return Err(format!(
             "unsupported capture application metadata version {}",
             metadata.format_version
         ));
     }
+    let mut repaired = metadata.format_version != APPLICATION_METADATA_VERSION;
+    metadata.format_version = APPLICATION_METADATA_VERSION;
+    for epoch in &mut metadata.configuration_epochs {
+        if epoch.outcome == PersistedConfigurationEpochOutcome::Pending {
+            epoch.outcome = PersistedConfigurationEpochOutcome::Failed;
+            epoch.message = Some("capture ended before this epoch outcome was recorded".into());
+            repaired = true;
+        }
+    }
+    if repaired {
+        write_application_metadata(directory, &metadata)?;
+    }
     Ok(metadata)
+}
+
+fn recover_application_metadata_file(directory: &Path) -> Result<(), String> {
+    let final_path = directory.join(APPLICATION_METADATA_FILE);
+    let temporary = directory.join(APPLICATION_METADATA_TEMP_FILE);
+    let old_path = directory.join(APPLICATION_METADATA_OLD_FILE);
+    if final_path.exists() {
+        let _ = fs::remove_file(temporary);
+        let _ = fs::remove_file(old_path);
+        return Ok(());
+    }
+    if temporary.exists() {
+        fs::rename(&temporary, &final_path).map_err(|error| error.to_string())?;
+        let _ = fs::remove_file(old_path);
+        return Ok(());
+    }
+    if old_path.exists() {
+        fs::rename(old_path, final_path).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn run_capture_worker(
@@ -1261,13 +1478,13 @@ fn run_capture_worker(
 ) -> Result<CompletedCapture, String> {
     let CaptureWorkerSession {
         repository,
-        application_metadata,
+        mut application_metadata,
     } = session;
     let session_pin = repository
         .reserve(session_id)
         .map_err(|error| error.to_string())?;
-    if let Some(metadata) = application_metadata
-        && let Err(error) = write_application_metadata(session_pin.directory(), &metadata)
+    if let Some(metadata) = &application_metadata
+        && let Err(error) = write_application_metadata(session_pin.directory(), metadata)
     {
         drop(session_pin);
         let _ = repository.discard(session_id);
@@ -1309,6 +1526,7 @@ fn run_capture_worker(
         .write_timeline_metadata(timeline)
         .map_err(|error| error.to_string())?;
     let graph_source_factory = feature.graph_source_factory();
+    let sample_rate_hz = feature.sample_rate_hz();
     let analysis_cursor = store.open_cursor().map_err(|error| error.to_string())?;
     let analysis_cursor = recording_gate.cursor(Box::new(analysis_cursor));
     let analysis_process = graph_source_factory
@@ -1371,6 +1589,30 @@ fn run_capture_worker(
                     .request_force_trigger()
                     .map_err(|error| error.to_string())?;
             }
+            Ok(CaptureCommand::PrepareConfigurationEpoch { graph, response }) => {
+                let result = prepare_configuration_epoch(
+                    &mut application_metadata,
+                    session_pin.directory(),
+                    *graph,
+                    &store,
+                    &recording_gate,
+                    sample_rate_hz,
+                );
+                let _ = response.send(result);
+            }
+            Ok(CaptureCommand::ResolveConfigurationEpoch {
+                epoch_id,
+                resolution,
+                response,
+            }) => {
+                let result = resolve_configuration_epoch(
+                    &mut application_metadata,
+                    session_pin.directory(),
+                    epoch_id,
+                    resolution,
+                );
+                let _ = response.send(result);
+            }
             Ok(CaptureCommand::Stop | CaptureCommand::Abort)
             | Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) if !stop_requested => {
@@ -1429,6 +1671,61 @@ fn run_capture_worker(
         }
     }
     let outcome = acquisition.join().map_err(|error| error.to_string())?;
+    let resolution_deadline = Instant::now() + Duration::from_millis(500);
+    while application_metadata.as_ref().is_some_and(|metadata| {
+        metadata
+            .configuration_epochs
+            .iter()
+            .any(|epoch| epoch.outcome == PersistedConfigurationEpochOutcome::Pending)
+    }) && Instant::now() < resolution_deadline
+    {
+        match commands.recv_timeout(SUPERVISOR_POLL_INTERVAL) {
+            Ok(CaptureCommand::ResolveConfigurationEpoch {
+                epoch_id,
+                resolution,
+                response,
+            }) => {
+                let result = resolve_configuration_epoch(
+                    &mut application_metadata,
+                    session_pin.directory(),
+                    epoch_id,
+                    resolution,
+                );
+                let _ = response.send(result);
+            }
+            Ok(CaptureCommand::PrepareConfigurationEpoch { response, .. }) => {
+                let _ = response.send(Err(
+                    "capture ended before the configuration epoch was prepared".into(),
+                ));
+            }
+            Ok(CaptureCommand::Stop | CaptureCommand::Abort | CaptureCommand::ForceTrigger) => {}
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    while let Ok(command) = commands.try_recv() {
+        match command {
+            CaptureCommand::ResolveConfigurationEpoch {
+                epoch_id,
+                resolution,
+                response,
+            } => {
+                let result = resolve_configuration_epoch(
+                    &mut application_metadata,
+                    session_pin.directory(),
+                    epoch_id,
+                    resolution,
+                );
+                let _ = response.send(result);
+            }
+            CaptureCommand::PrepareConfigurationEpoch { response, .. } => {
+                let _ = response.send(Err(
+                    "capture ended before the configuration epoch was prepared".into(),
+                ));
+            }
+            CaptureCommand::Stop | CaptureCommand::Abort | CaptureCommand::ForceTrigger => {}
+        }
+    }
     if !waveform_published {
         let _ = waveform_ready.send(waveform.clone());
     }
@@ -1476,6 +1773,92 @@ fn run_capture_worker(
         completion: Some(outcome.completion),
         waveform_worker: None,
     })
+}
+
+fn prepare_configuration_epoch(
+    metadata: &mut Option<CaptureApplicationMetadata>,
+    directory: &Path,
+    graph: node_graph::GraphState,
+    store: &NativeCaptureStore,
+    recording_gate: &CaptureRecordingGate,
+    sample_rate_hz: f64,
+) -> Result<WorkerPreparedConfigurationEpoch, String> {
+    let metadata = metadata
+        .as_mut()
+        .ok_or_else(|| "capture graph metadata is unavailable".to_owned())?;
+    let recording_origin = recording_gate
+        .recording_origin()
+        .ok_or_else(|| "capture has not reached its recording origin".to_owned())?;
+    let source_sample = store
+        .snapshot()
+        .committed_samples
+        .max(recording_origin);
+    let analysis_sample = source_sample.saturating_sub(recording_origin);
+    let timestamp_step_ns = (1_000_000_000.0 / sample_rate_hz).round();
+    if !timestamp_step_ns.is_finite()
+        || timestamp_step_ns <= 0.0
+        || timestamp_step_ns > u64::MAX as f64
+    {
+        return Err(format!(
+            "capture sample rate {sample_rate_hz} Hz cannot represent an epoch timestamp"
+        ));
+    }
+    let timestamp_ns = analysis_sample.saturating_mul(timestamp_step_ns as u64);
+    let epoch_id = metadata
+        .configuration_epochs
+        .last()
+        .map_or(Ok(1), |epoch| epoch.epoch_id.checked_add(1).ok_or(()))
+        .map_err(|()| "configuration epoch ID overflow".to_owned())?;
+    metadata.graph = graph.clone();
+    metadata.configuration_epochs.push(PersistedConfigurationEpoch {
+        epoch_id,
+        source_sample,
+        analysis_sample,
+        timestamp_ns,
+        graph,
+        outcome: PersistedConfigurationEpochOutcome::Pending,
+        message: None,
+    });
+    write_application_metadata(directory, metadata)?;
+    Ok(WorkerPreparedConfigurationEpoch {
+        epoch_id,
+        source_sample,
+        boundary: signal_processing::ConfigurationBoundary::new(analysis_sample, timestamp_ns),
+    })
+}
+
+fn resolve_configuration_epoch(
+    metadata: &mut Option<CaptureApplicationMetadata>,
+    directory: &Path,
+    epoch_id: u64,
+    resolution: super::ConfigurationEpochResolution,
+) -> Result<(), String> {
+    let metadata = metadata
+        .as_mut()
+        .ok_or_else(|| "capture graph metadata is unavailable".to_owned())?;
+    let epoch = metadata
+        .configuration_epochs
+        .iter_mut()
+        .find(|epoch| epoch.epoch_id == epoch_id)
+        .ok_or_else(|| format!("configuration epoch {epoch_id} is missing"))?;
+    if epoch.outcome != PersistedConfigurationEpochOutcome::Pending {
+        return Err(format!("configuration epoch {epoch_id} is already resolved"));
+    }
+    let (outcome, message) = match resolution {
+        super::ConfigurationEpochResolution::Applied => {
+            (PersistedConfigurationEpochOutcome::Applied, None)
+        }
+        super::ConfigurationEpochResolution::Deferred(message) => (
+            PersistedConfigurationEpochOutcome::Deferred,
+            Some(message),
+        ),
+        super::ConfigurationEpochResolution::Failed(message) => {
+            (PersistedConfigurationEpochOutcome::Failed, Some(message))
+        }
+    };
+    epoch.outcome = outcome;
+    epoch.message = message;
+    write_application_metadata(directory, metadata)
 }
 
 const fn completion_for_outcome(outcome: CaptureSessionOutcome) -> Option<CaptureCompletion> {
@@ -2118,6 +2501,127 @@ mod tests {
         assert_eq!(manifest.descriptor.session_id(), coordinator.status().unwrap().session_id);
         assert_eq!(manifest.committed_chunks, 2);
         assert_eq!(manifest.committed_samples, 8);
+    }
+
+    #[test]
+    fn configuration_epoch_is_persisted_before_runtime_application_and_resolved() {
+        let (feature, controller) = manual_feature();
+        let mut coordinator = CaptureCoordinator::new();
+        let graph = node_graph::GraphState::default();
+        coordinator
+            .start_with_graph(feature, &graph, CaptureStartMode::SavedPolicy)
+            .unwrap();
+        poll_until(&mut coordinator, |coordinator| {
+            coordinator
+                .status()
+                .is_some_and(|status| status.state == CaptureSessionState::Recording)
+        });
+        assert!(coordinator.graph_editing_enabled());
+        controller.grant_chunks(2);
+        poll_until(&mut coordinator, |coordinator| {
+            coordinator
+                .status()
+                .and_then(|status| status.progress.captured_samples)
+                == Some(8)
+        });
+
+        let mut edited = graph.clone();
+        edited.set_extension("test.configuration_epoch", 1_u64).unwrap();
+        coordinator
+            .request_configuration_epoch(edited)
+            .unwrap();
+        let prepared = loop {
+            coordinator.poll();
+            if let Some(result) = coordinator.take_configuration_epoch_preparation() {
+                break result.unwrap();
+            }
+            std::thread::yield_now();
+        };
+        assert_eq!(prepared.epoch_id, 1);
+        // Provider progress can lead the batched durable-store frontier.
+        // Epoch acceptance deliberately uses the latter.
+        assert_eq!(prepared.source_sample, 0);
+        assert_eq!(prepared.boundary.sample_index, 0);
+        coordinator
+            .resolve_configuration_epoch(
+                prepared.epoch_id,
+                super::super::ConfigurationEpochResolution::Applied,
+            )
+            .unwrap();
+        loop {
+            coordinator.poll();
+            if let Some(result) = coordinator.take_configuration_epoch_notice() {
+                result.unwrap();
+                break;
+            }
+            std::thread::yield_now();
+        }
+        coordinator.request_stop();
+        poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
+
+        let directory = coordinator
+            .completed
+            .as_ref()
+            .unwrap()
+            ._session_pin
+            .directory();
+        let metadata = super::read_application_metadata(directory).unwrap();
+        assert_eq!(metadata.configuration_epochs.len(), 1);
+        let epoch = &metadata.configuration_epochs[0];
+        assert_eq!(epoch.source_sample, 0);
+        assert_eq!(epoch.analysis_sample, 0);
+        assert_eq!(epoch.timestamp_ns, 0);
+        assert_eq!(
+            epoch.outcome,
+            super::PersistedConfigurationEpochOutcome::Applied
+        );
+    }
+
+    #[test]
+    fn interrupted_pending_configuration_epoch_recovers_as_failed() {
+        let (feature, controller) = manual_feature();
+        let mut coordinator = CaptureCoordinator::new();
+        let graph = node_graph::GraphState::default();
+        coordinator
+            .start_with_graph(feature, &graph, CaptureStartMode::SavedPolicy)
+            .unwrap();
+        poll_until(&mut coordinator, |coordinator| {
+            coordinator
+                .status()
+                .is_some_and(|status| status.state == CaptureSessionState::Recording)
+        });
+        controller.grant_chunks(1);
+        let mut edited = graph.clone();
+        edited.set_extension("test.configuration_epoch", 2_u64).unwrap();
+        coordinator
+            .request_configuration_epoch(edited)
+            .unwrap();
+        loop {
+            coordinator.poll();
+            if coordinator
+                .take_configuration_epoch_preparation()
+                .is_some()
+            {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        coordinator.request_stop();
+        poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
+
+        let directory = coordinator
+            .completed
+            .as_ref()
+            .unwrap()
+            ._session_pin
+            .directory();
+        let metadata = super::read_application_metadata(directory).unwrap();
+        let epoch = &metadata.configuration_epochs[0];
+        assert_eq!(
+            epoch.outcome,
+            super::PersistedConfigurationEpochOutcome::Failed
+        );
+        assert!(epoch.message.as_deref().unwrap().contains("before"));
     }
 
     #[test]

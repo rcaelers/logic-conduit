@@ -104,7 +104,10 @@ pub use live_capture::{
 };
 pub use live_capture_store::*;
 pub use manager::{DisconnectEvent, InputSub, NodeSpec, PipelineManager};
-pub use node::{ConfigOutcome, ConfigValue, InputProtocolCandidate, NodeConfig, ProcessNode};
+pub use node::{
+    ConfigOutcome, ConfigValue, ConfigurationBoundary, ConfigurationScheduler,
+    InputProtocolCandidate, NodeConfig, ProcessNode,
+};
 pub use pipeline::Pipeline;
 pub use ports::{InputPort, OutputPort, PortDirection, PortSchema, register_type};
 pub use protocol::ProtocolKind;

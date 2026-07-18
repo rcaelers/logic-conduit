@@ -54,7 +54,7 @@ use crossbeam_channel::Receiver as CrossbeamReceiver;
 use super::errors::WorkError;
 use super::events::{NumberSample, TextSample, Trigger, Word};
 use super::manager::{DisconnectEvent, InputSub, NodeSpec};
-use super::node::{ConfigOutcome, InputScheduling, NodeConfig, ProcessNode};
+use super::node::{ConfigOutcome, ConfigurationBoundary, InputScheduling, NodeConfig, ProcessNode};
 use super::ports::{InputPort, OutputPort, StreamReadiness};
 use super::sample::{Sample, SampleBlock};
 use super::sender::ChannelMessage;
@@ -357,6 +357,27 @@ impl CooperativeManager {
         // as on the threaded manager — log it, don't fail the edit.
         if node.node.apply_config(&config) == ConfigOutcome::NeedsRestart {
             tracing::error!("[{name}] config not hot-appliable");
+        }
+        Ok(())
+    }
+
+    pub fn reconfigure_at(
+        &mut self,
+        name: &str,
+        config: NodeConfig,
+        boundary: ConfigurationBoundary,
+    ) -> Result<(), String> {
+        let node = self
+            .nodes
+            .get_mut(name)
+            .ok_or_else(|| format!("node '{name}' not running"))?;
+        let scheduler = node.node.configuration_scheduler().ok_or_else(|| {
+            format!("node '{name}' does not expose a scheduled configuration handle")
+        })?;
+        if scheduler.schedule_config(&config, boundary) == ConfigOutcome::NeedsRestart {
+            return Err(format!(
+                "node '{name}' rejected scheduled hot configuration"
+            ));
         }
         Ok(())
     }
@@ -685,6 +706,28 @@ mod tests {
     struct AddOffset {
         offset: i64,
         buffer: VecDeque<NumberSample>,
+        scheduled: Arc<Mutex<VecDeque<(ConfigurationBoundary, i64)>>>,
+    }
+
+    struct OffsetConfigurationScheduler {
+        scheduled: Arc<Mutex<VecDeque<(ConfigurationBoundary, i64)>>>,
+    }
+
+    impl crate::node::ConfigurationScheduler for OffsetConfigurationScheduler {
+        fn schedule_config(
+            &self,
+            config: &NodeConfig,
+            boundary: ConfigurationBoundary,
+        ) -> ConfigOutcome {
+            let Some(ConfigValue::I64(offset)) = config.get("offset") else {
+                return ConfigOutcome::NeedsRestart;
+            };
+            self.scheduled
+                .lock()
+                .unwrap()
+                .push_back((boundary, *offset));
+            ConfigOutcome::Applied
+        }
     }
 
     impl ProcessNode for AddOffset {
@@ -719,11 +762,24 @@ mod tests {
                 ConfigOutcome::NeedsRestart
             }
         }
+        fn configuration_scheduler(&self) -> Option<Arc<dyn crate::node::ConfigurationScheduler>> {
+            Some(Arc::new(OffsetConfigurationScheduler {
+                scheduled: Arc::clone(&self.scheduled),
+            }))
+        }
         fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
             let mut input = inputs[0]
                 .get::<NumberSample>(&mut self.buffer)
                 .ok_or_else(|| WorkError::NodeError("missing input".into()))?;
             let sample = input.recv()?;
+            let mut scheduled = self.scheduled.lock().unwrap();
+            while scheduled
+                .front()
+                .is_some_and(|(boundary, _)| boundary.timestamp_ns <= sample.start_time_ns)
+            {
+                self.offset = scheduled.pop_front().unwrap().1;
+            }
+            drop(scheduled);
             let output = outputs[0]
                 .get::<NumberSample>()
                 .ok_or_else(|| WorkError::NodeError("missing output".into()))?;
@@ -916,6 +972,7 @@ mod tests {
                 node: Box::new(AddOffset {
                     offset: 0,
                     buffer: VecDeque::new(),
+                    scheduled: Arc::new(Mutex::new(VecDeque::new())),
                 }),
                 inputs: vec![sub("source", "out")],
             })
@@ -946,6 +1003,45 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_reconfigure_switches_at_event_boundary_with_queued_input() {
+        let mut manager = CooperativeManager::new();
+        let out = Arc::new(Mutex::new(Vec::new()));
+        manager
+            .add_node(NodeSpec {
+                name: "source".into(),
+                node: Box::new(CountingSource { next: 0, max: 60 }),
+                inputs: vec![],
+            })
+            .unwrap();
+        manager
+            .add_node(NodeSpec {
+                name: "offset".into(),
+                node: Box::new(AddOffset {
+                    offset: 0,
+                    buffer: VecDeque::new(),
+                    scheduled: Arc::new(Mutex::new(VecDeque::new())),
+                }),
+                inputs: vec![sub("source", "out")],
+            })
+            .unwrap();
+        manager
+            .add_node(collect_spec("sink", "offset", "out", &out))
+            .unwrap();
+        manager
+            .reconfigure_at(
+                "offset",
+                NodeConfig::from([("offset".into(), ConfigValue::I64(1000))]),
+                ConfigurationBoundary::new(40, 40),
+            )
+            .unwrap();
+        manager.pump(1000);
+
+        let values = out.lock().unwrap();
+        assert_eq!(&values[..40], (0..40).collect::<Vec<_>>().as_slice());
+        assert_eq!(&values[40..], (1040..1060).collect::<Vec<_>>().as_slice());
+    }
+
+    #[test]
     fn restart_in_place_keeps_downstream_attached() {
         let mut manager = CooperativeManager::new();
         let out = Arc::new(Mutex::new(Vec::new()));
@@ -963,6 +1059,7 @@ mod tests {
                 node: Box::new(AddOffset {
                     offset: 0,
                     buffer: VecDeque::new(),
+                    scheduled: Arc::new(Mutex::new(VecDeque::new())),
                 }),
                 inputs: vec![sub("source", "out")],
             })
@@ -978,6 +1075,7 @@ mod tests {
                 Box::new(AddOffset {
                     offset: 5000,
                     buffer: VecDeque::new(),
+                    scheduled: Arc::new(Mutex::new(VecDeque::new())),
                 }),
                 vec![sub("source", "out")],
             )

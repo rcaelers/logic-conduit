@@ -12,7 +12,7 @@ use crate::about::AboutWindow;
 use crate::demo_signals;
 use crate::live_capture::{
     CaptureAnalysisAttachment, CaptureAvailability, CaptureCoordinator, CaptureCoordinatorContract,
-    CaptureReplayAttachment, capture_availability,
+    CaptureReplayAttachment, ConfigurationEpochResolution, capture_availability,
 };
 use crate::toast::Toasts;
 
@@ -71,6 +71,9 @@ pub struct App {
     capture_graph: Option<GraphState>,
     capture_analysis: Option<compiler::AppRun>,
     capture_analysis_error: Option<String>,
+    capture_epoch_observed_graph: Option<Vec<u8>>,
+    capture_epoch_request_in_flight: bool,
+    last_capture_epoch_sync: f64,
     run: Option<compiler::AppRun>,
     /// Persistent run *state* shown in the status bar next to Run/Stop — the
     /// current compile-error summary, or "stop & rerun to apply" while a
@@ -278,6 +281,9 @@ impl App {
             capture_graph: None,
             capture_analysis: None,
             capture_analysis_error: None,
+            capture_epoch_observed_graph: None,
+            capture_epoch_request_in_flight: false,
+            last_capture_epoch_sync: -1.0,
             run: None,
             run_message: None,
             toasts: Toasts::default(),
@@ -558,6 +564,8 @@ impl App {
             }
         };
         self.capture_graph = Some(self.node_graph.graph().clone());
+        self.capture_epoch_observed_graph = serde_json::to_vec(self.node_graph.graph()).ok();
+        self.capture_epoch_request_in_flight = false;
         self.capture_analysis = None;
         self.capture_analysis_error = None;
         match self
@@ -567,6 +575,7 @@ impl App {
             Ok(()) => self.node_graph.set_editing_enabled(false),
             Err(error) => {
                 self.capture_graph = None;
+                self.capture_epoch_observed_graph = None;
                 self.toasts.error(error);
             }
         }
@@ -609,14 +618,15 @@ impl App {
         self.capture.set_graph_processed_samples(graph_processed);
         let analysis_active = self.is_capture_analysis_active();
         self.node_graph
-            .set_editing_enabled(self.capture.graph_editing_enabled() && !analysis_active);
-        self.logic_analyzer.set_simple_trigger_editing_enabled(
-            self.capture.graph_editing_enabled() && !analysis_active,
-        );
+            .set_editing_enabled(self.capture.graph_editing_enabled());
+        self.logic_analyzer
+            .set_simple_trigger_editing_enabled(!self.capture.is_active() && !analysis_active);
         if self.capture.is_active() || analysis_active || self.capture.export_status().is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         } else if self.capture_analysis.is_none() {
             self.capture_graph = None;
+            self.capture_epoch_observed_graph = None;
+            self.capture_epoch_request_in_flight = false;
         }
     }
 
@@ -652,18 +662,18 @@ impl App {
     }
 
     fn sync_capture_analysis(&mut self, ctx: &egui::Context) {
-        let Some(run) = &mut self.capture_analysis else {
+        if self.capture_analysis.is_none() {
             return;
-        };
-        run.pump(256);
-        for (id, items) in run.progress() {
+        }
+        self.capture_analysis.as_mut().unwrap().pump(256);
+        for (id, items) in self.capture_analysis.as_ref().unwrap().progress() {
             let status = (items > 0).then(|| format_count(items));
             self.node_graph.set_node_status(id, status);
         }
-        if !run.is_finished() {
+        if !self.capture_analysis.as_ref().unwrap().is_finished() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
-        for (node, event) in run.take_disconnected() {
+        for (node, event) in self.capture_analysis.as_ref().unwrap().take_disconnected() {
             if let Some(id) = node {
                 self.node_graph.set_node_badge(
                     id,
@@ -674,6 +684,102 @@ impl App {
                 );
                 self.error_badges.push(id);
             }
+        }
+
+        if let Some(preparation) = self.capture.take_configuration_epoch_preparation() {
+            self.capture_epoch_request_in_flight = false;
+            match preparation {
+                Ok(prepared) => {
+                    let result = self
+                        .capture_analysis
+                        .as_mut()
+                        .unwrap()
+                        .apply_configuration_epoch(
+                            &prepared.graph,
+                            &self.builders,
+                            prepared.boundary,
+                        );
+                    let resolution = match result {
+                        Ok(summary) => {
+                            self.toasts.info(format!(
+                                "configuration epoch {} applied at sample {} ({} node{})",
+                                prepared.epoch_id,
+                                prepared.source_sample,
+                                summary.configured,
+                                if summary.configured == 1 { "" } else { "s" }
+                            ));
+                            ConfigurationEpochResolution::Applied
+                        }
+                        Err(compiler::ApplyError::NeedsFullRestart(reason)) => {
+                            self.toasts
+                                .info(format!("live edit deferred to the next capture: {reason}"));
+                            ConfigurationEpochResolution::Deferred(reason)
+                        }
+                        Err(compiler::ApplyError::Compile(errors)) => {
+                            let message = errors
+                                .first()
+                                .map(|error| error.message.clone())
+                                .unwrap_or_else(|| "the edited graph is invalid".into());
+                            self.toasts
+                                .error(format!("configuration epoch failed: {message}"));
+                            ConfigurationEpochResolution::Failed(message)
+                        }
+                        Err(compiler::ApplyError::Apply(message)) => {
+                            self.toasts
+                                .error(format!("configuration epoch failed: {message}"));
+                            ConfigurationEpochResolution::Failed(message)
+                        }
+                    };
+                    if let Err(error) = self
+                        .capture
+                        .resolve_configuration_epoch(prepared.epoch_id, resolution)
+                    {
+                        self.toasts.error(error);
+                    }
+                }
+                Err(error) => self.toasts.error(error),
+            }
+        }
+        if let Some(Err(error)) = self.capture.take_configuration_epoch_notice() {
+            self.toasts.error(format!(
+                "could not persist configuration epoch outcome: {error}"
+            ));
+        }
+
+        const EPOCH_SYNC_INTERVAL_S: f64 = 0.5;
+        let now = ctx.input(|input| input.time);
+        let recording = self.capture.status().is_some_and(|status| {
+            status.state == signal_processing::CaptureSessionState::Recording
+        });
+        if !recording
+            || self.capture_analysis.as_ref().unwrap().is_finished()
+            || self.capture_epoch_request_in_flight
+            || now - self.last_capture_epoch_sync < EPOCH_SYNC_INTERVAL_S
+        {
+            return;
+        }
+        self.last_capture_epoch_sync = now;
+        let revision = match serde_json::to_vec(self.node_graph.graph()) {
+            Ok(revision) => revision,
+            Err(error) => {
+                self.toasts.error(format!(
+                    "could not encode the edited capture graph: {error}"
+                ));
+                return;
+            }
+        };
+        if self.capture_epoch_observed_graph.as_ref() == Some(&revision) {
+            return;
+        }
+        match self
+            .capture
+            .request_configuration_epoch(self.node_graph.graph().clone())
+        {
+            Ok(()) => {
+                self.capture_epoch_observed_graph = Some(revision);
+                self.capture_epoch_request_in_flight = true;
+            }
+            Err(error) => self.toasts.error(error),
         }
     }
 

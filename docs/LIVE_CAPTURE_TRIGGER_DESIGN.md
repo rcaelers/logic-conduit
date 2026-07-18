@@ -101,9 +101,9 @@ The UI-independent live-capture foundation is also present:
   acquisition and summary construction continue;
 - a trigger event advances the UI through Armed and observable Triggered state, records the
   recording origin, and adds an exact red trigger marker to the raw waveform timeline;
-- the application publishes analysis progress and sample lag, keeps graph editing disabled until
-  acquisition and downstream drain are both complete, and preserves live derived lanes while the
-  analysis cursor catches up;
+- the application publishes analysis progress and sample lag, enables graph editing only in
+  Recording, routes hot-configurable changes through durable future-only epochs, keeps acquisition
+  controls immutable, and preserves live derived lanes while the analysis cursor catches up;
 - Run on a live-source graph requires its associated finalized session, creates fresh derived lane
   stores without persistent-cache reuse, and atomically replaces the live-derived presentation;
 - `NodeGraphWidget` has a generic host-controlled editing mode: selection, inspection, copy, pan,
@@ -172,9 +172,9 @@ fixed from Start until the capture and downstream drain both finish. It provides
 - Run-based re-analysis of the finalized capture with fresh derived-data stores.
 
 This behavior is delivered through the small, dependency-ordered phases below. No phase needs to
-implement the whole release slice at once. Multiple live sources, graph editing during capture,
-repeated frames, advanced trigger stages, and capture export remain later phases. They use the same
-contracts rather than replacing the first implementation.
+implement the whole release slice at once. Multiple live sources, repeated frames, advanced trigger
+stages, and the separately scoped extended workflows use the same contracts rather than replacing
+the first implementation.
 
 ### Terminology
 
@@ -204,7 +204,7 @@ pre-trigger data can therefore be retained without pretending it belongs after t
 | `logic_analyzer_processing` | Portable analyzer control/events and concrete U3Pro16 USB behavior. It translates U3 trigger headers and chunks into the generic session contracts. |
 | `logic_analyzer_graph` | U3Pro16 saved trigger state, generic live-source descriptors, trigger-state lowering, replay override lowering, and builder registration. Concrete U3 behavior stays in its feature directory. |
 | `logic_analyzer_viewer` | Generic lane trigger icons, hit testing, live capture queries, and neutral trigger-edit events. It does not identify U3Pro16 or construct hardware trigger programs. |
-| `logic_analyzer_ui` | Capture-session coordinator, Start/Stop state machine, graph lock, title-bar controls, status/toasts, and routing neutral edits between descriptors and widgets. It does not branch on node names. |
+| `logic_analyzer_ui` | Capture-session coordinator, Start/Stop state machine, recording-time epoch orchestration, title-bar controls, status/toasts, and routing neutral edits between descriptors and widgets. It does not branch on node names. |
 | `node_graph` | Generic read-only/edit-enabled mode during capture. It has no capture or trigger concepts. |
 
 The U3Pro16 remains native-only as a complete registry/module boundary. Generic session, graph,
@@ -516,8 +516,8 @@ Start performs these operations in order:
 3. Create fresh raw and derived stores and a gated analysis cursor whose origin is not yet fixed.
 4. Ask the source feature to open the analyzer, negotiate an immutable effective plan, and configure
    it against the raw-store writer, including its trigger program.
-5. Materialize the fixed graph with a live analysis-cursor override and every downstream
-   subscription ready.
+5. Materialize the base graph with a live analysis-cursor override and every downstream
+   subscription ready; later accepted hot configuration is scheduled through explicit epochs.
 6. Start/arm the prepared acquisition and enter Armed or immediate Recording. A `Triggered` event
    fixes the recording origin and releases the analysis cursor; free-running capture uses its first
    committed sample.
@@ -831,24 +831,28 @@ Re-analysis always starts from the recording origin and processes the immutable 
 current graph. It uses a fresh `DerivedLanes` generation, so old live-derived results are replaced
 atomically rather than appended to or patched. Re-analysis never changes raw capture data.
 
-### Future configuration epochs
+### Configuration epochs
 
-After fixed-graph capture is reliable, ordinary processor parameters may change while Recording.
-Every accepted change receives an effective sample boundary and monotonically increasing epoch ID.
-Nodes apply the change only to subsequent input. Already emitted words, markers, files, and viewer
-lanes remain untouched.
+Ordinary hot-configurable processor parameters may change while Recording. Each attempted graph
+revision receives a monotonically increasing epoch ID and a boundary at the current durable raw
+sample frontier. The boundary records both the original source-sample coordinate and the
+recording-relative sample/timestamp consumed by the analysis graph. A processor schedules the
+validated configuration and switches immediately before its first input event at or after that
+timestamp. Queued older events therefore retain the previous configuration. Already emitted words,
+markers, files, and viewer lanes remain untouched.
 
-The existing live manager supplies add/remove/hot-reconfigure/restart mechanics. The capture
-session adds the missing durable facts:
+The capture application metadata durably records the complete attempted graph revision, epoch ID,
+both effective sample coordinates, effective timestamp, and outcome. A pending record is installed
+before the runtime change is scheduled and is resolved to applied, deferred, or failed afterward.
+An unresolved record recovered after interruption is reported as failed. Original source-sample
+coordinates remain stable when bounded retention advances the store's retained prefix.
 
-- graph revision or patch;
-- epoch ID;
-- effective sample/timestamp; and
-- success/failure outcome.
-
-Acquisition settings that hardware cannot change safely—sample rate, channel mask, simple trigger,
-clock source, and encoding—remain deferred to the next capture session. A future driver capability
-may explicitly permit a subset at safe boundaries.
+This first epoch contract accepts only changes classified by the owning runtime builder as hot
+configuration. Node additions/removals, wiring changes, restarts, source changes, and acquisition
+settings are retained in the editable graph but deferred to the next capture/Run with a visible
+reason. Sample rate, channel mask, simple trigger, clock source, and encoding remain immutable for
+the active hardware session. A future provider capability may explicitly permit a subset at a safe
+device boundary.
 
 Re-analysis normally ignores live epochs and runs the current graph from the start. Reproducing the
 original live analysis from its epoch log is a separate explicit mode.
@@ -902,7 +906,8 @@ the first vertical slice:
 Repeated acquisition uses `CaptureFrameId` and per-frame trigger/origin metadata from the start;
 it does not concatenate frames into a falsely continuous sample range. Search and measurements use
 the same committed-prefix query boundary as the viewer. Automation invokes the same coordinator
-commands as the UI, so it cannot bypass validation, graph locking, or finalization.
+commands as the UI, so it cannot bypass validation, active-session setting immutability, epoch
+boundaries, or finalization.
 
 The advanced Triggers panel consumes a generic `TriggerEditorSchema` and emits neutral edit
 operations. The schema describes supported predicates, typed operands, stage/sequence structure,
@@ -1137,13 +1142,36 @@ trigger position; unsupported derived values produce an explicit warning rather 
 
 #### Phase 13 — Extended live workflows
 
-- Add configuration epochs and graph changes that affect only future samples.
-- Add advanced staged/counted/serial triggers, repeated or segmented acquisition, live search and
-  measurements, notifications, automation, source synchronization, and power-management
-  integration as separately scoped follow-up work.
+##### Phase 13.1 — Configuration epochs
 
-Gate: each follow-up receives its own focused design amendment and acceptance gate before
-implementation; Phase 13 is not a single release-blocking batch.
+- Permit recording-time graph editing and apply only builder-declared hot configuration at an
+  explicit durable-source and recording-relative sample/time boundary.
+- Persist pending and resolved graph revisions without protocol or node-name knowledge in generic
+  runtime/viewer infrastructure; defer structural, source, and acquisition edits visibly.
+
+Gate: deterministic native and cooperative-runtime tests prove that queued events before the
+boundary use the old configuration and events at/after it use the new configuration; interrupted
+pending records recover explicitly, retention preserves their original coordinate, and native/wasm
+builds retain the same platform-neutral scheduling contract.
+
+##### Proposed future phases 13.2–13.9
+
+- **13.2 Advanced-trigger contract:** provider-neutral schema, validation, capabilities, and
+  lowering boundary.
+- **13.3 Advanced Triggers panel:** neutral editing, persistence, migration, and simple-trigger
+  interoperability.
+- **13.4 Concrete advanced-trigger execution:** deterministic providers followed by hardware
+  lowering and fixtures.
+- **13.5 Repeated and segmented acquisition:** frame identity, per-frame origins/triggers, bounded
+  storage, replay, and navigation.
+- **13.6 Live search and measurements:** committed-prefix coverage and lag.
+- **13.7 Notifications and power integration:** host capabilities for lifecycle/integrity events
+  and sleep inhibition.
+- **13.8 Automation:** the same validated coordinator commands through a UI-independent service.
+- **13.9 Source synchronization:** external trigger/clock contracts and shared-timeline alignment.
+
+Each future phase receives a focused design amendment and acceptance gate before implementation;
+Phase 13 is not a single release-blocking batch.
 
 ### Verification strategy
 

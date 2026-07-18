@@ -31,6 +31,39 @@ pub enum ConfigValue {
 /// the app-layer builders that know how UI state maps onto runtime knobs.
 pub type NodeConfig = std::collections::HashMap<String, ConfigValue>;
 
+/// An immutable point on a capture analysis timeline at which a scheduled
+/// configuration becomes eligible to take effect.
+///
+/// `sample_index` is recording-relative. `timestamp_ns` uses the timestamps
+/// carried by runtime events, so a node can preserve future-only semantics
+/// even when older events are already queued downstream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfigurationBoundary {
+    pub sample_index: u64,
+    pub timestamp_ns: u64,
+}
+
+impl ConfigurationBoundary {
+    pub const fn new(sample_index: u64, timestamp_ns: u64) -> Self {
+        Self {
+            sample_index,
+            timestamp_ns,
+        }
+    }
+}
+
+/// Thread-safe validation and enqueue boundary for future-only node
+/// configuration. The manager retains this handle before moving the node
+/// into its worker, so scheduling is not delayed when `work()` is blocked
+/// waiting for its next input event.
+pub trait ConfigurationScheduler: Send + Sync {
+    fn schedule_config(
+        &self,
+        config: &NodeConfig,
+        boundary: ConfigurationBoundary,
+    ) -> ConfigOutcome;
+}
+
 /// Outcome of a hot configuration attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigOutcome {
@@ -152,6 +185,14 @@ pub trait ProcessNode: Send {
         ConfigOutcome::NeedsRestart
     }
 
+    /// Returns a thread-safe configuration scheduler when this node supports
+    /// explicit future-only epochs. The node and scheduler share a pending
+    /// queue; `work()` consumes due entries immediately before processing an
+    /// event at or after their timestamp.
+    fn configuration_scheduler(&self) -> Option<Arc<dyn ConfigurationScheduler>> {
+        None
+    }
+
     /// Random-access query handle for output port `port`, if this node
     /// can answer it without streaming. Only called by `Pipeline::build`
     /// for connections that negotiated
@@ -213,6 +254,9 @@ impl ProcessNode for Box<dyn ProcessNode> {
     }
     fn apply_config(&mut self, config: &NodeConfig) -> ConfigOutcome {
         (**self).apply_config(config)
+    }
+    fn configuration_scheduler(&self) -> Option<Arc<dyn ConfigurationScheduler>> {
+        (**self).configuration_scheduler()
     }
     fn edge_query(
         &self,

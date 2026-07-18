@@ -1,12 +1,16 @@
 //! Word matcher emitting a trigger whenever a decoded word matches a pattern.
 
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 use tracing::debug;
 
 use signal_processing::errors::{WorkError, WorkResult};
 use signal_processing::events::{Trigger, Word};
-use signal_processing::node::ProcessNode;
+use signal_processing::node::{
+    ConfigOutcome, ConfigValue, ConfigurationBoundary, ConfigurationScheduler, NodeConfig,
+    ProcessNode,
+};
 use signal_processing::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 use signal_processing::sample::Sample;
 
@@ -91,6 +95,43 @@ pub struct WordMatcher {
     /// End of the previously emitted pulse (monotonicity guard).
     last_pulse_end: u64,
     started: bool,
+    scheduled_settings: Arc<Mutex<VecDeque<(ConfigurationBoundary, NodeConfig)>>>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct MatcherSettings {
+    pattern: u64,
+    mask: u64,
+    op: MatchOp,
+    trigger_at: TriggerAt,
+}
+
+struct WordMatcherConfigurationScheduler {
+    scheduled: Arc<Mutex<VecDeque<(ConfigurationBoundary, NodeConfig)>>>,
+}
+
+impl ConfigurationScheduler for WordMatcherConfigurationScheduler {
+    fn schedule_config(
+        &self,
+        config: &NodeConfig,
+        boundary: ConfigurationBoundary,
+    ) -> ConfigOutcome {
+        if WordMatcher::configured_settings(MatcherSettings::default(), config).is_err() {
+            return ConfigOutcome::NeedsRestart;
+        }
+        let mut scheduled = self
+            .scheduled
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if scheduled
+            .back()
+            .is_some_and(|(previous, _)| previous.timestamp_ns > boundary.timestamp_ns)
+        {
+            return ConfigOutcome::NeedsRestart;
+        }
+        scheduled.push_back((boundary, config.clone()));
+        ConfigOutcome::Applied
+    }
 }
 
 impl WordMatcher {
@@ -106,6 +147,7 @@ impl WordMatcher {
             matches: 0,
             last_pulse_end: 0,
             started: false,
+            scheduled_settings: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -127,6 +169,61 @@ impl WordMatcher {
     pub fn with_pulse_ns(mut self, pulse_ns: u64) -> Self {
         self.pulse_ns = pulse_ns.max(1);
         self
+    }
+
+    fn settings(&self) -> MatcherSettings {
+        MatcherSettings {
+            pattern: self.pattern,
+            mask: self.mask,
+            op: self.op,
+            trigger_at: self.trigger_at,
+        }
+    }
+
+    fn configured_settings(
+        mut settings: MatcherSettings,
+        config: &NodeConfig,
+    ) -> Result<MatcherSettings, ()> {
+        for (key, value) in config {
+            match (key.as_str(), value) {
+                ("pattern", ConfigValue::U64(pattern)) => settings.pattern = *pattern,
+                ("mask", ConfigValue::U64(mask)) => settings.mask = *mask,
+                ("op", ConfigValue::Text(op)) => settings.op = MatchOp::parse(op).ok_or(())?,
+                ("trigger_at", ConfigValue::Text(at)) => {
+                    settings.trigger_at = TriggerAt::parse(at).ok_or(())?;
+                }
+                _ => return Err(()),
+            }
+        }
+        Ok(settings)
+    }
+
+    fn apply_settings(&mut self, settings: MatcherSettings) {
+        self.pattern = settings.pattern;
+        self.mask = settings.mask;
+        self.op = settings.op;
+        self.trigger_at = settings.trigger_at;
+    }
+
+    fn apply_scheduled_settings(&mut self, timestamp_ns: u64) {
+        let mut due = Vec::new();
+        {
+            let mut scheduled = self
+                .scheduled_settings
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            while scheduled
+                .front()
+                .is_some_and(|(boundary, _)| boundary.timestamp_ns <= timestamp_ns)
+            {
+                due.push(scheduled.pop_front().expect("front was present").1);
+            }
+        }
+        for config in due {
+            let settings = Self::configured_settings(self.settings(), &config)
+                .expect("scheduled matcher configuration was validated before enqueue");
+            self.apply_settings(settings);
+        }
     }
 }
 
@@ -150,27 +247,18 @@ impl ProcessNode for WordMatcher {
     /// Hot-appliable: `pattern` / `mask` (U64), `op`, and `trigger_at`.
     /// Takes effect for the next word; in-flight words already consumed
     /// keep the old match result (accepted hot-reconfigure semantics).
-    fn apply_config(
-        &mut self,
-        config: &signal_processing::node::NodeConfig,
-    ) -> signal_processing::node::ConfigOutcome {
-        use signal_processing::node::{ConfigOutcome, ConfigValue};
-        for (key, value) in config {
-            match (key.as_str(), value) {
-                ("pattern", ConfigValue::U64(pattern)) => self.pattern = *pattern,
-                ("mask", ConfigValue::U64(mask)) => self.mask = *mask,
-                ("op", ConfigValue::Text(op)) => match MatchOp::parse(op) {
-                    Some(op) => self.op = op,
-                    None => return ConfigOutcome::NeedsRestart,
-                },
-                ("trigger_at", ConfigValue::Text(at)) => match TriggerAt::parse(at) {
-                    Some(at) => self.trigger_at = at,
-                    None => return ConfigOutcome::NeedsRestart,
-                },
-                _ => return ConfigOutcome::NeedsRestart,
-            }
-        }
+    fn apply_config(&mut self, config: &NodeConfig) -> ConfigOutcome {
+        let Ok(settings) = Self::configured_settings(self.settings(), config) else {
+            return ConfigOutcome::NeedsRestart;
+        };
+        self.apply_settings(settings);
         ConfigOutcome::Applied
+    }
+
+    fn configuration_scheduler(&self) -> Option<Arc<dyn ConfigurationScheduler>> {
+        Some(Arc::new(WordMatcherConfigurationScheduler {
+            scheduled: Arc::clone(&self.scheduled_settings),
+        }))
     }
 
     fn output_schema(&self) -> Vec<PortSchema> {
@@ -202,6 +290,7 @@ impl ProcessNode for WordMatcher {
         }
 
         let word = input.recv()?;
+        self.apply_scheduled_settings(word.timestamp_ns);
         let value = word.value;
         if self.op.matches(value & self.mask, self.pattern & self.mask) {
             let ts = match self.trigger_at {
@@ -431,5 +520,42 @@ mod tests {
         assert_eq!(run_with_op(MatchOp::Le), vec![1, 2]);
         assert_eq!(run_with_op(MatchOp::Gt), vec![3]);
         assert_eq!(run_with_op(MatchOp::Ge), vec![2, 3]);
+    }
+
+    #[test]
+    fn scheduled_pattern_uses_old_config_before_boundary_and_new_at_boundary() {
+        let wd = Watchdog::new();
+        let (tx, rx) = bounded::<ChannelMessage<Word>>(16);
+        let input = InputPort::new_with_watchdog(rx, &wd, "m", "words");
+        let (ttx, trx) = bounded::<ChannelMessage<Trigger>>(16);
+        let trigger_out =
+            OutputPort::new_with_watchdog(Sender::new(vec![ttx]), &wd, "m", "trigger");
+        let (ptx, _prx) = bounded::<ChannelMessage<Sample>>(16);
+        let pulse_out = OutputPort::new_with_watchdog(Sender::new(vec![ptx]), &wd, "m", "matched");
+        for (value, timestamp) in [(1, 100), (2, 199), (2, 200), (1, 201)] {
+            tx.send(ChannelMessage::Sample(Word::new(value, timestamp)))
+                .unwrap();
+        }
+        drop(tx);
+
+        let mut matcher = WordMatcher::new(1, u64::MAX);
+        let config = NodeConfig::from([("pattern".to_owned(), ConfigValue::U64(2))]);
+        assert_eq!(
+            matcher
+                .configuration_scheduler()
+                .unwrap()
+                .schedule_config(&config, ConfigurationBoundary::new(2, 200)),
+            ConfigOutcome::Applied
+        );
+        run_to_shutdown(&mut matcher, &[input], &[trigger_out, pulse_out]);
+
+        let timestamps: Vec<_> = trx
+            .try_iter()
+            .filter_map(|message| match message {
+                ChannelMessage::Sample(trigger) => Some(trigger.timestamp_ns),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(timestamps, vec![100, 200]);
     }
 }

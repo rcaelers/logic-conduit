@@ -1,10 +1,14 @@
 //! Text formatter mapping integer levels to a text level via a template.
 
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 use signal_processing::errors::{WorkError, WorkResult};
 use signal_processing::events::{NumberSample, TextSample};
-use signal_processing::node::ProcessNode;
+use signal_processing::node::{
+    ConfigOutcome, ConfigValue, ConfigurationBoundary, ConfigurationScheduler, NodeConfig,
+    ProcessNode,
+};
 use signal_processing::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 
 /// Substitutes value placeholders in `template`:
@@ -82,6 +86,35 @@ pub struct TextFormatter {
     eos: Vec<bool>,
     last_text: Option<String>,
     buffers: Vec<VecDeque<NumberSample>>,
+    scheduled_templates: Arc<Mutex<VecDeque<(ConfigurationBoundary, NodeConfig)>>>,
+}
+
+struct TextFormatterConfigurationScheduler {
+    scheduled: Arc<Mutex<VecDeque<(ConfigurationBoundary, NodeConfig)>>>,
+}
+
+impl ConfigurationScheduler for TextFormatterConfigurationScheduler {
+    fn schedule_config(
+        &self,
+        config: &NodeConfig,
+        boundary: ConfigurationBoundary,
+    ) -> ConfigOutcome {
+        if TextFormatter::configured_template(config).is_err() {
+            return ConfigOutcome::NeedsRestart;
+        }
+        let mut scheduled = self
+            .scheduled
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if scheduled
+            .back()
+            .is_some_and(|(previous, _)| previous.timestamp_ns > boundary.timestamp_ns)
+        {
+            return ConfigOutcome::NeedsRestart;
+        }
+        scheduled.push_back((boundary, config.clone()));
+        ConfigOutcome::Applied
+    }
 }
 
 impl TextFormatter {
@@ -100,6 +133,7 @@ impl TextFormatter {
             eos: vec![false; num_values],
             last_text: None,
             buffers: (0..num_values).map(|_| VecDeque::new()).collect(),
+            scheduled_templates: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -115,6 +149,38 @@ impl TextFormatter {
             format!("value{index}")
         }
     }
+
+    fn configured_template(config: &NodeConfig) -> Result<Option<String>, ()> {
+        let mut template = None;
+        for (key, value) in config {
+            match (key.as_str(), value) {
+                ("template", ConfigValue::Text(value)) => template = Some(value.clone()),
+                _ => return Err(()),
+            }
+        }
+        Ok(template)
+    }
+
+    fn apply_scheduled_templates(&mut self, timestamp_ns: u64) {
+        let mut due = Vec::new();
+        {
+            let mut scheduled = self
+                .scheduled_templates
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            while scheduled
+                .front()
+                .is_some_and(|(boundary, _)| boundary.timestamp_ns <= timestamp_ns)
+            {
+                due.push(scheduled.pop_front().expect("front was present").1);
+            }
+        }
+        for config in due {
+            if let Ok(Some(template)) = Self::configured_template(&config) {
+                self.template = template;
+            }
+        }
+    }
 }
 
 impl ProcessNode for TextFormatter {
@@ -124,18 +190,20 @@ impl ProcessNode for TextFormatter {
 
     /// Hot-appliable: `template` (Text). Applies to the next value change;
     /// the current text level keeps the old formatting until then.
-    fn apply_config(
-        &mut self,
-        config: &signal_processing::node::NodeConfig,
-    ) -> signal_processing::node::ConfigOutcome {
-        use signal_processing::node::{ConfigOutcome, ConfigValue};
-        for (key, value) in config {
-            match (key.as_str(), value) {
-                ("template", ConfigValue::Text(template)) => self.template = template.clone(),
-                _ => return ConfigOutcome::NeedsRestart,
-            }
+    fn apply_config(&mut self, config: &NodeConfig) -> ConfigOutcome {
+        let Ok(template) = Self::configured_template(config) else {
+            return ConfigOutcome::NeedsRestart;
+        };
+        if let Some(template) = template {
+            self.template = template;
         }
         ConfigOutcome::Applied
+    }
+
+    fn configuration_scheduler(&self) -> Option<Arc<dyn ConfigurationScheduler>> {
+        Some(Arc::new(TextFormatterConfigurationScheduler {
+            scheduled: Arc::clone(&self.scheduled_templates),
+        }))
     }
 
     fn num_inputs(&self) -> usize {
@@ -175,6 +243,7 @@ impl ProcessNode for TextFormatter {
                 .and_then(|port| port.get::<NumberSample>(&mut self.buffers[0]))
                 .ok_or_else(|| WorkError::NodeError("Missing value input".to_string()))?;
             let number = input.recv()?;
+            self.apply_scheduled_templates(number.start_time_ns);
             let text = format_template(&self.template, &[number.value]);
             output.send(TextSample::new(text, number.start_time_ns))?;
             return Ok(1);
@@ -208,6 +277,7 @@ impl ProcessNode for TextFormatter {
         };
         self.heads[index] = None;
         self.values[index] = sample.value;
+        self.apply_scheduled_templates(sample.start_time_ns);
 
         let text = format_template(&self.template, &self.values);
         if self.last_text.as_deref() == Some(text.as_str()) {
@@ -332,6 +402,56 @@ mod tests {
                 TextSample::new("0/5", 0), // input 1's t=0 initial
                 TextSample::new("0/6", 200),
                 TextSample::new("1/6", 300),
+            ]
+        );
+    }
+
+    #[test]
+    fn scheduled_template_keeps_queued_values_before_boundary_on_old_config() {
+        let wd = Watchdog::new();
+        let (tx, rx) = bounded::<ChannelMessage<NumberSample>>(16);
+        for sample in [
+            NumberSample::new(1, 100),
+            NumberSample::new(2, 199),
+            NumberSample::new(3, 200),
+        ] {
+            tx.send(ChannelMessage::Sample(sample)).unwrap();
+        }
+        drop(tx);
+        let inputs = [InputPort::new_with_watchdog(rx, &wd, "fmt", "value")];
+        let (out_tx, out_rx) = bounded::<ChannelMessage<TextSample>>(16);
+        let outputs = [OutputPort::new_with_watchdog(
+            Sender::new(vec![out_tx]),
+            &wd,
+            "fmt",
+            "text",
+        )];
+        let mut formatter = TextFormatter::new("old:{n}");
+        let config = NodeConfig::from([(
+            "template".to_owned(),
+            ConfigValue::Text("new:{n}".to_owned()),
+        )]);
+        assert_eq!(
+            formatter
+                .configuration_scheduler()
+                .unwrap()
+                .schedule_config(&config, ConfigurationBoundary::new(2, 200)),
+            ConfigOutcome::Applied
+        );
+
+        loop {
+            match formatter.work(&inputs, &outputs) {
+                Ok(_) => {}
+                Err(WorkError::Shutdown) => break,
+                Err(error) => panic!("unexpected error: {error}"),
+            }
+        }
+        assert_eq!(
+            collect(&out_rx),
+            vec![
+                TextSample::new("old:1", 100),
+                TextSample::new("old:2", 199),
+                TextSample::new("new:3", 200),
             ]
         );
     }

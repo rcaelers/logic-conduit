@@ -29,9 +29,9 @@ use node_graph::{
 };
 use signal_processing::{
     AppManager, CaptureChannelId, CaptureProviderCapabilities, CaptureSessionPlan,
-    CaptureStartMode, CaptureStoreCursor, DerivedLanes, DisconnectEvent, InputSub, NodeConfig,
-    OverflowPolicy, PersistentStoreConfig, ProcessNode, SampleBlock, SamplingActivity,
-    SimpleTriggerCondition, ViewerRetention,
+    CaptureStartMode, CaptureStoreCursor, ConfigurationBoundary, DerivedLanes, DisconnectEvent,
+    InputSub, NodeConfig, OverflowPolicy, PersistentStoreConfig, ProcessNode, SampleBlock,
+    SamplingActivity, SimpleTriggerCondition, ViewerRetention,
 };
 
 use super::cache_platform;
@@ -1640,6 +1640,72 @@ impl LiveRun {
         }
         self.compiled = new;
         Ok(summary)
+    }
+
+    /// Applies the subset of an edited capture graph that can preserve an
+    /// explicit future-only boundary. Phase 13.1 deliberately accepts only
+    /// builder-declared hot configuration; structural changes and restarts
+    /// remain in the edited graph for the next capture or ordinary Run.
+    pub fn apply_configuration_epoch(
+        &mut self,
+        graph: &GraphState,
+        registry: &BuilderRegistry,
+        boundary: ConfigurationBoundary,
+    ) -> Result<ApplySummary, ApplyError> {
+        let mut new = lower(graph, registry).map_err(ApplyError::Compile)?;
+        reuse_sampling_activities(&self.compiled, &mut new);
+        cache_platform::configure_directory(&mut new, self.persistent_cache_directory.as_deref());
+        let edits = diff(&self.compiled, &new, registry).map_err(ApplyError::NeedsFullRestart)?;
+        if edits.is_empty() {
+            self.compiled = new;
+            return Ok(ApplySummary::default());
+        }
+        if self.cache_pruned {
+            return Err(ApplyError::NeedsFullRestart(
+                "the running graph reused persistent viewer data; the edit is deferred to the next capture"
+                    .to_string(),
+            ));
+        }
+        if let Some(edit) = edits
+            .iter()
+            .find(|edit| !matches!(edit, LiveEdit::Configure(_, _)))
+        {
+            let reason = match edit {
+                LiveEdit::Add(_) => "node additions",
+                LiveEdit::Remove(_) => "node removals",
+                LiveEdit::Restart(_) => "node restarts or wiring changes",
+                LiveEdit::Configure(_, _) => unreachable!(),
+            };
+            return Err(ApplyError::NeedsFullRestart(format!(
+                "{reason} are deferred to the next capture"
+            )));
+        }
+
+        // Resolve every target before sending any control message so a
+        // missing running node cannot leave a partially scheduled epoch.
+        let scheduled: Vec<_> = edits
+            .into_iter()
+            .map(|edit| match edit {
+                LiveEdit::Configure(id, config) => self
+                    .names
+                    .get(&id)
+                    .cloned()
+                    .map(|name| (name, config))
+                    .ok_or_else(|| ApplyError::Apply(format!("n{} not running", id.0))),
+                _ => unreachable!(),
+            })
+            .collect::<Result<_, _>>()?;
+        let configured = scheduled.len();
+        for (name, config) in scheduled {
+            self.manager
+                .reconfigure_at(&name, config, boundary)
+                .map_err(ApplyError::Apply)?;
+        }
+        self.compiled = new;
+        Ok(ApplySummary {
+            configured,
+            ..ApplySummary::default()
+        })
     }
 
     pub fn is_finished(&self) -> bool {

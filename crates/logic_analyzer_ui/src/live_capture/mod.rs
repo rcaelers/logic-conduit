@@ -166,6 +166,21 @@ pub(crate) struct CaptureExportCompletion {
     pub warnings: Vec<String>,
 }
 
+#[derive(Clone)]
+pub(crate) struct PreparedConfigurationEpoch {
+    pub epoch_id: u64,
+    pub source_sample: u64,
+    pub boundary: signal_processing::ConfigurationBoundary,
+    pub graph: node_graph::GraphState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ConfigurationEpochResolution {
+    Applied,
+    Deferred(String),
+    Failed(String),
+}
+
 pub(crate) trait CaptureCoordinatorContract {
     fn backend_available() -> bool;
     fn backend_unavailable_reason() -> &'static str;
@@ -183,6 +198,27 @@ pub(crate) trait CaptureCoordinatorContract {
     fn status(&self) -> Option<&CaptureSessionStatus>;
     fn take_waveform_update(&mut self) -> Option<CaptureWaveformUpdate>;
     fn take_analysis_attachment(&mut self) -> Option<CaptureAnalysisAttachment>;
+    fn request_configuration_epoch(
+        &mut self,
+        _graph: node_graph::GraphState,
+    ) -> Result<(), String> {
+        Err("live configuration epochs are unavailable on this platform".into())
+    }
+    fn take_configuration_epoch_preparation(
+        &mut self,
+    ) -> Option<Result<PreparedConfigurationEpoch, String>> {
+        None
+    }
+    fn resolve_configuration_epoch(
+        &mut self,
+        _epoch_id: u64,
+        _resolution: ConfigurationEpochResolution,
+    ) -> Result<(), String> {
+        Err("live configuration epochs are unavailable on this platform".into())
+    }
+    fn take_configuration_epoch_notice(&mut self) -> Option<Result<(), String>> {
+        None
+    }
     fn replay_source_node(&self) -> Option<NodeId>;
     fn create_replay_attachment(&self) -> Result<Option<CaptureReplayAttachment>, String>;
     /// Remains true through Error cleanup until the supervisor has returned.

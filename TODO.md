@@ -107,9 +107,29 @@ Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN
   12. **Export — complete:** durable timeline metadata, pinned background DSL/portable raw export,
       bounded streaming, progress/cancellation, temporary destination files, trigger-position
       preservation, and explicit format capabilities are implemented.
-  13. **Extended workflows:** scope configuration epochs, advanced triggers, segmented acquisition,
-      automation, synchronization, and related features as separate follow-up amendments rather
-      than one implementation batch.
+  13. **Extended workflows:** keep the stable subphase numbers below and complete each focused gate
+      before starting the next one:
+      - **13.1 Configuration epochs — complete:** recording-time hot configuration switches at an
+        explicit durable-source/analysis-time boundary; pending and resolved graph revisions are
+        durable, interrupted attempts recover visibly, and structural/source/acquisition edits are
+        deferred.
+      - **13.2 Advanced-trigger contract:** define the provider-neutral staged/counted/serial
+        trigger schema, validation, capability negotiation, and concrete lowering boundary without
+        adding device-specific cases to generic UI/compiler code.
+      - **13.3 Advanced Triggers panel:** edit and persist the registered schema through neutral
+        operations, with migration diagnostics and simple-trigger interoperability.
+      - **13.4 Concrete advanced-trigger execution:** lower supported programs in each owning
+        source feature, cover deterministic providers first, then add hardware fixture coverage.
+      - **13.5 Repeated and segmented acquisition:** introduce frame identity, per-frame origin and
+        trigger metadata, bounded storage, replay, and viewer navigation.
+      - **13.6 Live search and measurements:** operate over committed raw/derived prefixes with
+        explicit coverage and lag.
+      - **13.7 Notifications and power integration:** add host capabilities for capture lifecycle,
+        integrity, storage, and sleep inhibition without platform conditionals in consumers.
+      - **13.8 Automation:** expose the same validated coordinator commands and outcomes through a
+        UI-independent service.
+      - **13.9 Source synchronization:** add external trigger/clock contracts and shared-timeline
+        alignment after multi-source viewer support is defined.
 - Make file and live sources first-class capture providers, rather than having the app select
   source types explicitly.
 - Persist/reload live-capture snapshots where appropriate so they can be indexed and revisited.
