@@ -27,8 +27,8 @@ use node_graph::{
     VariadicInfo,
 };
 use signal_processing::{
-    AppManager, CaptureChannelId, DerivedLanes, DisconnectEvent, InputSub, NodeConfig,
-    OverflowPolicy, PersistentStoreConfig, ProcessNode, SampleBlock, SamplingActivity,
+    AppManager, CaptureChannelId, CaptureStoreCursor, DerivedLanes, DisconnectEvent, InputSub,
+    NodeConfig, OverflowPolicy, PersistentStoreConfig, ProcessNode, SampleBlock, SamplingActivity,
     ViewerRetention,
 };
 
@@ -147,6 +147,15 @@ pub trait LiveCaptureFeature: Send {
     fn channel_names(&self) -> &[String];
     fn sample_rate_hz(&self) -> f64;
 
+    /// Builds the concrete source process that feeds this node's runtime
+    /// ports from an independent committed-store cursor. The feature owns
+    /// the port mapping; generic compiler and application code treat the
+    /// returned process opaquely.
+    fn analysis_source(
+        &self,
+        cursor: Box<dyn CaptureStoreCursor>,
+    ) -> Result<Box<dyn ProcessNode>, String>;
+
     fn prepare(
         self: Box<Self>,
         context: AcquisitionContext,
@@ -182,6 +191,13 @@ impl DiscoveredLiveCaptureFeature {
 
     pub fn sample_rate_hz(&self) -> f64 {
         self.feature.sample_rate_hz()
+    }
+
+    pub fn analysis_source(
+        &self,
+        cursor: Box<dyn CaptureStoreCursor>,
+    ) -> Result<Box<dyn ProcessNode>, String> {
+        self.feature.analysis_source(cursor)
     }
 
     pub fn prepare(
@@ -1268,12 +1284,41 @@ pub struct LiveRun {
     persistent_cache_directory: Option<std::path::PathBuf>,
 }
 
+/// One provider-owned source process used only while a live capture follows
+/// its authoritative store. This is intentionally narrower than the general
+/// finalized-session source overrides introduced in Phase 5.
+pub struct LiveAnalysisSource {
+    pub source_node: NodeId,
+    pub process: Box<dyn ProcessNode>,
+}
+
 /// Lowers and materializes `graph` under an [`AppManager`] — real OS threads
 /// natively, a cooperative single-thread runner on wasm.
 pub fn start_live(
     graph: &GraphState,
     registry: &BuilderRegistry,
     ctx: &mut CompileCtx,
+) -> Result<LiveRun, Vec<CompileError>> {
+    start_live_inner(graph, registry, ctx, None)
+}
+
+/// Starts the fixed compiled graph with its live-capable source replaced by
+/// the process that follows the capture store. All other nodes use the same
+/// lowering and materialization path as an ordinary run.
+pub fn start_live_analysis(
+    graph: &GraphState,
+    registry: &BuilderRegistry,
+    ctx: &mut CompileCtx,
+    source: LiveAnalysisSource,
+) -> Result<LiveRun, Vec<CompileError>> {
+    start_live_inner(graph, registry, ctx, Some(source))
+}
+
+fn start_live_inner(
+    graph: &GraphState,
+    registry: &BuilderRegistry,
+    ctx: &mut CompileCtx,
+    mut analysis_source: Option<LiveAnalysisSource>,
 ) -> Result<LiveRun, Vec<CompileError>> {
     let mut compiled = lower(graph, registry)?;
     cache_platform::configure_directory(&mut compiled, ctx.persistent_cache_directory.as_deref());
@@ -1286,6 +1331,28 @@ pub fn start_live(
 
     let (execution, cache_pruned) = cache_platform::prepare_execution(&compiled, registry);
 
+    if let Some(source) = &analysis_source {
+        let Some(node) = execution
+            .nodes
+            .iter()
+            .find(|node| node.id == source.source_node)
+        else {
+            return Err(vec![CompileError::on(
+                source.source_node,
+                "live analysis source is not retained by the compiled graph",
+            )]);
+        };
+        let is_source = registry
+            .get(&node.builder)
+            .is_some_and(RuntimeBuilder::is_source);
+        if !is_source {
+            return Err(vec![CompileError::on(
+                source.source_node,
+                "live analysis replacement does not target a source node",
+            )]);
+        }
+    }
+
     for id in topo_order(&execution) {
         let node = compiled_node(&execution, id);
         let builder = registry.get(&node.builder).ok_or_else(|| {
@@ -1295,9 +1362,19 @@ pub fn start_live(
             )]
         })?;
         ctx.viewer_word_caches.clone_from(&node.viewer_word_caches);
-        let process = builder
-            .build(&node.runtime_name, &node.state, &node.resolved, ctx)
-            .map_err(|message| vec![CompileError::on(id, message)])?;
+        let process = if analysis_source
+            .as_ref()
+            .is_some_and(|source| source.source_node == id)
+        {
+            analysis_source
+                .take()
+                .expect("matching live analysis source is present")
+                .process
+        } else {
+            builder
+                .build(&node.runtime_name, &node.state, &node.resolved, ctx)
+                .map_err(|message| vec![CompileError::on(id, message)])?
+        };
         let inputs = input_subs(&execution, id, process.as_ref(), &names)
             .map_err(|message| vec![CompileError::on(id, message)])?;
         manager
@@ -1511,10 +1588,14 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use logic_analyzer_processing::BinaryFileWriter;
+    use logic_analyzer_processing::{
+        BinaryFileWriter, CaptureAnalysisChannel, CaptureAnalysisSource,
+    };
     use node_graph::{NodeDef, NodeGraphWidget};
     use signal_processing::{
-        ConfigValue, CooperativeManager, DerivedLaneData, NodeSpec, Pipeline, Sample, Trigger, Word,
+        CaptureChannelId, CaptureChunk, CaptureChunkWriter, CaptureSessionId, ConfigValue,
+        CooperativeManager, DerivedLaneData, NativeCaptureStore, NativeCaptureStoreConfig,
+        NodeSpec, Pipeline, Sample, Trigger, Word,
     };
 
     use super::*;
@@ -1536,6 +1617,298 @@ mod tests {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         nodes::test_graphs::build_binary_decoder_demo(&mut widget);
         widget
+    }
+
+    struct ThrottledProcess {
+        inner: Box<dyn ProcessNode>,
+        delay: Duration,
+    }
+
+    struct ThrottledBinaryBuilder {
+        delay: Duration,
+    }
+
+    impl RuntimeBuilder for ThrottledBinaryBuilder {
+        fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
+            crate::nodes::BinaryDecoderBuilder.accepted_kinds(socket, state)
+        }
+
+        fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
+            crate::nodes::BinaryDecoderBuilder.offered_kinds(socket, state)
+        }
+
+        fn input_port(
+            &self,
+            socket: &Socket,
+            member_index: usize,
+            state: &Value,
+            kind: PortKind,
+        ) -> Option<String> {
+            crate::nodes::BinaryDecoderBuilder.input_port(socket, member_index, state, kind)
+        }
+
+        fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
+            crate::nodes::BinaryDecoderBuilder.output_port(socket, state, kind)
+        }
+
+        fn word_display_format(&self, socket: &Socket, state: &Value) -> Option<String> {
+            crate::nodes::BinaryDecoderBuilder.word_display_format(socket, state)
+        }
+
+        fn sampling_overlay(&self, state: &Value) -> Option<SamplingOverlayDescriptor> {
+            crate::nodes::BinaryDecoderBuilder.sampling_overlay(state)
+        }
+
+        fn input_required(&self, socket: &Socket, state: &Value) -> bool {
+            crate::nodes::BinaryDecoderBuilder.input_required(socket, state)
+        }
+
+        fn build(
+            &self,
+            name: &str,
+            state: &Value,
+            resolved: &ResolvedInputs,
+            ctx: &mut CompileCtx,
+        ) -> Result<Box<dyn ProcessNode>, String> {
+            let inner = crate::nodes::BinaryDecoderBuilder.build(name, state, resolved, ctx)?;
+            Ok(Box::new(ThrottledProcess {
+                inner,
+                delay: self.delay,
+            }))
+        }
+    }
+
+    impl ProcessNode for ThrottledProcess {
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+
+        fn should_stop(&self) -> bool {
+            self.inner.should_stop()
+        }
+
+        fn num_inputs(&self) -> usize {
+            self.inner.num_inputs()
+        }
+
+        fn num_outputs(&self) -> usize {
+            self.inner.num_outputs()
+        }
+
+        fn input_schema(&self) -> Vec<signal_processing::PortSchema> {
+            self.inner.input_schema()
+        }
+
+        fn output_schema(&self) -> Vec<signal_processing::PortSchema> {
+            self.inner.output_schema()
+        }
+
+        fn work(
+            &mut self,
+            inputs: &[signal_processing::InputPort],
+            outputs: &[signal_processing::OutputPort],
+        ) -> signal_processing::WorkResult<usize> {
+            std::thread::sleep(self.delay);
+            self.inner.work(inputs, outputs)
+        }
+    }
+
+    fn live_analysis_chunk(
+        session_id: CaptureSessionId,
+        channels: &[CaptureChannelId],
+        sequence: u64,
+        start_sample: u64,
+        sample_count: u64,
+    ) -> CaptureChunk {
+        let bit_offset = (sequence % 7) as u8;
+        let bit_count = sample_count as usize * channels.len();
+        let mut bytes = vec![0_u8; (usize::from(bit_offset) + bit_count).div_ceil(8)];
+        for relative in 0..sample_count {
+            let sample = start_sample + relative;
+            for channel in 0..channels.len() {
+                let value = match channel {
+                    0 => !sample.is_multiple_of(2),
+                    1 => !(sample / 2).is_multiple_of(2),
+                    _ => false,
+                };
+                if value {
+                    let bit =
+                        usize::from(bit_offset) + relative as usize * channels.len() + channel;
+                    bytes[bit / 8] |= 1 << (bit % 8);
+                }
+            }
+        }
+        CaptureChunk::packed_lsb_first(
+            session_id,
+            sequence,
+            start_sample,
+            sample_count,
+            channels.to_vec(),
+            bytes,
+            bit_offset,
+        )
+        .unwrap()
+    }
+
+    fn captured_words(
+        lanes: &signal_processing::DerivedLanes,
+    ) -> Vec<signal_processing::Annotation> {
+        let lanes = lanes.read();
+        lanes
+            .iter()
+            .find_map(|lane| match &lane.data {
+                DerivedLaneData::Annotations(words) => Some(words.clone()),
+                DerivedLaneData::IndexedAnnotations(indexed) => {
+                    let metadata = indexed.metadata();
+                    let end = metadata.extent_end_ns.unwrap_or(0);
+                    Some(
+                        indexed
+                            .query
+                            .exact_window(
+                                0,
+                                end,
+                                usize::try_from(metadata.total_word_count)
+                                    .unwrap_or(usize::MAX)
+                                    .saturating_add(1),
+                            )
+                            .unwrap()
+                            .annotations,
+                    )
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("binary decoder word lane; actual lanes: {lanes:?}"))
+    }
+
+    #[test]
+    fn lagging_live_analysis_catches_up_without_backpressuring_capture() {
+        const CHUNKS: u64 = 48;
+        const SAMPLES_PER_CHUNK: u64 = 128;
+
+        let mut widget = NodeGraphWidget::new(nodes::build_registry());
+        let source_node = nodes::test_graphs::build_live_binary_test(&mut widget);
+        let mut registry = BuilderRegistry::standard();
+        registry.insert(
+            nodes::BinaryDecoder::name(),
+            Box::new(ThrottledBinaryBuilder {
+                delay: Duration::from_millis(3),
+            }),
+        );
+        let channels = vec![
+            CaptureChannelId::new("test:clock"),
+            CaptureChannelId::new("test:data"),
+        ];
+        let session_id = CaptureSessionId::new(0x4c49_5645);
+        let directory = tempfile::tempdir().unwrap();
+        let descriptor =
+            signal_processing::CaptureStoreDescriptor::new(session_id, channels.clone()).unwrap();
+        let (store, mut writer) =
+            NativeCaptureStore::create(NativeCaptureStoreConfig::new(directory.path(), descriptor))
+                .unwrap();
+
+        let cursor = store.open_cursor().unwrap();
+        let source = CaptureAnalysisSource::new(
+            "throttled-live-source",
+            Box::new(cursor),
+            1_000_000_000.0,
+            channels
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, channel)| {
+                    CaptureAnalysisChannel::separate(
+                        channel,
+                        format!("ch{index}"),
+                        format!("block{index}"),
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+        let mut live_ctx = CompileCtx::default();
+        let live_lanes = live_ctx.derived_lanes.clone();
+        let mut live_run = start_live_analysis(
+            widget.graph(),
+            &registry,
+            &mut live_ctx,
+            LiveAnalysisSource {
+                source_node,
+                process: Box::new(source),
+            },
+        )
+        .unwrap();
+
+        for sequence in 0..CHUNKS {
+            writer
+                .append(live_analysis_chunk(
+                    session_id,
+                    &channels,
+                    sequence,
+                    sequence * SAMPLES_PER_CHUNK,
+                    SAMPLES_PER_CHUNK,
+                ))
+                .unwrap();
+        }
+        writer.finish().unwrap();
+        drop(writer);
+        let committed_samples = CHUNKS * SAMPLES_PER_CHUNK;
+        assert_eq!(store.snapshot().committed_samples, committed_samples);
+        let processed_while_capture_finished = live_run
+            .progress()
+            .into_iter()
+            .find_map(|(node, items)| (node == source_node).then_some(items))
+            .unwrap_or(0);
+        assert!(
+            processed_while_capture_finished < committed_samples,
+            "throttled analysis unexpectedly kept up with acquisition"
+        );
+        let finalized = store.finalize().unwrap();
+        while !live_run.is_finished() {
+            std::thread::yield_now();
+        }
+        let final_processed = live_run
+            .progress()
+            .into_iter()
+            .find_map(|(node, items)| (node == source_node).then_some(items));
+        live_run.wait();
+        let live_words = captured_words(&live_lanes);
+        assert!(!live_words.is_empty());
+
+        let replay_source = CaptureAnalysisSource::new(
+            "finite-reference-source",
+            Box::new(finalized.open_cursor().unwrap()),
+            1_000_000_000.0,
+            channels
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, channel)| {
+                    CaptureAnalysisChannel::separate(
+                        channel,
+                        format!("ch{index}"),
+                        format!("block{index}"),
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+        let mut reference_ctx = CompileCtx::default();
+        let reference_lanes = reference_ctx.derived_lanes.clone();
+        let reference_registry = BuilderRegistry::standard();
+        let mut reference_run = start_live_analysis(
+            widget.graph(),
+            &reference_registry,
+            &mut reference_ctx,
+            LiveAnalysisSource {
+                source_node,
+                process: Box::new(replay_source),
+            },
+        )
+        .unwrap();
+        reference_run.wait();
+
+        assert_eq!(live_words, captured_words(&reference_lanes));
+        assert_eq!(final_processed, Some(committed_samples));
     }
 
     fn run_cooperatively(widget: &NodeGraphWidget) -> (CompiledGraph, Vec<(String, u64)>) {

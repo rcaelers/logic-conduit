@@ -1,6 +1,9 @@
 use logic_analyzer_graph::compiler::DiscoveredLiveCaptureFeature;
 
-use super::{CaptureCoordinatorContract, CaptureSessionStatus, CaptureWaveformUpdate};
+use super::{
+    CaptureAnalysisAttachment, CaptureCoordinatorContract, CaptureSessionStatus,
+    CaptureWaveformUpdate,
+};
 
 pub(crate) struct CaptureCoordinator;
 
@@ -32,6 +35,10 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
     }
 
     fn take_waveform_update(&mut self) -> Option<CaptureWaveformUpdate> {
+        None
+    }
+
+    fn take_analysis_attachment(&mut self) -> Option<CaptureAnalysisAttachment> {
         None
     }
 

@@ -11,7 +11,8 @@ use panel_layout::{BoundaryInteraction, PanelIcon, PanelLayout, PanelSlot, Panel
 use crate::about::AboutWindow;
 use crate::demo_signals;
 use crate::live_capture::{
-    CaptureAvailability, CaptureCoordinator, CaptureCoordinatorContract, capture_availability,
+    CaptureAnalysisAttachment, CaptureAvailability, CaptureCoordinator, CaptureCoordinatorContract,
+    capture_availability,
 };
 use crate::toast::Toasts;
 
@@ -59,6 +60,9 @@ pub struct App {
     builders: compiler::BuilderRegistry,
     capture: CaptureCoordinator,
     capture_availability: CaptureAvailability,
+    capture_graph: Option<GraphState>,
+    capture_analysis: Option<compiler::AppRun>,
+    capture_analysis_error: Option<String>,
     run: Option<compiler::AppRun>,
     /// Persistent run *state* shown in the status bar next to Run/Stop — the
     /// current compile-error summary, or "stop & rerun to apply" while a
@@ -189,6 +193,9 @@ impl App {
             capture_availability: CaptureAvailability::Unavailable {
                 reason: "Checking the graph for a live capture source".into(),
             },
+            capture_graph: None,
+            capture_analysis: None,
+            capture_analysis_error: None,
             run: None,
             run_message: None,
             toasts: Toasts::default(),
@@ -358,7 +365,7 @@ impl App {
     /// while it doesn't apply (Run while already running, Stop while not)
     /// is a safe no-op rather than double-starting or double-stopping.
     fn run_command(&mut self) {
-        if !self.is_running() && !self.capture.is_active() {
+        if !self.is_running() && !self.capture.is_active() && !self.is_capture_analysis_active() {
             self.start_run();
         }
     }
@@ -373,7 +380,7 @@ impl App {
     }
 
     fn start_capture_command(&mut self) {
-        if self.capture.is_active() || self.is_running() {
+        if self.capture.is_active() || self.is_running() || self.is_capture_analysis_active() {
             return;
         }
         for id in self.error_badges.drain(..) {
@@ -404,9 +411,15 @@ impl App {
                 return;
             }
         };
+        self.capture_graph = Some(self.node_graph.graph().clone());
+        self.capture_analysis = None;
+        self.capture_analysis_error = None;
         match self.capture.start(feature) {
             Ok(()) => self.node_graph.set_editing_enabled(false),
-            Err(error) => self.toasts.error(error),
+            Err(error) => {
+                self.capture_graph = None;
+                self.toasts.error(error);
+            }
         }
     }
 
@@ -416,6 +429,9 @@ impl App {
 
     fn poll_capture(&mut self, ctx: &egui::Context) {
         self.capture.poll();
+        if let Some(attachment) = self.capture.take_analysis_attachment() {
+            self.start_capture_analysis(attachment);
+        }
         if let Some(update) = self.capture.take_waveform_update() {
             match update {
                 Some(index) => {
@@ -427,11 +443,87 @@ impl App {
                 }
             }
         }
+        self.sync_capture_analysis(ctx);
+        let analysis_active = self.is_capture_analysis_active();
         self.node_graph
-            .set_editing_enabled(self.capture.graph_editing_enabled());
-        if self.capture.is_active() {
+            .set_editing_enabled(self.capture.graph_editing_enabled() && !analysis_active);
+        if self.capture.is_active() || analysis_active {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        } else if self.capture_analysis.is_none() {
+            self.capture_graph = None;
+        }
+    }
+
+    fn start_capture_analysis(&mut self, attachment: CaptureAnalysisAttachment) {
+        let Some(graph) = self.capture_graph.take() else {
+            self.capture_analysis_error = Some("capture graph snapshot is unavailable".into());
+            return;
+        };
+        let mut ctx = compiler::CompileCtx::default();
+        self.logic_analyzer
+            .set_derived_lanes(ctx.derived_lanes.clone());
+        self.logic_analyzer
+            .set_viewer_lanes(ctx.viewer_lanes.clone());
+        let source = compiler::LiveAnalysisSource {
+            source_node: attachment.source_node,
+            process: attachment.process,
+        };
+        match compiler::start_live_analysis(&graph, &self.builders, &mut ctx, source) {
+            Ok(run) => {
+                self.set_sampling_overlay_candidates(ctx.sampling_overlays);
+                self.capture_analysis = Some(run);
+            }
+            Err(errors) => {
+                self.report_compile_errors(&errors);
+                self.capture_analysis_error = Some(
+                    errors
+                        .first()
+                        .map(|error| error.message.clone())
+                        .unwrap_or_else(|| "live analysis could not start".into()),
+                );
+            }
+        }
+    }
+
+    fn sync_capture_analysis(&mut self, ctx: &egui::Context) {
+        let Some(run) = &mut self.capture_analysis else {
+            return;
+        };
+        run.pump(256);
+        for (id, items) in run.progress() {
+            let status = (items > 0).then(|| format_count(items));
+            self.node_graph.set_node_status(id, status);
+        }
+        if !run.is_finished() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
+        for (node, event) in run.take_disconnected() {
+            if let Some(id) = node {
+                self.node_graph.set_node_badge(
+                    id,
+                    Some(NodeBadge::warning(format!(
+                        "Disconnected during live analysis: can't keep up with {}.{}",
+                        event.producer, event.port
+                    ))),
+                );
+                self.error_badges.push(id);
+            }
+        }
+    }
+
+    fn is_capture_analysis_active(&self) -> bool {
+        self.capture_analysis
+            .as_ref()
+            .is_some_and(|run| !run.is_finished())
+    }
+
+    fn capture_analysis_progress(&self) -> Option<u64> {
+        let source = self.capture.status()?.source_node;
+        self.capture_analysis
+            .as_ref()?
+            .progress()
+            .into_iter()
+            .find_map(|(node, items)| (node == source).then_some(items))
     }
 
     fn show_capture_controls(&mut self, ui: &mut egui::Ui) {
@@ -495,6 +587,27 @@ impl App {
             } else {
                 ui.label(summary);
             }
+
+            if let Some(error) = &self.capture_analysis_error {
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 120, 120),
+                    format!("Analysis error · {error}"),
+                );
+            } else if let Some(processed) = self.capture_analysis_progress() {
+                let captured = status.progress.captured_samples.unwrap_or(processed);
+                let lag = captured.saturating_sub(processed);
+                if self
+                    .capture_analysis
+                    .as_ref()
+                    .is_some_and(compiler::AppRun::is_finished)
+                {
+                    ui.label(format!("Analysis complete · {processed} samples"));
+                } else {
+                    ui.label(format!("Analysis · {processed} samples · lag {lag}"));
+                }
+            } else if self.capture.is_active() {
+                ui.label("Analysis · waiting for committed data");
+            }
         }
     }
 
@@ -543,7 +656,7 @@ impl App {
         const SYNC_INTERVAL_S: f64 = 0.5;
         let now = ctx.input(|input| input.time);
         if self.run.is_none() {
-            if self.capture.is_active() {
+            if self.capture.is_active() || self.is_capture_analysis_active() {
                 return;
             }
             if now - self.last_live_sync >= SYNC_INTERVAL_S {
@@ -675,9 +788,12 @@ impl App {
             }
             ui.spinner();
             ui.label("Live");
+        } else if self.is_capture_analysis_active() {
+            ui.spinner();
+            ui.label("Analyzing capture…");
         } else {
             let run = ui.add_enabled(
-                !self.capture.is_active(),
+                !self.capture.is_active() && !self.is_capture_analysis_active(),
                 egui::Button::new("▶ Run").small(),
             );
             if self.capture.is_active() {

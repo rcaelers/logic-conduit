@@ -15,7 +15,10 @@ use signal_processing::{
 };
 use signal_processing::live_capture_waveform::NativeGrowingCaptureIndex;
 
-use super::{CaptureCoordinatorContract, CaptureSessionStatus, CaptureWaveformUpdate};
+use super::{
+    CaptureAnalysisAttachment, CaptureCoordinatorContract, CaptureSessionStatus,
+    CaptureWaveformUpdate,
+};
 
 const EVENT_QUEUE_CAPACITY: usize = 1_024;
 const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -40,6 +43,7 @@ struct ActiveCapture {
     commands: Sender<CaptureCommand>,
     completion: Receiver<WorkerCompletion>,
     waveforms: Receiver<NativeGrowingCaptureIndex>,
+    analyses: Receiver<CaptureAnalysisAttachment>,
     events: CaptureEventQueueReader,
     worker: Option<JoinHandle<()>>,
     stop_requested: bool,
@@ -50,6 +54,7 @@ pub(crate) struct CaptureCoordinator {
     active: Option<ActiveCapture>,
     completed: Option<CompletedCapture>,
     waveform_update: Option<CaptureWaveformUpdate>,
+    analysis_attachment: Option<CaptureAnalysisAttachment>,
     state_history: Vec<CaptureSessionState>,
 }
 
@@ -60,6 +65,7 @@ impl CaptureCoordinator {
             active: None,
             completed: None,
             waveform_update: None,
+            analysis_attachment: None,
             state_history: Vec::new(),
         }
     }
@@ -173,6 +179,7 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
         let (command_sender, command_receiver) = crossbeam_channel::bounded(1);
         let (completion_sender, completion_receiver) = crossbeam_channel::bounded(1);
         let (waveform_sender, waveform_receiver) = crossbeam_channel::bounded(1);
+        let (analysis_sender, analysis_receiver) = crossbeam_channel::bounded(1);
         let worker = std::thread::Builder::new()
             .name("live-capture-supervisor".into())
             .spawn(move || {
@@ -182,6 +189,7 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
                     Box::new(event_publisher),
                     command_receiver,
                     waveform_sender,
+                    analysis_sender,
                 ) {
                     Ok(capture) => WorkerCompletion::Complete(capture),
                     Err(error) => WorkerCompletion::Failed(error),
@@ -205,6 +213,7 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
             commands: command_sender,
             completion: completion_receiver,
             waveforms: waveform_receiver,
+            analyses: analysis_receiver,
             events,
             worker: Some(worker),
             stop_requested: false,
@@ -229,6 +238,13 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
     }
 
     fn poll(&mut self) {
+        if let Some(analysis) = self
+            .active
+            .as_ref()
+            .and_then(|active| active.analyses.try_recv().ok())
+        {
+            self.analysis_attachment = Some(analysis);
+        }
         if let Some(waveform) = self
             .active
             .as_ref()
@@ -270,6 +286,10 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
         self.waveform_update.take()
     }
 
+    fn take_analysis_attachment(&mut self) -> Option<CaptureAnalysisAttachment> {
+        self.analysis_attachment.take()
+    }
+
     fn is_active(&self) -> bool {
         self.active.is_some()
     }
@@ -301,6 +321,7 @@ fn run_capture_worker(
     events: Box<dyn signal_processing::CaptureEventPublisher>,
     commands: Receiver<CaptureCommand>,
     waveform_ready: Sender<NativeGrowingCaptureIndex>,
+    analysis_ready: Sender<CaptureAnalysisAttachment>,
 ) -> Result<CompletedCapture, String> {
     let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
     let descriptor = CaptureStoreDescriptor::new(session_id, feature.channels().to_vec())
@@ -308,6 +329,16 @@ fn run_capture_worker(
     let (store, writer) =
         NativeCaptureStore::create(NativeCaptureStoreConfig::new(directory.path(), descriptor))
             .map_err(|error| error.to_string())?;
+    let analysis_cursor = store.open_cursor().map_err(|error| error.to_string())?;
+    let analysis_process = feature
+        .analysis_source(Box::new(analysis_cursor))
+        .map_err(|error| format!("could not build live analysis source: {error}"))?;
+    analysis_ready
+        .send(CaptureAnalysisAttachment {
+            source_node: feature.source_node,
+            process: analysis_process,
+        })
+        .map_err(|_| "live analysis attachment receiver closed".to_owned())?;
     let source_title = feature.source_title.clone();
     let (waveform, waveform_worker) = NativeGrowingCaptureIndex::spawn(
         store.clone(),
@@ -359,11 +390,14 @@ mod tests {
     use logic_analyzer_graph::compiler::{DiscoveredLiveCaptureFeature, LiveCaptureFeature};
     use logic_analyzer_graph::{compiler, nodes};
     use logic_analyzer_processing::{
-        AcquisitionContext, AcquisitionError, AcquisitionResult, DeterministicFakeConfig,
-        DeterministicFakeController, DeterministicFakeProvider, PreparedAcquisition,
+        AcquisitionContext, AcquisitionError, AcquisitionResult, CaptureAnalysisChannel,
+        CaptureAnalysisSource, DeterministicFakeConfig, DeterministicFakeController,
+        DeterministicFakeProvider, PreparedAcquisition,
     };
     use node_graph::{NodeDef, NodeGraphWidget, NodeId};
-    use signal_processing::{CaptureChannelId, CaptureSessionState};
+    use signal_processing::{
+        CaptureChannelId, CaptureSessionState, CaptureStoreCursor, ProcessNode,
+    };
 
     use super::{CaptureCoordinator, CaptureCoordinatorContract};
 
@@ -384,6 +418,13 @@ mod tests {
 
         fn sample_rate_hz(&self) -> f64 {
             1_000_000_000.0
+        }
+
+        fn analysis_source(
+            &self,
+            cursor: Box<dyn CaptureStoreCursor>,
+        ) -> Result<Box<dyn ProcessNode>, String> {
+            test_analysis_source(&self.channels, cursor)
         }
 
         fn prepare(
@@ -412,6 +453,13 @@ mod tests {
             1_000_000_000.0
         }
 
+        fn analysis_source(
+            &self,
+            cursor: Box<dyn CaptureStoreCursor>,
+        ) -> Result<Box<dyn ProcessNode>, String> {
+            test_analysis_source(&self.channels, cursor)
+        }
+
         fn prepare(
             self: Box<Self>,
             _context: AcquisitionContext,
@@ -420,6 +468,22 @@ mod tests {
                 "intentional preparation failure".into(),
             ))
         }
+    }
+
+    fn test_analysis_source(
+        channels: &[CaptureChannelId],
+        cursor: Box<dyn CaptureStoreCursor>,
+    ) -> Result<Box<dyn ProcessNode>, String> {
+        let layout = channels
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, channel)| {
+                CaptureAnalysisChannel::polymorphic(channel, format!("ch{index}"))
+            })
+            .collect();
+        CaptureAnalysisSource::new("test-live-analysis", cursor, 1_000_000_000.0, layout)
+            .map(|source| Box::new(source) as Box<dyn ProcessNode>)
     }
 
     fn manual_feature() -> (DiscoveredLiveCaptureFeature, DeterministicFakeController) {
@@ -544,7 +608,7 @@ mod tests {
     }
 
     #[test]
-    fn paused_viewer_does_not_delay_manual_capture() {
+    fn paused_viewer_and_analysis_do_not_delay_manual_capture() {
         let (feature, controller) = manual_feature();
         let mut coordinator = CaptureCoordinator::new();
         coordinator.start(feature).unwrap();
@@ -562,6 +626,9 @@ mod tests {
         let mut viewer = logic_analyzer_viewer::LogicAnalyzerViewer::new();
         viewer.set_growing_capture(index);
         viewer.toggle_pause_display();
+        let _paused_analysis = coordinator
+            .take_analysis_attachment()
+            .expect("analysis attachment should precede waveform publication");
 
         controller.grant_chunks(4);
         poll_until(&mut coordinator, |coordinator| !coordinator.is_active());

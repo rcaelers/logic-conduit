@@ -8,6 +8,10 @@ use signal_processing::{
     CaptureProgress, CaptureSessionId, CaptureSessionState, CaptureStatus, CaptureWriteError,
 };
 
+mod analysis;
+
+pub use analysis::{CaptureAnalysisChannel, CaptureAnalysisSource};
+
 std::cfg_select! {
     target_arch = "wasm32" => {}
     _ => {

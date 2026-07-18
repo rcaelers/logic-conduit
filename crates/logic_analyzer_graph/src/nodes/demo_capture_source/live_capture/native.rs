@@ -3,10 +3,10 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use logic_analyzer_processing::{
-    AcquisitionContext, AcquisitionResult, DeterministicFakeConfig, DeterministicFakeProvider,
-    PreparedAcquisition,
+    AcquisitionContext, AcquisitionResult, CaptureAnalysisChannel, CaptureAnalysisSource,
+    DeterministicFakeConfig, DeterministicFakeProvider, PreparedAcquisition,
 };
-use signal_processing::CaptureChannelId;
+use signal_processing::{CaptureChannelId, CaptureStoreCursor, ProcessNode};
 
 use crate::compiler::LiveCaptureFeature;
 use crate::nodes::DemoCaptureSourceState;
@@ -31,6 +31,27 @@ impl LiveCaptureFeature for DemoLiveCaptureFeature {
 
     fn sample_rate_hz(&self) -> f64 {
         1_000_000.0
+    }
+
+    fn analysis_source(
+        &self,
+        cursor: Box<dyn CaptureStoreCursor>,
+    ) -> Result<Box<dyn ProcessNode>, String> {
+        let channels = self
+            .channels
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, channel)| {
+                CaptureAnalysisChannel::separate(
+                    channel,
+                    format!("ch{index}"),
+                    format!("block{index}"),
+                )
+            })
+            .collect();
+        CaptureAnalysisSource::new("demo-live-analysis", cursor, self.sample_rate_hz(), channels)
+            .map(|source| Box::new(source) as Box<dyn ProcessNode>)
     }
 
     fn prepare(

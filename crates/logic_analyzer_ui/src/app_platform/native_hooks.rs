@@ -9,9 +9,9 @@ use crate::app_platform::{NativeMenuCommand, notify_recent_files_changed};
 
 impl App {
     fn can_replace_graph(&mut self) -> bool {
-        if self.capture.is_active() {
+        if self.capture.is_active() || self.is_capture_analysis_active() {
             self.toasts
-                .error("Stop live capture before replacing the graph");
+                .error("Wait for live capture analysis before replacing the graph");
             false
         } else {
             true

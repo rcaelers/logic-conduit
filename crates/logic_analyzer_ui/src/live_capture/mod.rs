@@ -6,6 +6,7 @@ use logic_analyzer_graph::compiler::{
 use node_graph::{GraphState, NodeId};
 use signal_processing::{
     CaptureAcquisitionPhase, CaptureIndex, CaptureProgress, CaptureSessionId, CaptureSessionState,
+    ProcessNode,
 };
 
 std::cfg_select! {
@@ -24,6 +25,11 @@ pub(crate) use imp::CaptureCoordinator;
 /// Outer `Option` on the coordinator method means "no update"; this inner
 /// option carries either a new growing index or an explicit detach.
 pub(crate) type CaptureWaveformUpdate = Option<Box<dyn CaptureIndex>>;
+
+pub(crate) struct CaptureAnalysisAttachment {
+    pub source_node: NodeId,
+    pub process: Box<dyn ProcessNode>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CaptureAvailability {
@@ -97,6 +103,7 @@ pub(crate) trait CaptureCoordinatorContract {
     fn poll(&mut self);
     fn status(&self) -> Option<&CaptureSessionStatus>;
     fn take_waveform_update(&mut self) -> Option<CaptureWaveformUpdate>;
+    fn take_analysis_attachment(&mut self) -> Option<CaptureAnalysisAttachment>;
     /// Remains true through Error cleanup until the supervisor has returned.
     fn is_active(&self) -> bool;
 

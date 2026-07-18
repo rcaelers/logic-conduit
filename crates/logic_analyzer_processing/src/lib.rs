@@ -4,8 +4,8 @@ pub mod live_capture;
 pub mod nodes;
 
 pub use live_capture::{
-    AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult, LogicCaptureEvent,
-    PreparedAcquisition,
+    AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult,
+    CaptureAnalysisChannel, CaptureAnalysisSource, LogicCaptureEvent, PreparedAcquisition,
 };
 pub use nodes::decoders::{
     CsPolarity, ParallelDecoder, ParallelDecoderMetrics, ParallelDecoderMetricsSnapshot,

@@ -1,8 +1,8 @@
 # Live Capture and Trigger Control
 
-> Status: the foundation described under **Current baseline** is implemented. The behavior under
-> **Proposed future design** is not yet implemented. Actionable work is tracked in
-> [TODO.md](../TODO.md).
+> Status: the foundation described under **Current baseline** and the delivery phases explicitly
+> marked complete are implemented. Other behavior under **Proposed future design** is not yet
+> implemented. Actionable work is tracked in [TODO.md](../TODO.md).
 
 This design adds interactive triggering, live waveform display, lossless host upload, live graph
 processing, and post-capture re-analysis for hardware logic-analyzer sources such as the DSLogic
@@ -58,6 +58,9 @@ The UI-independent live-capture foundation is also present:
 - `RuntimeBuilder` can expose a state-bound `LiveCaptureFeature`; compiler discovery considers
   only the feature belonging to the source retained by a successfully lowered graph and rejects
   multiple candidates without matching node names;
+- the live feature supplies an explicit, generic runtime-port layout and builds the concrete
+  store-following source process; compiler, application, and store code do not infer ports from
+  node names, channel labels, or protocols;
 - the native Demo Capture Source exposes the deterministic provider through this development
   feature, while its complete wasm feature module reports no live capability;
 - the native application capture coordinator prepares, starts, supervises, stops, and finalizes an
@@ -65,12 +68,18 @@ The UI-independent live-capture foundation is also present:
   new session completes successfully;
 - the coordinator attaches the growing query to the viewer before acquisition completes and keeps
   the finalized query available after completion;
+- the coordinator also opens an independent committed-prefix cursor and attaches its concrete
+  source process to a separately supervised, fixed compiled graph; decoder backpressure advances
+  only that cursor's lag and cannot retain acquisition chunks or delay the store writer;
 - the Logic Analyzer title bar presents the combined Start/Stop control and lifecycle/sample
   status, Follow Newest, Pause/Resume Display, and Go Live controls, while Run and capture exclude
   one another;
 - the viewer renders exact data from the authoritative store at detailed zoom levels and uses the
   incremental summaries for wider windows; pausing display freezes its published generation while
   acquisition and summary construction continue;
+- the application publishes analysis progress and sample lag, keeps graph editing disabled until
+  acquisition and downstream drain are both complete, and preserves live derived lanes while the
+  analysis cursor catches up;
 - `NodeGraphWidget` has a generic host-controlled editing mode: selection, inspection, copy, pan,
   zoom, and box selection remain available while inline controls, wiring, movement, menus, and
   other mutations are disabled; entering read-only mode cancels and restores an in-progress edit;
@@ -83,9 +92,9 @@ The UI-independent live-capture foundation is also present:
 The native fake and application coordinator are selected as complete platform modules. The fake is
 reachable only through the existing development/demo node; concrete hardware nodes do not yet
 expose a live feature. Native store recovery, retention and reclamation, cleanup, export, and live
-graph analysis do not yet exist. The growing summary is currently an in-memory index over durable
-raw storage; sustained-ingest measurement and duration-independent summary storage remain Phase 9.
-The existing `LogicAnalyzerSource` graph-run path remains unchanged.
+session replay through Run do not yet exist. The growing summary is currently an in-memory index
+over durable raw storage; sustained-ingest measurement and duration-independent summary storage
+remain Phase 9. The existing `LogicAnalyzerSource` graph-run path remains unchanged.
 
 ## Proposed future design
 
@@ -929,6 +938,8 @@ acquisition, Go Live catches up, and the finalized waveform matches the fake inp
 summary zoom levels.
 
 #### Phase 4 — Independent live graph analysis
+
+Status: **complete**.
 
 - Add the independent analysis cursor and feed the fixed compiled graph from committed raw chunks.
 - Start at the immediate recording origin, expose graph lag, and let a lagging graph catch up from

@@ -44,6 +44,8 @@ std::cfg_select! {
     }
 }
 
+#[cfg(test)]
+pub(crate) use binary_decoder::BinaryDecoderBuilder;
 pub use binary_decoder::{BinaryDecoder, BinaryDecoderState};
 pub use buffer::{Buffer, BufferState};
 pub(crate) use catalog::standard_builders;

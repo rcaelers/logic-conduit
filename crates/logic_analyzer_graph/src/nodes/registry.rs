@@ -331,6 +331,28 @@ pub(crate) mod test_graphs {
             .selected = true;
     }
 
+    /// Small two-channel graph used by live-capture cursor contract tests.
+    pub(crate) fn build_live_binary_test(
+        widget: &mut node_graph::NodeGraphWidget,
+    ) -> node_graph::NodeId {
+        use egui::Pos2;
+
+        let source = widget
+            .add_node_at(DemoCaptureSource::name(), Pos2::new(40.0, 80.0))
+            .expect("demo source is registered");
+        let decoder = widget
+            .add_node_at(BinaryDecoder::name(), Pos2::new(360.0, 80.0))
+            .expect("binary decoder is registered");
+        let mut decoder_state = BinaryDecoder::state();
+        decoder_state.input_strategy.select("Packed stream");
+        widget.set_node_state(decoder, serde_json::to_value(decoder_state).unwrap());
+        connect(widget, (source, "Ch 0"), (decoder, "Clock"));
+        connect(widget, (source, "Ch 1"), (decoder, "D"));
+        let words = output_index(widget, decoder, "Words");
+        widget.graph_mut().nodes.get_mut(&decoder).unwrap().outputs[words].show_in_view = true;
+        source
+    }
+
     /// Builds the CCD analysis pipeline captured by the embedded test fixture.
     /// Select a capture in its DSL File Source before running it (SPI cs=8
     /// clk=7 mosi=6; parallel strobe=10 (ACDK), data D0..D7 = ch 0..7).
