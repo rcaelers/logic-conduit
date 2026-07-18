@@ -5,8 +5,8 @@
 //! stores, graph cursors, and viewers.
 
 use std::fmt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
@@ -131,10 +131,246 @@ pub enum CaptureEvent {
     Failed(CaptureFailure),
 }
 
+#[derive(Clone)]
+pub struct CaptureBytes(Arc<CaptureBytesInner>);
+
+enum CaptureBytesInner {
+    Owned(Box<[u8]>),
+    Shared(Arc<[u8]>),
+    Pooled(PooledCaptureBytes),
+}
+
+struct PooledCaptureBytes {
+    bytes: Vec<u8>,
+    pool: Weak<CaptureBufferPoolInner>,
+}
+
+impl Drop for PooledCaptureBytes {
+    fn drop(&mut self) {
+        if let Some(pool) = self.pool.upgrade() {
+            pool.return_buffer(std::mem::take(&mut self.bytes));
+        }
+    }
+}
+
+impl CaptureBytes {
+    pub fn as_slice(&self) -> &[u8] {
+        match self.0.as_ref() {
+            CaptureBytesInner::Owned(bytes) => bytes,
+            CaptureBytesInner::Shared(bytes) => bytes,
+            CaptureBytesInner::Pooled(bytes) => &bytes.bytes,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.as_slice().is_empty()
+    }
+}
+
+impl AsRef<[u8]> for CaptureBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl fmt::Debug for CaptureBytes {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CaptureBytes")
+            .field("len", &self.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for CaptureBytes {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl Eq for CaptureBytes {}
+
+impl From<Vec<u8>> for CaptureBytes {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(Arc::new(CaptureBytesInner::Owned(bytes.into_boxed_slice())))
+    }
+}
+
+impl<const N: usize> From<[u8; N]> for CaptureBytes {
+    fn from(bytes: [u8; N]) -> Self {
+        Self::from(Vec::from(bytes))
+    }
+}
+
+impl From<Arc<[u8]>> for CaptureBytes {
+    fn from(bytes: Arc<[u8]>) -> Self {
+        Self(Arc::new(CaptureBytesInner::Shared(bytes)))
+    }
+}
+
+#[derive(Debug)]
+struct CaptureBufferPoolState {
+    available: Vec<Vec<u8>>,
+    allocated: usize,
+    in_use: usize,
+    max_in_use: usize,
+}
+
+#[derive(Debug)]
+struct CaptureBufferPoolInner {
+    max_buffers: usize,
+    initial_capacity: usize,
+    state: Mutex<CaptureBufferPoolState>,
+    available: Condvar,
+}
+
+impl CaptureBufferPoolInner {
+    fn return_buffer(&self, mut buffer: Vec<u8>) {
+        buffer.clear();
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        debug_assert!(state.in_use > 0);
+        state.in_use -= 1;
+        state.available.push(buffer);
+        self.available.notify_one();
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CaptureBufferPool {
+    inner: Arc<CaptureBufferPoolInner>,
+}
+
+impl CaptureBufferPool {
+    pub fn new(
+        max_buffers: usize,
+        initial_capacity: usize,
+    ) -> Result<Self, CaptureBufferPoolError> {
+        if max_buffers == 0 {
+            return Err(CaptureBufferPoolError::ZeroCapacity);
+        }
+        Ok(Self {
+            inner: Arc::new(CaptureBufferPoolInner {
+                max_buffers,
+                initial_capacity,
+                state: Mutex::new(CaptureBufferPoolState {
+                    available: Vec::with_capacity(max_buffers),
+                    allocated: 0,
+                    in_use: 0,
+                    max_in_use: 0,
+                }),
+                available: Condvar::new(),
+            }),
+        })
+    }
+
+    pub fn acquire(&self) -> CaptureBufferLease {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        loop {
+            let buffer = if let Some(buffer) = state.available.pop() {
+                buffer
+            } else if state.allocated < self.inner.max_buffers {
+                state.allocated += 1;
+                Vec::with_capacity(self.inner.initial_capacity)
+            } else {
+                state = self
+                    .inner
+                    .available
+                    .wait(state)
+                    .unwrap_or_else(|error| error.into_inner());
+                continue;
+            };
+            state.in_use += 1;
+            state.max_in_use = state.max_in_use.max(state.in_use);
+            return CaptureBufferLease {
+                buffer: Some(buffer),
+                pool: Arc::clone(&self.inner),
+            };
+        }
+    }
+
+    pub fn metrics(&self) -> CaptureBufferPoolMetrics {
+        let state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        CaptureBufferPoolMetrics {
+            max_buffers: self.inner.max_buffers,
+            allocated: state.allocated,
+            available: state.available.len(),
+            in_use: state.in_use,
+            max_in_use: state.max_in_use,
+        }
+    }
+}
+
+pub struct CaptureBufferLease {
+    buffer: Option<Vec<u8>>,
+    pool: Arc<CaptureBufferPoolInner>,
+}
+
+impl CaptureBufferLease {
+    pub fn resize(&mut self, len: usize, value: u8) {
+        self.buffer
+            .as_mut()
+            .expect("live buffer lease owns its buffer")
+            .resize(len, value);
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        self.buffer
+            .as_mut()
+            .expect("live buffer lease owns its buffer")
+            .as_mut_slice()
+    }
+
+    pub fn freeze(mut self) -> CaptureBytes {
+        let bytes = self
+            .buffer
+            .take()
+            .expect("live buffer lease owns its buffer");
+        CaptureBytes(Arc::new(CaptureBytesInner::Pooled(PooledCaptureBytes {
+            bytes,
+            pool: Arc::downgrade(&self.pool),
+        })))
+    }
+}
+
+impl Drop for CaptureBufferLease {
+    fn drop(&mut self) {
+        if let Some(buffer) = self.buffer.take() {
+            self.pool.return_buffer(buffer);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CaptureBufferPoolMetrics {
+    pub max_buffers: usize,
+    pub allocated: usize,
+    pub available: usize,
+    pub in_use: usize,
+    pub max_in_use: usize,
+}
+
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum CaptureBufferPoolError {
+    #[error("capture buffer pool capacity must be non-zero")]
+    ZeroCapacity,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CaptureChunkPayload {
     /// Channel bits follow the chunk's channel table, least-significant bit first in each byte.
-    PackedLsbFirst { bytes: Arc<[u8]>, bit_offset: u8 },
+    PackedLsbFirst { bytes: CaptureBytes, bit_offset: u8 },
 }
 
 /// Immutable canonical raw data shared by acquisition, storage, and caught-up consumers.
@@ -157,7 +393,7 @@ impl CaptureChunk {
         start_sample: u64,
         sample_count: u64,
         channels: impl Into<Arc<[CaptureChannelId]>>,
-        bytes: impl Into<Arc<[u8]>>,
+        bytes: impl Into<CaptureBytes>,
         bit_offset: u8,
     ) -> Result<Self, CaptureChunkError> {
         let channels = channels.into();
@@ -248,6 +484,7 @@ impl CaptureChunk {
         let byte_index = usize::try_from(absolute_bit / 8).ok()?;
         let bit_index = u8::try_from(absolute_bit % 8).ok()?;
         bytes
+            .as_slice()
             .get(byte_index)
             .map(|byte| (byte & (1_u8 << bit_index)) != 0)
     }
@@ -329,6 +566,11 @@ pub enum CaptureWriteError {
 /// Synchronous authority boundary used by an acquisition worker.
 pub trait CaptureChunkWriter: Send {
     fn append(&mut self, chunk: CaptureChunk) -> Result<(), CaptureWriteError>;
+
+    /// Makes every successfully appended chunk visible to committed readers.
+    fn finish(&mut self) -> Result<(), CaptureWriteError> {
+        Ok(())
+    }
 }
 
 pub struct CaptureQueueWriter {
@@ -512,8 +754,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        CaptureChannelId, CaptureChunk, CaptureChunkError, CaptureChunkWriter, CaptureQueueLimits,
-        CaptureSessionId, CaptureWriteError, bounded_capture_queue,
+        CaptureBufferPool, CaptureChannelId, CaptureChunk, CaptureChunkError, CaptureChunkWriter,
+        CaptureQueueLimits, CaptureSessionId, CaptureWriteError, bounded_capture_queue,
     };
 
     fn channels() -> Arc<[CaptureChannelId]> {
@@ -601,5 +843,26 @@ mod tests {
         );
         assert_eq!(reader.queued_chunks(), 0);
         assert_eq!(reader.capacity(), 2);
+    }
+
+    #[test]
+    fn buffer_pool_reuses_allocation_after_last_chunk_owner_drops() {
+        let pool = CaptureBufferPool::new(1, 64).unwrap();
+        let mut lease = pool.acquire();
+        lease.resize(17, 0xaa);
+        let bytes = lease.freeze();
+        assert_eq!(bytes.len(), 17);
+        assert_eq!(pool.metrics().in_use, 1);
+        drop(bytes);
+
+        let mut second = pool.acquire();
+        second.resize(9, 0x55);
+        assert_eq!(second.as_mut_slice(), &[0x55; 9]);
+        drop(second);
+        let metrics = pool.metrics();
+        assert_eq!(metrics.allocated, 1);
+        assert_eq!(metrics.available, 1);
+        assert_eq!(metrics.in_use, 0);
+        assert_eq!(metrics.max_in_use, 1);
     }
 }

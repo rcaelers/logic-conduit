@@ -102,6 +102,11 @@ impl AcquisitionContext {
         Ok(())
     }
 
+    pub fn finish_writer(&mut self) -> AcquisitionResult<()> {
+        self.writer.finish()?;
+        Ok(())
+    }
+
     pub fn publish_status(
         &mut self,
         state: CaptureSessionState,

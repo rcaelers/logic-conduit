@@ -4,8 +4,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
 use signal_processing::{
-    CaptureAcquisitionPhase, CaptureChannelId, CaptureChunk, CaptureProgress, CaptureSessionId,
-    CaptureSessionState,
+    CaptureAcquisitionPhase, CaptureBufferPool, CaptureChannelId, CaptureChunk, CaptureProgress,
+    CaptureSessionId, CaptureSessionState,
 };
 
 use super::{
@@ -43,11 +43,13 @@ impl DeterministicFakeConfig {
                 AcquisitionError::InvalidRequest("fake capture sample count overflows u64".into())
             })
         })?;
-        Ok(Self {
+        let config = Self {
             channels,
             chunk_sample_counts,
             seed,
-        })
+        };
+        config.maximum_chunk_bytes()?;
+        Ok(config)
     }
 
     pub fn channels(&self) -> &[CaptureChannelId] {
@@ -72,8 +74,19 @@ impl DeterministicFakeConfig {
         (mixed ^ (mixed >> 17) ^ (mixed >> 41)) & 1 != 0
     }
 
+    fn maximum_chunk_bytes(&self) -> AcquisitionResult<usize> {
+        let samples = self.chunk_sample_counts.iter().copied().max().unwrap_or(0) as u128;
+        let payload_bits = samples
+            .checked_mul(self.channels.len() as u128)
+            .and_then(|bits| bits.checked_add(7))
+            .ok_or_else(|| AcquisitionError::Internal("fake payload size overflow".into()))?;
+        usize::try_from(payload_bits.div_ceil(8))
+            .map_err(|_| AcquisitionError::Internal("fake payload is too large".into()))
+    }
+
     fn build_chunk(
         &self,
+        buffer_pool: &CaptureBufferPool,
         session_id: CaptureSessionId,
         sequence: u64,
         start_sample: u64,
@@ -86,13 +99,14 @@ impl DeterministicFakeConfig {
         let total_bits = payload_bits + u128::from(bit_offset);
         let byte_len = usize::try_from(total_bits.div_ceil(8))
             .map_err(|_| AcquisitionError::Internal("fake payload is too large".into()))?;
-        let mut bytes = vec![0_u8; byte_len];
+        let mut bytes = buffer_pool.acquire();
+        bytes.resize(byte_len, 0);
         for relative_sample in 0..sample_count {
             for channel in 0..self.channels.len() {
                 if self.level_at(start_sample + relative_sample, channel) {
                     let relative_bit = relative_sample as usize * self.channels.len() + channel;
                     let absolute_bit = usize::from(bit_offset) + relative_bit;
-                    bytes[absolute_bit / 8] |= 1 << (absolute_bit % 8);
+                    bytes.as_mut_slice()[absolute_bit / 8] |= 1 << (absolute_bit % 8);
                 }
             }
         }
@@ -102,7 +116,7 @@ impl DeterministicFakeConfig {
             start_sample,
             sample_count,
             Arc::clone(&self.channels),
-            bytes,
+            bytes.freeze(),
             bit_offset,
         )
         .map_err(|error| AcquisitionError::Internal(error.to_string()))
@@ -178,13 +192,19 @@ impl DeterministicFakeController {
 pub struct DeterministicFakeProvider {
     config: DeterministicFakeConfig,
     control: Arc<FakeControl>,
+    buffer_pool: CaptureBufferPool,
 }
 
 impl DeterministicFakeProvider {
     pub fn new(config: DeterministicFakeConfig) -> Self {
+        let initial_capacity = config
+            .maximum_chunk_bytes()
+            .expect("validated fake configuration has a bounded chunk size");
         Self {
             config,
             control: Arc::new(FakeControl::new(false)),
+            buffer_pool: CaptureBufferPool::new(2, initial_capacity)
+                .expect("fake provider uses a non-zero pool size"),
         }
     }
 
@@ -192,13 +212,22 @@ impl DeterministicFakeProvider {
         config: DeterministicFakeConfig,
     ) -> (Self, DeterministicFakeController) {
         let control = Arc::new(FakeControl::new(true));
+        let initial_capacity = config
+            .maximum_chunk_bytes()
+            .expect("validated fake configuration has a bounded chunk size");
         (
             Self {
                 config,
                 control: Arc::clone(&control),
+                buffer_pool: CaptureBufferPool::new(2, initial_capacity)
+                    .expect("fake provider uses a non-zero pool size"),
             },
             DeterministicFakeController { control },
         )
+    }
+
+    pub fn buffer_pool(&self) -> CaptureBufferPool {
+        self.buffer_pool.clone()
     }
 
     pub fn prepare(
@@ -218,6 +247,7 @@ impl DeterministicFakeProvider {
             context: Some(context),
             config: self.config,
             control: self.control,
+            buffer_pool: self.buffer_pool,
             handle: None,
             started: false,
         }))
@@ -229,6 +259,7 @@ struct PreparedFakeAcquisition {
     context: Option<AcquisitionContext>,
     config: DeterministicFakeConfig,
     control: Arc<FakeControl>,
+    buffer_pool: CaptureBufferPool,
     handle: Option<JoinHandle<AcquisitionResult<AcquisitionOutcome>>>,
     started: bool,
 }
@@ -238,8 +269,9 @@ impl PreparedFakeAcquisition {
         mut context: AcquisitionContext,
         config: DeterministicFakeConfig,
         control: Arc<FakeControl>,
+        buffer_pool: CaptureBufferPool,
     ) -> AcquisitionResult<AcquisitionOutcome> {
-        let result = Self::run_inner(&mut context, &config, &control);
+        let result = Self::run_inner(&mut context, &config, &control, &buffer_pool);
         if let Err(error) = &result {
             context.publish_failure(error);
         }
@@ -250,6 +282,7 @@ impl PreparedFakeAcquisition {
         context: &mut AcquisitionContext,
         config: &DeterministicFakeConfig,
         control: &FakeControl,
+        buffer_pool: &CaptureBufferPool,
     ) -> AcquisitionResult<AcquisitionOutcome> {
         context.publish_status(
             CaptureSessionState::Recording,
@@ -265,6 +298,7 @@ impl PreparedFakeAcquisition {
                 break;
             }
             let chunk = config.build_chunk(
+                buffer_pool,
                 context.session_id(),
                 sequence as u64,
                 captured_samples,
@@ -281,6 +315,7 @@ impl PreparedFakeAcquisition {
                 transferred_bytes: Some(transferred_bytes),
             })?;
         }
+        context.finish_writer()?;
         context.publish_status(
             CaptureSessionState::Stopping,
             CaptureAcquisitionPhase::Finalizing,
@@ -315,10 +350,11 @@ impl PreparedAcquisition for PreparedFakeAcquisition {
         let context = self.context.take().ok_or(AcquisitionError::AlreadyStarted)?;
         let config = self.config.clone();
         let control = Arc::clone(&self.control);
+        let buffer_pool = self.buffer_pool.clone();
         self.handle = Some(
             std::thread::Builder::new()
                 .name("deterministic-live-capture".into())
-                .spawn(move || Self::run(context, config, control))
+                .spawn(move || Self::run(context, config, control, buffer_pool))
                 .map_err(|error| AcquisitionError::WorkerStart(error.to_string()))?,
         );
         self.started = true;
@@ -348,9 +384,13 @@ impl Drop for PreparedFakeAcquisition {
 mod tests {
     use std::time::Duration;
 
+    use tempfile::tempdir;
+
     use signal_processing::{
-        CaptureChannelId, CaptureEvent, CaptureQueueLimits, CaptureQueueReceiveError,
-        CaptureSessionId, CaptureSessionState, bounded_capture_event_queue, bounded_capture_queue,
+        CaptureChannelId, CaptureCursorItem, CaptureEvent, CaptureQueueLimits,
+        CaptureQueueReceiveError, CaptureSessionId, CaptureSessionState, CaptureStoreCursor,
+        CaptureStoreDescriptor, NativeCaptureStore, NativeCaptureStoreConfig,
+        NativeFinalizedCapture, bounded_capture_event_queue, bounded_capture_queue,
     };
 
     use super::{DeterministicFakeConfig, DeterministicFakeProvider};
@@ -379,9 +419,9 @@ mod tests {
         let (writer, chunks) = bounded_capture_queue(limits);
         let (events, event_reader) = bounded_capture_event_queue(32).unwrap();
         let context = AcquisitionContext::new(session_id, Box::new(writer), Box::new(events));
-        let mut acquisition = DeterministicFakeProvider::new(config.clone())
-            .prepare(context)
-            .unwrap();
+        let provider = DeterministicFakeProvider::new(config.clone());
+        let buffer_pool = provider.buffer_pool();
+        let mut acquisition = provider.prepare(context).unwrap();
 
         assert_eq!(acquisition.session_id(), session_id);
         acquisition.start().unwrap();
@@ -389,10 +429,21 @@ mod tests {
             acquisition.start(),
             Err(AcquisitionError::AlreadyStarted)
         );
-        let mut received = Vec::new();
+        let mut received = 0_usize;
         loop {
             match chunks.recv_timeout(TIMEOUT) {
-                Ok(chunk) => received.push(chunk),
+                Ok(chunk) => {
+                    assert_eq!(chunk.sequence(), received as u64);
+                    for sample in 0..chunk.sample_count() {
+                        for channel in 0..config.channels().len() {
+                            assert_eq!(
+                                chunk.packed_level(sample, channel),
+                                Some(config.level_at(chunk.start_sample() + sample, channel))
+                            );
+                        }
+                    }
+                    received += 1;
+                }
                 Err(CaptureQueueReceiveError::Closed) => break,
                 Err(error) => panic!("unexpected chunk receive error: {error}"),
             }
@@ -405,17 +456,10 @@ mod tests {
         assert_eq!(outcome.chunk_count as usize, config.chunk_sample_counts().len());
         assert!(!outcome.stopped);
         assert!(chunks.max_observed_queued_chunks() <= chunks.capacity());
-        for (sequence, chunk) in received.iter().enumerate() {
-            assert_eq!(chunk.sequence(), sequence as u64);
-            for sample in 0..chunk.sample_count() {
-                for channel in 0..config.channels().len() {
-                    assert_eq!(
-                        chunk.packed_level(sample, channel),
-                        Some(config.level_at(chunk.start_sample() + sample, channel))
-                    );
-                }
-            }
-        }
+        assert_eq!(received, config.chunk_sample_counts().len());
+        let pool_metrics = buffer_pool.metrics();
+        assert!(pool_metrics.allocated <= pool_metrics.max_buffers);
+        assert_eq!(pool_metrics.in_use, 0);
 
         let mut states = Vec::new();
         loop {
@@ -469,5 +513,56 @@ mod tests {
             Err(CaptureQueueReceiveError::Closed)
         );
         assert!(chunks.max_observed_queued_chunks() <= 1);
+    }
+
+    #[test]
+    fn provider_round_trips_through_the_finalized_authoritative_store() {
+        let config = config();
+        let session_id = CaptureSessionId::new(0x9abc);
+        let temporary = tempdir().unwrap();
+        let descriptor = CaptureStoreDescriptor::new(session_id, config.channels().to_vec())
+            .unwrap();
+        let store_config = NativeCaptureStoreConfig::new(temporary.path(), descriptor)
+            .with_commit_batch_chunks(2)
+            .unwrap();
+        let (store, writer) = NativeCaptureStore::create(store_config).unwrap();
+        let (events, _event_reader) = bounded_capture_event_queue(32).unwrap();
+        let context = AcquisitionContext::new(session_id, Box::new(writer), Box::new(events));
+        let provider = DeterministicFakeProvider::new(config.clone());
+        let buffer_pool = provider.buffer_pool();
+        let mut acquisition = provider.prepare(context).unwrap();
+
+        acquisition.start().unwrap();
+        let outcome = acquisition.join().unwrap();
+        assert_eq!(outcome.captured_samples, config.total_samples());
+        let pool_metrics = buffer_pool.metrics();
+        assert_eq!(pool_metrics.allocated, 1);
+        assert_eq!(pool_metrics.in_use, 0);
+        assert_eq!(pool_metrics.available, 1);
+        assert!(pool_metrics.max_in_use <= pool_metrics.max_buffers);
+        assert!(!store.snapshot().writer_open);
+        let finalized = store.finalize().unwrap();
+        let reopened = NativeFinalizedCapture::open(finalized.directory()).unwrap();
+        let mut cursor = reopened.open_cursor().unwrap();
+        let mut reconstructed_samples = 0_u64;
+        loop {
+            match cursor.next().unwrap() {
+                CaptureCursorItem::Chunk(chunk) => {
+                    assert_eq!(chunk.start_sample(), reconstructed_samples);
+                    for sample in 0..chunk.sample_count() {
+                        for channel in 0..config.channels().len() {
+                            assert_eq!(
+                                chunk.packed_level(sample, channel),
+                                Some(config.level_at(reconstructed_samples + sample, channel))
+                            );
+                        }
+                    }
+                    reconstructed_samples = chunk.end_sample();
+                }
+                CaptureCursorItem::End => break,
+                CaptureCursorItem::Pending => panic!("finalized cursor cannot be pending"),
+            }
+        }
+        assert_eq!(reconstructed_samples, config.total_samples());
     }
 }
