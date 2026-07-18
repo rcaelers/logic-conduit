@@ -8,7 +8,7 @@ use node_graph::{
     BoolValue, EnumValue, FloatValue, InlineControl, InputDef, IntValue, NodeBadge, NodeDef,
     OutputDef, PanelSection, PropDef, Socket,
 };
-use signal_processing::SimpleTriggerCondition;
+use signal_processing::{SimpleTriggerCondition, TriggerProgram};
 
 use crate::nodes::registry::{COLOR_SOURCES, Signal};
 
@@ -28,7 +28,7 @@ const U3_RATES: &[(&str, u64)] = &[
     ("500 MHz", 500_000_000),
     ("1 GHz", 1_000_000_000),
 ];
-const U3PRO16_STATE_VERSION: u16 = 2;
+const U3PRO16_STATE_VERSION: u16 = 3;
 pub(super) const U3PRO16_CHANNELS: usize = 16;
 
 fn u3_rate_names() -> Vec<&'static str> {
@@ -150,7 +150,7 @@ pub struct U3Pro16State {
     pub clock_edge: EnumValue,
     pub channels: ChannelGridValue,
     pub summary: LabelValue,
-    trigger_conditions: Vec<SimpleTriggerCondition>,
+    trigger_program: Option<TriggerProgram>,
     /// Explanation of an auto-clamped rate, surfaced as a node badge.
     #[serde(skip)]
     pub clamp_note: Option<String>,
@@ -185,7 +185,7 @@ impl Default for U3Pro16State {
             clock_edge: EnumValue::new(0, &["Rising", "Falling"]),
             channels: ChannelGridValue::new(U3PRO16_CHANNELS, U3PRO16_CHANNELS),
             summary: LabelValue::default(),
-            trigger_conditions: vec![SimpleTriggerCondition::Ignore; U3PRO16_CHANNELS],
+            trigger_program: None,
             clamp_note: None,
             compatibility_warning: None,
         }
@@ -193,8 +193,16 @@ impl Default for U3Pro16State {
 }
 
 impl U3Pro16State {
-    pub fn trigger_conditions(&self) -> &[SimpleTriggerCondition] {
-        &self.trigger_conditions
+    pub fn trigger_program(&self) -> Option<&TriggerProgram> {
+        self.trigger_program.as_ref()
+    }
+
+    pub fn set_trigger_program(&mut self, program: Option<TriggerProgram>) -> Result<(), String> {
+        super::trigger::validate_program(self, program.as_ref())?;
+        self.trigger_program = program;
+        self.sync_recording_start_to_trigger_program();
+        self.compatibility_warning = None;
+        Ok(())
     }
 
     pub fn set_trigger_condition(
@@ -202,23 +210,28 @@ impl U3Pro16State {
         physical_channel: usize,
         condition: SimpleTriggerCondition,
     ) -> Result<(), String> {
-        let Some(current) = self.trigger_conditions.get_mut(physical_channel) else {
-            return Err(format!(
-                "U3Pro16 input {physical_channel} is outside 0..{U3PRO16_CHANNELS}"
-            ));
-        };
-        *current = condition;
-        if self
-            .trigger_conditions
-            .iter()
-            .any(|condition| *condition != SimpleTriggerCondition::Ignore)
-        {
+        self.trigger_program = super::trigger::set_condition(self, physical_channel, condition)?;
+        self.sync_recording_start_to_trigger_program();
+        self.compatibility_warning = None;
+        Ok(())
+    }
+
+    fn sync_recording_start_to_trigger_program(&mut self) {
+        if self.trigger_program.is_some() {
             self.recording_start.select("Trigger");
         } else {
             self.recording_start.select("Immediate");
         }
-        self.compatibility_warning = None;
-        Ok(())
+    }
+
+    fn retain_enabled_trigger_conditions(&mut self) {
+        let had_trigger = self.trigger_program.is_some();
+        if let Ok(program) = super::trigger::retain_enabled_conditions(self) {
+            self.trigger_program = program;
+            if had_trigger && self.trigger_program.is_none() {
+                self.recording_start.select("Immediate");
+            }
+        }
     }
 }
 
@@ -252,6 +265,8 @@ struct SavedU3Pro16State {
     summary: LabelValue,
     #[serde(default)]
     trigger_conditions: Vec<SimpleTriggerCondition>,
+    #[serde(default)]
+    trigger_program: Option<Value>,
 }
 
 impl<'de> Deserialize<'de> for U3Pro16State {
@@ -260,9 +275,13 @@ impl<'de> Deserialize<'de> for U3Pro16State {
         D: Deserializer<'de>,
     {
         let value = Value::deserialize(deserializer)?;
+        let has_saved_trigger_program = value
+            .as_object()
+            .is_some_and(|object| object.contains_key("trigger_program"));
         let saved: SavedU3Pro16State = serde_json::from_value(value)
             .map_err(|error| serde::de::Error::custom(error.to_string()))?;
         let mut warnings = Vec::new();
+        let recording_start_was_missing = saved.recording_start.is_none();
         if saved.schema_version != U3PRO16_STATE_VERSION {
             warnings.push(format!(
                 "updated U3Pro16 settings from schema {} to {}",
@@ -270,7 +289,7 @@ impl<'de> Deserialize<'de> for U3Pro16State {
             ));
         }
         let mut trigger_conditions = saved.trigger_conditions;
-        if trigger_conditions.len() != U3PRO16_CHANNELS {
+        if !has_saved_trigger_program && trigger_conditions.len() != U3PRO16_CHANNELS {
             trigger_conditions.resize(U3PRO16_CHANNELS, SimpleTriggerCondition::Ignore);
             trigger_conditions.truncate(U3PRO16_CHANNELS);
             warnings.push(format!(
@@ -283,21 +302,14 @@ impl<'de> Deserialize<'de> for U3Pro16State {
             channels.enabled.truncate(U3PRO16_CHANNELS);
             warnings.push(format!("normalized channel count to {U3PRO16_CHANNELS}"));
         }
-        let has_trigger = trigger_conditions
-            .iter()
-            .any(|condition| *condition != SimpleTriggerCondition::Ignore);
-        let recording_start = saved.recording_start.unwrap_or_else(|| {
-            EnumValue::new(
-                usize::from(has_trigger),
-                &["Immediate", "Trigger"],
-            )
-        });
-        Ok(Self {
+        let mut state = Self {
             schema_version: U3PRO16_STATE_VERSION,
             mode: saved.mode,
             sample_rate: saved.sample_rate,
             duration_ms: saved.duration_ms,
-            recording_start,
+            recording_start: saved
+                .recording_start
+                .unwrap_or_else(|| EnumValue::new(0, &["Immediate", "Trigger"])),
             trigger_position_percent: saved
                 .trigger_position_percent
                 .unwrap_or_else(|| IntValue::new(50, 0, 100)),
@@ -323,10 +335,48 @@ impl<'de> Deserialize<'de> for U3Pro16State {
             clock_edge: saved.clock_edge,
             channels,
             summary: saved.summary,
-            trigger_conditions,
+            trigger_program: None,
             clamp_note: None,
-            compatibility_warning: (!warnings.is_empty()).then(|| warnings.join("; ")),
-        })
+            compatibility_warning: None,
+        };
+        let mut reset_trigger_program = false;
+        state.trigger_program = if has_saved_trigger_program {
+            match saved.trigger_program {
+                None => None,
+                Some(value) => match serde_json::from_value::<TriggerProgram>(value) {
+                    Ok(program) => match super::trigger::validate_program(&state, Some(&program)) {
+                        Ok(()) => Some(program),
+                        Err(error) => {
+                            reset_trigger_program = true;
+                            warnings.push(format!(
+                                "reset incompatible trigger program to free run: {error}"
+                            ));
+                            None
+                        }
+                    },
+                    Err(error) => {
+                        reset_trigger_program = true;
+                        warnings.push(format!(
+                            "reset malformed trigger program to free run: {error}"
+                        ));
+                        None
+                    }
+                },
+            }
+        } else {
+            super::trigger::program_from_conditions(
+                &trigger_conditions,
+                &state.channels.enabled,
+            )
+            .map_err(serde::de::Error::custom)?
+        };
+        if recording_start_was_missing || reset_trigger_program {
+            state.sync_recording_start_to_trigger_program();
+        }
+        warnings.sort();
+        warnings.dedup();
+        state.compatibility_warning = (!warnings.is_empty()).then(|| warnings.join("; "));
+        Ok(state)
     }
 }
 
@@ -422,6 +472,7 @@ impl NodeDef for DsLogicU3Pro16 {
     }
 
     fn on_update(state: &mut Self::State, _inputs: &mut [Socket], outputs: &mut [Socket]) {
+        state.retain_enabled_trigger_conditions();
         let enabled = state.channels.enabled_count();
 
         // Channel-count ↔ rate constraint (stream mode only): clamp the rate
@@ -480,6 +531,7 @@ mod tests {
     use signal_processing::SimpleTriggerCondition::{Falling, High, Ignore};
 
     use super::{DsLogicU3Pro16, U3PRO16_CHANNELS, U3Pro16State, u3_max_stream_rate};
+    use crate::nodes::dslogic_u3pro16::trigger;
 
     #[test]
     fn streaming_rate_limit_uses_highest_enabled_input_not_population_count() {
@@ -502,7 +554,10 @@ mod tests {
         let saved = serde_json::to_value(&state).unwrap();
         let restored: U3Pro16State = serde_json::from_value(saved).unwrap();
 
-        assert_eq!(restored.trigger_conditions(), state.trigger_conditions());
+        assert_eq!(
+            trigger::conditions(&restored).unwrap(),
+            trigger::conditions(&state).unwrap()
+        );
         assert_eq!(restored.recording_start.selected(), "Trigger");
         assert_eq!(restored.trigger_position_percent.value, 37);
         assert_eq!(restored.retention.selected(), "Recent bytes");
@@ -517,35 +572,69 @@ mod tests {
         let mut saved = serde_json::to_value(U3Pro16State::default()).unwrap();
         let object = saved.as_object_mut().unwrap();
         object.remove("schema_version");
-        object.remove("trigger_conditions");
+        object.remove("trigger_program");
 
         let restored: U3Pro16State = serde_json::from_value(saved).unwrap();
 
-        assert_eq!(restored.trigger_conditions(), &[Ignore; U3PRO16_CHANNELS]);
+        assert_eq!(
+            trigger::conditions(&restored).unwrap(),
+            [Ignore; U3PRO16_CHANNELS]
+        );
         let warning = DsLogicU3Pro16::badge(&restored).unwrap();
         assert!(warning.text.contains("schema 0"));
         assert!(warning.text.contains("defaulted to Ignore"));
         let current = serde_json::to_value(restored).unwrap();
-        assert_eq!(current["schema_version"], 2);
+        assert_eq!(current["schema_version"], 3);
         assert_eq!(current["recording_start"]["value"], "Immediate");
         assert_eq!(current["trigger_position_percent"]["value"], 50);
         assert_eq!(current["retention"]["value"], "Everything");
-        assert_eq!(
-            current["trigger_conditions"].as_array().unwrap().len(),
-            U3PRO16_CHANNELS
-        );
+        assert!(current.get("trigger_conditions").is_none());
+        assert!(current["trigger_program"].is_null());
     }
 
     #[test]
     fn malformed_channel_and_trigger_counts_are_normalized() {
         let mut saved = serde_json::to_value(U3Pro16State::default()).unwrap();
+        saved["schema_version"] = serde_json::json!(2);
+        saved.as_object_mut().unwrap().remove("trigger_program");
         saved["channels"]["enabled"] = serde_json::json!([true, false]);
         saved["trigger_conditions"] = serde_json::json!(["falling"]);
         let restored: U3Pro16State = serde_json::from_value(saved).unwrap();
 
         assert_eq!(restored.channels.enabled.len(), U3PRO16_CHANNELS);
-        assert_eq!(restored.trigger_conditions().len(), U3PRO16_CHANNELS);
-        assert_eq!(restored.trigger_conditions()[0], Falling);
+        let conditions = trigger::conditions(&restored).unwrap();
+        assert_eq!(conditions.len(), U3PRO16_CHANNELS);
+        assert_eq!(conditions[0], Falling);
         assert!(DsLogicU3Pro16::badge(&restored).is_some());
+    }
+
+    #[test]
+    fn incompatible_saved_program_resets_with_a_visible_warning() {
+        let mut state = U3Pro16State::default();
+        state.set_trigger_condition(3, High).unwrap();
+        let mut saved = serde_json::to_value(state).unwrap();
+        saved["trigger_program"]["schema_id"] = serde_json::json!("future.engine");
+
+        let restored: U3Pro16State = serde_json::from_value(saved).unwrap();
+
+        assert!(restored.trigger_program().is_none());
+        assert_eq!(restored.recording_start.selected(), "Immediate");
+        let warning = DsLogicU3Pro16::badge(&restored).unwrap();
+        assert!(warning.text.contains("reset incompatible trigger program"));
+    }
+
+    #[test]
+    fn malformed_saved_program_resets_with_a_visible_warning() {
+        let mut state = U3Pro16State::default();
+        state.set_trigger_condition(3, High).unwrap();
+        let mut saved = serde_json::to_value(state).unwrap();
+        saved["trigger_program"] = serde_json::json!({ "stages": "not-an-array" });
+
+        let restored: U3Pro16State = serde_json::from_value(saved).unwrap();
+
+        assert!(restored.trigger_program().is_none());
+        assert_eq!(restored.recording_start.selected(), "Immediate");
+        let warning = DsLogicU3Pro16::badge(&restored).unwrap();
+        assert!(warning.text.contains("reset malformed trigger program"));
     }
 }

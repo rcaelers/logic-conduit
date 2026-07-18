@@ -35,6 +35,10 @@ fn generic_capture_components_contain_no_provider_or_model_contracts() {
             "viewer",
             include_str!("../../../widgets/logic_analyzer_viewer/src/viewer.rs"),
         ),
+        (
+            "trigger editor",
+            include_str!("../../../widgets/trigger_editor/src/lib.rs"),
+        ),
     ];
     let forbidden = ["DeterministicFake", "BufferedFake", "U3Pro16", "u3pro16"];
 
@@ -46,5 +50,23 @@ fn generic_capture_components_contain_no_provider_or_model_contracts() {
                 "generic {component} source contains provider/model-specific token {token:?}"
             );
         }
+    }
+}
+
+#[test]
+fn generic_trigger_editor_contains_no_provider_or_protocol_cases() {
+    let source = implementation_source(include_str!("../../../widgets/trigger_editor/src/lib.rs"));
+    for token in [
+        "U3Pro16",
+        "DSLogic",
+        "SPI",
+        "UART",
+        "Binary Decoder",
+        "demo:",
+    ] {
+        assert!(
+            !source.contains(token),
+            "generic trigger editor contains concrete token {token:?}"
+        );
     }
 }

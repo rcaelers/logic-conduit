@@ -2209,6 +2209,7 @@ dependencies = [
  "serde_json",
  "signal-processing",
  "tempfile",
+ "trigger-editor",
 ]
 
 [[package]]
@@ -3920,6 +3921,14 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "trigger-editor"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "signal-processing",
 ]
 
 [[package]]

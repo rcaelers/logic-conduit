@@ -467,6 +467,67 @@ impl TriggerEditorSchema {
         }))
     }
 
+    /// Classifies a validated program without interpreting registered predicate identities.
+    ///
+    /// The common digital form is the one representation lane trigger controls may edit safely:
+    /// one non-inverted, uncounted AND stage containing at most one digital predicate per channel.
+    pub fn program_form(
+        &self,
+        program: Option<&TriggerProgram>,
+        channels: &[CaptureChannelId],
+    ) -> Result<TriggerProgramForm, TriggerValidationErrors> {
+        let Some(program) = program else {
+            return Ok(TriggerProgramForm::FreeRun);
+        };
+        self.validate_program(program, channels)?;
+        let [stage] = program.stages.as_slice() else {
+            return Ok(TriggerProgramForm::Advanced);
+        };
+        if stage.logic != TriggerLogicOperator::And || stage.inverted || stage.count.is_some() {
+            return Ok(TriggerProgramForm::Advanced);
+        }
+        let mut conditions = BTreeMap::new();
+        for predicate in &stage.predicates {
+            let TriggerPredicate::Digital { channel, condition } = predicate else {
+                return Ok(TriggerProgramForm::Advanced);
+            };
+            if conditions.insert(channel.clone(), *condition).is_some() {
+                return Ok(TriggerProgramForm::Advanced);
+            }
+        }
+        Ok(TriggerProgramForm::CommonDigital(conditions))
+    }
+
+    /// Applies one lane condition without replacing an advanced program implicitly.
+    pub fn with_simple_condition(
+        &self,
+        program: Option<&TriggerProgram>,
+        channels: &[CaptureChannelId],
+        channel: &CaptureChannelId,
+        condition: SimpleTriggerCondition,
+    ) -> Result<Option<TriggerProgram>, TriggerProgramEditError> {
+        if !channels.contains(channel) {
+            return Err(TriggerProgramEditError::UnknownChannel(channel.clone()));
+        }
+        let mut conditions = match self.program_form(program, channels)? {
+            TriggerProgramForm::FreeRun => BTreeMap::new(),
+            TriggerProgramForm::CommonDigital(conditions) => conditions,
+            TriggerProgramForm::Advanced => return Err(TriggerProgramEditError::AdvancedProgram),
+        };
+        if condition == SimpleTriggerCondition::Ignore {
+            conditions.remove(channel);
+        } else {
+            conditions.insert(channel.clone(), condition);
+        }
+        let program = self
+            .simple_program(conditions)?
+            .filter(|program| !program.stages.is_empty());
+        if let Some(program) = &program {
+            self.validate_program(program, channels)?;
+        }
+        Ok(program)
+    }
+
     pub fn validate_program(
         &self,
         program: &TriggerProgram,
@@ -672,6 +733,31 @@ pub struct TriggerProgram {
     pub schema_id: TriggerIdentifier,
     pub schema_revision: u32,
     pub stages: Vec<TriggerStage>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TriggerProgramForm {
+    FreeRun,
+    CommonDigital(BTreeMap<CaptureChannelId, SimpleTriggerCondition>),
+    Advanced,
+}
+
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum TriggerProgramEditError {
+    #[error(transparent)]
+    Validation(#[from] TriggerValidationErrors),
+    #[error("lane controls cannot replace an advanced trigger program; use the Triggers panel")]
+    AdvancedProgram,
+    #[error("capture channel '{0}' is not enabled")]
+    UnknownChannel(CaptureChannelId),
+    #[error("the trigger schema cannot represent this simple trigger: {0}")]
+    UnsupportedSimpleProgram(String),
+}
+
+impl From<String> for TriggerProgramEditError {
+    fn from(message: String) -> Self {
+        Self::UnsupportedSimpleProgram(message)
+    }
 }
 
 impl TriggerProgram {
@@ -1175,6 +1261,65 @@ mod tests {
         assert_eq!(program.stages[0].logic, TriggerLogicOperator::And);
         assert_eq!(program.stages[0].predicates.len(), 1);
         schema().validate_program(&program, &channels()).unwrap();
+    }
+
+    #[test]
+    fn lane_edits_share_the_common_program_and_refuse_advanced_replacement() {
+        let schema = schema();
+        let channels = channels();
+        let first = schema
+            .with_simple_condition(
+                None,
+                &channels,
+                &channels[0],
+                SimpleTriggerCondition::Rising,
+            )
+            .unwrap();
+        let second = schema
+            .with_simple_condition(
+                first.as_ref(),
+                &channels,
+                &channels[1],
+                SimpleTriggerCondition::High,
+            )
+            .unwrap();
+        let TriggerProgramForm::CommonDigital(conditions) =
+            schema.program_form(second.as_ref(), &channels).unwrap()
+        else {
+            panic!("lane edits should produce the common digital form");
+        };
+        assert_eq!(conditions[&channels[0]], SimpleTriggerCondition::Rising);
+        assert_eq!(conditions[&channels[1]], SimpleTriggerCondition::High);
+
+        assert_eq!(
+            schema
+                .with_simple_condition(
+                    Some(&valid_program()),
+                    &channels,
+                    &channels[0],
+                    SimpleTriggerCondition::Falling,
+                )
+                .unwrap_err(),
+            TriggerProgramEditError::AdvancedProgram
+        );
+
+        let cleared = schema
+            .with_simple_condition(
+                second.as_ref(),
+                &channels,
+                &channels[0],
+                SimpleTriggerCondition::Ignore,
+            )
+            .unwrap();
+        let cleared = schema
+            .with_simple_condition(
+                cleared.as_ref(),
+                &channels,
+                &channels[1],
+                SimpleTriggerCondition::Ignore,
+            )
+            .unwrap();
+        assert!(cleared.is_none());
     }
 
     #[test]

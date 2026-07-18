@@ -1,6 +1,7 @@
 mod builder;
 mod definition;
 mod live_capture;
+mod trigger;
 
 pub(crate) use builder::DsLogicU3Pro16Builder;
 pub use definition::{DsLogicU3Pro16, U3Pro16State};
@@ -52,7 +53,8 @@ fn physical_input_mask(state: &U3Pro16State) -> u64 {
         })
 }
 
-fn lower_trigger(state: &U3Pro16State) -> LogicTrigger {
+fn lower_trigger(state: &U3Pro16State) -> Result<LogicTrigger, String> {
+    let conditions = trigger::conditions(state)?;
     let mut stage = LogicTriggerStage::default();
     let mut active = false;
     for physical_channel in 0..U3PRO16_CHANNELS {
@@ -63,7 +65,7 @@ fn lower_trigger(state: &U3Pro16State) -> LogicTrigger {
             .copied()
             .unwrap_or(false);
         let condition = enabled
-            .then(|| state.trigger_conditions().get(physical_channel).copied())
+            .then(|| conditions.get(physical_channel).copied())
             .flatten()
             .unwrap_or(SimpleTriggerCondition::Ignore);
         stage.plane0[physical_channel] = match condition {
@@ -76,10 +78,10 @@ fn lower_trigger(state: &U3Pro16State) -> LogicTrigger {
         };
         active |= condition != SimpleTriggerCondition::Ignore;
     }
-    LogicTrigger {
+    Ok(LogicTrigger {
         stages: active.then_some(stage).into_iter().collect(),
         serial: false,
-    }
+    })
 }
 
 fn capture_config(state: &U3Pro16State) -> Result<LogicCaptureConfig, String> {
@@ -98,7 +100,7 @@ fn capture_config(state: &U3Pro16State) -> Result<LogicCaptureConfig, String> {
             .unwrap_or(50),
         threshold_volts: Some(state.threshold.value),
         trigger: if state.recording_start.selected() == "Trigger" {
-            lower_trigger(state)
+            lower_trigger(state)?
         } else {
             LogicTrigger::default()
         },
@@ -199,19 +201,22 @@ fn capacity_request(state: &U3Pro16State) -> Result<CaptureCapacityRequest, Stri
 
 fn apply_live_capture_edit(state: &Value, edit: &LiveCaptureEdit) -> Result<Value, String> {
     let mut state = parse_state::<U3Pro16State>(state)?;
-    let LiveCaptureEdit::SetSimpleTrigger {
-        channel_id,
-        condition,
-    } = edit
-    else {
-        return Err("U3Pro16 saved state has no advanced trigger program".into());
-    };
-    let physical_channel = channel_id
-        .as_str()
-        .strip_prefix("u3pro16:input:")
-        .and_then(|channel| channel.parse::<usize>().ok())
-        .ok_or_else(|| format!("unknown U3Pro16 input {channel_id}"))?;
-    state.set_trigger_condition(physical_channel, *condition)?;
+    match edit {
+        LiveCaptureEdit::SetSimpleTrigger {
+            channel_id,
+            condition,
+        } => {
+            let physical_channel = channel_id
+                .as_str()
+                .strip_prefix("u3pro16:input:")
+                .and_then(|channel| channel.parse::<usize>().ok())
+                .ok_or_else(|| format!("unknown U3Pro16 input {channel_id}"))?;
+            state.set_trigger_condition(physical_channel, *condition)?;
+        }
+        LiveCaptureEdit::SetTriggerProgram { program } => {
+            state.set_trigger_program(program.clone())?;
+        }
+    }
     serde_json::to_value(state).map_err(|error| error.to_string())
 }
 

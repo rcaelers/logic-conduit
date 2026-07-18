@@ -8,7 +8,7 @@ use signal_processing::{ProcessNode, Sample, SampleBlock, ViewerRetention};
 
 use crate::compiler::{
     CompileCtx, LiveCaptureEdit, LiveCaptureFeature, PortKind, ResolvedInputs, RuntimeBuilder,
-    parse_state,
+    TriggerConfigurationFeature, parse_state,
 };
 use crate::nodes::U3Pro16State;
 
@@ -86,6 +86,14 @@ impl RuntimeBuilder for DsLogicU3Pro16Builder {
         state: &Value,
     ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
         super::live_capture::feature(state)
+    }
+
+    fn trigger_configuration(
+        &self,
+        state: &Value,
+    ) -> Result<Option<TriggerConfigurationFeature>, String> {
+        let state: U3Pro16State = parse_state(state)?;
+        super::trigger::configuration(&state).map(Some)
     }
 
     fn apply_live_capture_edit(

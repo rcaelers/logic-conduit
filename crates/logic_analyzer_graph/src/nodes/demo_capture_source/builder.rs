@@ -8,6 +8,7 @@ use signal_processing::{ProcessNode, Sample, SampleBlock};
 
 use crate::compiler::{
     CompileCtx, LiveCaptureEdit, LiveCaptureFeature, PortKind, ResolvedInputs, RuntimeBuilder,
+    TriggerConfigurationFeature,
 };
 
 pub(crate) struct DemoCaptureSourceBuilder;
@@ -54,6 +55,15 @@ impl RuntimeBuilder for DemoCaptureSourceBuilder {
         state: &Value,
     ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
         super::live_capture::feature(state)
+    }
+
+    fn trigger_configuration(
+        &self,
+        state: &Value,
+    ) -> Result<Option<TriggerConfigurationFeature>, String> {
+        let state = serde_json::from_value::<super::DemoCaptureSourceState>(state.clone())
+            .map_err(|error| format!("invalid demo capture state: {error}"))?;
+        super::trigger::configuration(&state).map(Some)
     }
 
     fn apply_live_capture_edit(

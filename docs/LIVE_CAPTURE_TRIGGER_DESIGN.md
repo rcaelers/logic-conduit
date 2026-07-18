@@ -353,7 +353,7 @@ opens a small condition menu; it does not rely only on cycling through icons. Th
 show the actual selected condition. Input bindings and status-bar hints come from the existing
 binding configuration rather than hardcoded shortcuts.
 
-The later Triggers panel supplies advanced multi-stage programs through the same portable trigger
+The Triggers panel supplies advanced multi-stage programs through the same portable trigger
 model. When an advanced program is active, lane icons summarize its selected stage rather than
 maintaining a second, conflicting trigger program.
 
@@ -381,15 +381,24 @@ bounds. It returns either a `ValidatedTriggerProgram` or structured path/code/me
 Generic code cannot construct the validated wrapper directly.
 
 `LiveCaptureEdit::SetTriggerProgram` routes an optional neutral program to the concrete source
-builder that owns the selected live feature. The builder owns saved-state migration and, in the
-execution phase, translation from the validated program to its processing/provider representation.
-Generic compiler, application, viewer, and capture runtime code neither inspect registered IDs nor
-branch on a device, protocol, port label, or predicate name. A schema revision mismatch is an
-explicit compatibility diagnostic until that owning builder migrates the program.
+builder that owns the selected feature. The builder owns saved-state migration and translation from
+the validated program to its processing/provider representation. Generic compiler, application,
+viewer, and capture runtime code neither inspect registered IDs nor branch on a device, protocol,
+port label, or predicate name. A schema revision mismatch is handled by an explicit owning-node
+migration or a user-visible reset warning.
 
-The Triggers panel, concrete saved programs, and device execution are proposed future Phases 13.3
-and 13.4. Phase 13.2 establishes only the portable contract, validation/negotiation, neutral edit
-routing, and conformance tests.
+Trigger configuration discovery is a pure graph-builder feature separate from acquisition feature
+discovery. It remains available when a native device/backend is absent and on wasm, and exposes
+only the schema, active opaque channel table, saved program, and common lane projection. The
+generic `trigger-editor` widget consumes that contract and emits neutral whole-program edits. It
+supports schema-declared stages, logic, inversion, counts, digital conditions, registered
+predicates, and typed operands without provider callbacks or built-in layouts.
+
+Lane controls and the Triggers panel edit the same saved program. Lane controls may update free-run
+or the common one-stage digital form; they refuse to replace a staged, counted, inverted, or
+registered-predicate program implicitly. Built-in source schemas advertise the common digital
+subset that their current execution paths can lower. Additional concrete execution and richer
+built-in schemas remain proposed Phase 13.4 work.
 
 ### Capture policy
 
@@ -921,10 +930,10 @@ the first vertical slice:
 
 - repeated or segmented acquisition that re-arms after each trigger and records immutable frames
   within one session, with a configurable re-arm delay and frame limit;
-- advanced trigger stages including pulse width, holdoff, debounce/glitch qualification, channel
-  patterns, and conditions derived from decoded events. Capability metadata describes maximum
-  sequential stages, condition planes, logical operations, equality/inversion, event counters,
-  contiguous-count qualification, and serial shift-register fields rather than assuming every
+- concrete execution for advanced trigger stages including pulse width, holdoff, debounce/glitch
+  qualification, channel patterns, and conditions derived from decoded events. Capability metadata
+  describes maximum sequential stages, condition planes, logical operations, equality/inversion,
+  event counters, contiguous-count qualification, and registered fields rather than assuming every
   source has the same trigger engine;
 - live search and incremental measurements over raw or derived lanes, with explicit covered extent
   and processing lag;
@@ -943,17 +952,19 @@ the same committed-prefix query boundary as the viewer. Automation invokes the s
 commands as the UI, so it cannot bypass validation, active-session setting immutability, epoch
 boundaries, or finalization.
 
-The advanced Triggers panel consumes a generic `TriggerEditorSchema` and emits neutral edit
-operations. The schema describes supported predicates, typed operands, stage/sequence structure,
-limits, defaults, and validation messages using stable registered IDs. Concrete features lower and
-serialize the resulting program. The panel contains no built-in driver layouts, model checks, port
-label inference, or arbitrary device callbacks.
+The Triggers panel consumes a generic `TriggerEditorSchema` and emits neutral edit operations. The
+schema describes supported predicates, typed operands, stage/sequence structure, limits, defaults,
+and validation messages using stable registered IDs. Concrete graph features serialize the
+resulting program. The panel contains no built-in driver layouts, model checks, port-label
+inference, or arbitrary device callbacks.
 
 ### Persistence and export
 
-The graph file stores capture and trigger *configuration*, not temporary raw bytes. Simple trigger
-conditions are part of `U3Pro16State`. Application document metadata may record the current capture
-reference, source node ID, and session manifest once the capture has a durable location.
+The graph file stores capture and trigger *configuration*, not temporary raw bytes. Each concrete
+source state stores an optional neutral `TriggerProgram`; legacy per-channel condition arrays
+migrate into its common digital form with a visible node warning. Application document metadata may
+record the current capture reference, source node ID, and session manifest once the capture has a
+durable location.
 
 The generic session record stores its opaque physical-channel table, exact sample rate, channel
 names, actual trigger sample, recording origin, retained start, logical sample count, encoded byte
@@ -1200,10 +1211,24 @@ limit, channel, predicate, operand, range, count, and revision violations with s
 serde round trips preserve neutral programs; routing tests prove a plugin builder receives the
 program without generic name/ID interpretation; native and wasm builds use the same data contract.
 
-##### Proposed future phases 13.3–13.9
+##### Phase 13.3 — Advanced Triggers panel
 
-- **13.3 Advanced Triggers panel:** neutral editing, persistence, migration, and simple-trigger
-  interoperability.
+- Discover pure trigger configuration independently of acquisition backend availability and expose
+  schema, active opaque channels, saved program, and common lane projection.
+- Edit schema-declared stages, predicates, counts, and typed operands through a reusable generic
+  widget that emits neutral whole-program edits.
+- Persist programs in owning concrete source states, migrate legacy simple conditions visibly, and
+  keep lane controls and the panel on the same program model.
+- Keep concrete advanced-program execution out of this phase; built-in schemas advertise only the
+  subset their current execution paths lower.
+
+Gate: a feature-rich synthetic schema exercises every editor operation and operand kind; native and
+wasm discovery do not require acquisition; lane and panel edits survive graph JSON round trips;
+legacy simple states migrate to byte-equivalent common programs with visible warnings; malformed or
+incompatible saved programs reset explicitly; no generic crate branches on provider IDs or names.
+
+##### Proposed future phases 13.4–13.9
+
 - **13.4 Concrete advanced-trigger execution:** deterministic providers followed by hardware
   lowering and fixtures.
 - **13.5 Repeated and segmented acquisition:** frame identity, per-frame origins/triggers, bounded

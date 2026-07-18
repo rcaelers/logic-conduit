@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[cfg(test)]
 use logic_analyzer_graph::compiler::DiscoveredLiveCaptureFeature;
 use logic_analyzer_graph::compiler::{
-    BuilderRegistry, SimpleTriggerChannel, discover_compiled_live_capture_feature, lower,
+    BuilderRegistry, discover_compiled_live_capture_feature, lower,
 };
 use node_graph::{GraphState, NodeId};
 #[cfg(test)]
@@ -59,7 +59,7 @@ pub(crate) enum CaptureAvailability {
     Available {
         source_node: NodeId,
         source_title: String,
-        simple_trigger_channels: Vec<SimpleTriggerChannel>,
+        has_trigger_program: bool,
         capabilities: CaptureProviderCapabilities,
         session_plan: Option<Box<CaptureSessionPlan>>,
     },
@@ -100,7 +100,7 @@ pub(crate) fn capture_availability(
         Ok(Some(feature)) => CaptureAvailability::Available {
             source_node: feature.source_node,
             source_title: feature.source_title.clone(),
-            simple_trigger_channels: feature.simple_trigger_channels().to_vec(),
+            has_trigger_program: feature.has_trigger_program(),
             capabilities: feature.capabilities().clone(),
             session_plan: feature.session_plan().cloned().map(Box::new),
         },

@@ -13,7 +13,7 @@ use signal_processing::{
     CapturePolicyCapabilities, CapturePolicyContext, CaptureProviderCapabilities,
     CaptureSessionPlan, CaptureStartMode, CaptureStoreCursor, CompletionPolicyKind, ProcessNode,
     RecordingStart, RetentionPolicyKind, TriggerPlacementCapability, TriggerTimeoutAction,
-    estimate_capture_capacity,
+    TriggerProgram, estimate_capture_capacity,
 };
 
 use crate::compiler::{
@@ -47,6 +47,7 @@ struct U3Pro16LiveCaptureFeature {
     channel_names: Arc<[String]>,
     sample_rate_hz: f64,
     simple_trigger_channels: Arc<[SimpleTriggerChannel]>,
+    trigger_program: Option<TriggerProgram>,
     analysis_channels: Arc<[CaptureAnalysisChannel]>,
     capabilities: CaptureProviderCapabilities,
     session_plan: CaptureSessionPlan,
@@ -79,6 +80,10 @@ impl LiveCaptureFeature for U3Pro16LiveCaptureFeature {
 
     fn simple_trigger_channels(&self) -> &[SimpleTriggerChannel] {
         &self.simple_trigger_channels
+    }
+
+    fn trigger_program(&self) -> Option<&TriggerProgram> {
+        self.trigger_program.as_ref()
     }
 
     fn session_plan(&self) -> Option<&CaptureSessionPlan> {
@@ -145,6 +150,7 @@ pub(super) fn feature(
 ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
     let state = parse_state::<U3Pro16State>(state)?;
     let config = capture_config(&state)?;
+    let trigger_conditions = super::trigger::conditions(&state)?;
     let (profile, delivery, actual_samples) = if state.mode.selected() == "Buffer" {
         let plan = u3pro16_buffered_plan(&config).map_err(|error| error.to_string())?;
         (
@@ -174,7 +180,7 @@ pub(super) fn feature(
         if !enabled {
             continue;
         }
-        let channel_id = CaptureChannelId::new(format!("u3pro16:input:{physical_channel}"));
+        let channel_id = super::trigger::physical_channel_id(physical_channel);
         let name = format!("Ch {physical_channel}");
         let viewer_channel = channels.len();
         channels.push(channel_id.clone());
@@ -188,7 +194,7 @@ pub(super) fn feature(
             viewer_channel,
             name,
             enabled: true,
-            condition: state.trigger_conditions()[physical_channel],
+            condition: trigger_conditions[physical_channel],
         });
     }
     let channels: Arc<[CaptureChannelId]> = channels.into();
@@ -218,7 +224,8 @@ pub(super) fn feature(
         config.sample_rate_hz,
     )
     .with_commands(CaptureCommandCapabilities::new(true, false, false, true))
-    .with_policy(policy_capabilities);
+    .with_policy(policy_capabilities)
+    .with_trigger_schema(super::trigger::schema());
     let requested_policy = requested_capture_policy(&state)?;
     let mut policy = capabilities
         .policy()
@@ -265,6 +272,7 @@ pub(super) fn feature(
         analysis_channels: analysis_channels.into(),
         sample_rate_hz: config.sample_rate_hz as f64,
         simple_trigger_channels: simple_trigger_channels.into(),
+        trigger_program: state.trigger_program().cloned(),
         channels,
         capabilities,
         session_plan,

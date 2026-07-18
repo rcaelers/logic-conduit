@@ -31,7 +31,7 @@ use signal_processing::{
     AppManager, CaptureChannelId, CaptureProviderCapabilities, CaptureSessionPlan,
     CaptureStartMode, CaptureStoreCursor, ConfigurationBoundary, DerivedLanes, DisconnectEvent,
     InputSub, NodeConfig, OverflowPolicy, PersistentStoreConfig, ProcessNode, SampleBlock,
-    SamplingActivity, SimpleTriggerCondition, TriggerProgram, ViewerRetention,
+    SamplingActivity, SimpleTriggerCondition, TriggerEditorSchema, TriggerProgram, ViewerRetention,
 };
 
 use super::cache_platform;
@@ -159,6 +159,76 @@ pub struct SimpleTriggerChannel {
     pub condition: SimpleTriggerCondition,
 }
 
+/// Pure graph-state trigger configuration exposed independently of acquisition availability.
+///
+/// This contract is available on native and wasm targets. It contains only opaque channel
+/// identities, generic schema metadata, and the neutral saved program.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TriggerConfigurationFeature {
+    schema: Arc<TriggerEditorSchema>,
+    program: Option<TriggerProgram>,
+    channels: Vec<SimpleTriggerChannel>,
+}
+
+impl TriggerConfigurationFeature {
+    pub fn new(
+        schema: TriggerEditorSchema,
+        program: Option<TriggerProgram>,
+        channels: Vec<SimpleTriggerChannel>,
+    ) -> Result<Self, String> {
+        let all_channel_ids: Vec<_> = channels
+            .iter()
+            .map(|channel| channel.channel_id.clone())
+            .collect();
+        let channel_ids: Vec<_> = channels
+            .iter()
+            .filter(|channel| channel.enabled)
+            .map(|channel| channel.channel_id.clone())
+            .collect();
+        if all_channel_ids.iter().collect::<HashSet<_>>().len() != all_channel_ids.len() {
+            return Err("trigger configuration channel identities must be unique".into());
+        }
+        if channels
+            .iter()
+            .map(|channel| channel.viewer_channel)
+            .collect::<HashSet<_>>()
+            .len()
+            != channels.len()
+        {
+            return Err("trigger configuration viewer channels must be unique".into());
+        }
+        if let Some(program) = &program {
+            schema
+                .validate_program(program, &channel_ids)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(Self {
+            schema: Arc::new(schema),
+            program,
+            channels,
+        })
+    }
+
+    pub fn schema(&self) -> &TriggerEditorSchema {
+        &self.schema
+    }
+
+    pub fn program(&self) -> Option<&TriggerProgram> {
+        self.program.as_ref()
+    }
+
+    pub fn channels(&self) -> &[SimpleTriggerChannel] {
+        &self.channels
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiscoveredTriggerConfiguration {
+    pub source_node: NodeId,
+    pub source_title: String,
+    pub feature: TriggerConfigurationFeature,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LiveCaptureEdit {
     SetSimpleTrigger {
@@ -181,6 +251,9 @@ pub trait LiveCaptureFeature: Send {
     fn capabilities(&self) -> &CaptureProviderCapabilities;
     fn simple_trigger_channels(&self) -> &[SimpleTriggerChannel] {
         &[]
+    }
+    fn trigger_program(&self) -> Option<&TriggerProgram> {
+        None
     }
     fn session_plan(&self) -> Option<&CaptureSessionPlan> {
         None
@@ -249,6 +322,14 @@ impl DiscoveredLiveCaptureFeature {
 
     pub fn simple_trigger_channels(&self) -> &[SimpleTriggerChannel] {
         self.feature.simple_trigger_channels()
+    }
+
+    pub fn trigger_program(&self) -> Option<&TriggerProgram> {
+        self.feature.trigger_program()
+    }
+
+    pub fn has_trigger_program(&self) -> bool {
+        self.trigger_program().is_some() || self.has_simple_trigger()
     }
 
     pub fn session_plan(&self) -> Option<&CaptureSessionPlan> {
@@ -343,6 +424,16 @@ pub trait RuntimeBuilder {
     ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
         Ok(None)
     }
+    /// Optional trigger configuration owned by this node's serialized state.
+    ///
+    /// Unlike `live_capture_feature`, this pure-data contract must not require a device, native
+    /// backend, or acquisition preparation and can therefore remain available on wasm.
+    fn trigger_configuration(
+        &self,
+        _state: &Value,
+    ) -> Result<Option<TriggerConfigurationFeature>, String> {
+        Ok(None)
+    }
     /// Applies a portable feature edit to this node's serialized state. Concrete builders own
     /// channel identity and state evolution; the compiler only routes the opaque request.
     fn apply_live_capture_edit(
@@ -415,6 +506,50 @@ pub fn discover_live_capture_feature(
     builders: &BuilderRegistry,
 ) -> Result<Option<DiscoveredLiveCaptureFeature>, LiveCaptureDiscoveryError> {
     discover_live_capture_feature_from(graph, builders, |_| true)
+}
+
+/// Resolves exactly one enabled trigger-configuration feature without consulting acquisition
+/// backends or identifying a concrete node type.
+pub fn discover_trigger_configuration(
+    graph: &GraphState,
+    builders: &BuilderRegistry,
+) -> Result<Option<DiscoveredTriggerConfiguration>, LiveCaptureDiscoveryError> {
+    let mut candidates = Vec::new();
+    for node in graph
+        .nodes
+        .values()
+        .filter(|node| node.kind == NodeKind::Regular && !node.muted)
+    {
+        let Some(builder) = builders.get(node.def_name()) else {
+            continue;
+        };
+        match builder.trigger_configuration(&node.state) {
+            Ok(Some(feature)) => candidates.push(DiscoveredTriggerConfiguration {
+                source_node: node.id,
+                source_title: node.title.clone(),
+                feature,
+            }),
+            Ok(None) => {}
+            Err(message) => {
+                return Err(LiveCaptureDiscoveryError {
+                    source_nodes: vec![node.id],
+                    message: format!("{}: {message}", node.title),
+                });
+            }
+        }
+    }
+    match candidates.len() {
+        0 => Ok(None),
+        1 => Ok(candidates.pop()),
+        _ => Err(LiveCaptureDiscoveryError {
+            source_nodes: candidates
+                .iter()
+                .map(|candidate| candidate.source_node)
+                .collect(),
+            message: "multiple enabled trigger configurations are present; keep one capture source enabled"
+                .into(),
+        }),
+    }
 }
 
 /// Routes a portable live-feature edit to the concrete builder that owns `source_node`.
@@ -1812,8 +1947,8 @@ mod tests {
         CaptureChannelId, CaptureChunk, CaptureChunkWriter, CaptureDataDelivery,
         CaptureProviderCapabilities, CaptureSessionId, CaptureStoreCursor, ConfigValue,
         CooperativeManager, DerivedLaneData, NativeCaptureStore, NativeCaptureStoreConfig,
-        NodeSpec, Pipeline, Sample, Trigger, TriggerIdentifier, TriggerLogicOperator,
-        TriggerPredicate, TriggerStage, Word,
+        NodeSpec, Pipeline, Sample, Trigger, TriggerEditorSchema, TriggerIdentifier,
+        TriggerLogicOperator, TriggerPredicate, TriggerStage, Word,
     };
 
     use super::*;
@@ -1852,6 +1987,8 @@ mod tests {
     }
 
     struct BufferedPluginBuilder;
+
+    struct TriggerOnlyPluginBuilder;
 
     struct BufferedPluginGraphSourceFactory {
         channels: Arc<[CaptureChannelId]>,
@@ -1982,6 +2119,87 @@ mod tests {
                 }))),
                 LiveCaptureEdit::SetSimpleTrigger { .. } => Ok(None),
             }
+        }
+
+        fn input_required(&self, socket: &Socket, state: &Value) -> bool {
+            crate::nodes::DemoCaptureSourceBuilder.input_required(socket, state)
+        }
+
+        fn build(
+            &self,
+            name: &str,
+            state: &Value,
+            resolved: &ResolvedInputs,
+            ctx: &mut CompileCtx,
+        ) -> Result<Box<dyn ProcessNode>, String> {
+            crate::nodes::DemoCaptureSourceBuilder.build(name, state, resolved, ctx)
+        }
+    }
+
+    impl RuntimeBuilder for TriggerOnlyPluginBuilder {
+        fn is_source(&self) -> bool {
+            true
+        }
+
+        fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
+            crate::nodes::DemoCaptureSourceBuilder.accepted_kinds(socket, state)
+        }
+
+        fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
+            crate::nodes::DemoCaptureSourceBuilder.offered_kinds(socket, state)
+        }
+
+        fn input_port(
+            &self,
+            socket: &Socket,
+            member_index: usize,
+            state: &Value,
+            kind: PortKind,
+        ) -> Option<String> {
+            crate::nodes::DemoCaptureSourceBuilder.input_port(socket, member_index, state, kind)
+        }
+
+        fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
+            crate::nodes::DemoCaptureSourceBuilder.output_port(socket, state, kind)
+        }
+
+        fn viewer_channel_origin(&self, socket: &Socket, state: &Value) -> Option<usize> {
+            crate::nodes::DemoCaptureSourceBuilder.viewer_channel_origin(socket, state)
+        }
+
+        fn live_capture_feature(
+            &self,
+            _state: &Value,
+        ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
+            panic!("trigger configuration discovery consulted the acquisition feature")
+        }
+
+        fn trigger_configuration(
+            &self,
+            _state: &Value,
+        ) -> Result<Option<TriggerConfigurationFeature>, String> {
+            let schema = TriggerEditorSchema::new(
+                TriggerIdentifier::new("plugin.trigger-only").unwrap(),
+                1,
+                1,
+                2,
+                vec![TriggerLogicOperator::And],
+            )
+            .unwrap()
+            .with_digital_conditions(vec![SimpleTriggerCondition::High])
+            .unwrap();
+            TriggerConfigurationFeature::new(
+                schema,
+                None,
+                vec![SimpleTriggerChannel {
+                    channel_id: CaptureChannelId::new("plugin-bank:23"),
+                    viewer_channel: 0,
+                    name: "Plugin 23".into(),
+                    enabled: true,
+                    condition: SimpleTriggerCondition::Ignore,
+                }],
+            )
+            .map(Some)
         }
 
         fn input_required(&self, socket: &Socket, state: &Value) -> bool {
@@ -2518,9 +2736,53 @@ mod tests {
             SimpleTriggerCondition::Falling
         );
         assert!(edited.has_simple_trigger());
+        let trigger_configuration =
+            discover_trigger_configuration(widget.graph(), &BuilderRegistry::standard())
+                .unwrap()
+                .unwrap();
+        assert_eq!(trigger_configuration.source_node, source);
+        assert_eq!(
+            trigger_configuration.feature.program(),
+            edited.trigger_program()
+        );
+        let panel_program = trigger_configuration
+            .feature
+            .schema()
+            .simple_program([
+                (
+                    CaptureChannelId::new("demo:2"),
+                    SimpleTriggerCondition::High,
+                ),
+                (
+                    CaptureChannelId::new("demo:7"),
+                    SimpleTriggerCondition::Falling,
+                ),
+            ])
+            .unwrap();
+        let state = apply_live_capture_edit(
+            widget.graph(),
+            &BuilderRegistry::standard(),
+            source,
+            &LiveCaptureEdit::SetTriggerProgram {
+                program: panel_program.clone(),
+            },
+        )
+        .unwrap();
+        assert!(widget.edit_node_state(source, state));
+        let panel_edited =
+            discover_trigger_configuration(widget.graph(), &BuilderRegistry::standard())
+                .unwrap()
+                .unwrap();
+        assert_eq!(panel_edited.feature.program(), panel_program.as_ref());
 
         let serialized = serde_json::to_string(widget.graph()).unwrap();
         let graph: GraphState = serde_json::from_str(&serialized).unwrap();
+        assert!(
+            graph.nodes[&source]
+                .state
+                .get("trigger_conditions")
+                .is_none()
+        );
         let mut restored = NodeGraphWidget::new(nodes::build_registry());
         restored.set_graph(graph);
         let reloaded =
@@ -2530,6 +2792,38 @@ mod tests {
         assert_eq!(
             reloaded.simple_trigger_channels()[7].condition,
             SimpleTriggerCondition::Falling
+        );
+        assert_eq!(
+            reloaded.simple_trigger_channels()[2].condition,
+            SimpleTriggerCondition::High
+        );
+    }
+
+    #[test]
+    fn trigger_configuration_discovery_does_not_require_acquisition() {
+        let mut node_types = nodes::build_registry();
+        let mut builders = BuilderRegistry::standard();
+        crate::compiler::PluginContext::new(&mut node_types, &mut builders).register_builder(
+            nodes::DemoCaptureSource::name(),
+            Box::new(TriggerOnlyPluginBuilder),
+        );
+        let mut widget = NodeGraphWidget::new(node_types);
+        let source = widget
+            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::ZERO)
+            .unwrap();
+
+        let configuration = discover_trigger_configuration(widget.graph(), &builders)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(configuration.source_node, source);
+        assert_eq!(
+            configuration.feature.schema().id().as_str(),
+            "plugin.trigger-only"
+        );
+        assert_eq!(
+            configuration.feature.channels()[0].channel_id.as_str(),
+            "plugin-bank:23"
         );
     }
 

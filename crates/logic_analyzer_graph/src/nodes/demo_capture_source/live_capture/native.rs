@@ -12,7 +12,7 @@ use signal_processing::{
     CaptureProviderCapabilities, CaptureSessionPlan, CaptureSettingCombination, CaptureStartMode,
     CaptureStoreCursor, CompletionPolicy, CompletionPolicyKind, ProcessNode, RecordingStart,
     RetentionPolicy, RetentionPolicyKind, TriggerPlacement, TriggerPlacementCapability,
-    TriggerTimeoutAction, estimate_capture_capacity,
+    TriggerProgram, TriggerTimeoutAction, estimate_capture_capacity,
 };
 
 use crate::compiler::{CaptureGraphSourceFactory, LiveCaptureFeature, SimpleTriggerChannel};
@@ -53,6 +53,7 @@ struct DemoLiveCaptureFeature {
     channels: Arc<[CaptureChannelId]>,
     channel_names: Arc<[String]>,
     simple_trigger_channels: Arc<[SimpleTriggerChannel]>,
+    trigger_program: Option<TriggerProgram>,
     capabilities: CaptureProviderCapabilities,
     session_plan: CaptureSessionPlan,
     config: DeterministicFakeConfig,
@@ -77,6 +78,10 @@ impl LiveCaptureFeature for DemoLiveCaptureFeature {
 
     fn simple_trigger_channels(&self) -> &[SimpleTriggerChannel] {
         &self.simple_trigger_channels
+    }
+
+    fn trigger_program(&self) -> Option<&TriggerProgram> {
+        self.trigger_program.as_ref()
     }
 
     fn session_plan(&self) -> Option<&CaptureSessionPlan> {
@@ -126,14 +131,12 @@ pub(super) fn feature(
 ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
     let state = serde_json::from_value::<DemoCaptureSourceState>(state.clone())
         .map_err(|error| format!("invalid demo capture state: {error}"))?;
-    let channels: Arc<[CaptureChannelId]> = (0..11)
-        .map(|channel| CaptureChannelId::new(format!("demo:{channel}")))
-        .collect::<Vec<_>>()
-        .into();
+    let channels: Arc<[CaptureChannelId]> = super::super::trigger::channel_ids().into();
     let channel_names: Arc<[String]> = (0..11)
         .map(|channel| format!("D{channel}"))
         .collect::<Vec<_>>()
         .into();
+    let trigger_conditions = super::super::trigger::conditions(state.trigger_program())?;
     let config = DeterministicFakeConfig::new(
         Arc::clone(&channels),
         vec![CHUNK_SAMPLES; CHUNK_COUNT],
@@ -141,8 +144,7 @@ pub(super) fn feature(
     )
     .map_err(|error| error.to_string())?
     .with_simple_trigger(
-        state
-            .trigger_conditions()
+        trigger_conditions
             .iter()
             .copied()
             .map(Some)
@@ -153,7 +155,7 @@ pub(super) fn feature(
         .iter()
         .cloned()
         .zip(channel_names.iter().cloned())
-        .zip(state.trigger_conditions().iter().copied())
+        .zip(trigger_conditions.iter().copied())
         .enumerate()
         .map(
             |(viewer_channel, ((channel_id, name), condition))| SimpleTriggerChannel {
@@ -204,7 +206,8 @@ pub(super) fn feature(
     )
     .map_err(|error| error.to_string())?
     .with_commands(CaptureCommandCapabilities::new(true, true, true, true))
-    .with_policy(policy_capabilities);
+    .with_policy(policy_capabilities)
+    .with_trigger_schema(super::super::trigger::schema());
     let requested_policy = CapturePolicy {
         start: if has_trigger_program {
             RecordingStart::Trigger
@@ -258,6 +261,7 @@ pub(super) fn feature(
         channels,
         channel_names,
         simple_trigger_channels,
+        trigger_program: state.trigger_program().cloned(),
         capabilities,
         session_plan,
         config,

@@ -794,7 +794,7 @@ impl CaptureCoordinator {
         let immediate_recording_origin = session_plan
             .as_ref()
             .map(|plan| plan.policy.effective.start == RecordingStart::Immediate)
-            .unwrap_or_else(|| !feature.has_simple_trigger())
+            .unwrap_or_else(|| !feature.has_trigger_program())
             .then_some(0);
         let application_metadata = graph.map(|graph| CaptureApplicationMetadata {
                     format_version: APPLICATION_METADATA_VERSION,
@@ -1506,7 +1506,7 @@ fn run_capture_worker(
     let triggered_recording = session_plan
         .as_ref()
         .map(|plan| plan.policy.effective.start == RecordingStart::Trigger)
-        .unwrap_or_else(|| feature.has_simple_trigger());
+        .unwrap_or_else(|| feature.has_trigger_program());
     let recording_gate = if triggered_recording {
         CaptureRecordingGate::pending()
     } else {

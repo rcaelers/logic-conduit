@@ -117,8 +117,10 @@ Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN
         registered-predicate schema, typed programs, structured validation, capability
         negotiation, simple-trigger bridge, and concrete-owner edit-routing boundary are
         implemented without device-specific cases in generic UI/compiler/runtime code.
-      - **13.3 Advanced Triggers panel:** edit and persist the registered schema through neutral
-        operations, with migration diagnostics and simple-trigger interoperability.
+      - **13.3 Advanced Triggers panel — complete:** pure trigger-configuration discovery,
+        schema-driven neutral editing, concrete-owner persistence and migration diagnostics, and
+        one-program interoperability between lane controls and the panel are implemented on native
+        and wasm without acquisition-dependent UI state.
       - **13.4 Concrete advanced-trigger execution:** lower supported programs in each owning
         source feature, cover deterministic providers first, then add hardware fixture coverage.
       - **13.5 Repeated and segmented acquisition:** introduce frame identity, per-frame origin and

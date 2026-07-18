@@ -7,6 +7,7 @@ use logic_analyzer_graph::{compiler, nodes};
 use logic_analyzer_viewer::{LogicAnalyzerViewer, SimpleTriggerEdit, SimpleTriggerLane};
 use node_graph::{GraphState, NodeBadge, NodeContextAction, NodeGraphWidget, NodeId};
 use panel_layout::{BoundaryInteraction, PanelIcon, PanelLayout, PanelSlot, PanelSpec};
+use trigger_editor::{TriggerEditor, TriggerEditorChannel};
 
 use crate::about::AboutWindow;
 use crate::demo_signals;
@@ -68,6 +69,8 @@ pub struct App {
     builders: compiler::BuilderRegistry,
     capture: CaptureCoordinator,
     capture_availability: CaptureAvailability,
+    trigger_configuration: Option<compiler::DiscoveredTriggerConfiguration>,
+    trigger_configuration_error: Option<String>,
     capture_graph: Option<GraphState>,
     capture_analysis: Option<compiler::AppRun>,
     capture_analysis_error: Option<String>,
@@ -95,43 +98,58 @@ pub struct App {
 
 impl App {
     fn refresh_simple_trigger_ui(&mut self) {
-        let lanes = match &self.capture_availability {
-            CaptureAvailability::Available {
-                simple_trigger_channels,
-                ..
-            } => simple_trigger_channels
-                .iter()
-                .map(|channel| SimpleTriggerLane {
-                    channel: channel.viewer_channel,
-                    condition: channel.condition,
-                    enabled: channel.enabled,
-                })
-                .collect(),
-            CaptureAvailability::Unavailable { .. } => Vec::new(),
-        };
+        let lanes = self
+            .trigger_configuration
+            .as_ref()
+            .map(|configuration| configuration.feature.channels())
+            .unwrap_or_default()
+            .iter()
+            .map(|channel| SimpleTriggerLane {
+                channel: channel.viewer_channel,
+                condition: channel.condition,
+                enabled: channel.enabled,
+            })
+            .collect();
         self.logic_analyzer.set_simple_trigger_lanes(lanes);
     }
 
+    fn refresh_trigger_configuration(&mut self) {
+        match compiler::discover_trigger_configuration(self.node_graph.graph(), &self.builders) {
+            Ok(configuration) => {
+                self.trigger_configuration = configuration;
+                self.trigger_configuration_error = self
+                    .trigger_configuration
+                    .is_none()
+                    .then(|| "The graph has no trigger-configurable source".into());
+            }
+            Err(error) => {
+                self.trigger_configuration = None;
+                self.trigger_configuration_error = Some(error.message);
+            }
+        }
+        self.refresh_simple_trigger_ui();
+    }
+
     fn apply_simple_trigger_edit(&mut self, edit: SimpleTriggerEdit) {
-        let request = match &self.capture_availability {
-            CaptureAvailability::Available {
-                source_node,
-                simple_trigger_channels,
-                ..
-            } => simple_trigger_channels
-                .iter()
-                .find(|channel| channel.viewer_channel == edit.channel)
-                .map(|channel| {
-                    (
-                        *source_node,
-                        compiler::LiveCaptureEdit::SetSimpleTrigger {
-                            channel_id: channel.channel_id.clone(),
-                            condition: edit.condition,
-                        },
-                    )
-                }),
-            CaptureAvailability::Unavailable { .. } => None,
-        };
+        let request = self
+            .trigger_configuration
+            .as_ref()
+            .and_then(|configuration| {
+                configuration
+                    .feature
+                    .channels()
+                    .iter()
+                    .find(|channel| channel.viewer_channel == edit.channel)
+                    .map(|channel| {
+                        (
+                            configuration.source_node,
+                            compiler::LiveCaptureEdit::SetSimpleTrigger {
+                                channel_id: channel.channel_id.clone(),
+                                condition: edit.condition,
+                            },
+                        )
+                    })
+            });
         let Some((source_node, request)) = request else {
             self.toasts
                 .error("That trigger input is no longer available");
@@ -158,7 +176,40 @@ impl App {
             return;
         }
         self.capture_availability = capture_availability(self.node_graph.graph(), &self.builders);
-        self.refresh_simple_trigger_ui();
+        self.refresh_trigger_configuration();
+    }
+
+    fn apply_trigger_program_edit(&mut self, program: Option<signal_processing::TriggerProgram>) {
+        let Some(source_node) = self
+            .trigger_configuration
+            .as_ref()
+            .map(|configuration| configuration.source_node)
+        else {
+            self.toasts
+                .error("The trigger-configurable source is no longer available");
+            self.refresh_trigger_configuration();
+            return;
+        };
+        let request = compiler::LiveCaptureEdit::SetTriggerProgram { program };
+        let state = match compiler::apply_live_capture_edit(
+            self.node_graph.graph(),
+            &self.builders,
+            source_node,
+            &request,
+        ) {
+            Ok(state) => state,
+            Err(error) => {
+                self.toasts.error(error);
+                self.refresh_trigger_configuration();
+                return;
+            }
+        };
+        if !self.node_graph.edit_node_state(source_node, state) {
+            self.toasts
+                .error("The trigger could not be changed while the graph is read-only");
+        }
+        self.capture_availability = capture_availability(self.node_graph.graph(), &self.builders);
+        self.refresh_trigger_configuration();
     }
 
     fn set_capture_preview(&mut self, signals: Vec<nodes::CapturePreviewSignal>) {
@@ -278,6 +329,10 @@ impl App {
             capture_availability: CaptureAvailability::Unavailable {
                 reason: "Checking the graph for a live capture source".into(),
             },
+            trigger_configuration: None,
+            trigger_configuration_error: Some(
+                "Checking the graph for a trigger-configurable source".into(),
+            ),
             capture_graph: None,
             capture_analysis: None,
             capture_analysis_error: None,
@@ -937,15 +992,12 @@ impl App {
                 ui.ctx().request_repaint();
             }
             if let CaptureAvailability::Available {
-                simple_trigger_channels,
+                has_trigger_program,
                 capabilities,
                 ..
             } = &availability
                 && capabilities.commands().capture_now
-                && simple_trigger_channels.iter().any(|channel| {
-                    channel.enabled
-                        && channel.condition != signal_processing::SimpleTriggerCondition::Ignore
-                })
+                && *has_trigger_program
             {
                 ui.menu_button("▾", |ui| {
                     if ui.button("Capture Now").clicked() {
@@ -1307,7 +1359,7 @@ impl App {
                 self.last_live_sync = now;
                 self.capture_availability =
                     capture_availability(self.node_graph.graph(), &self.builders);
-                self.refresh_simple_trigger_ui();
+                self.refresh_trigger_configuration();
                 if let Ok(candidates) =
                     compiler::sampling_overlay_candidates(self.node_graph.graph(), &self.builders)
                 {
@@ -1467,6 +1519,54 @@ impl App {
                     .weak(),
             );
         });
+    }
+
+    fn show_trigger_panel(&mut self, ui: &mut egui::Ui) {
+        let Some(configuration) = self.trigger_configuration.as_ref() else {
+            ui.centered_and_justified(|ui| {
+                ui.label(
+                    egui::RichText::new(
+                        self.trigger_configuration_error
+                            .as_deref()
+                            .unwrap_or("No trigger configuration is available"),
+                    )
+                    .weak(),
+                );
+            });
+            return;
+        };
+        ui.horizontal(|ui| {
+            ui.label("Source:");
+            ui.strong(&configuration.source_title);
+        });
+        ui.separator();
+        let channels: Vec<_> = configuration
+            .feature
+            .channels()
+            .iter()
+            .filter(|channel| channel.enabled)
+            .map(|channel| TriggerEditorChannel {
+                id: channel.channel_id.clone(),
+                label: channel.name.clone(),
+            })
+            .collect();
+        let response = TriggerEditor::new(
+            configuration.feature.schema(),
+            &channels,
+            configuration.feature.program(),
+        )
+        .enabled(
+            self.node_graph.editing_enabled()
+                && !self.capture.is_active()
+                && !self.is_capture_analysis_active(),
+        )
+        .show(ui);
+        if let Some(error) = response.error {
+            self.toasts.error(error);
+        }
+        if let Some(program) = response.program {
+            self.apply_trigger_program_edit(program);
+        }
     }
 
     fn show_view_panel(&mut self, content_id: &str) {
@@ -1819,7 +1919,7 @@ impl eframe::App for App {
                 PanelSlot::Body {
                     content_id: "triggers",
                     ..
-                } => Self::show_placeholder_panel(panel_ui, "Triggers"),
+                } => self.show_trigger_panel(panel_ui),
                 PanelSlot::Body {
                     content_id: "decoder",
                     ..

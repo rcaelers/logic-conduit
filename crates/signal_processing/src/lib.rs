@@ -67,8 +67,9 @@ pub use advanced_trigger::{
     RegisteredTriggerPredicateSchema, TRIGGER_PROGRAM_FORMAT_VERSION, TriggerChoice, TriggerCount,
     TriggerCountCapabilities, TriggerCountMode, TriggerEditorSchema, TriggerIdentifier,
     TriggerLogicOperator, TriggerOperandKind, TriggerOperandSchema, TriggerOperandValue,
-    TriggerPredicate, TriggerProgram, TriggerStage, TriggerValidationCode,
-    TriggerValidationDiagnostic, TriggerValidationErrors, ValidatedTriggerProgram,
+    TriggerPredicate, TriggerProgram, TriggerProgramEditError, TriggerProgramForm, TriggerStage,
+    TriggerValidationCode, TriggerValidationDiagnostic, TriggerValidationErrors,
+    ValidatedTriggerProgram,
 };
 pub use capture::{
     BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureIndex,
