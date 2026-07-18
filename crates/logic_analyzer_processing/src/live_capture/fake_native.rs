@@ -5,7 +5,7 @@ use std::thread::JoinHandle;
 
 use signal_processing::{
     CaptureAcquisitionPhase, CaptureBufferPool, CaptureChannelId, CaptureChunk, CaptureProgress,
-    CaptureSessionId, CaptureSessionState, SimpleTriggerCondition,
+    CaptureCompletion, CaptureSessionId, CaptureSessionState, SimpleTriggerCondition,
 };
 
 use super::{
@@ -85,6 +85,11 @@ impl DeterministicFakeConfig {
 
     pub fn trigger_conditions(&self) -> &[Option<SimpleTriggerCondition>] {
         &self.trigger_conditions
+    }
+
+    pub fn without_trigger(mut self) -> Self {
+        self.trigger_conditions = vec![None; self.channels.len()].into();
+        self
     }
 
     pub fn has_trigger(&self) -> bool {
@@ -183,6 +188,15 @@ struct FakeControlState {
     manual: bool,
     permits: usize,
     stop_requested: bool,
+    abort_requested: bool,
+    force_trigger_requested: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FakeWake {
+    Chunk,
+    Stop,
+    ForceTrigger,
 }
 
 #[derive(Debug)]
@@ -198,26 +212,37 @@ impl FakeControl {
                 manual,
                 permits: 0,
                 stop_requested: false,
+                abort_requested: false,
+                force_trigger_requested: false,
             }),
             changed: Condvar::new(),
         }
     }
 
-    fn wait_for_chunk(&self) -> bool {
+    fn wait_for_chunk(&self) -> FakeWake {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        while state.manual && state.permits == 0 && !state.stop_requested {
+        while state.manual
+            && state.permits == 0
+            && !state.stop_requested
+            && !state.abort_requested
+            && !state.force_trigger_requested
+        {
             state = self
                 .changed
                 .wait(state)
                 .unwrap_or_else(|error| error.into_inner());
         }
-        if state.stop_requested {
-            return false;
+        if state.stop_requested || state.abort_requested {
+            return FakeWake::Stop;
+        }
+        if state.force_trigger_requested {
+            state.force_trigger_requested = false;
+            return FakeWake::ForceTrigger;
         }
         if state.manual {
             state.permits -= 1;
         }
-        true
+        FakeWake::Chunk
     }
 
     fn grant(&self, chunks: usize) {
@@ -230,6 +255,25 @@ impl FakeControl {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.stop_requested = true;
         self.changed.notify_all();
+    }
+
+    fn request_abort(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.abort_requested = true;
+        self.changed.notify_all();
+    }
+
+    fn request_force_trigger(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.force_trigger_requested = true;
+        self.changed.notify_all();
+    }
+
+    fn was_aborted(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .abort_requested
     }
 }
 
@@ -356,8 +400,29 @@ impl PreparedFakeAcquisition {
         let mut chunk_count = 0_u64;
         let mut stopped = false;
         for (sequence, sample_count) in config.chunk_sample_counts.iter().copied().enumerate() {
-            if !control.wait_for_chunk() {
-                stopped = true;
+            loop {
+                match control.wait_for_chunk() {
+                    FakeWake::Chunk => break,
+                    FakeWake::Stop => {
+                        stopped = true;
+                        break;
+                    }
+                    FakeWake::ForceTrigger if !triggered => {
+                        triggered = true;
+                        context.publish_triggered(captured_samples)?;
+                        context.publish_status(
+                            CaptureSessionState::Triggered,
+                            CaptureAcquisitionPhase::ReceivingLiveData,
+                        )?;
+                        context.publish_status(
+                            CaptureSessionState::Recording,
+                            CaptureAcquisitionPhase::ReceivingLiveData,
+                        )?;
+                    }
+                    FakeWake::ForceTrigger => {}
+                }
+            }
+            if stopped {
                 break;
             }
             let chunk = config.build_chunk(
@@ -407,6 +472,15 @@ impl PreparedFakeAcquisition {
             captured_samples,
             chunk_count,
             stopped,
+            completion: if control.was_aborted() {
+                CaptureCompletion::Aborted
+            } else if stopped && config.has_trigger() && !triggered {
+                CaptureCompletion::CancelledBeforeTrigger
+            } else if stopped {
+                CaptureCompletion::Stopped
+            } else {
+                CaptureCompletion::Finished
+            },
         })
     }
 
@@ -441,6 +515,16 @@ impl PreparedAcquisition for PreparedFakeAcquisition {
 
     fn request_stop(&self) -> AcquisitionResult<()> {
         self.control.request_stop();
+        Ok(())
+    }
+
+    fn request_abort(&self) -> AcquisitionResult<()> {
+        self.control.request_abort();
+        Ok(())
+    }
+
+    fn request_force_trigger(&self) -> AcquisitionResult<()> {
+        self.control.request_force_trigger();
         Ok(())
     }
 
@@ -547,7 +631,8 @@ mod tests {
         loop {
             match event_reader.recv_timeout(TIMEOUT) {
                 Ok(CaptureEvent::Status(status)) => states.push(status.state),
-                Ok(CaptureEvent::Progress { .. }) => {}
+                Ok(CaptureEvent::Progress { .. } | CaptureEvent::Health { .. }) => {}
+                Ok(CaptureEvent::Plan { .. }) => {}
                 Ok(CaptureEvent::Triggered { sample, .. }) => {
                     panic!("unexpected trigger at sample {sample}")
                 }
@@ -691,7 +776,8 @@ mod tests {
                 match event_reader.recv_timeout(TIMEOUT) {
                     Ok(CaptureEvent::Status(status)) => states.push(status.state),
                     Ok(CaptureEvent::Triggered { sample, .. }) => actual = Some(sample),
-                    Ok(CaptureEvent::Progress { .. }) => {}
+                    Ok(CaptureEvent::Progress { .. } | CaptureEvent::Health { .. }) => {}
+                    Ok(CaptureEvent::Plan { .. }) => {}
                     Ok(CaptureEvent::Failed(failure)) => {
                         panic!("unexpected failure: {failure:?}")
                     }

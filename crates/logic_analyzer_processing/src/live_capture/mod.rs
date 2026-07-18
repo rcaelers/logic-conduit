@@ -3,9 +3,10 @@
 use thiserror::Error;
 
 use signal_processing::{
-    CaptureAcquisitionPhase, CaptureChunk, CaptureChunkWriter, CaptureEvent,
+    CaptureAcquisitionPhase, CaptureChunk, CaptureChunkWriter, CaptureCompletion, CaptureEvent,
     CaptureEventPublishError, CaptureEventPublisher, CaptureFailure, CaptureFailureKind,
-    CaptureProgress, CaptureSessionId, CaptureSessionState, CaptureStatus, CaptureWriteError,
+    CaptureHealth, CaptureProgress, CaptureSessionId, CaptureSessionPlan, CaptureSessionState,
+    CaptureStatus, CaptureWriteError,
 };
 
 mod analysis;
@@ -43,6 +44,8 @@ pub enum AcquisitionError {
     AlreadyStarted,
     #[error("acquisition has not been started")]
     NotStarted,
+    #[error("unsupported acquisition operation: {0}")]
+    UnsupportedOperation(String),
     #[error("capture writer failed: {0}")]
     Writer(#[from] CaptureWriteError),
     #[error("capture status publication failed: {0}")]
@@ -67,6 +70,7 @@ impl AcquisitionError {
     pub fn failure_kind(&self) -> CaptureFailureKind {
         match self {
             Self::InvalidRequest(_) => CaptureFailureKind::InvalidRequest,
+            Self::UnsupportedOperation(_) => CaptureFailureKind::InvalidRequest,
             Self::Writer(_) => CaptureFailureKind::Writer,
             Self::Transport(_) => CaptureFailureKind::Transport,
             Self::Protocol(_) => CaptureFailureKind::Protocol,
@@ -144,6 +148,22 @@ impl AcquisitionContext {
         Ok(())
     }
 
+    pub fn publish_health(&mut self, health: CaptureHealth) -> AcquisitionResult<()> {
+        self.events.publish(CaptureEvent::Health {
+            session_id: self.session_id,
+            health,
+        })?;
+        Ok(())
+    }
+
+    pub fn publish_plan(&mut self, plan: CaptureSessionPlan) -> AcquisitionResult<()> {
+        self.events.publish(CaptureEvent::Plan {
+            session_id: self.session_id,
+            plan,
+        })?;
+        Ok(())
+    }
+
     pub fn publish_triggered(&mut self, sample: u64) -> AcquisitionResult<()> {
         self.events.publish(CaptureEvent::Triggered {
             session_id: self.session_id,
@@ -174,6 +194,7 @@ pub struct AcquisitionOutcome {
     pub captured_samples: u64,
     pub chunk_count: u64,
     pub stopped: bool,
+    pub completion: CaptureCompletion,
 }
 
 /// Object-safe ownership boundary returned after a provider has prepared a session.
@@ -181,6 +202,14 @@ pub trait PreparedAcquisition: Send {
     fn session_id(&self) -> CaptureSessionId;
     fn start(&mut self) -> AcquisitionResult<()>;
     fn request_stop(&self) -> AcquisitionResult<()>;
+    fn request_abort(&self) -> AcquisitionResult<()> {
+        Err(AcquisitionError::UnsupportedOperation("abort".into()))
+    }
+    fn request_force_trigger(&self) -> AcquisitionResult<()> {
+        Err(AcquisitionError::UnsupportedOperation(
+            "force trigger".into(),
+        ))
+    }
     /// Non-blocking completion probe used by an acquisition supervisor so
     /// Stop remains available while Join runs off the UI thread.
     fn is_finished(&self) -> bool;

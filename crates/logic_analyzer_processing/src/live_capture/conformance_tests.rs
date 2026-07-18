@@ -104,7 +104,8 @@ fn run_provider_contract(case: ProviderContractCase) {
                 phases.push(status.phase);
             }
             Ok(CaptureEvent::Triggered { sample, .. }) => trigger = Some(sample),
-            Ok(CaptureEvent::Progress { .. }) => {}
+            Ok(CaptureEvent::Progress { .. } | CaptureEvent::Health { .. }) => {}
+            Ok(CaptureEvent::Plan { .. }) => {}
             Ok(CaptureEvent::Failed(failure)) => {
                 panic!("{} failed unexpectedly: {failure:?}", case.name)
             }

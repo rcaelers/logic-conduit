@@ -1,4 +1,5 @@
 use logic_analyzer_graph::compiler::DiscoveredLiveCaptureFeature;
+use signal_processing::CaptureStartMode;
 
 use super::{
     CaptureAnalysisAttachment, CaptureCoordinatorContract, CaptureReplayAttachment,
@@ -22,11 +23,25 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
         "Live capture is not available in this web build"
     }
 
-    fn start(&mut self, _feature: DiscoveredLiveCaptureFeature) -> Result<(), String> {
+    fn start(
+        &mut self,
+        _feature: DiscoveredLiveCaptureFeature,
+        _mode: CaptureStartMode,
+    ) -> Result<(), String> {
         Err(Self::backend_unavailable_reason().into())
     }
 
     fn request_stop(&mut self) {}
+
+    fn request_abort(&mut self) -> Result<(), String> {
+        Err(Self::backend_unavailable_reason().into())
+    }
+
+    fn request_force_trigger(&mut self) -> Result<(), String> {
+        Err(Self::backend_unavailable_reason().into())
+    }
+
+    fn set_graph_processed_samples(&mut self, _processed_samples: Option<u64>) {}
 
     fn poll(&mut self) {}
 

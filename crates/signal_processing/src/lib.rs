@@ -12,6 +12,7 @@
 //! - **Derived data**: Generic viewer-lane storage and queries
 
 pub mod capture;
+mod capture_policy;
 mod cooperative_manager;
 mod derived_index;
 pub mod derived_word_store;
@@ -67,6 +68,14 @@ pub use capture::{
     CaptureWaveformSegment, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
     DslWaveformSegment, packed_bit,
 };
+pub use capture_policy::{
+    CaptureCapacityEstimate, CaptureCapacityRequest, CaptureFraction, CapturePolicy,
+    CapturePolicyCapabilities, CapturePolicyContext, CapturePolicyError, CaptureRetentionPin,
+    CaptureRetentionTracker, CaptureSessionPlan, CaptureStartMode, CompletionPolicy,
+    CompletionPolicyKind, EffectiveCapturePolicy, RecordingStart, RetentionPolicy,
+    RetentionPolicyKind, TriggerPlacement, TriggerPlacementCapability, TriggerTimeout,
+    TriggerTimeoutAction, estimate_capture_capacity,
+};
 pub use cooperative_manager::CooperativeManager;
 pub use derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 pub use derived_word_store::{
@@ -84,13 +93,14 @@ pub(crate) use idle::idle_backoff;
 pub use live_capture::{
     CAPTURE_CHUNK_FORMAT_VERSION, CaptureAcquisitionPhase, CaptureBufferLease, CaptureBufferPool,
     CaptureBufferPoolError, CaptureBufferPoolMetrics, CaptureBytes, CaptureChannelId, CaptureChunk,
-    CaptureChunkError, CaptureChunkPayload, CaptureChunkWriter, CaptureDataDelivery, CaptureEvent,
-    CaptureEventPublishError, CaptureEventPublisher, CaptureEventQueuePublisher,
-    CaptureEventQueueReader, CaptureFailure, CaptureFailureKind, CaptureProgress,
-    CaptureProviderCapabilities, CaptureQueueConfigError, CaptureQueueLimits, CaptureQueueReader,
-    CaptureQueueReceiveError, CaptureQueueWriter, CaptureSessionId, CaptureSessionState,
-    CaptureSettingCombination, CaptureStatus, CaptureWriteError, SimpleTriggerCondition,
-    bounded_capture_event_queue, bounded_capture_queue,
+    CaptureChunkError, CaptureChunkPayload, CaptureChunkWriter, CaptureCommandCapabilities,
+    CaptureCompletion, CaptureDataDelivery, CaptureEvent, CaptureEventPublishError,
+    CaptureEventPublisher, CaptureEventQueuePublisher, CaptureEventQueueReader, CaptureFailure,
+    CaptureFailureKind, CaptureHealth, CaptureProgress, CaptureProviderCapabilities,
+    CaptureQueueConfigError, CaptureQueueLimits, CaptureQueueReader, CaptureQueueReceiveError,
+    CaptureQueueWriter, CaptureSessionId, CaptureSessionState, CaptureSettingCombination,
+    CaptureStatus, CaptureWriteError, SimpleTriggerCondition, bounded_capture_event_queue,
+    bounded_capture_queue,
 };
 pub use live_capture_store::*;
 pub use manager::{DisconnectEvent, InputSub, NodeSpec, PipelineManager};

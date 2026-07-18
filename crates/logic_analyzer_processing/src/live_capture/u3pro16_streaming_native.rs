@@ -6,7 +6,7 @@ use std::thread::JoinHandle;
 
 use signal_processing::{
     CaptureAcquisitionPhase, CaptureChannelId, CaptureChunk, CaptureProgress,
-    CaptureSessionId, CaptureSessionState,
+    CaptureCompletion, CaptureSessionId, CaptureSessionState,
 };
 
 use crate::nodes::{
@@ -244,6 +244,13 @@ impl<T: UsbTransport> PreparedStreamingAcquisition<T> {
             captured_samples,
             chunk_count: sequence,
             stopped,
+            completion: if stopped && armed && !header_seen {
+                CaptureCompletion::CancelledBeforeTrigger
+            } else if stopped {
+                CaptureCompletion::Stopped
+            } else {
+                CaptureCompletion::Finished
+            },
         })
     }
 

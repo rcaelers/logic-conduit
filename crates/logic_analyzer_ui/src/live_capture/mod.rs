@@ -6,8 +6,9 @@ use logic_analyzer_graph::compiler::{
 };
 use node_graph::{GraphState, NodeId};
 use signal_processing::{
-    CaptureAcquisitionPhase, CaptureIndex, CaptureProgress, CaptureSessionId, CaptureSessionState,
-    ProcessNode,
+    CaptureAcquisitionPhase, CaptureCommandCapabilities, CaptureCompletion, CaptureHealth,
+    CaptureIndex, CaptureProgress, CaptureProviderCapabilities, CaptureSessionId,
+    CaptureSessionPlan, CaptureSessionState, CaptureStartMode, ProcessNode,
 };
 
 std::cfg_select! {
@@ -47,6 +48,8 @@ pub(crate) enum CaptureAvailability {
         source_node: NodeId,
         source_title: String,
         simple_trigger_channels: Vec<SimpleTriggerChannel>,
+        capabilities: CaptureProviderCapabilities,
+        session_plan: Option<Box<CaptureSessionPlan>>,
     },
     Unavailable {
         reason: String,
@@ -86,6 +89,8 @@ pub(crate) fn capture_availability(
             source_node: feature.source_node,
             source_title: feature.source_title.clone(),
             simple_trigger_channels: feature.simple_trigger_channels().to_vec(),
+            capabilities: feature.capabilities().clone(),
+            session_plan: feature.session_plan().cloned().map(Box::new),
         },
         Ok(None) => CaptureAvailability::Unavailable {
             reason: "The graph has no live capture source".into(),
@@ -104,16 +109,27 @@ pub(crate) struct CaptureSessionStatus {
     pub state: CaptureSessionState,
     pub phase: CaptureAcquisitionPhase,
     pub progress: CaptureProgress,
+    pub health: CaptureHealth,
+    pub commands: CaptureCommandCapabilities,
+    pub session_plan: Option<CaptureSessionPlan>,
     pub trigger_sample: Option<u64>,
     pub recording_origin: Option<u64>,
+    pub completion: Option<CaptureCompletion>,
     pub error: Option<String>,
 }
 
 pub(crate) trait CaptureCoordinatorContract {
     fn backend_available() -> bool;
     fn backend_unavailable_reason() -> &'static str;
-    fn start(&mut self, feature: DiscoveredLiveCaptureFeature) -> Result<(), String>;
+    fn start(
+        &mut self,
+        feature: DiscoveredLiveCaptureFeature,
+        mode: CaptureStartMode,
+    ) -> Result<(), String>;
     fn request_stop(&mut self);
+    fn request_abort(&mut self) -> Result<(), String>;
+    fn request_force_trigger(&mut self) -> Result<(), String>;
+    fn set_graph_processed_samples(&mut self, processed_samples: Option<u64>);
     fn poll(&mut self);
     fn status(&self) -> Option<&CaptureSessionStatus>;
     fn take_waveform_update(&mut self) -> Option<CaptureWaveformUpdate>;

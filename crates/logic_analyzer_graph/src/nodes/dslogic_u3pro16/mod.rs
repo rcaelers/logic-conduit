@@ -5,13 +5,19 @@ mod live_capture;
 pub(crate) use builder::DsLogicU3Pro16Builder;
 pub use definition::{DsLogicU3Pro16, U3Pro16State};
 
+use std::time::Duration;
+
 use serde_json::Value;
 
 use logic_analyzer_processing::{
     CaptureMode, ClockEdge, ClockSource, LogicCaptureConfig, LogicEncodingRequest, LogicTrigger,
     LogicTriggerStage, TriggerCondition,
 };
-use signal_processing::SimpleTriggerCondition;
+use signal_processing::{
+    CaptureCapacityRequest, CaptureFraction, CapturePolicy, CompletionPolicy, RecordingStart,
+    RetentionPolicy, SimpleTriggerCondition, TriggerPlacement, TriggerTimeout,
+    TriggerTimeoutAction,
+};
 
 use crate::compiler::{LiveCaptureEdit, parse_state};
 
@@ -88,9 +94,14 @@ fn capture_config(state: &U3Pro16State) -> Result<LogicCaptureConfig, String> {
         sample_rate_hz,
         input_mask: physical_input_mask(state),
         sample_limit: sample_rate_hz.saturating_mul(duration_ms).div_ceil(1_000),
-        trigger_percent: 50,
+        trigger_percent: u8::try_from(state.trigger_position_percent.value.clamp(0, 100))
+            .unwrap_or(50),
         threshold_volts: Some(state.threshold.value),
-        trigger: lower_trigger(state),
+        trigger: if state.recording_start.selected() == "Trigger" {
+            lower_trigger(state)
+        } else {
+            LogicTrigger::default()
+        },
         encoding: if state.rle.value {
             LogicEncodingRequest::RunLength
         } else {
@@ -108,6 +119,81 @@ fn capture_config(state: &U3Pro16State) -> Result<LogicCaptureConfig, String> {
             ClockSource::Internal
         },
         input_filter: state.filter.value,
+    })
+}
+
+fn retention_policy(state: &U3Pro16State) -> RetentionPolicy {
+    match state.retention.selected() {
+        "Recent duration" => RetentionPolicy::RecentDuration(Duration::from_millis(
+            u64::try_from(state.retention_duration_ms.value.max(1)).unwrap_or(1),
+        )),
+        "Recent bytes" => RetentionPolicy::RecentBytes(
+            u64::try_from(state.retention_megabytes.value.max(1))
+                .unwrap_or(1)
+                .saturating_mul(1024 * 1024),
+        ),
+        _ => RetentionPolicy::Everything,
+    }
+}
+
+fn requested_capture_policy(state: &U3Pro16State) -> Result<CapturePolicy, String> {
+    let config = capture_config(state)?;
+    let start = if state.recording_start.selected() == "Trigger" {
+        RecordingStart::Trigger
+    } else {
+        RecordingStart::Immediate
+    };
+    if start == RecordingStart::Trigger && config.trigger.stages.is_empty() {
+        return Err("triggered recording requires at least one enabled trigger condition".into());
+    }
+    let before_samples = if start == RecordingStart::Trigger {
+        config
+            .sample_limit
+            .saturating_mul(u64::from(config.trigger_percent))
+            / 100
+    } else {
+        0
+    };
+    let trigger_timeout = match state.trigger_timeout_action.selected() {
+        "Continue waiting" => Some(TriggerTimeout {
+            after: Duration::from_millis(
+                u64::try_from(state.trigger_timeout_ms.value.max(1)).unwrap_or(1),
+            ),
+            action: TriggerTimeoutAction::ContinueWaiting,
+        }),
+        "Stop" => Some(TriggerTimeout {
+            after: Duration::from_millis(
+                u64::try_from(state.trigger_timeout_ms.value.max(1)).unwrap_or(1),
+            ),
+            action: TriggerTimeoutAction::Stop,
+        }),
+        _ => None,
+    };
+    Ok(CapturePolicy {
+        start,
+        trigger_placement: (start == RecordingStart::Trigger).then(|| {
+            TriggerPlacement::Fraction(
+                CaptureFraction::from_percent(config.trigger_percent)
+                    .expect("clamped trigger percentage is valid"),
+            )
+        }),
+        retention_before_origin: RetentionPolicy::Everything,
+        retention_after_origin: retention_policy(state),
+        completion: CompletionPolicy::SamplesAfterOrigin(
+            config.sample_limit.saturating_sub(before_samples).max(1),
+        ),
+        trigger_timeout,
+    })
+}
+
+fn capacity_request(state: &U3Pro16State) -> Result<CaptureCapacityRequest, String> {
+    let config = capture_config(state)?;
+    Ok(CaptureCapacityRequest {
+        sample_rate_hz: config.sample_rate_hz,
+        channel_count: config.input_mask.count_ones() as usize,
+        capture_window_samples: Some(config.sample_limit),
+        storage_budget_bytes: None,
+        available_storage_bytes: None,
     })
 }
 

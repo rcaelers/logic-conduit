@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use signal_processing::{
     CaptureAcquisitionPhase, CaptureBufferPool, CaptureChannelId, CaptureChunk,
-    CaptureDataDelivery, CaptureProgress, CaptureProviderCapabilities, CaptureSessionId,
-    CaptureSessionState, CaptureSettingCombination, SimpleTriggerCondition,
+    CaptureCompletion, CaptureDataDelivery, CaptureProgress, CaptureProviderCapabilities,
+    CaptureSessionId, CaptureSessionState, CaptureSettingCombination, SimpleTriggerCondition,
 };
 
 use super::{
@@ -465,6 +465,13 @@ impl PreparedBufferedFakeAcquisition {
             captured_samples,
             chunk_count: sequence,
             stopped,
+            completion: if stopped && config.has_trigger() && trigger_sample.is_none() {
+                CaptureCompletion::CancelledBeforeTrigger
+            } else if stopped {
+                CaptureCompletion::Stopped
+            } else {
+                CaptureCompletion::Finished
+            },
         })
     }
 

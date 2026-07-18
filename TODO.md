@@ -68,7 +68,7 @@ Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN
 ## Capture sources
 
 - Implement the dependency-ordered delivery plan in
-  [Live Capture and Trigger Control](docs/LIVE_CAPTURE_TRIGGER_DESIGN.md). Continue with Phase 10 and do
+  [Live Capture and Trigger Control](docs/LIVE_CAPTURE_TRIGGER_DESIGN.md). Continue with Phase 11 and do
   not begin a later phase until the preceding completion gate passes:
   1. **Minimal authoritative store — complete:** sequential staging, committed-prefix cursors,
      finalization, byte-exact replay, bounded memory, and slow-reader isolation are implemented.
@@ -96,10 +96,12 @@ Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN
   9. **U3Pro16 host streaming and sustained ingest — complete:** the streaming profile, actual-link
      tuple validation, integrity reporting, bounded file-backed summaries, and measured ingest
      benchmark are implemented.
-  10. **Capture policies and health controls:** add finite/rolling policy, trigger placement,
-      timeout and one-shot controls, capacity estimates, telemetry, and reclamation tests.
-  11. **Recovery and session ownership:** add commit-boundary recovery, incomplete-session handling,
-      pinning, cleanup, and recent-session ownership.
+  10. **Capture policies and health controls — complete:** finite completion,
+      rolling-retention policy and safe-boundary planning, trigger placement, timeout and one-shot
+      controls, capacity estimates, telemetry, persisted effective plans, and reclamation-safety
+      tests are implemented.
+  11. **Recovery and session ownership:** add commit-boundary recovery, durable bounded
+      reclamation, incomplete-session handling, pinning, cleanup, and recent-session ownership.
   12. **Export:** add raw DSL/portable export first and capability-aware derived export afterward.
   13. **Extended workflows:** scope configuration epochs, advanced triggers, segmented acquisition,
       automation, synchronization, and related features as separate follow-up amendments rather

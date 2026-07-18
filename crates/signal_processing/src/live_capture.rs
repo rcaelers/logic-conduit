@@ -14,6 +14,8 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, TrySen
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::{CapturePolicyCapabilities, CaptureSessionPlan};
+
 pub const CAPTURE_CHUNK_FORMAT_VERSION: u16 = 1;
 
 /// Portable one-channel condition used by simple capture triggers.
@@ -153,7 +155,8 @@ impl CaptureSettingCombination {
 pub struct CaptureProviderCapabilities {
     data_delivery: CaptureDataDelivery,
     setting_matrix: Arc<[CaptureSettingCombination]>,
-    force_trigger: bool,
+    commands: CaptureCommandCapabilities,
+    policy: CapturePolicyCapabilities,
 }
 
 impl CaptureProviderCapabilities {
@@ -169,7 +172,13 @@ impl CaptureProviderCapabilities {
         Ok(Self {
             data_delivery,
             setting_matrix,
-            force_trigger,
+            commands: CaptureCommandCapabilities {
+                orderly_stop: true,
+                abort: false,
+                force_trigger,
+                capture_now: true,
+            },
+            policy: CapturePolicyCapabilities::finite_default(),
         })
     }
 
@@ -193,13 +202,55 @@ impl CaptureProviderCapabilities {
     }
 
     pub const fn supports_force_trigger(&self) -> bool {
-        self.force_trigger
+        self.commands.force_trigger
+    }
+
+    pub const fn commands(&self) -> CaptureCommandCapabilities {
+        self.commands
+    }
+
+    pub fn policy(&self) -> &CapturePolicyCapabilities {
+        &self.policy
+    }
+
+    pub fn with_commands(mut self, commands: CaptureCommandCapabilities) -> Self {
+        self.commands = commands;
+        self
+    }
+
+    pub fn with_policy(mut self, policy: CapturePolicyCapabilities) -> Self {
+        self.policy = policy;
+        self
     }
 
     pub fn supports(&self, channels: &[CaptureChannelId], sample_rate_hz: f64) -> bool {
         self.setting_matrix
             .iter()
             .any(|setting| setting.supports(channels, sample_rate_hz))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaptureCommandCapabilities {
+    pub orderly_stop: bool,
+    pub abort: bool,
+    pub force_trigger: bool,
+    pub capture_now: bool,
+}
+
+impl CaptureCommandCapabilities {
+    pub const fn new(
+        orderly_stop: bool,
+        abort: bool,
+        force_trigger: bool,
+        capture_now: bool,
+    ) -> Self {
+        Self {
+            orderly_stop,
+            abort,
+            force_trigger,
+            capture_now,
+        }
     }
 }
 
@@ -213,6 +264,14 @@ pub enum CaptureSessionState {
     Stopping,
     Complete,
     Error,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureCompletion {
+    Finished,
+    Stopped,
+    CancelledBeforeTrigger,
+    Aborted,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -231,6 +290,18 @@ pub enum CaptureAcquisitionPhase {
 pub struct CaptureProgress {
     pub captured_samples: Option<u64>,
     pub transferred_bytes: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CaptureHealth {
+    pub input_bytes_per_second: Option<u64>,
+    pub write_bytes_per_second: Option<u64>,
+    pub buffer_used_bytes: Option<u64>,
+    pub buffer_capacity_bytes: Option<u64>,
+    pub available_storage_bytes: Option<u64>,
+    pub retained_samples: Option<u64>,
+    pub summary_lag_samples: Option<u64>,
+    pub graph_lag_samples: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -278,6 +349,14 @@ pub enum CaptureEvent {
     Progress {
         session_id: CaptureSessionId,
         progress: CaptureProgress,
+    },
+    Health {
+        session_id: CaptureSessionId,
+        health: CaptureHealth,
+    },
+    Plan {
+        session_id: CaptureSessionId,
+        plan: CaptureSessionPlan,
     },
     /// The raw capture sample at which all enabled simple trigger conditions matched.
     Triggered {
@@ -1038,6 +1117,10 @@ mod tests {
         assert!(!capabilities.supports(&all_channels, 8_000_000.0));
         assert!(!capabilities.supports(&bank_subset, 1_000_000.0));
         assert!(!capabilities.supports_force_trigger());
+        assert!(capabilities.commands().orderly_stop);
+        assert!(!capabilities.commands().abort);
+        assert!(capabilities.commands().capture_now);
+        assert!(!capabilities.policy().recording_starts().is_empty());
 
         assert!(CaptureSettingCombination::new(Vec::new(), Arc::from([1_u64])).is_err());
         assert!(

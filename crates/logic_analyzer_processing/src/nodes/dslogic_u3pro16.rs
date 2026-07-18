@@ -1701,7 +1701,8 @@ mod tests {
             match event_reader.try_recv() {
                 Ok(CaptureEvent::Triggered { sample, .. }) => trigger_sample = Some(sample),
                 Ok(CaptureEvent::Status(status)) => phases.push(status.phase),
-                Ok(CaptureEvent::Progress { .. }) => {}
+                Ok(CaptureEvent::Progress { .. } | CaptureEvent::Health { .. }) => {}
+                Ok(CaptureEvent::Plan { .. }) => {}
                 Ok(CaptureEvent::Failed(failure)) => panic!("fixture failed: {failure:?}"),
                 Err(CaptureQueueReceiveError::Closed) => break,
                 Err(CaptureQueueReceiveError::Empty) => std::thread::yield_now(),
@@ -1780,7 +1781,12 @@ mod tests {
         loop {
             match event_reader.try_recv() {
                 Ok(CaptureEvent::Status(status)) => phases.push(status.phase),
-                Ok(CaptureEvent::Triggered { .. } | CaptureEvent::Progress { .. }) => {}
+                Ok(
+                    CaptureEvent::Triggered { .. }
+                    | CaptureEvent::Progress { .. }
+                    | CaptureEvent::Health { .. }
+                    | CaptureEvent::Plan { .. },
+                ) => {}
                 Ok(CaptureEvent::Failed(failure)) => panic!("stream failed: {failure:?}"),
                 Err(CaptureQueueReceiveError::Closed) => break,
                 Err(CaptureQueueReceiveError::Empty) => std::thread::yield_now(),

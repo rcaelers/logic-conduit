@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use crate::{
     CaptureChunk, CaptureChunkPayload, CaptureChunkWriter, CaptureSampledChannel,
-    CaptureSampledWindow, CaptureSessionId, CaptureTransition, CaptureWriteError, Error,
+    CaptureSampledWindow, CaptureSessionId, CaptureSessionPlan, CaptureTransition,
+    CaptureWriteError, Error,
 };
 
 use super::{
@@ -20,6 +21,8 @@ const DATA_FILE_NAME: &str = "capture.data";
 const COMMIT_FILE_NAME: &str = "capture.commits";
 const MANIFEST_FILE_NAME: &str = "capture.manifest";
 const MANIFEST_TEMP_FILE_NAME: &str = "capture.manifest.tmp";
+const PLAN_FILE_NAME: &str = "capture.plan.json";
+const PLAN_TEMP_FILE_NAME: &str = "capture.plan.json.tmp";
 const COMMIT_MAGIC: &[u8; 8] = b"DSLCMT01";
 const MANIFEST_MAGIC: &[u8; 8] = b"DSLSES01";
 const STORE_FORMAT_VERSION: u16 = 1;
@@ -131,7 +134,14 @@ impl NativeCaptureStore {
         let data_path = config.directory.join(DATA_FILE_NAME);
         let commit_path = config.directory.join(COMMIT_FILE_NAME);
         let manifest_path = config.directory.join(MANIFEST_FILE_NAME);
-        if data_path.exists() || commit_path.exists() || manifest_path.exists() {
+        let plan_path = config.directory.join(PLAN_FILE_NAME);
+        let plan_temp_path = config.directory.join(PLAN_TEMP_FILE_NAME);
+        if data_path.exists()
+            || commit_path.exists()
+            || manifest_path.exists()
+            || plan_path.exists()
+            || plan_temp_path.exists()
+        {
             return Err(CaptureStoreError::InvalidConfig(format!(
                 "capture-store directory is not empty: {}",
                 config.directory.display()
@@ -193,6 +203,26 @@ impl NativeCaptureStore {
         NativeCaptureRandomReader::open(Arc::clone(&self.shared))
     }
 
+    pub fn write_session_plan(&self, plan: &CaptureSessionPlan) -> CaptureStoreResult<()> {
+        {
+            let state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if state.writer_open {
+                return Err(CaptureStoreError::WriterStillOpen);
+            }
+            if state.finalized {
+                return Err(CaptureStoreError::AlreadyFinalized);
+            }
+            if let Some(error) = &state.writer_failure {
+                return Err(CaptureStoreError::WriterFailed(error.clone()));
+            }
+        }
+        write_session_plan(&self.shared.directory, plan)
+    }
+
     pub fn finalize(&self) -> CaptureStoreResult<NativeFinalizedCapture> {
         let manifest = {
             let state = self
@@ -241,6 +271,7 @@ impl NativeFinalizedCapture {
         let directory = directory.into();
         let manifest = read_manifest(&directory.join(MANIFEST_FILE_NAME))?;
         validate_finalized_files(&directory, &manifest)?;
+        let _ = read_session_plan(&directory)?;
         Ok(Self {
             shared: Arc::new(SharedStore {
                 directory,
@@ -272,6 +303,10 @@ impl NativeFinalizedCapture {
 
     pub fn open_random_reader(&self) -> CaptureStoreResult<NativeCaptureRandomReader> {
         NativeCaptureRandomReader::open(Arc::clone(&self.shared))
+    }
+
+    pub fn session_plan(&self) -> CaptureStoreResult<Option<CaptureSessionPlan>> {
+        read_session_plan(&self.shared.directory)
     }
 }
 
@@ -833,6 +868,38 @@ fn write_manifest(directory: &Path, manifest: &CaptureStoreManifest) -> CaptureS
     Ok(())
 }
 
+fn write_session_plan(directory: &Path, plan: &CaptureSessionPlan) -> CaptureStoreResult<()> {
+    let mut bytes = serde_json::to_vec_pretty(plan).map_err(|error| {
+        CaptureStoreError::InvalidConfig(format!("capture session plan cannot be encoded: {error}"))
+    })?;
+    bytes.push(b'\n');
+    let temp_path = directory.join(PLAN_TEMP_FILE_NAME);
+    let final_path = directory.join(PLAN_FILE_NAME);
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp_path)?;
+    file.write_all(&bytes)?;
+    file.sync_data()?;
+    drop(file);
+    fs::rename(temp_path, final_path)?;
+    Ok(())
+}
+
+fn read_session_plan(directory: &Path) -> CaptureStoreResult<Option<CaptureSessionPlan>> {
+    let path = directory.join(PLAN_FILE_NAME);
+    match fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|error| {
+            CaptureStoreError::Corrupt(format!(
+                "capture session plan {} is invalid: {error}",
+                path.display()
+            ))
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn encode_manifest(manifest: &CaptureStoreManifest) -> CaptureStoreResult<Vec<u8>> {
     let channel_count = u32::try_from(manifest.descriptor.channels().len())
         .map_err(|_| CaptureStoreError::InvalidConfig("too many capture channels".into()))?;
@@ -972,17 +1039,20 @@ fn get_bytes<'a>(
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use tempfile::tempdir;
 
     use crate::{
-        CaptureChannelId, CaptureChunk, CaptureChunkWriter, CaptureSessionId,
-        CaptureStoreCursor,
+        CaptureCapacityEstimate, CaptureChannelId, CaptureChunk, CaptureChunkWriter,
+        CaptureFraction, CapturePolicy, CaptureSessionId, CaptureSessionPlan, CaptureStoreCursor,
+        CompletionPolicy, EffectiveCapturePolicy, RecordingStart, RetentionPolicy,
+        TriggerPlacement,
     };
 
     use super::{
         CaptureCursorItem, CaptureStoreDescriptor, CaptureStoreError, NativeCaptureStore,
-        NativeCaptureStoreConfig, NativeFinalizedCapture,
+        NativeCaptureStoreConfig, NativeFinalizedCapture, PLAN_FILE_NAME, PLAN_TEMP_FILE_NAME,
     };
 
     fn descriptor() -> CaptureStoreDescriptor {
@@ -995,6 +1065,34 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    fn session_plan() -> CaptureSessionPlan {
+        let policy = CapturePolicy {
+            start: RecordingStart::Trigger,
+            trigger_placement: Some(TriggerPlacement::Fraction(
+                CaptureFraction::from_percent(25).unwrap(),
+            )),
+            retention_before_origin: RetentionPolicy::RecentDuration(Duration::from_secs(2)),
+            retention_after_origin: RetentionPolicy::Everything,
+            completion: CompletionPolicy::SamplesAfterOrigin(768),
+            trigger_timeout: None,
+        };
+        CaptureSessionPlan {
+            sample_rate_hz: 500_000_000,
+            channel_count: 3,
+            policy: EffectiveCapturePolicy {
+                requested: policy.clone(),
+                effective: policy,
+            },
+            capacity: CaptureCapacityEstimate {
+                worst_case_bytes_per_second: 187_500_000,
+                finite_capture_bytes: Some(384),
+                retained_duration: Some(Duration::from_secs(2)),
+                sustainable: Some(true),
+                warnings: vec!["capacity estimate test".into()],
+            },
+        }
     }
 
     fn chunk(
@@ -1061,6 +1159,48 @@ mod tests {
             assert_eq!(actual, expected);
         }
         assert_eq!(cursor.next().unwrap(), CaptureCursorItem::End);
+    }
+
+    #[test]
+    fn finalized_store_reopens_atomic_session_plan() {
+        let temporary = tempdir().unwrap();
+        let descriptor = descriptor();
+        let (store, mut writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
+            temporary.path(),
+            descriptor,
+        ))
+        .unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+
+        let plan = session_plan();
+        store.write_session_plan(&plan).unwrap();
+        let finalized = store.finalize().unwrap();
+        assert_eq!(finalized.session_plan().unwrap(), Some(plan.clone()));
+
+        let reopened = NativeFinalizedCapture::open(finalized.directory()).unwrap();
+        assert_eq!(reopened.session_plan().unwrap(), Some(plan));
+        assert!(!temporary.path().join(PLAN_TEMP_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn malformed_session_plan_rejects_reopen() {
+        let temporary = tempdir().unwrap();
+        let descriptor = descriptor();
+        let (store, mut writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
+            temporary.path(),
+            descriptor,
+        ))
+        .unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+        let finalized = store.finalize().unwrap();
+        std::fs::write(finalized.directory().join(PLAN_FILE_NAME), b"not json").unwrap();
+
+        assert!(matches!(
+            NativeFinalizedCapture::open(finalized.directory()),
+            Err(CaptureStoreError::Corrupt(_))
+        ));
     }
 
     #[test]

@@ -510,7 +510,7 @@ impl App {
         }
     }
 
-    fn start_capture_command(&mut self) {
+    fn start_capture_command(&mut self, mode: signal_processing::CaptureStartMode) {
         if self.capture.is_active() || self.is_running() || self.is_capture_analysis_active() {
             return;
         }
@@ -545,7 +545,7 @@ impl App {
         self.capture_graph = Some(self.node_graph.graph().clone());
         self.capture_analysis = None;
         self.capture_analysis_error = None;
-        match self.capture.start(feature) {
+        match self.capture.start(feature, mode) {
             Ok(()) => self.node_graph.set_editing_enabled(false),
             Err(error) => {
                 self.capture_graph = None;
@@ -556,6 +556,18 @@ impl App {
 
     fn stop_capture_command(&mut self) {
         self.capture.request_stop();
+    }
+
+    fn abort_capture_command(&mut self) {
+        if let Err(error) = self.capture.request_abort() {
+            self.toasts.error(error);
+        }
+    }
+
+    fn force_trigger_capture_command(&mut self) {
+        if let Err(error) = self.capture.request_force_trigger() {
+            self.toasts.error(error);
+        }
     }
 
     fn poll_capture(&mut self, ctx: &egui::Context) {
@@ -575,6 +587,8 @@ impl App {
             }
         }
         self.sync_capture_analysis(ctx);
+        let graph_processed = self.capture_analysis_progress();
+        self.capture.set_graph_processed_samples(graph_processed);
         let analysis_active = self.is_capture_analysis_active();
         self.node_graph
             .set_editing_enabled(self.capture.graph_editing_enabled() && !analysis_active);
@@ -664,6 +678,29 @@ impl App {
         let status = self.capture.status().cloned();
         if self.capture.is_active() {
             let state = status.as_ref().map(|status| status.state);
+            let popup_open = ui.ctx().any_popup_open();
+            if !popup_open
+                && status.as_ref().is_some_and(|status| status.commands.abort)
+                && self.input_bindings.consume_shortcut_once(
+                    ui,
+                    &["logic_analyzer.capture"],
+                    "abort",
+                )
+            {
+                self.abort_capture_command();
+            } else if !popup_open
+                && status.as_ref().is_some_and(|status| {
+                    status.commands.force_trigger
+                        && status.state == signal_processing::CaptureSessionState::Armed
+                })
+                && self.input_bindings.consume_shortcut_once(
+                    ui,
+                    &["logic_analyzer.capture"],
+                    "force_trigger",
+                )
+            {
+                self.force_trigger_capture_command();
+            }
             if matches!(
                 state,
                 Some(
@@ -673,8 +710,59 @@ impl App {
             ) {
                 ui.add_enabled(false, egui::Button::new("⏹ Stop"));
                 ui.spinner();
-            } else if ui.small_button("⏹ Stop").clicked() {
-                self.stop_capture_command();
+            } else {
+                let stop_supported = status
+                    .as_ref()
+                    .is_none_or(|status| status.commands.orderly_stop);
+                let stop = ui.add_enabled(stop_supported, egui::Button::new("⏹ Stop"));
+                if !stop_supported {
+                    stop.clone().on_disabled_hover_text(
+                        "This capture source cannot stop before finite completion",
+                    );
+                }
+                if stop.clicked() {
+                    self.stop_capture_command();
+                }
+            }
+            if let Some(status) = &status
+                && (status.commands.abort || status.commands.force_trigger)
+            {
+                ui.menu_button("▾", |ui| {
+                    if status.commands.force_trigger {
+                        let shortcut = self
+                            .input_bindings
+                            .shortcut(&["logic_analyzer.capture"], "force_trigger");
+                        let response = ui.add_enabled(
+                            status.state == signal_processing::CaptureSessionState::Armed,
+                            egui::Button::new("Force Trigger").shortcut_text(
+                                shortcut
+                                    .map(|shortcut| ui.ctx().format_shortcut(&shortcut))
+                                    .unwrap_or_default(),
+                            ),
+                        );
+                        if response.clicked() {
+                            self.force_trigger_capture_command();
+                            ui.close();
+                        }
+                    }
+                    let abort_shortcut = self
+                        .input_bindings
+                        .shortcut(&["logic_analyzer.capture"], "abort");
+                    if status.commands.abort
+                        && ui
+                            .add(
+                                egui::Button::new("Abort").shortcut_text(
+                                    abort_shortcut
+                                        .map(|shortcut| ui.ctx().format_shortcut(&shortcut))
+                                        .unwrap_or_default(),
+                                ),
+                            )
+                            .clicked()
+                    {
+                        self.abort_capture_command();
+                        ui.close();
+                    }
+                });
             }
         } else {
             let availability = if self.is_running() {
@@ -704,13 +792,65 @@ impl App {
                 }
             }
             if response.clicked() {
-                self.start_capture_command();
+                self.start_capture_command(signal_processing::CaptureStartMode::SavedPolicy);
                 ui.ctx().request_repaint();
+            }
+            if let CaptureAvailability::Available {
+                simple_trigger_channels,
+                capabilities,
+                ..
+            } = &availability
+                && capabilities.commands().capture_now
+                && simple_trigger_channels.iter().any(|channel| {
+                    channel.enabled
+                        && channel.condition != signal_processing::SimpleTriggerCondition::Ignore
+                })
+            {
+                ui.menu_button("▾", |ui| {
+                    if ui.button("Capture Now").clicked() {
+                        self.start_capture_command(signal_processing::CaptureStartMode::CaptureNow);
+                        ui.close();
+                    }
+                });
+            }
+            if let CaptureAvailability::Available {
+                session_plan: Some(plan),
+                ..
+            } = &availability
+            {
+                ui.menu_button("Capacity", |ui| {
+                    ui.label(format!(
+                        "Worst-case input: {}/s",
+                        format_bytes(plan.capacity.worst_case_bytes_per_second)
+                    ));
+                    if let Some(bytes) = plan.capacity.finite_capture_bytes {
+                        ui.label(format!("Finite capture: {}", format_bytes(bytes)));
+                    }
+                    if let Some(duration) = plan.capacity.retained_duration {
+                        ui.label(format!(
+                            "Retained duration: {:.3} s",
+                            duration.as_secs_f64()
+                        ));
+                    }
+                    for warning in &plan.capacity.warnings {
+                        ui.colored_label(egui::Color32::from_rgb(220, 170, 90), warning);
+                    }
+                });
             }
         }
 
         if let Some(status) = self.capture.status() {
             let mut summary = capture_state_name(status.state).to_owned();
+            if let Some(completion) = status.completion {
+                summary = match completion {
+                    signal_processing::CaptureCompletion::Finished => "Complete".into(),
+                    signal_processing::CaptureCompletion::Stopped => "Stopped".into(),
+                    signal_processing::CaptureCompletion::CancelledBeforeTrigger => {
+                        "Cancelled before trigger".into()
+                    }
+                    signal_processing::CaptureCompletion::Aborted => "Aborted · incomplete".into(),
+                };
+            }
             if let Some(samples) = status.progress.captured_samples {
                 summary.push_str(&format!(" · {samples} samples"));
             }
@@ -721,6 +861,43 @@ impl App {
                 );
             } else {
                 ui.label(summary);
+            }
+
+            if status.health != signal_processing::CaptureHealth::default()
+                || status.session_plan.is_some()
+            {
+                ui.menu_button("Health", |ui| {
+                    if let Some(plan) = &status.session_plan {
+                        ui.label(format!(
+                            "Input estimate: {}/s",
+                            format_bytes(plan.capacity.worst_case_bytes_per_second)
+                        ));
+                        if let Some(bytes) = plan.capacity.finite_capture_bytes {
+                            ui.label(format!("Capture estimate: {}", format_bytes(bytes)));
+                        }
+                        for warning in &plan.capacity.warnings {
+                            ui.colored_label(egui::Color32::from_rgb(220, 170, 90), warning);
+                        }
+                    }
+                    if let Some(rate) = status.health.input_bytes_per_second {
+                        ui.label(format!("Input: {}/s", format_bytes(rate)));
+                    }
+                    if let Some(rate) = status.health.write_bytes_per_second {
+                        ui.label(format!("Store: {}/s", format_bytes(rate)));
+                    }
+                    if let Some(samples) = status.health.retained_samples {
+                        ui.label(format!("Retained: {samples} samples"));
+                    }
+                    if let Some(samples) = status.health.summary_lag_samples {
+                        ui.label(format!("Summary lag: {samples} samples"));
+                    }
+                    if let Some(samples) = status.health.graph_lag_samples {
+                        ui.label(format!("Graph lag: {samples} samples"));
+                    }
+                    if let Some(bytes) = status.health.available_storage_bytes {
+                        ui.label(format!("Free storage: {}", format_bytes(bytes)));
+                    }
+                });
             }
 
             if let Some(error) = &self.capture_analysis_error {
@@ -1170,6 +1347,18 @@ fn format_count(items: u64) -> String {
         1_000..=999_999 => format!("{:.1}k", items as f64 / 1_000.0),
         1_000_000..=999_999_999 => format!("{:.1}M", items as f64 / 1_000_000.0),
         _ => format!("{:.1}G", items as f64 / 1_000_000_000.0),
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * 1024;
+    const GIB: u64 = MIB * 1024;
+    match bytes {
+        0..=1023 => format!("{bytes} B"),
+        KIB..=1_048_575 => format!("{:.1} KiB", bytes as f64 / KIB as f64),
+        MIB..=1_073_741_823 => format!("{:.1} MiB", bytes as f64 / MIB as f64),
+        _ => format!("{:.1} GiB", bytes as f64 / GIB as f64),
     }
 }
 

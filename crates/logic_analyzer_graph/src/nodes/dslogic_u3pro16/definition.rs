@@ -28,7 +28,7 @@ const U3_RATES: &[(&str, u64)] = &[
     ("500 MHz", 500_000_000),
     ("1 GHz", 1_000_000_000),
 ];
-const U3PRO16_STATE_VERSION: u16 = 1;
+const U3PRO16_STATE_VERSION: u16 = 2;
 pub(super) const U3PRO16_CHANNELS: usize = 16;
 
 fn u3_rate_names() -> Vec<&'static str> {
@@ -136,6 +136,13 @@ pub struct U3Pro16State {
     pub mode: EnumValue,
     pub sample_rate: EnumValue,
     pub duration_ms: IntValue,
+    pub recording_start: EnumValue,
+    pub trigger_position_percent: IntValue,
+    pub retention: EnumValue,
+    pub retention_duration_ms: IntValue,
+    pub retention_megabytes: IntValue,
+    pub trigger_timeout_action: EnumValue,
+    pub trigger_timeout_ms: IntValue,
     pub rle: BoolValue,
     pub threshold: FloatValue,
     pub filter: BoolValue,
@@ -158,6 +165,19 @@ impl Default for U3Pro16State {
             mode: EnumValue::new(0, &["Stream", "Buffer"]),
             sample_rate: EnumValue::new(9, &u3_rate_names()),
             duration_ms: IntValue::new(1000, 1, 60_000),
+            recording_start: EnumValue::new(0, &["Immediate", "Trigger"]),
+            trigger_position_percent: IntValue::new(50, 0, 100),
+            retention: EnumValue::new(
+                0,
+                &["Everything", "Recent duration", "Recent bytes"],
+            ),
+            retention_duration_ms: IntValue::new(10_000, 1, i32::MAX),
+            retention_megabytes: IntValue::new(1024, 1, i32::MAX),
+            trigger_timeout_action: EnumValue::new(
+                0,
+                &["Disabled", "Continue waiting", "Stop"],
+            ),
+            trigger_timeout_ms: IntValue::new(10_000, 1, i32::MAX),
             rle: BoolValue::new(false),
             threshold: FloatValue::new(1.0, 0.0, 5.0, 0.05),
             filter: BoolValue::new(false),
@@ -188,6 +208,15 @@ impl U3Pro16State {
             ));
         };
         *current = condition;
+        if self
+            .trigger_conditions
+            .iter()
+            .any(|condition| *condition != SimpleTriggerCondition::Ignore)
+        {
+            self.recording_start.select("Trigger");
+        } else {
+            self.recording_start.select("Immediate");
+        }
         self.compatibility_warning = None;
         Ok(())
     }
@@ -200,6 +229,20 @@ struct SavedU3Pro16State {
     mode: EnumValue,
     sample_rate: EnumValue,
     duration_ms: IntValue,
+    #[serde(default)]
+    recording_start: Option<EnumValue>,
+    #[serde(default)]
+    trigger_position_percent: Option<IntValue>,
+    #[serde(default)]
+    retention: Option<EnumValue>,
+    #[serde(default)]
+    retention_duration_ms: Option<IntValue>,
+    #[serde(default)]
+    retention_megabytes: Option<IntValue>,
+    #[serde(default)]
+    trigger_timeout_action: Option<EnumValue>,
+    #[serde(default)]
+    trigger_timeout_ms: Option<IntValue>,
     rle: BoolValue,
     threshold: FloatValue,
     filter: BoolValue,
@@ -240,11 +283,39 @@ impl<'de> Deserialize<'de> for U3Pro16State {
             channels.enabled.truncate(U3PRO16_CHANNELS);
             warnings.push(format!("normalized channel count to {U3PRO16_CHANNELS}"));
         }
+        let has_trigger = trigger_conditions
+            .iter()
+            .any(|condition| *condition != SimpleTriggerCondition::Ignore);
+        let recording_start = saved.recording_start.unwrap_or_else(|| {
+            EnumValue::new(
+                usize::from(has_trigger),
+                &["Immediate", "Trigger"],
+            )
+        });
         Ok(Self {
             schema_version: U3PRO16_STATE_VERSION,
             mode: saved.mode,
             sample_rate: saved.sample_rate,
             duration_ms: saved.duration_ms,
+            recording_start,
+            trigger_position_percent: saved
+                .trigger_position_percent
+                .unwrap_or_else(|| IntValue::new(50, 0, 100)),
+            retention: saved.retention.unwrap_or_else(|| {
+                EnumValue::new(0, &["Everything", "Recent duration", "Recent bytes"])
+            }),
+            retention_duration_ms: saved
+                .retention_duration_ms
+                .unwrap_or_else(|| IntValue::new(10_000, 1, i32::MAX)),
+            retention_megabytes: saved
+                .retention_megabytes
+                .unwrap_or_else(|| IntValue::new(1024, 1, i32::MAX)),
+            trigger_timeout_action: saved.trigger_timeout_action.unwrap_or_else(|| {
+                EnumValue::new(0, &["Disabled", "Continue waiting", "Stop"])
+            }),
+            trigger_timeout_ms: saved
+                .trigger_timeout_ms
+                .unwrap_or_else(|| IntValue::new(10_000, 1, i32::MAX)),
             rle: saved.rle,
             threshold: saved.threshold,
             filter: saved.filter,
@@ -300,6 +371,31 @@ impl NodeDef for DsLogicU3Pro16 {
                     PropDef::control("sample_rate", "Sample rate", |state| &mut state.sample_rate),
                     PropDef::control("duration_ms", "Duration (ms)", |state| {
                         &mut state.duration_ms
+                    }),
+                    PropDef::control("recording_start", "Recording start", |state| {
+                        &mut state.recording_start
+                    }),
+                    PropDef::control(
+                        "trigger_position_percent",
+                        "Pre-trigger (%)",
+                        |state| &mut state.trigger_position_percent,
+                    ),
+                    PropDef::control("retention", "Retention", |state| &mut state.retention),
+                    PropDef::control(
+                        "retention_duration_ms",
+                        "Retain duration (ms)",
+                        |state| &mut state.retention_duration_ms,
+                    ),
+                    PropDef::control(
+                        "retention_megabytes",
+                        "Retain size (MiB)",
+                        |state| &mut state.retention_megabytes,
+                    ),
+                    PropDef::control("trigger_timeout_action", "Trigger timeout", |state| {
+                        &mut state.trigger_timeout_action
+                    }),
+                    PropDef::control("trigger_timeout_ms", "Timeout after (ms)", |state| {
+                        &mut state.trigger_timeout_ms
                     }),
                     PropDef::control("rle", "RLE compress", |state| &mut state.rle),
                 ],
@@ -398,10 +494,21 @@ mod tests {
         let mut state = U3Pro16State::default();
         state.set_trigger_condition(2, High).unwrap();
         state.set_trigger_condition(13, Falling).unwrap();
+        state.trigger_position_percent.value = 37;
+        state.retention.select("Recent bytes");
+        state.retention_megabytes.value = 512;
+        state.trigger_timeout_action.select("Stop");
+        state.trigger_timeout_ms.value = 750;
         let saved = serde_json::to_value(&state).unwrap();
         let restored: U3Pro16State = serde_json::from_value(saved).unwrap();
 
         assert_eq!(restored.trigger_conditions(), state.trigger_conditions());
+        assert_eq!(restored.recording_start.selected(), "Trigger");
+        assert_eq!(restored.trigger_position_percent.value, 37);
+        assert_eq!(restored.retention.selected(), "Recent bytes");
+        assert_eq!(restored.retention_megabytes.value, 512);
+        assert_eq!(restored.trigger_timeout_action.selected(), "Stop");
+        assert_eq!(restored.trigger_timeout_ms.value, 750);
         assert!(DsLogicU3Pro16::badge(&restored).is_none());
     }
 
@@ -419,7 +526,10 @@ mod tests {
         assert!(warning.text.contains("schema 0"));
         assert!(warning.text.contains("defaulted to Ignore"));
         let current = serde_json::to_value(restored).unwrap();
-        assert_eq!(current["schema_version"], 1);
+        assert_eq!(current["schema_version"], 2);
+        assert_eq!(current["recording_start"]["value"], "Immediate");
+        assert_eq!(current["trigger_position_percent"]["value"], 50);
+        assert_eq!(current["retention"]["value"], "Everything");
         assert_eq!(
             current["trigger_conditions"].as_array().unwrap().len(),
             U3PRO16_CHANNELS

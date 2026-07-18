@@ -28,9 +28,10 @@ use node_graph::{
     VariadicInfo,
 };
 use signal_processing::{
-    AppManager, CaptureChannelId, CaptureProviderCapabilities, CaptureStoreCursor, DerivedLanes,
-    DisconnectEvent, InputSub, NodeConfig, OverflowPolicy, PersistentStoreConfig, ProcessNode,
-    SampleBlock, SamplingActivity, SimpleTriggerCondition, ViewerRetention,
+    AppManager, CaptureChannelId, CaptureProviderCapabilities, CaptureSessionPlan,
+    CaptureStartMode, CaptureStoreCursor, DerivedLanes, DisconnectEvent, InputSub, NodeConfig,
+    OverflowPolicy, PersistentStoreConfig, ProcessNode, SampleBlock, SamplingActivity,
+    SimpleTriggerCondition, ViewerRetention,
 };
 
 use super::cache_platform;
@@ -178,6 +179,9 @@ pub trait LiveCaptureFeature: Send {
     fn simple_trigger_channels(&self) -> &[SimpleTriggerChannel] {
         &[]
     }
+    fn session_plan(&self) -> Option<&CaptureSessionPlan> {
+        None
+    }
 
     /// Captures the concrete runtime port mapping and timebase independently
     /// of provider ownership. The same factory creates the live-following
@@ -188,6 +192,21 @@ pub trait LiveCaptureFeature: Send {
         self: Box<Self>,
         context: AcquisitionContext,
     ) -> AcquisitionResult<Box<dyn PreparedAcquisition>>;
+
+    fn prepare_with_mode(
+        self: Box<Self>,
+        context: AcquisitionContext,
+        mode: CaptureStartMode,
+    ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
+        if mode == CaptureStartMode::CaptureNow {
+            return Err(
+                logic_analyzer_processing::AcquisitionError::UnsupportedOperation(
+                    "capture now".into(),
+                ),
+            );
+        }
+        self.prepare(context)
+    }
 }
 
 pub struct DiscoveredLiveCaptureFeature {
@@ -229,6 +248,10 @@ impl DiscoveredLiveCaptureFeature {
         self.feature.simple_trigger_channels()
     }
 
+    pub fn session_plan(&self) -> Option<&CaptureSessionPlan> {
+        self.feature.session_plan()
+    }
+
     pub fn has_simple_trigger(&self) -> bool {
         self.simple_trigger_channels()
             .iter()
@@ -242,8 +265,9 @@ impl DiscoveredLiveCaptureFeature {
     pub fn prepare(
         self,
         context: AcquisitionContext,
+        mode: CaptureStartMode,
     ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
-        self.feature.prepare(context)
+        self.feature.prepare_with_mode(context, mode)
     }
 }
 
@@ -465,6 +489,26 @@ fn discover_live_capture_feature_from(
                     .any(|channel| channel.viewer_channel >= feature.channels().len())
                 {
                     Some("live capture trigger channel references an unknown viewer channel")
+                } else if feature.session_plan().is_some_and(|plan| {
+                    plan.channel_count != feature.channels().len()
+                        || plan.sample_rate_hz as f64 != feature.sample_rate_hz()
+                }) {
+                    Some("live capture session plan differs from its active channel/rate tuple")
+                } else if feature
+                    .session_plan()
+                    .is_some_and(|plan| plan.capacity.sustainable == Some(false))
+                {
+                    Some("live capture policy exceeds its storage capacity")
+                } else if feature.session_plan().is_some_and(|plan| {
+                    plan.policy
+                        .effective
+                        .trigger_timeout
+                        .is_some_and(|timeout| {
+                            timeout.action == signal_processing::TriggerTimeoutAction::ForceTrigger
+                                && !feature.capabilities().commands().force_trigger
+                        })
+                }) {
+                    Some("live capture policy requests Force Trigger without advertising it")
                 } else if duplicate_trigger_channels {
                     Some("live capture trigger channels must have unique identities and lanes")
                 } else {

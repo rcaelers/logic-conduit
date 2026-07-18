@@ -9,15 +9,18 @@ use logic_analyzer_processing::{
     u3pro16_streaming_plan,
 };
 use signal_processing::{
-    CaptureChannelId, CaptureDataDelivery, CaptureProviderCapabilities, CaptureStoreCursor,
-    ProcessNode,
+    CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery, CaptureFraction,
+    CapturePolicyCapabilities, CapturePolicyContext, CaptureProviderCapabilities,
+    CaptureSessionPlan, CaptureStartMode, CaptureStoreCursor, CompletionPolicyKind, ProcessNode,
+    RecordingStart, RetentionPolicyKind, TriggerPlacementCapability, TriggerTimeoutAction,
+    estimate_capture_capacity,
 };
 
 use crate::compiler::{
     CaptureGraphSourceFactory, LiveCaptureFeature, SimpleTriggerChannel, parse_state,
 };
 
-use super::{U3Pro16State, capture_config};
+use super::{U3Pro16State, capacity_request, capture_config, requested_capture_policy};
 
 struct U3Pro16GraphSourceFactory {
     channels: Arc<[CaptureAnalysisChannel]>,
@@ -46,6 +49,7 @@ struct U3Pro16LiveCaptureFeature {
     simple_trigger_channels: Arc<[SimpleTriggerChannel]>,
     analysis_channels: Arc<[CaptureAnalysisChannel]>,
     capabilities: CaptureProviderCapabilities,
+    session_plan: CaptureSessionPlan,
     profile: U3Pro16AcquisitionProfile,
     config: LogicCaptureConfig,
 }
@@ -77,6 +81,10 @@ impl LiveCaptureFeature for U3Pro16LiveCaptureFeature {
         &self.simple_trigger_channels
     }
 
+    fn session_plan(&self) -> Option<&CaptureSessionPlan> {
+        Some(&self.session_plan)
+    }
+
     fn graph_source_factory(&self) -> Arc<dyn CaptureGraphSourceFactory> {
         Arc::new(U3Pro16GraphSourceFactory {
             channels: Arc::clone(&self.analysis_channels),
@@ -88,13 +96,44 @@ impl LiveCaptureFeature for U3Pro16LiveCaptureFeature {
         self: Box<Self>,
         context: AcquisitionContext,
     ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
+        self.prepare_mode(context, CaptureStartMode::SavedPolicy)
+    }
+
+    fn prepare_with_mode(
+        self: Box<Self>,
+        context: AcquisitionContext,
+        mode: CaptureStartMode,
+    ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
+        self.prepare_mode(context, mode)
+    }
+}
+
+impl U3Pro16LiveCaptureFeature {
+    fn prepare_mode(
+        self: Box<Self>,
+        mut context: AcquisitionContext,
+        mode: CaptureStartMode,
+    ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
+        let mut config = self.config;
+        let plan = if mode == CaptureStartMode::CaptureNow {
+            if !self.capabilities.commands().capture_now {
+                return Err(logic_analyzer_processing::AcquisitionError::UnsupportedOperation(
+                    "capture now".into(),
+                ));
+            }
+            config.trigger = Default::default();
+            self.session_plan.clone().capture_now()
+        } else {
+            self.session_plan.clone()
+        };
+        context.publish_plan(plan)?;
         match self.profile {
             U3Pro16AcquisitionProfile::Buffered => {
-                DsLogicU3Pro16BufferedProvider::open_first(self.config, self.channels)?
+                DsLogicU3Pro16BufferedProvider::open_first(config, self.channels)?
                     .prepare(context)
             }
             U3Pro16AcquisitionProfile::Streaming => {
-                DsLogicU3Pro16StreamingProvider::open_first(self.config, self.channels)?
+                DsLogicU3Pro16StreamingProvider::open_first(config, self.channels)?
                     .prepare(context)
             }
         }
@@ -106,11 +145,12 @@ pub(super) fn feature(
 ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
     let state = parse_state::<U3Pro16State>(state)?;
     let config = capture_config(&state)?;
-    let (profile, delivery) = if state.mode.selected() == "Buffer" {
-        u3pro16_buffered_plan(&config).map_err(|error| error.to_string())?;
+    let (profile, delivery, actual_samples) = if state.mode.selected() == "Buffer" {
+        let plan = u3pro16_buffered_plan(&config).map_err(|error| error.to_string())?;
         (
             U3Pro16AcquisitionProfile::Buffered,
             CaptureDataDelivery::BufferedUpload,
+            plan.actual_samples(),
         )
     } else {
         let high = u3pro16_streaming_plan(&config, LinkSpeed::High);
@@ -123,6 +163,7 @@ pub(super) fn feature(
         (
             U3Pro16AcquisitionProfile::Streaming,
             CaptureDataDelivery::DuringAcquisition,
+            config.sample_limit,
         )
     };
     let mut channels = Vec::new();
@@ -151,11 +192,74 @@ pub(super) fn feature(
         });
     }
     let channels: Arc<[CaptureChannelId]> = channels.into();
+    let policy_capabilities = CapturePolicyCapabilities::new(
+        Arc::from([RecordingStart::Immediate, RecordingStart::Trigger]),
+        Arc::from([
+            RetentionPolicyKind::Everything,
+            RetentionPolicyKind::RecentDuration,
+            RetentionPolicyKind::RecentBytes,
+        ]),
+        Arc::from([CompletionPolicyKind::SamplesAfterOrigin]),
+        TriggerPlacementCapability::SelectableFraction {
+            minimum: CaptureFraction::from_percent(0).expect("zero percentage is valid"),
+            maximum: CaptureFraction::from_percent(100).expect("full percentage is valid"),
+            step: CaptureFraction::from_percent(1).expect("one percentage is valid"),
+            sample_alignment: 64,
+        },
+        Arc::from([
+            TriggerTimeoutAction::ContinueWaiting,
+            TriggerTimeoutAction::Stop,
+        ]),
+    )
+    .map_err(|error| error.to_string())?;
     let capabilities = CaptureProviderCapabilities::single(
         delivery,
         Arc::clone(&channels),
         config.sample_rate_hz,
+    )
+    .with_commands(CaptureCommandCapabilities::new(true, false, false, true))
+    .with_policy(policy_capabilities);
+    let requested_policy = requested_capture_policy(&state)?;
+    let mut policy = capabilities
+        .policy()
+        .negotiate(
+            &requested_policy,
+            CapturePolicyContext {
+                sample_rate_hz: config.sample_rate_hz,
+                capture_window_samples: Some(actual_samples),
+                has_trigger_program: !config.trigger.stages.is_empty(),
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    let effective_before = match policy.effective.trigger_placement {
+        Some(signal_processing::TriggerPlacement::SamplesBefore(samples)) => samples,
+        Some(signal_processing::TriggerPlacement::Fraction(fraction)) => {
+            fraction.samples_of(actual_samples)
+        }
+        Some(signal_processing::TriggerPlacement::DurationBefore(duration)) => {
+            u64::try_from(
+                duration
+                    .as_nanos()
+                    .saturating_mul(u128::from(config.sample_rate_hz))
+                    .div_ceil(1_000_000_000),
+            )
+            .unwrap_or(actual_samples)
+        }
+        None => 0,
+    };
+    policy.effective.completion = signal_processing::CompletionPolicy::SamplesAfterOrigin(
+        actual_samples.saturating_sub(effective_before).max(1),
     );
+    let mut capacity_request = capacity_request(&state)?;
+    capacity_request.capture_window_samples = Some(actual_samples);
+    let capacity = estimate_capture_capacity(capacity_request, &requested_policy)
+        .map_err(|error| error.to_string())?;
+    let session_plan = CaptureSessionPlan {
+        sample_rate_hz: config.sample_rate_hz,
+        channel_count: channels.len(),
+        policy,
+        capacity,
+    };
     Ok(Some(Box::new(U3Pro16LiveCaptureFeature {
         channel_names: channel_names.into(),
         analysis_channels: analysis_channels.into(),
@@ -163,6 +267,7 @@ pub(super) fn feature(
         simple_trigger_channels: simple_trigger_channels.into(),
         channels,
         capabilities,
+        session_plan,
         profile,
         config,
     })))
@@ -173,7 +278,8 @@ mod tests {
     use std::time::Duration;
 
     use signal_processing::{
-        CaptureCursorItem, CaptureStoreCursor, CaptureStoreResult, ProcessNode,
+        CaptureCursorItem, CaptureStoreCursor, CaptureStoreResult, CompletionPolicy, ProcessNode,
+        RecordingStart, RetentionPolicy, TriggerPlacement,
     };
 
     use super::{U3Pro16State, feature};
@@ -217,5 +323,49 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["ch0", "ch2", "ch9"]
         );
+    }
+
+    #[test]
+    fn requested_policy_and_aligned_effective_values_are_part_of_the_session_plan() {
+        let mut state = U3Pro16State::default();
+        state.mode.select("Buffer");
+        state.sample_rate.select("100 MHz");
+        state.duration_ms.value = 10;
+        state.channels.enabled.fill(false);
+        state.channels.enabled[0] = true;
+        state
+            .set_trigger_condition(0, signal_processing::SimpleTriggerCondition::Rising)
+            .unwrap();
+        state.trigger_position_percent.value = 37;
+        state.retention.select("Recent duration");
+        state.retention_duration_ms.value = 250;
+
+        let feature = feature(&serde_json::to_value(state).unwrap())
+            .unwrap()
+            .unwrap();
+        let plan = feature.session_plan().unwrap();
+
+        assert_eq!(plan.policy.requested.start, RecordingStart::Trigger);
+        assert_eq!(
+            plan.policy.requested.trigger_placement,
+            Some(TriggerPlacement::Fraction(
+                signal_processing::CaptureFraction::from_percent(37).unwrap()
+            ))
+        );
+        assert_eq!(
+            plan.policy.requested.retention_after_origin,
+            RetentionPolicy::RecentDuration(Duration::from_millis(250))
+        );
+        let TriggerPlacement::SamplesBefore(before) =
+            plan.policy.effective.trigger_placement.unwrap()
+        else {
+            panic!("effective placement must be sample aligned");
+        };
+        assert_eq!(before % 64, 0);
+        let CompletionPolicy::SamplesAfterOrigin(after) = plan.policy.effective.completion else {
+            panic!("effective completion must be a finite sample count");
+        };
+        assert_eq!(before + after, 1_000_448);
+        assert_eq!(plan.capacity.finite_capture_bytes, Some(125_056));
     }
 }

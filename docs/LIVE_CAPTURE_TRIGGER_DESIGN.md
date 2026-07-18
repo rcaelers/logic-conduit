@@ -27,7 +27,16 @@ The UI-independent live-capture foundation is also present:
   packed raw chunk with validated unaligned payload access;
 - the same generic contract describes whether samples arrive during acquisition or during a
   buffered upload, advertises explicit channel/rate setting combinations, and capability-gates
-  Force Trigger without naming a provider or transport;
+  Stop, Abort, Force Trigger, and Capture Now without naming a provider or transport;
+- generic capture-policy contracts validate immediate or triggered start, finite or manual
+  completion, trigger placement and timeout action, requested retention, and provider-advertised
+  combinations before acquisition begins;
+- capacity planning reports the worst-case packed input rate, finite capture size, retained
+  duration, configured or available storage limit, sustainability, and early warnings without
+  assuming compression;
+- a pin-aware retention tracker computes a monotonic safe-reclamation boundary for pre-trigger,
+  post-trigger, recent-duration, and recent-byte policies and rejects any attempted reclamation
+  beyond a required consumer position;
 - the same contract defines the portable Ignore, Low, High, Rising, Falling, and Either simple
   conditions and publishes an exact raw trigger sample as a generic capture event;
 - `CaptureChunkWriter` and `CaptureEventPublisher` are the generic acquisition boundaries, with
@@ -37,6 +46,9 @@ The UI-independent live-capture foundation is also present:
 - its native implementation appends canonical payloads to a sequential data file, publishes only
   fully synced batches through a fixed-size commit log, and finalizes a manifest that can be
   reopened without the acquisition provider;
+- the native store atomically persists an optional generic session plan containing both requested
+  and negotiated effective policy and capacity metadata; old captures without this sidecar remain
+  valid, while malformed metadata is reported as corruption;
 - native live and finalized cursors read commit records and payloads through independent file
   handles, report Pending or End explicitly, and retain no acquisition-sized in-memory commit
   index when paused;
@@ -65,9 +77,10 @@ The UI-independent live-capture foundation is also present:
   feature, persists one portable condition per input with explicit legacy-state migration and a
   visible compatibility warning, while its complete wasm feature module reports no live
   capability;
-- the native application capture coordinator prepares, starts, supervises, stops, and finalizes an
-  immediate capture off the UI thread, retaining the previous completed temporary session until a
-  new session completes successfully;
+- the native application capture coordinator prepares, starts, supervises, stops, aborts,
+  force-triggers, applies finite completion and trigger-timeout actions, and finalizes capture off
+  the UI thread, retaining the previous completed temporary session until a new session completes
+  successfully;
 - the coordinator attaches the growing query to the viewer before acquisition completes and keeps
   the finalized query available after completion;
 - the coordinator also opens an independent committed-prefix cursor and attaches its concrete
@@ -77,8 +90,9 @@ The UI-independent live-capture foundation is also present:
   captured graph-source factory; each Run opens a fresh finalized cursor and substitutes that
   source by explicit node ID without rediscovering, opening, or operating the provider;
 - the Logic Analyzer title bar presents the combined Start/Stop control and lifecycle/sample
-  status, Follow Newest, Pause/Resume Display, and Go Live controls, while Run and capture exclude
-  one another;
+  status, capability-gated Capture Now, Force Trigger, and Abort actions, capacity and health
+  popovers, Follow Newest, Pause/Resume Display, and Go Live controls, while Run and capture
+  exclude one another;
 - generic per-lane trigger icons open a condition menu through the configured input-binding
   action; the viewer emits only a neutral lane/condition edit, and the application routes it by
   opaque channel identity to the concrete source builder;
@@ -109,6 +123,10 @@ The UI-independent live-capture foundation is also present:
   explicit saved-state schema migration, lowers enabled non-contiguous physical inputs to opaque
   capture identities and their original graph output ports, and validates the active finite
   channel/rate/depth tuple before opening hardware;
+- concrete U3Pro16 state also persists recording start, trigger-position percentage, retention
+  target, and trigger-timeout controls through an explicit schema migration; its feature lowers
+  them to generic policy, aligns effective placement to the negotiated capture window, and records
+  both requested and effective values in the session plan;
 - U3Pro16 preparation freezes one validated device plan before Start performs the final arm
   command; the provider publishes Armed, trigger, on-device capture, upload, progress, and terminal
   events through the same generic acquisition contract as the fakes;
@@ -130,8 +148,9 @@ The UI-independent live-capture foundation is also present:
 
 The native fakes, U3Pro16 buffered and streaming providers, and application coordinator are
 selected as complete platform modules. The streaming fake is reachable through the existing
-development/demo node and both fakes are used by conformance composition. Native store recovery,
-retention and reclamation, cleanup, capture-policy controls, and export do not yet exist. The
+development/demo node and both fakes are used by conformance composition. Durable execution of
+the safe-reclamation boundary, interrupted-session recovery and ownership cleanup remain part of
+the recovery/session-ownership work; export also remains outside the current architecture. The
 existing `LogicAnalyzerSource` direct graph-run path remains available.
 
 ## Proposed future design
@@ -1076,8 +1095,11 @@ reported rather than silently discarded.
 
 #### Phase 10 — Capture policies and health controls
 
-- Add finite completion, rolling retention, trigger placement, timeout actions, Capture Now, Force
-  Trigger, Abort, capacity estimates, and health/lag telemetry through advertised capabilities.
+Status: **complete**.
+
+- Add finite completion, rolling-retention policy and safe-boundary planning, trigger placement,
+  timeout actions, Capture Now, Force Trigger, Abort, capacity estimates, and health/lag telemetry
+  through advertised capabilities.
 - Persist requested policy in the concrete graph state and negotiated effective values in the
   captured session.
 
@@ -1087,8 +1109,9 @@ operation.
 
 #### Phase 11 — Recovery and session ownership
 
-- Add recovery after every durable commit step, incomplete-session presentation, cleanup and
-  pinning, recent-session ownership, and explicit keep/discard decisions.
+- Add recovery after every durable commit step, durable execution of bounded reclamation,
+  incomplete-session presentation, cleanup and pinning, recent-session ownership, and explicit
+  keep/discard decisions.
 - Keep export out of this phase so lifecycle and deletion safety are verified independently.
 
 Gate: fault-injection tests recover exactly the committed prefix or return a structured corruption
