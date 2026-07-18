@@ -132,6 +132,14 @@ impl AcquisitionContext {
         Ok(())
     }
 
+    pub fn publish_triggered(&mut self, sample: u64) -> AcquisitionResult<()> {
+        self.events.publish(CaptureEvent::Triggered {
+            session_id: self.session_id,
+            sample,
+        })?;
+        Ok(())
+    }
+
     pub fn publish_failure(&mut self, error: &AcquisitionError) {
         let _ = self
             .events

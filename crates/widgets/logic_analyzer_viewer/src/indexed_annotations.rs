@@ -143,6 +143,7 @@ mod tests {
             labels_rect: empty,
             wave_rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(width, 30.0)),
             row_height: 30.0,
+            trigger_width: 0.0,
             name_col_width: 0.0,
             badge_width: 0.0,
         }

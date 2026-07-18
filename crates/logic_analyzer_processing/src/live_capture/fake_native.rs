@@ -5,7 +5,7 @@ use std::thread::JoinHandle;
 
 use signal_processing::{
     CaptureAcquisitionPhase, CaptureBufferPool, CaptureChannelId, CaptureChunk, CaptureProgress,
-    CaptureSessionId, CaptureSessionState,
+    CaptureSessionId, CaptureSessionState, SimpleTriggerCondition,
 };
 
 use super::{
@@ -17,6 +17,7 @@ use super::{
 pub struct DeterministicFakeConfig {
     channels: Arc<[CaptureChannelId]>,
     chunk_sample_counts: Arc<[u64]>,
+    trigger_conditions: Arc<[Option<SimpleTriggerCondition>]>,
     seed: u64,
 }
 
@@ -44,6 +45,7 @@ impl DeterministicFakeConfig {
             })
         })?;
         let config = Self {
+            trigger_conditions: vec![None; channels.len()].into(),
             channels,
             chunk_sample_counts,
             seed,
@@ -64,6 +66,38 @@ impl DeterministicFakeConfig {
         self.chunk_sample_counts.iter().sum()
     }
 
+    /// Configures a portable simple trigger. `None` disables the corresponding physical input.
+    pub fn with_simple_trigger(
+        mut self,
+        conditions: impl Into<Arc<[Option<SimpleTriggerCondition>]>>,
+    ) -> AcquisitionResult<Self> {
+        let conditions = conditions.into();
+        if conditions.len() != self.channels.len() {
+            return Err(AcquisitionError::InvalidRequest(format!(
+                "fake trigger has {} channels, expected {}",
+                conditions.len(),
+                self.channels.len()
+            )));
+        }
+        self.trigger_conditions = conditions;
+        Ok(self)
+    }
+
+    pub fn trigger_conditions(&self) -> &[Option<SimpleTriggerCondition>] {
+        &self.trigger_conditions
+    }
+
+    pub fn has_trigger(&self) -> bool {
+        self.trigger_conditions
+            .iter()
+            .flatten()
+            .any(|condition| *condition != SimpleTriggerCondition::Ignore)
+    }
+
+    pub fn first_trigger_sample(&self) -> Option<u64> {
+        self.first_trigger_sample_in(0, self.total_samples())
+    }
+
     pub fn level_at(&self, sample: u64, channel: usize) -> bool {
         let channel = channel as u64;
         let mixed = sample
@@ -72,6 +106,27 @@ impl DeterministicFakeConfig {
             ^ channel.wrapping_mul(0xd6e8_feb8_6659_fd93)
             ^ self.seed;
         (mixed ^ (mixed >> 17) ^ (mixed >> 41)) & 1 != 0
+    }
+
+    fn first_trigger_sample_in(&self, start_sample: u64, sample_count: u64) -> Option<u64> {
+        if !self.has_trigger() {
+            return None;
+        }
+        let end_sample = start_sample.checked_add(sample_count)?;
+        (start_sample..end_sample).find(|sample| {
+            self.trigger_conditions
+                .iter()
+                .enumerate()
+                .all(|(channel, condition)| {
+                    let Some(condition) = condition else {
+                        return true;
+                    };
+                    let previous = sample
+                        .checked_sub(1)
+                        .map(|previous| self.level_at(previous, channel));
+                    condition.matches(previous, self.level_at(*sample, channel))
+                })
+        })
     }
 
     fn maximum_chunk_bytes(&self) -> AcquisitionResult<usize> {
@@ -284,10 +339,18 @@ impl PreparedFakeAcquisition {
         control: &FakeControl,
         buffer_pool: &CaptureBufferPool,
     ) -> AcquisitionResult<AcquisitionOutcome> {
-        context.publish_status(
-            CaptureSessionState::Recording,
-            CaptureAcquisitionPhase::ReceivingLiveData,
-        )?;
+        let mut triggered = !config.has_trigger();
+        if triggered {
+            context.publish_status(
+                CaptureSessionState::Recording,
+                CaptureAcquisitionPhase::ReceivingLiveData,
+            )?;
+        } else {
+            context.publish_status(
+                CaptureSessionState::Armed,
+                CaptureAcquisitionPhase::WaitingForTrigger,
+            )?;
+        }
         let mut captured_samples = 0_u64;
         let mut transferred_bytes = 0_u64;
         let mut chunk_count = 0_u64;
@@ -304,10 +367,25 @@ impl PreparedFakeAcquisition {
                 captured_samples,
                 sample_count,
             )?;
+            let trigger_sample = (!triggered)
+                .then(|| config.first_trigger_sample_in(captured_samples, sample_count))
+                .flatten();
             transferred_bytes = transferred_bytes
                 .checked_add(chunk.encoded_byte_len() as u64)
                 .ok_or_else(|| AcquisitionError::Internal("byte count overflow".into()))?;
             context.append(chunk)?;
+            if let Some(trigger_sample) = trigger_sample {
+                triggered = true;
+                context.publish_triggered(trigger_sample)?;
+                context.publish_status(
+                    CaptureSessionState::Triggered,
+                    CaptureAcquisitionPhase::ReceivingLiveData,
+                )?;
+                context.publish_status(
+                    CaptureSessionState::Recording,
+                    CaptureAcquisitionPhase::ReceivingLiveData,
+                )?;
+            }
             captured_samples += sample_count;
             chunk_count += 1;
             context.publish_progress(CaptureProgress {
@@ -470,6 +548,9 @@ mod tests {
             match event_reader.recv_timeout(TIMEOUT) {
                 Ok(CaptureEvent::Status(status)) => states.push(status.state),
                 Ok(CaptureEvent::Progress { .. }) => {}
+                Ok(CaptureEvent::Triggered { sample, .. }) => {
+                    panic!("unexpected trigger at sample {sample}")
+                }
                 Ok(CaptureEvent::Failed(failure)) => panic!("unexpected failure: {failure:?}"),
                 Err(CaptureQueueReceiveError::Closed) => break,
                 Err(error) => panic!("unexpected event receive error: {error}"),
@@ -568,5 +649,87 @@ mod tests {
             }
         }
         assert_eq!(reconstructed_samples, config.total_samples());
+    }
+
+    #[test]
+    fn portable_conditions_publish_the_exact_deterministic_trigger_sample() {
+        use signal_processing::SimpleTriggerCondition::{Either, Falling, High, Low, Rising};
+
+        for (condition, expected) in [
+            (Low, 2),
+            (High, 0),
+            (Rising, 3),
+            (Falling, 2),
+            (Either, 2),
+        ] {
+            let config = config()
+                .with_simple_trigger(vec![Some(condition), None, None])
+                .unwrap();
+            assert_eq!(config.first_trigger_sample(), Some(expected));
+            let session_id = CaptureSessionId::new(0x7000 + condition as u128);
+            let temporary = tempdir().unwrap();
+            let descriptor = CaptureStoreDescriptor::new(session_id, config.channels().to_vec())
+                .unwrap();
+            let (store, writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
+                temporary.path(),
+                descriptor,
+            ))
+            .unwrap();
+            let (events, event_reader) = bounded_capture_event_queue(64).unwrap();
+            let context = AcquisitionContext::new(session_id, Box::new(writer), Box::new(events));
+            let mut acquisition = DeterministicFakeProvider::new(config)
+                .prepare(context)
+                .unwrap();
+
+            acquisition.start().unwrap();
+            acquisition.join().unwrap();
+            store.finalize().unwrap();
+
+            let mut states = Vec::new();
+            let mut actual = None;
+            loop {
+                match event_reader.recv_timeout(TIMEOUT) {
+                    Ok(CaptureEvent::Status(status)) => states.push(status.state),
+                    Ok(CaptureEvent::Triggered { sample, .. }) => actual = Some(sample),
+                    Ok(CaptureEvent::Progress { .. }) => {}
+                    Ok(CaptureEvent::Failed(failure)) => {
+                        panic!("unexpected failure: {failure:?}")
+                    }
+                    Err(CaptureQueueReceiveError::Closed) => break,
+                    Err(error) => panic!("unexpected event receive error: {error}"),
+                }
+            }
+            assert_eq!(actual, Some(expected), "condition {condition:?}");
+            assert!(states.windows(2).any(|states| {
+                states == [CaptureSessionState::Armed, CaptureSessionState::Triggered]
+            }));
+            assert!(states.windows(2).any(|states| {
+                states == [
+                    CaptureSessionState::Triggered,
+                    CaptureSessionState::Recording,
+                ]
+            }));
+        }
+    }
+
+    #[test]
+    fn disabled_and_ignore_conditions_do_not_arm_the_fake_provider() {
+        use signal_processing::SimpleTriggerCondition::{High, Ignore};
+
+        for conditions in [
+            vec![None, None, None],
+            vec![Some(Ignore), None, None],
+            vec![None, Some(Ignore), Some(Ignore)],
+        ] {
+            let config = config().with_simple_trigger(conditions).unwrap();
+            assert!(!config.has_trigger());
+            assert_eq!(config.first_trigger_sample(), None);
+        }
+
+        let enabled = config()
+            .with_simple_trigger(vec![None, Some(High), None])
+            .unwrap();
+        assert!(enabled.has_trigger());
+        assert!(enabled.first_trigger_sample().is_some());
     }
 }

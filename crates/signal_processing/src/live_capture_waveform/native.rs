@@ -237,6 +237,7 @@ struct GrowingState {
     indexed_samples: u64,
     committed_chunks: u64,
     generation: u64,
+    trigger_sample: Option<u64>,
     complete: bool,
     error: Option<String>,
 }
@@ -249,6 +250,7 @@ impl GrowingState {
             indexed_samples: 0,
             committed_chunks: 0,
             generation: 0,
+            trigger_sample: None,
             complete: false,
             error: None,
         }
@@ -322,6 +324,7 @@ impl NativeGrowingCaptureIndex {
             total_blocks: 0,
             samples_per_block: LEAF_SAMPLES,
             probe_names,
+            trigger_sample: None,
         };
         let state = Arc::new(RwLock::new(GrowingState::new(header.total_probes)));
         let cursor = store
@@ -348,7 +351,19 @@ impl NativeGrowingCaptureIndex {
         let mut metadata = self.header.clone();
         metadata.total_samples = state.indexed_samples;
         metadata.total_blocks = state.committed_chunks;
+        metadata.trigger_sample = state.trigger_sample;
         metadata
+    }
+
+    pub fn set_trigger_sample(&self, sample: u64) {
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        if state.trigger_sample != Some(sample) {
+            state.trigger_sample = Some(sample);
+            state.generation = state.generation.wrapping_add(1);
+        }
     }
 
     fn exact_window(

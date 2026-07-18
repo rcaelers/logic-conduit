@@ -9,6 +9,7 @@ mod input;
 mod lanes;
 mod sampling;
 mod sampling_overlay;
+mod simple_trigger;
 mod types;
 mod viewer;
 std::cfg_select! {
@@ -27,5 +28,6 @@ pub use lanes::{
     ViewerLaneTrackFrame, ViewerLaneTrackId, ViewerOutputPresentation,
 };
 pub use sampling_overlay::{SamplingEdge, SamplingOverlay, SamplingQualifier};
+pub use simple_trigger::{SimpleTriggerEdit, SimpleTriggerLane};
 pub use types::ColorProfile;
 pub use viewer::{ChannelSignal, LogicAnalyzerViewer};

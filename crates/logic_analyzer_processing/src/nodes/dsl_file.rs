@@ -595,6 +595,7 @@ impl DslFileSource {
             total_blocks,
             samples_per_block,
             probe_names,
+            trigger_sample: None,
         })
     }
 

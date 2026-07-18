@@ -59,6 +59,7 @@ impl LogicAnalyzerViewer {
             labels_rect,
             wave_rect,
             row_height,
+            layout.trigger_width,
             layout.name_col_width,
             layout.badge_width,
             text,
@@ -66,6 +67,7 @@ impl LogicAnalyzerViewer {
             grid,
         );
         self.draw_sampling_overlay(painter, layout);
+        self.draw_capture_trigger(painter, layout);
 
         // Pointer position marker: a small triangle hanging from the ruler
         // bottom instead of a full-height crosshair line.
@@ -95,6 +97,41 @@ impl LogicAnalyzerViewer {
         self.draw_cursors(painter, ruler_rect, wave_rect, active_cursor);
     }
 
+    fn draw_capture_trigger(&self, painter: &Painter, layout: AnalyzerLayout) {
+        let Some(x) = self.capture_trigger_x(layout.wave_rect) else {
+            return;
+        };
+        let color = Color32::from_rgb(238, 72, 72);
+        painter.line_segment(
+            [
+                Pos2::new(x, layout.ruler_rect.top()),
+                Pos2::new(x, layout.wave_rect.bottom()),
+            ],
+            Stroke::new(1.5, color),
+        );
+        painter.add(Shape::convex_polygon(
+            vec![
+                Pos2::new(x - 6.0, layout.ruler_rect.top()),
+                Pos2::new(x + 6.0, layout.ruler_rect.top()),
+                Pos2::new(x, layout.ruler_rect.top() + 8.0),
+            ],
+            color,
+            Stroke::NONE,
+        ));
+    }
+
+    pub(crate) fn capture_trigger_x(&self, wave_rect: Rect) -> Option<f32> {
+        let capture = self.capture_info.as_ref()?;
+        let sample = capture.header.trigger_sample?;
+        let time_us = sample as f64 * 1_000_000.0 / capture.header.samplerate_hz;
+        if !(self.visible_start_us..=self.visible_start_us + self.visible_span_us)
+            .contains(&time_us)
+        {
+            return None;
+        }
+        Some(self.time_to_x_unclamped(wave_rect, time_us))
+    }
+
     /// Draws every row in `row_order` — a channel or a derived lane, freely
     /// interleaved. The label (name text, then the colored badge) is drawn
     /// identically either way, from `row_label`; only the waveform content
@@ -106,6 +143,7 @@ impl LogicAnalyzerViewer {
         labels_rect: Rect,
         wave_rect: Rect,
         row_height: f32,
+        trigger_width: f32,
         name_col_width: f32,
         badge_width: f32,
         text: Color32,
@@ -136,8 +174,21 @@ impl LogicAnalyzerViewer {
                 y_top += display_height;
                 continue;
             };
+            if trigger_width > 0.0 {
+                let trigger_rect = Rect::from_center_size(
+                    Pos2::new(
+                        labels_rect.left() + 12.0 + trigger_width * 0.5 - 2.0,
+                        row_rect.center().y,
+                    ),
+                    vec2(20.0, 20.0),
+                );
+                self.draw_simple_trigger_icon(painter, key, trigger_rect);
+            }
             painter.text(
-                Pos2::new(labels_rect.left() + 12.0, row_rect.center().y),
+                Pos2::new(
+                    labels_rect.left() + 12.0 + trigger_width,
+                    row_rect.center().y,
+                ),
                 Align2::LEFT_CENTER,
                 &label.name,
                 FontId::proportional(12.0),
@@ -145,7 +196,7 @@ impl LogicAnalyzerViewer {
             );
             let badge_rect = Rect::from_min_size(
                 Pos2::new(
-                    labels_rect.left() + 12.0 + name_col_width + 10.0,
+                    labels_rect.left() + 12.0 + trigger_width + name_col_width + 10.0,
                     row_rect.center().y - 8.0,
                 ),
                 vec2(badge_width, 16.0),
@@ -569,12 +620,13 @@ mod frame_tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use signal_processing::{Annotation, DerivedLaneData, DerivedLanes};
+    use signal_processing::{Annotation, CaptureMetadata, DerivedLaneData, DerivedLanes};
 
     use super::*;
     use crate::lanes::{
         DerivedLaneId, ViewerLaneBadge, ViewerLaneGroupId, ViewerLaneRenderer, ViewerLaneTrack,
     };
+    use crate::types::CaptureInfo;
 
     struct ProbingRenderer {
         lanes: DerivedLanes,
@@ -609,6 +661,33 @@ mod frame_tests {
             )],
             renderer,
         }
+    }
+
+    #[test]
+    fn capture_trigger_marker_uses_the_raw_sample_time_and_culls_offscreen() {
+        let mut viewer = LogicAnalyzerViewer::new();
+        viewer.capture_info = Some(CaptureInfo {
+            display_name: "trigger test".into(),
+            duration_us: 100.0,
+            header: CaptureMetadata {
+                total_probes: 1,
+                samplerate: "1 MHz".into(),
+                samplerate_hz: 1_000_000.0,
+                sample_period: 0.000_001,
+                total_samples: 100,
+                total_blocks: 1,
+                samples_per_block: 100,
+                probe_names: vec!["D0".into()],
+                trigger_sample: Some(50),
+            },
+        });
+        viewer.visible_start_us = 0.0;
+        viewer.visible_span_us = 100.0;
+        let wave_rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 100.0));
+        assert_eq!(viewer.capture_trigger_x(wave_rect), Some(400.0));
+
+        viewer.visible_start_us = 60.0;
+        assert_eq!(viewer.capture_trigger_x(wave_rect), None);
     }
 
     #[test]

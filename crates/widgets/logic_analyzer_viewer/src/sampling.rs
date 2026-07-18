@@ -477,6 +477,7 @@ mod tests {
                 total_blocks: 1,
                 samples_per_block: total_samples,
                 probe_names: vec!["0".to_string()],
+                trigger_sample: None,
             },
             duration_us: total_samples as f64 / 1_000.0,
         }

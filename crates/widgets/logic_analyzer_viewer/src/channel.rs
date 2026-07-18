@@ -239,7 +239,11 @@ impl LogicAnalyzerViewer {
             .unwrap_or(layout.row_height);
         Rect::from_min_size(
             Pos2::new(
-                layout.labels_rect.left() + 12.0 + layout.name_col_width + 10.0,
+                layout.labels_rect.left()
+                    + 12.0
+                    + layout.trigger_width
+                    + layout.name_col_width
+                    + 10.0,
                 row_top + height * 0.5 - 8.0,
             ),
             vec2(layout.badge_width, 16.0),

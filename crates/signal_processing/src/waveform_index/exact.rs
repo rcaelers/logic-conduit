@@ -70,6 +70,7 @@ mod tests {
                     probe_names: (0..total_probes)
                         .map(|channel| channel.to_string())
                         .collect(),
+                    trigger_sample: None,
                 },
                 blocks: Arc::new(blocks),
                 index_path: std::env::temp_dir().join(format!("capture-index-test-{id}.idx")),

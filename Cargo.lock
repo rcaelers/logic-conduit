@@ -3510,6 +3510,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "memmap2",
+ "serde",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",

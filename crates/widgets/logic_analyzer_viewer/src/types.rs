@@ -86,6 +86,7 @@ pub(crate) struct AnalyzerLayout {
     pub(crate) labels_rect: Rect,
     pub(crate) wave_rect: Rect,
     pub(crate) row_height: f32,
+    pub(crate) trigger_width: f32,
     pub(crate) name_col_width: f32,
     pub(crate) badge_width: f32,
 }

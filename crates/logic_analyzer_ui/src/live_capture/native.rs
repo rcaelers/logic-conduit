@@ -9,9 +9,10 @@ use tempfile::TempDir;
 use logic_analyzer_graph::compiler::{CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature};
 use logic_analyzer_processing::AcquisitionContext;
 use signal_processing::{
-    CaptureAcquisitionPhase, CaptureEvent, CaptureEventQueueReader, CaptureProgress,
-    CaptureQueueReceiveError, CaptureSessionId, CaptureSessionState, CaptureStoreDescriptor,
-    NativeCaptureStore, NativeCaptureStoreConfig, NativeFinalizedCapture,
+    CaptureAcquisitionPhase, CaptureEvent, CaptureEventPublishError, CaptureEventPublisher,
+    CaptureEventQueueReader, CaptureProgress, CaptureQueueReceiveError, CaptureRecordingGate,
+    CaptureSessionId, CaptureSessionState, CaptureStoreDescriptor, NativeCaptureStore,
+    NativeCaptureStoreConfig, NativeFinalizedCapture,
     bounded_capture_event_queue,
 };
 use signal_processing::live_capture_waveform::NativeGrowingCaptureIndex;
@@ -35,6 +36,23 @@ struct CompletedCapture {
     waveform: NativeGrowingCaptureIndex,
     source_node: node_graph::NodeId,
     graph_source_factory: Arc<dyn CaptureGraphSourceFactory>,
+    recording_origin: Option<u64>,
+}
+
+struct RecordingEventPublisher {
+    inner: Box<dyn CaptureEventPublisher>,
+    recording_gate: CaptureRecordingGate,
+    waveform: NativeGrowingCaptureIndex,
+}
+
+impl CaptureEventPublisher for RecordingEventPublisher {
+    fn publish(&mut self, event: CaptureEvent) -> Result<(), CaptureEventPublishError> {
+        if let CaptureEvent::Triggered { sample, .. } = &event {
+            self.recording_gate.resolve_trigger(*sample);
+            self.waveform.set_trigger_sample(*sample);
+        }
+        self.inner.publish(event)
+    }
 }
 
 enum WorkerCompletion {
@@ -85,10 +103,11 @@ impl CaptureCoordinator {
         self.waveform_update = Some(None);
     }
 
-    fn apply_event(&mut self, event: CaptureEvent) {
+    fn apply_event(&mut self, event: CaptureEvent) -> bool {
         let Some(status) = &mut self.status else {
-            return;
+            return false;
         };
+        let mut hold_triggered_state = false;
         match event {
             CaptureEvent::Status(event) if event.session_id == status.session_id => {
                 let stop_requested = self
@@ -103,7 +122,7 @@ impl CaptureCoordinator {
                             | CaptureSessionState::Error
                     )
                 {
-                    return;
+                    return false;
                 }
                 status.state = event.state;
                 status.phase = event.phase;
@@ -113,6 +132,16 @@ impl CaptureCoordinator {
                 session_id,
                 progress,
             } if session_id == status.session_id => status.progress = progress,
+            CaptureEvent::Triggered { session_id, sample }
+                if session_id == status.session_id =>
+            {
+                status.state = CaptureSessionState::Triggered;
+                status.phase = CaptureAcquisitionPhase::ReceivingLiveData;
+                status.trigger_sample = Some(sample);
+                status.recording_origin = Some(sample);
+                self.record_state(CaptureSessionState::Triggered);
+                hold_triggered_state = true;
+            }
             CaptureEvent::Failed(failure) if failure.session_id == status.session_id => {
                 status.state = CaptureSessionState::Error;
                 status.phase = CaptureAcquisitionPhase::Finalizing;
@@ -121,6 +150,7 @@ impl CaptureCoordinator {
             }
             _ => {}
         }
+        hold_triggered_state
     }
 
     fn finish_worker(&mut self, completion: WorkerCompletion) {
@@ -162,6 +192,20 @@ impl CaptureCoordinator {
     }
 
     #[cfg(test)]
+    fn completed_recording_origin(&self) -> Option<u64> {
+        self.completed
+            .as_ref()
+            .and_then(|completed| completed.recording_origin)
+    }
+
+    #[cfg(test)]
+    fn completed_trigger_sample(&self) -> Option<u64> {
+        self.completed.as_ref().and_then(|completed| {
+            signal_processing::CaptureIndex::current_metadata(&completed.waveform).trigger_sample
+        })
+    }
+
+    #[cfg(test)]
     fn state_history(&self) -> &[CaptureSessionState] {
         &self.state_history
     }
@@ -183,6 +227,7 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
         let session_id = fresh_session_id();
         let source_node = feature.source_node;
         let source_title = feature.source_title.clone();
+        let immediate_recording_origin = (!feature.has_simple_trigger()).then_some(0);
         let (event_publisher, events) = bounded_capture_event_queue(EVENT_QUEUE_CAPACITY)
             .expect("capture event queue capacity is non-zero");
         let (command_sender, command_receiver) = crossbeam_channel::bounded(1);
@@ -214,6 +259,8 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
             state: CaptureSessionState::Preparing,
             phase: CaptureAcquisitionPhase::Preparing,
             progress: CaptureProgress::default(),
+            trigger_sample: None,
+            recording_origin: immediate_recording_origin,
             error: None,
         });
         self.state_history.clear();
@@ -261,17 +308,27 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
         {
             self.waveform_update = Some(Some(Box::new(waveform)));
         }
+        let mut hold_triggered_state = false;
         loop {
             let event = self
                 .active
                 .as_ref()
                 .map(|active| active.events.try_recv());
             match event {
-                Some(Ok(event)) => self.apply_event(event),
+                Some(Ok(event)) => {
+                    hold_triggered_state = self.apply_event(event);
+                    if hold_triggered_state {
+                        break;
+                    }
+                }
                 Some(Err(CaptureQueueReceiveError::Empty | CaptureQueueReceiveError::Closed))
                 | None => break,
                 Some(Err(CaptureQueueReceiveError::Timeout)) => unreachable!(),
             }
+        }
+
+        if hold_triggered_state {
+            return;
         }
 
         let completion = self
@@ -311,6 +368,8 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
             .capture
             .open_cursor()
             .map_err(|error| format!("could not open finalized capture: {error}"))?;
+        let cursor = CaptureRecordingGate::finalized(completed.recording_origin)
+            .cursor(Box::new(cursor));
         let process = completed
             .graph_source_factory
             .create(Box::new(cursor))
@@ -354,6 +413,11 @@ fn run_capture_worker(
     waveform_ready: Sender<NativeGrowingCaptureIndex>,
     analysis_ready: Sender<CaptureAnalysisAttachment>,
 ) -> Result<CompletedCapture, String> {
+    let recording_gate = if feature.has_simple_trigger() {
+        CaptureRecordingGate::pending()
+    } else {
+        CaptureRecordingGate::immediate()
+    };
     let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
     let descriptor = CaptureStoreDescriptor::new(session_id, feature.channels().to_vec())
         .map_err(|error| error.to_string())?;
@@ -362,6 +426,7 @@ fn run_capture_worker(
             .map_err(|error| error.to_string())?;
     let graph_source_factory = feature.graph_source_factory();
     let analysis_cursor = store.open_cursor().map_err(|error| error.to_string())?;
+    let analysis_cursor = recording_gate.cursor(Box::new(analysis_cursor));
     let analysis_process = graph_source_factory
         .create(Box::new(analysis_cursor))
         .map_err(|error| format!("could not build live analysis source: {error}"))?;
@@ -381,7 +446,12 @@ fn run_capture_worker(
     )
     .map_err(|error| error.to_string())?;
     let _ = waveform_ready.send(waveform.clone());
-    let context = AcquisitionContext::new(session_id, Box::new(writer), events);
+    let events = RecordingEventPublisher {
+        inner: events,
+        recording_gate: recording_gate.clone(),
+        waveform: waveform.clone(),
+    };
+    let context = AcquisitionContext::new(session_id, Box::new(writer), Box::new(events));
     let mut acquisition = feature
         .prepare(context)
         .map_err(|error| error.to_string())?;
@@ -407,6 +477,9 @@ fn run_capture_worker(
         }
     }
     acquisition.join().map_err(|error| error.to_string())?;
+    if !recording_gate.is_resolved() {
+        recording_gate.finish_without_trigger();
+    }
     waveform_worker.join().map_err(|error| error.to_string())?;
     let capture = store.finalize().map_err(|error| error.to_string())?;
     Ok(CompletedCapture {
@@ -415,6 +488,7 @@ fn run_capture_worker(
         waveform,
         source_node,
         graph_source_factory,
+        recording_origin: recording_gate.recording_origin(),
     })
 }
 
@@ -426,6 +500,7 @@ mod tests {
 
     use logic_analyzer_graph::compiler::{
         CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature, LiveCaptureFeature,
+        SimpleTriggerChannel,
     };
     use logic_analyzer_graph::{compiler, nodes};
     use logic_analyzer_processing::{
@@ -436,6 +511,7 @@ mod tests {
     use node_graph::{NodeDef, NodeGraphWidget, NodeId};
     use signal_processing::{
         CaptureChannelId, CaptureSessionState, CaptureStoreCursor, ProcessNode,
+        SimpleTriggerCondition,
     };
 
     use super::{CaptureCoordinator, CaptureCoordinatorContract};
@@ -445,6 +521,7 @@ mod tests {
         channel_names: Vec<String>,
         provider: DeterministicFakeProvider,
         prepare_calls: Arc<AtomicUsize>,
+        simple_trigger_channels: Vec<SimpleTriggerChannel>,
     }
 
     struct TestGraphSourceFactory {
@@ -471,6 +548,10 @@ mod tests {
 
         fn sample_rate_hz(&self) -> f64 {
             1_000_000_000.0
+        }
+
+        fn simple_trigger_channels(&self) -> &[SimpleTriggerChannel] {
+            &self.simple_trigger_channels
         }
 
         fn graph_source_factory(&self) -> Arc<dyn CaptureGraphSourceFactory> {
@@ -560,6 +641,7 @@ mod tests {
                     channels,
                     provider,
                     prepare_calls: Arc::clone(&prepare_calls),
+                    simple_trigger_channels: Vec::new(),
                 }),
             );
         (feature, controller, prepare_calls)
@@ -568,6 +650,41 @@ mod tests {
     fn manual_feature() -> (DiscoveredLiveCaptureFeature, DeterministicFakeController) {
         let (feature, controller, _) = manual_feature_with_counter();
         (feature, controller)
+    }
+
+    fn manual_triggered_feature() -> (
+        DiscoveredLiveCaptureFeature,
+        DeterministicFakeController,
+        u64,
+    ) {
+        let channels = vec![
+            CaptureChannelId::new("bank-a:7"),
+            CaptureChannelId::new("bank-c:2"),
+        ];
+        let config = DeterministicFakeConfig::new(channels.clone(), vec![3, 5, 2, 7], 0x5a17)
+            .unwrap()
+            .with_simple_trigger(vec![Some(SimpleTriggerCondition::Rising), None])
+            .unwrap();
+        let trigger_sample = config.first_trigger_sample().unwrap();
+        let (provider, controller) = DeterministicFakeProvider::manually_paced(config);
+        let feature = DiscoveredLiveCaptureFeature::new(
+            NodeId(42),
+            "Triggered Contract Fake",
+            Box::new(FakeFeature {
+                channel_names: vec!["Bank A 7".into(), "Bank C 2".into()],
+                simple_trigger_channels: vec![SimpleTriggerChannel {
+                    channel_id: channels[0].clone(),
+                    viewer_channel: 0,
+                    name: "Bank A 7".into(),
+                    enabled: true,
+                    condition: SimpleTriggerCondition::Rising,
+                }],
+                channels,
+                provider,
+                prepare_calls: Arc::new(AtomicUsize::new(0)),
+            }),
+        );
+        (feature, controller, trigger_sample)
     }
 
     fn poll_until(coordinator: &mut CaptureCoordinator, condition: impl Fn(&CaptureCoordinator) -> bool) {
@@ -667,6 +784,33 @@ mod tests {
                 .is_some_and(|error| error.contains("intentional preparation failure"))
         );
         assert!(coordinator.completed_manifest().is_none());
+    }
+
+    #[test]
+    fn triggered_capture_arms_marks_the_waveform_and_defines_recording_origin() {
+        let (feature, controller, expected_trigger) = manual_triggered_feature();
+        let mut coordinator = CaptureCoordinator::new();
+        coordinator.start(feature).unwrap();
+
+        controller.grant_chunks(4);
+        poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
+
+        assert_eq!(coordinator.completed_recording_origin(), Some(expected_trigger));
+        assert_eq!(coordinator.completed_trigger_sample(), Some(expected_trigger));
+        assert_eq!(
+            coordinator.status().unwrap().trigger_sample,
+            Some(expected_trigger)
+        );
+        let states = coordinator.state_history();
+        assert!(states.contains(&CaptureSessionState::Armed));
+        assert!(states.contains(&CaptureSessionState::Triggered));
+        assert!(states.contains(&CaptureSessionState::Recording));
+        assert!(
+            states.iter().position(|state| *state == CaptureSessionState::Armed)
+                < states
+                    .iter()
+                    .position(|state| *state == CaptureSessionState::Triggered)
+        );
     }
 
     #[test]

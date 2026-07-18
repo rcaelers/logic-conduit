@@ -6,7 +6,9 @@ use logic_analyzer_processing::DemoCaptureSource;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock};
 
-use crate::compiler::{CompileCtx, LiveCaptureFeature, PortKind, ResolvedInputs, RuntimeBuilder};
+use crate::compiler::{
+    CompileCtx, LiveCaptureEdit, LiveCaptureFeature, PortKind, ResolvedInputs, RuntimeBuilder,
+};
 
 pub(crate) struct DemoCaptureSourceBuilder;
 
@@ -52,6 +54,14 @@ impl RuntimeBuilder for DemoCaptureSourceBuilder {
         state: &Value,
     ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
         super::live_capture::feature(state)
+    }
+
+    fn apply_live_capture_edit(
+        &self,
+        state: &Value,
+        edit: &LiveCaptureEdit,
+    ) -> Result<Option<Value>, String> {
+        super::apply_live_capture_edit(state, edit).map(Some)
     }
 
     fn input_required(&self, _socket: &Socket, _state: &Value) -> bool {

@@ -1,7 +1,8 @@
 //! Application-level coordination for immediate live capture.
 
 use logic_analyzer_graph::compiler::{
-    BuilderRegistry, DiscoveredLiveCaptureFeature, discover_compiled_live_capture_feature, lower,
+    BuilderRegistry, DiscoveredLiveCaptureFeature, SimpleTriggerChannel,
+    discover_compiled_live_capture_feature, lower,
 };
 use node_graph::{GraphState, NodeId};
 use signal_processing::{
@@ -42,6 +43,7 @@ pub(crate) enum CaptureAvailability {
     Available {
         source_node: NodeId,
         source_title: String,
+        simple_trigger_channels: Vec<SimpleTriggerChannel>,
     },
     Unavailable {
         reason: String,
@@ -79,7 +81,8 @@ pub(crate) fn capture_availability(
     match discover_compiled_live_capture_feature(graph, &compiled, builders) {
         Ok(Some(feature)) => CaptureAvailability::Available {
             source_node: feature.source_node,
-            source_title: feature.source_title,
+            source_title: feature.source_title.clone(),
+            simple_trigger_channels: feature.simple_trigger_channels().to_vec(),
         },
         Ok(None) => CaptureAvailability::Unavailable {
             reason: "The graph has no live capture source".into(),
@@ -98,6 +101,8 @@ pub(crate) struct CaptureSessionStatus {
     pub state: CaptureSessionState,
     pub phase: CaptureAcquisitionPhase,
     pub progress: CaptureProgress,
+    pub trigger_sample: Option<u64>,
+    pub recording_origin: Option<u64>,
     pub error: Option<String>,
 }
 

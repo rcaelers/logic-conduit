@@ -12,6 +12,7 @@ use crate::channel::LogicChannel;
 use crate::indexed_annotations::IndexedAnnotationCacheEntry;
 use crate::lanes::{ViewerLaneGroupId, ViewerLaneRegistry};
 use crate::sampling_overlay::SamplingOverlay;
+use crate::simple_trigger::{SimpleTriggerEdit, SimpleTriggerLane, SimpleTriggerPopup};
 use crate::types::{
     AnalyzerLayout, CaptureInfo, ColorProfile, IndexBuildProgress, PulseMeasurement, RowDragState,
     RowKey, RowRenameState, TimeCursor, Transition,
@@ -74,7 +75,11 @@ pub struct LogicAnalyzerViewer {
     pub(crate) indexed_annotation_cache: HashMap<String, IndexedAnnotationCacheEntry>,
     pub(crate) sampling_overlay: Option<SamplingOverlay>,
     pub(crate) growing_capture: Option<GrowingCaptureView>,
-    hovered_input_context: &'static str,
+    pub(crate) simple_trigger_lanes: HashMap<usize, SimpleTriggerLane>,
+    pub(crate) simple_trigger_popup: Option<SimpleTriggerPopup>,
+    pub(crate) pending_simple_trigger_edit: Option<SimpleTriggerEdit>,
+    pub(crate) simple_trigger_editing_enabled: bool,
+    pub(crate) hovered_input_context: &'static str,
 }
 
 pub(crate) struct GrowingCaptureView {
@@ -122,6 +127,10 @@ impl LogicAnalyzerViewer {
             indexed_annotation_cache: HashMap::new(),
             sampling_overlay: None,
             growing_capture: None,
+            simple_trigger_lanes: HashMap::new(),
+            simple_trigger_popup: None,
+            pending_simple_trigger_edit: None,
+            simple_trigger_editing_enabled: true,
             hovered_input_context: "logic_analyzer",
         }
     }
@@ -174,6 +183,28 @@ impl LogicAnalyzerViewer {
     /// relationship.
     pub fn set_sampling_overlay(&mut self, overlay: Option<SamplingOverlay>) {
         self.sampling_overlay = overlay;
+    }
+
+    pub fn set_simple_trigger_lanes(&mut self, lanes: Vec<SimpleTriggerLane>) {
+        self.simple_trigger_lanes = lanes.into_iter().map(|lane| (lane.channel, lane)).collect();
+        if self
+            .simple_trigger_popup
+            .as_ref()
+            .is_some_and(|popup| !self.simple_trigger_lanes.contains_key(&popup.channel))
+        {
+            self.simple_trigger_popup = None;
+        }
+    }
+
+    pub fn set_simple_trigger_editing_enabled(&mut self, enabled: bool) {
+        self.simple_trigger_editing_enabled = enabled;
+        if !enabled {
+            self.simple_trigger_popup = None;
+        }
+    }
+
+    pub fn take_simple_trigger_edit(&mut self) -> Option<SimpleTriggerEdit> {
+        self.pending_simple_trigger_edit.take()
     }
 
     /// Replaces the raw channel rows with `signals` — the generic way for a
@@ -473,8 +504,10 @@ impl LogicAnalyzerViewer {
                 }
             })
             .unwrap_or("logic_analyzer");
-        let row_rename_started = self.handle_row_label_input(ui, &response, layout);
-        let row_dragging = self.handle_row_reorder(ui, &response, layout);
+        let trigger_input = self.handle_simple_trigger_input(ui, &response, layout);
+        let row_rename_started =
+            !trigger_input && self.handle_row_label_input(ui, &response, layout);
+        let row_dragging = !trigger_input && self.handle_row_reorder(ui, &response, layout);
         let cursor_input = self.handle_cursor_input(ui, &response, layout);
         if cursor_input.active.is_some() {
             self.hovered_input_context = "logic_analyzer.cursor";
@@ -521,6 +554,7 @@ impl LogicAnalyzerViewer {
         };
         self.sample_hover_measurement(layout, hover_pointer);
         self.draw(&painter, layout, hover_pointer, cursor_input.active);
+        self.show_simple_trigger_popup(ui.ctx());
         self.show_row_rename(ui.ctx());
         if self.has_live_indexed_annotations() {
             ui.ctx()
@@ -549,6 +583,11 @@ impl LogicAnalyzerViewer {
         let ruler_height = 34.0;
         let row_height = 30.0;
         let label_pad = 12.0;
+        let trigger_width = if self.simple_trigger_lanes.is_empty() {
+            0.0
+        } else {
+            26.0
+        };
         let name_badge_gap = 10.0;
         let label_right_pad = 10.0;
         let name_font = FontId::proportional(12.0);
@@ -588,8 +627,12 @@ impl LogicAnalyzerViewer {
                 .fold(26.0, f32::max);
             (name_col_width, badge_width)
         });
-        let desired_left_width =
-            label_pad + name_col_width + name_badge_gap + badge_width + label_right_pad;
+        let desired_left_width = label_pad
+            + trigger_width
+            + name_col_width
+            + name_badge_gap
+            + badge_width
+            + label_right_pad;
         let left_width = desired_left_width.max(72.0).min(rect.width().max(0.0));
 
         let ruler_rect = Rect::from_min_max(
@@ -610,6 +653,7 @@ impl LogicAnalyzerViewer {
             labels_rect,
             wave_rect,
             row_height,
+            trigger_width,
             name_col_width,
             badge_width,
         }
@@ -789,6 +833,7 @@ mod tests {
                 total_blocks: 0,
                 samples_per_block: 64,
                 probe_names: vec!["D0".into()],
+                trigger_sample: None,
             },
             total_samples,
             generation,

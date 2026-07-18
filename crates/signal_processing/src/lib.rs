@@ -89,7 +89,7 @@ pub use live_capture::{
     CaptureEventQueueReader, CaptureFailure, CaptureFailureKind, CaptureProgress,
     CaptureQueueConfigError, CaptureQueueLimits, CaptureQueueReader, CaptureQueueReceiveError,
     CaptureQueueWriter, CaptureSessionId, CaptureSessionState, CaptureStatus, CaptureWriteError,
-    bounded_capture_event_queue, bounded_capture_queue,
+    SimpleTriggerCondition, bounded_capture_event_queue, bounded_capture_queue,
 };
 pub use live_capture_store::*;
 pub use manager::{DisconnectEvent, InputSub, NodeSpec, PipelineManager};

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use input_bindings::{InputBindings, PointerButtonName, PointerGesture, Trigger};
 use logic_analyzer_graph::{compiler, nodes};
-use logic_analyzer_viewer::LogicAnalyzerViewer;
+use logic_analyzer_viewer::{LogicAnalyzerViewer, SimpleTriggerEdit, SimpleTriggerLane};
 use node_graph::{GraphState, NodeBadge, NodeContextAction, NodeGraphWidget, NodeId};
 use panel_layout::{BoundaryInteraction, PanelIcon, PanelLayout, PanelSlot, PanelSpec};
 
@@ -83,6 +83,73 @@ pub struct App {
 }
 
 impl App {
+    fn refresh_simple_trigger_ui(&mut self) {
+        let lanes = match &self.capture_availability {
+            CaptureAvailability::Available {
+                simple_trigger_channels,
+                ..
+            } => simple_trigger_channels
+                .iter()
+                .map(|channel| SimpleTriggerLane {
+                    channel: channel.viewer_channel,
+                    condition: channel.condition,
+                    enabled: channel.enabled,
+                })
+                .collect(),
+            CaptureAvailability::Unavailable { .. } => Vec::new(),
+        };
+        self.logic_analyzer.set_simple_trigger_lanes(lanes);
+    }
+
+    fn apply_simple_trigger_edit(&mut self, edit: SimpleTriggerEdit) {
+        let request = match &self.capture_availability {
+            CaptureAvailability::Available {
+                source_node,
+                simple_trigger_channels,
+                ..
+            } => simple_trigger_channels
+                .iter()
+                .find(|channel| channel.viewer_channel == edit.channel)
+                .map(|channel| {
+                    (
+                        *source_node,
+                        compiler::LiveCaptureEdit::SetSimpleTrigger {
+                            channel_id: channel.channel_id.clone(),
+                            condition: edit.condition,
+                        },
+                    )
+                }),
+            CaptureAvailability::Unavailable { .. } => None,
+        };
+        let Some((source_node, request)) = request else {
+            self.toasts
+                .error("That trigger input is no longer available");
+            self.refresh_simple_trigger_ui();
+            return;
+        };
+        let state = match compiler::apply_live_capture_edit(
+            self.node_graph.graph(),
+            &self.builders,
+            source_node,
+            &request,
+        ) {
+            Ok(state) => state,
+            Err(error) => {
+                self.toasts.error(error);
+                self.refresh_simple_trigger_ui();
+                return;
+            }
+        };
+        if !self.node_graph.edit_node_state(source_node, state) {
+            self.toasts
+                .error("The trigger could not be changed while the graph is read-only");
+            self.refresh_simple_trigger_ui();
+            return;
+        }
+        self.capture_availability = capture_availability(self.node_graph.graph(), &self.builders);
+        self.refresh_simple_trigger_ui();
+    }
+
     fn set_capture_preview(&mut self, signals: Vec<nodes::CapturePreviewSignal>) {
         let duration_us = signals
             .iter()
@@ -426,6 +493,7 @@ impl App {
             CaptureAvailability::Available {
                 source_node,
                 source_title,
+                ..
             } if self.capture.replay_source_node() != Some(*source_node) => Some(format!(
                 "Capture data from {source_title} before running the pipeline"
             )),
@@ -510,6 +578,9 @@ impl App {
         let analysis_active = self.is_capture_analysis_active();
         self.node_graph
             .set_editing_enabled(self.capture.graph_editing_enabled() && !analysis_active);
+        self.logic_analyzer.set_simple_trigger_editing_enabled(
+            self.capture.graph_editing_enabled() && !analysis_active,
+        );
         if self.capture.is_active() || analysis_active {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         } else if self.capture_analysis.is_none() {
@@ -619,6 +690,7 @@ impl App {
                 CaptureAvailability::Available {
                     source_node,
                     source_title,
+                    ..
                 } => {
                     response.clone().on_hover_text(format!(
                         "Start capture from {source_title} (node {})",
@@ -657,7 +729,16 @@ impl App {
                     format!("Analysis error · {error}"),
                 );
             } else if let Some(processed) = self.capture_analysis_progress() {
-                let captured = status.progress.captured_samples.unwrap_or(processed);
+                let captured = status
+                    .progress
+                    .captured_samples
+                    .map(|captured| {
+                        status
+                            .recording_origin
+                            .map(|origin| captured.saturating_sub(origin))
+                            .unwrap_or(0)
+                    })
+                    .unwrap_or(processed);
                 let lag = captured.saturating_sub(processed);
                 if self
                     .capture_analysis
@@ -726,6 +807,7 @@ impl App {
                 self.last_live_sync = now;
                 self.capture_availability =
                     capture_availability(self.node_graph.graph(), &self.builders);
+                self.refresh_simple_trigger_ui();
                 if let Ok(candidates) =
                     compiler::sampling_overlay_candidates(self.node_graph.graph(), &self.builders)
                 {
@@ -1184,7 +1266,12 @@ impl eframe::App for App {
                 PanelSlot::Body {
                     content_id: "logic_analyzer",
                     ..
-                } => self.logic_analyzer.show(panel_ui),
+                } => {
+                    self.logic_analyzer.show(panel_ui);
+                    if let Some(edit) = self.logic_analyzer.take_simple_trigger_edit() {
+                        self.apply_simple_trigger_edit(edit);
+                    }
+                }
                 PanelSlot::Body {
                     content_id: "node_graph",
                     ..

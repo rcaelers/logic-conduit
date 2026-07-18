@@ -35,6 +35,8 @@ pub struct CaptureMetadata {
     pub samples_per_block: u64,
     /// Probe names indexed by probe number.
     pub probe_names: Vec<String>,
+    /// Raw sample at which an acquisition trigger matched, when one was observed.
+    pub trigger_sample: Option<u64>,
 }
 
 impl CaptureMetadata {

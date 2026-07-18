@@ -323,6 +323,27 @@ impl NodeGraphWidget {
         true
     }
 
+    /// Applies one host-initiated state edit as an undoable graph mutation.
+    pub fn edit_node_state(&mut self, id: NodeId, state: serde_json::Value) -> bool {
+        if !self.editing_enabled {
+            return false;
+        }
+        self.sync_all_node_state();
+        if self.graph.nodes.get(&id).map(|node| &node.state) == Some(&state) {
+            return true;
+        }
+        let previous = self.graph.clone();
+        if self.set_node_state(id, state) {
+            self.undo_stack.push(previous);
+            self.redo_stack.clear();
+            true
+        } else {
+            self.graph = previous;
+            self.restore_runtime();
+            false
+        }
+    }
+
     /// Sets (or clears, with `None`) an externally owned badge on a node —
     /// compile errors, runtime status. External badges render instead of the
     /// def's own badge while present.

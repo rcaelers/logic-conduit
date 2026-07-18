@@ -33,6 +33,8 @@ The UI-independent live-capture foundation is also present:
 - `signal_processing::live_capture` defines opaque session and physical-channel identities,
   lifecycle state, acquisition phase/progress, structured failures, and a versioned immutable
   packed raw chunk with validated unaligned payload access;
+- the same contract defines the portable Ignore, Low, High, Rising, Falling, and Either simple
+  conditions and publishes an exact raw trigger sample as a generic capture event;
 - `CaptureChunkWriter` and `CaptureEventPublisher` are the generic acquisition boundaries, with
   bounded in-memory chunk and event queues available for contract tests;
 - `signal_processing::live_capture_store` defines the platform-neutral session descriptor,
@@ -43,6 +45,9 @@ The UI-independent live-capture foundation is also present:
 - native live and finalized cursors read commit records and payloads through independent file
   handles, report Pending or End explicitly, and retain no acquisition-sized in-memory commit
   index when paused;
+- a shared recording-origin gate keeps analysis pending while armed, clips the one chunk crossing
+  the trigger, and presents both live analysis and finalized replay as a zero-based post-origin
+  stream while leaving the authoritative raw prefix intact;
 - the native store provides an exact random reader that binary-searches committed records and reads
   only authoritative raw chunks intersecting the requested sample window;
 - an independent growing-waveform worker follows committed chunks, incrementally publishes
@@ -62,7 +67,9 @@ The UI-independent live-capture foundation is also present:
   live and finalized-session cursor sources, and generic code does not infer ports from node names,
   channel labels, or protocols;
 - the native Demo Capture Source exposes the deterministic provider through this development
-  feature, while its complete wasm feature module reports no live capability;
+  feature, persists one portable condition per input with explicit legacy-state migration and a
+  visible compatibility warning, while its complete wasm feature module reports no live
+  capability;
 - the native application capture coordinator prepares, starts, supervises, stops, and finalizes an
   immediate capture off the UI thread, retaining the previous completed temporary session until a
   new session completes successfully;
@@ -77,9 +84,14 @@ The UI-independent live-capture foundation is also present:
 - the Logic Analyzer title bar presents the combined Start/Stop control and lifecycle/sample
   status, Follow Newest, Pause/Resume Display, and Go Live controls, while Run and capture exclude
   one another;
+- generic per-lane trigger icons open a condition menu through the configured input-binding
+  action; the viewer emits only a neutral lane/condition edit, and the application routes it by
+  opaque channel identity to the concrete source builder;
 - the viewer renders exact data from the authoritative store at detailed zoom levels and uses the
   incremental summaries for wider windows; pausing display freezes its published generation while
   acquisition and summary construction continue;
+- a trigger event advances the UI through Armed and observable Triggered state, records the
+  recording origin, and adds an exact red trigger marker to the raw waveform timeline;
 - the application publishes analysis progress and sample lag, keeps graph editing disabled until
   acquisition and downstream drain are both complete, and preserves live derived lanes while the
   analysis cursor catches up;
@@ -89,10 +101,12 @@ The UI-independent live-capture foundation is also present:
   zoom, and box selection remain available while inline controls, wiring, movement, menus, and
   other mutations are disabled; entering read-only mode cancels and restores an in-progress edit;
 - the native deterministic fake provider generates known packed samples across deliberately
-  unaligned chunk boundaries and supports manual pacing for exact stop tests; and
+  unaligned chunk boundaries, evaluates the portable simple-trigger program, and supports manual
+  pacing for exact stop tests; and
 - the fake-provider tests reconstruct every sample, verify lifecycle order and repeated Stop,
-  round-trip a finalized native store, and assert fixed buffer and queue bounds while a paused
-  store reader remains independent.
+  cover every simple condition and disabled/ignored inputs, round-trip a finalized native store,
+  verify trigger-origin gating and migration, and assert fixed buffer and queue bounds while a
+  paused store reader remains independent.
 
 The native fake and application coordinator are selected as complete platform modules. The fake is
 reachable only through the existing development/demo node; concrete hardware nodes do not yet
@@ -967,6 +981,8 @@ Gate: live-derived and replay-derived outputs for a finalized fake session are b
 and an instrumented provider proves that replay performs no discovery, open, or device operation.
 
 #### Phase 6 — Portable simple triggering
+
+Status: **complete**.
 
 - Add the common Ignore/Low/High/Rising/Falling/Either trigger model, neutral feature edits,
   per-lane icons, Armed/Triggered status, and recording-origin gating.

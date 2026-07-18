@@ -10,9 +10,46 @@ use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const CAPTURE_CHUNK_FORMAT_VERSION: u16 = 1;
+
+/// Portable one-channel condition used by simple capture triggers.
+///
+/// Providers may lower this contract into a native device representation, or evaluate it in a
+/// host-side acquisition implementation. Multiple enabled conditions are combined with AND.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SimpleTriggerCondition {
+    #[default]
+    Ignore,
+    Low,
+    High,
+    Rising,
+    Falling,
+    Either,
+}
+
+impl SimpleTriggerCondition {
+    pub const fn is_edge(self) -> bool {
+        matches!(self, Self::Rising | Self::Falling | Self::Either)
+    }
+
+    pub const fn matches(self, previous: Option<bool>, current: bool) -> bool {
+        match self {
+            Self::Ignore => true,
+            Self::Low => !current,
+            Self::High => current,
+            Self::Rising => matches!(previous, Some(false)) && current,
+            Self::Falling => matches!(previous, Some(true)) && !current,
+            Self::Either => match previous {
+                Some(previous) => previous != current,
+                None => false,
+            },
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CaptureSessionId(u128);
@@ -127,6 +164,11 @@ pub enum CaptureEvent {
     Progress {
         session_id: CaptureSessionId,
         progress: CaptureProgress,
+    },
+    /// The raw capture sample at which all enabled simple trigger conditions matched.
+    Triggered {
+        session_id: CaptureSessionId,
+        sample: u64,
     },
     Failed(CaptureFailure),
 }
@@ -488,6 +530,57 @@ impl CaptureChunk {
             .get(byte_index)
             .map(|byte| (byte & (1_u8 << bit_index)) != 0)
     }
+
+    /// Returns the post-origin part of this chunk on a zero-based recording timeline.
+    ///
+    /// Chunks wholly after the origin retain their shared payload. Only the single chunk crossing
+    /// the origin is repacked, keeping the common path allocation-free.
+    pub fn recording_slice(
+        &self,
+        origin_sample: u64,
+        output_sequence: u64,
+    ) -> Result<Option<Self>, CaptureChunkError> {
+        if self.end_sample() <= origin_sample {
+            return Ok(None);
+        }
+        let skipped_samples = origin_sample.saturating_sub(self.start_sample());
+        if skipped_samples == 0 {
+            let mut chunk = self.clone();
+            chunk.sequence = output_sequence;
+            chunk.start_sample = chunk
+                .start_sample
+                .checked_sub(origin_sample)
+                .ok_or(CaptureChunkError::SampleRangeOverflow)?;
+            return Ok(Some(chunk));
+        }
+
+        let sample_count = self.sample_count - skipped_samples;
+        let channel_count = self.channels.len();
+        let bit_count = (sample_count as u128)
+            .checked_mul(channel_count as u128)
+            .ok_or(CaptureChunkError::PayloadSizeOverflow)?;
+        let byte_count = usize::try_from(bit_count.div_ceil(8))
+            .map_err(|_| CaptureChunkError::PayloadSizeOverflow)?;
+        let mut bytes = vec![0_u8; byte_count];
+        for sample in 0..sample_count {
+            for channel in 0..channel_count {
+                if self.packed_level(skipped_samples + sample, channel) == Some(true) {
+                    let bit = sample as usize * channel_count + channel;
+                    bytes[bit / 8] |= 1 << (bit % 8);
+                }
+            }
+        }
+        Self::packed_lsb_first(
+            self.session_id,
+            output_sequence,
+            0,
+            sample_count,
+            Arc::clone(&self.channels),
+            bytes,
+            0,
+        )
+        .map(Some)
+    }
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -755,7 +848,8 @@ mod tests {
 
     use super::{
         CaptureBufferPool, CaptureChannelId, CaptureChunk, CaptureChunkError, CaptureChunkWriter,
-        CaptureQueueLimits, CaptureSessionId, CaptureWriteError, bounded_capture_queue,
+        CaptureQueueLimits, CaptureSessionId, CaptureWriteError, SimpleTriggerCondition,
+        bounded_capture_queue,
     };
 
     fn channels() -> Arc<[CaptureChannelId]> {
@@ -864,5 +958,55 @@ mod tests {
         assert_eq!(metrics.available, 1);
         assert_eq!(metrics.in_use, 0);
         assert_eq!(metrics.max_in_use, 1);
+    }
+
+    #[test]
+    fn simple_trigger_condition_truth_table_covers_levels_and_edges() {
+        use SimpleTriggerCondition::{Either, Falling, High, Ignore, Low, Rising};
+
+        assert!(Ignore.matches(None, false));
+        assert!(Ignore.matches(Some(true), false));
+        assert!(Low.matches(None, false));
+        assert!(!Low.matches(None, true));
+        assert!(High.matches(None, true));
+        assert!(!High.matches(None, false));
+        assert!(Rising.matches(Some(false), true));
+        assert!(!Rising.matches(None, true));
+        assert!(!Rising.matches(Some(true), true));
+        assert!(Falling.matches(Some(true), false));
+        assert!(!Falling.matches(None, false));
+        assert!(Either.matches(Some(false), true));
+        assert!(Either.matches(Some(true), false));
+        assert!(!Either.matches(Some(true), true));
+        assert!(!Either.matches(None, true));
+    }
+
+    #[test]
+    fn recording_slice_rebases_and_repackages_only_the_crossing_chunk() {
+        let levels = [true, true, false, true, true, false];
+        let chunk = CaptureChunk::packed_lsb_first(
+            CaptureSessionId::new(4),
+            8,
+            10,
+            2,
+            channels(),
+            [0b0011_0110_u8],
+            1,
+        )
+        .unwrap();
+
+        let sliced = chunk.recording_slice(11, 0).unwrap().unwrap();
+        assert_eq!(sliced.sequence(), 0);
+        assert_eq!(sliced.start_sample(), 0);
+        assert_eq!(sliced.sample_count(), 1);
+        for channel in 0..3 {
+            assert_eq!(sliced.packed_level(0, channel), Some(levels[3 + channel]));
+        }
+
+        let rebased = chunk.recording_slice(5, 2).unwrap().unwrap();
+        assert_eq!(rebased.sequence(), 2);
+        assert_eq!(rebased.start_sample(), 5);
+        assert_eq!(rebased.payload(), chunk.payload());
+        assert!(chunk.recording_slice(12, 0).unwrap().is_none());
     }
 }

@@ -298,6 +298,7 @@ impl SigrokFileSource {
             total_blocks: 1,
             samples_per_block: total_samples,
             probe_names,
+            trigger_sample: None,
         };
 
         Ok(Self {

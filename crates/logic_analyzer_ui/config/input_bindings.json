@@ -21,6 +21,7 @@
     { "context": "logic_analyzer.cursor", "action": "drag_cursor", "label": "Move Cursor", "input": "pointer", "button": "primary", "gesture": "drag" },
     { "context": "logic_analyzer.channel", "action": "rename", "label": "Rename", "input": "pointer", "button": "primary", "gesture": "double_click" },
     { "context": "logic_analyzer.channel", "action": "reorder", "label": "Reorder", "input": "pointer", "button": "primary", "gesture": "drag" },
+    { "context": "logic_analyzer.trigger", "action": "set_condition", "label": "Set Trigger", "input": "pointer", "button": "primary", "gesture": "click" },
     { "context": "logic_analyzer.channel_edit", "action": "confirm", "label": "Confirm", "input": "key", "key": "enter", "status": false },
     { "context": "logic_analyzer.channel_edit", "action": "cancel", "label": "Cancel", "input": "key", "key": "escape", "status": false },
 

@@ -30,7 +30,7 @@ use node_graph::{
 use signal_processing::{
     AppManager, CaptureChannelId, CaptureStoreCursor, DerivedLanes, DisconnectEvent, InputSub,
     NodeConfig, OverflowPolicy, PersistentStoreConfig, ProcessNode, SampleBlock, SamplingActivity,
-    ViewerRetention,
+    SimpleTriggerCondition, ViewerRetention,
 };
 
 use super::cache_platform;
@@ -148,6 +148,24 @@ pub trait CaptureGraphSourceFactory: Send + Sync {
     fn create(&self, cursor: Box<dyn CaptureStoreCursor>) -> Result<Box<dyn ProcessNode>, String>;
 }
 
+/// Portable simple-trigger presentation and edit identity for one captured input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SimpleTriggerChannel {
+    pub channel_id: CaptureChannelId,
+    pub viewer_channel: usize,
+    pub name: String,
+    pub enabled: bool,
+    pub condition: SimpleTriggerCondition,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LiveCaptureEdit {
+    SetSimpleTrigger {
+        channel_id: CaptureChannelId,
+        condition: SimpleTriggerCondition,
+    },
+}
+
 /// State-bound live-acquisition capability supplied by a concrete graph node.
 ///
 /// The compiler and application treat channel identities as opaque and do not
@@ -156,6 +174,9 @@ pub trait LiveCaptureFeature: Send {
     fn channels(&self) -> &[CaptureChannelId];
     fn channel_names(&self) -> &[String];
     fn sample_rate_hz(&self) -> f64;
+    fn simple_trigger_channels(&self) -> &[SimpleTriggerChannel] {
+        &[]
+    }
 
     /// Captures the concrete runtime port mapping and timebase independently
     /// of provider ownership. The same factory creates the live-following
@@ -197,6 +218,16 @@ impl DiscoveredLiveCaptureFeature {
 
     pub fn sample_rate_hz(&self) -> f64 {
         self.feature.sample_rate_hz()
+    }
+
+    pub fn simple_trigger_channels(&self) -> &[SimpleTriggerChannel] {
+        self.feature.simple_trigger_channels()
+    }
+
+    pub fn has_simple_trigger(&self) -> bool {
+        self.simple_trigger_channels()
+            .iter()
+            .any(|channel| channel.enabled && channel.condition != SimpleTriggerCondition::Ignore)
     }
 
     pub fn graph_source_factory(&self) -> Arc<dyn CaptureGraphSourceFactory> {
@@ -280,6 +311,15 @@ pub trait RuntimeBuilder {
     ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
         Ok(None)
     }
+    /// Applies a portable feature edit to this node's serialized state. Concrete builders own
+    /// channel identity and state evolution; the compiler only routes the opaque request.
+    fn apply_live_capture_edit(
+        &self,
+        _state: &Value,
+        _edit: &LiveCaptureEdit,
+    ) -> Result<Option<Value>, String> {
+        Ok(None)
+    }
     /// Whether an unconnected input is a compile error (given the state:
     /// e.g. CS is only required while its polarity isn't Disabled).
     fn input_required(&self, _socket: &Socket, _state: &Value) -> bool {
@@ -345,6 +385,25 @@ pub fn discover_live_capture_feature(
     discover_live_capture_feature_from(graph, builders, |_| true)
 }
 
+/// Routes a portable live-feature edit to the concrete builder that owns `source_node`.
+pub fn apply_live_capture_edit(
+    graph: &GraphState,
+    builders: &BuilderRegistry,
+    source_node: NodeId,
+    edit: &LiveCaptureEdit,
+) -> Result<Value, String> {
+    let node = graph
+        .nodes
+        .get(&source_node)
+        .ok_or_else(|| format!("live capture source {source_node:?} no longer exists"))?;
+    let builder = builders
+        .get(node.def_name())
+        .ok_or_else(|| format!("no runtime builder is registered for {}", node.def_name()))?;
+    builder
+        .apply_live_capture_edit(&node.state, edit)?
+        .ok_or_else(|| format!("{} does not support this live capture edit", node.title))
+}
+
 /// Resolves a live feature only from nodes retained by a successfully
 /// compiled graph. This prevents a disconnected development or hardware node
 /// from becoming the acquisition source for a different active time domain.
@@ -373,12 +432,31 @@ fn discover_live_capture_feature_from(
         };
         match builder.live_capture_feature(&node.state) {
             Ok(Some(feature)) => {
+                let trigger_channels = feature.simple_trigger_channels();
+                let trigger_ids: HashSet<_> = trigger_channels
+                    .iter()
+                    .map(|channel| &channel.channel_id)
+                    .collect();
+                let trigger_viewer_channels: HashSet<_> = trigger_channels
+                    .iter()
+                    .map(|channel| channel.viewer_channel)
+                    .collect();
+                let duplicate_trigger_channels = trigger_ids.len() != trigger_channels.len()
+                    || trigger_viewer_channels.len() != trigger_channels.len();
                 let invalid = if feature.channels().is_empty() {
                     Some("live capture exposes no channels")
                 } else if feature.channel_names().len() != feature.channels().len() {
                     Some("live capture channel names do not match its channel table")
                 } else if !feature.sample_rate_hz().is_finite() || feature.sample_rate_hz() <= 0.0 {
                     Some("live capture sample rate must be positive")
+                } else if feature
+                    .simple_trigger_channels()
+                    .iter()
+                    .any(|channel| channel.viewer_channel >= feature.channels().len())
+                {
+                    Some("live capture trigger channel references an unknown viewer channel")
+                } else if duplicate_trigger_channels {
+                    Some("live capture trigger channels must have unique identities and lanes")
                 } else {
                     None
                 };
@@ -2137,6 +2215,64 @@ mod tests {
         assert_eq!(feature.source_node, source);
         assert_eq!(feature.channels().len(), 11);
         assert_eq!(feature.channels()[7].as_str(), "demo:7");
+        assert_eq!(feature.simple_trigger_channels().len(), 11);
+        assert!(
+            feature
+                .simple_trigger_channels()
+                .iter()
+                .all(|channel| channel.condition == SimpleTriggerCondition::Ignore)
+        );
+
+        let state = apply_live_capture_edit(
+            widget.graph(),
+            &BuilderRegistry::standard(),
+            source,
+            &LiveCaptureEdit::SetSimpleTrigger {
+                channel_id: CaptureChannelId::new("demo:7"),
+                condition: SimpleTriggerCondition::Falling,
+            },
+        )
+        .unwrap();
+        assert!(widget.edit_node_state(source, state));
+        let edited = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            edited.simple_trigger_channels()[7].condition,
+            SimpleTriggerCondition::Falling
+        );
+        assert!(edited.has_simple_trigger());
+
+        let serialized = serde_json::to_string(widget.graph()).unwrap();
+        let graph: GraphState = serde_json::from_str(&serialized).unwrap();
+        let mut restored = NodeGraphWidget::new(nodes::build_registry());
+        restored.set_graph(graph);
+        let reloaded =
+            discover_live_capture_feature(restored.graph(), &BuilderRegistry::standard())
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            reloaded.simple_trigger_channels()[7].condition,
+            SimpleTriggerCondition::Falling
+        );
+    }
+
+    #[test]
+    fn legacy_development_capture_state_migrates_with_a_visible_warning() {
+        let mut widget = NodeGraphWidget::new(nodes::build_registry());
+        let source = widget
+            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::ZERO)
+            .unwrap();
+        let mut graph = widget.graph().clone();
+        graph.nodes.get_mut(&source).unwrap().state = serde_json::json!({});
+
+        let mut restored = NodeGraphWidget::new(nodes::build_registry());
+        restored.set_graph(graph);
+        let warning = restored.graph().nodes[&source]
+            .badge
+            .as_ref()
+            .expect("legacy state must surface its migration");
+        assert!(warning.text.contains("legacy"));
     }
 
     #[test]

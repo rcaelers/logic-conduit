@@ -8,7 +8,7 @@ use logic_analyzer_processing::{
 };
 use signal_processing::{CaptureChannelId, CaptureStoreCursor, ProcessNode};
 
-use crate::compiler::{CaptureGraphSourceFactory, LiveCaptureFeature};
+use crate::compiler::{CaptureGraphSourceFactory, LiveCaptureFeature, SimpleTriggerChannel};
 use crate::nodes::DemoCaptureSourceState;
 
 const CHUNK_SAMPLES: u64 = 4_096;
@@ -45,6 +45,7 @@ impl CaptureGraphSourceFactory for DemoCaptureGraphSourceFactory {
 struct DemoLiveCaptureFeature {
     channels: Arc<[CaptureChannelId]>,
     channel_names: Arc<[String]>,
+    simple_trigger_channels: Arc<[SimpleTriggerChannel]>,
     provider: DeterministicFakeProvider,
 }
 
@@ -59,6 +60,10 @@ impl LiveCaptureFeature for DemoLiveCaptureFeature {
 
     fn sample_rate_hz(&self) -> f64 {
         SAMPLE_RATE_HZ
+    }
+
+    fn simple_trigger_channels(&self) -> &[SimpleTriggerChannel] {
+        &self.simple_trigger_channels
     }
 
     fn graph_source_factory(&self) -> Arc<dyn CaptureGraphSourceFactory> {
@@ -78,7 +83,7 @@ impl LiveCaptureFeature for DemoLiveCaptureFeature {
 pub(super) fn feature(
     state: &Value,
 ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
-    serde_json::from_value::<DemoCaptureSourceState>(state.clone())
+    let state = serde_json::from_value::<DemoCaptureSourceState>(state.clone())
         .map_err(|error| format!("invalid demo capture state: {error}"))?;
     let channels: Arc<[CaptureChannelId]> = (0..11)
         .map(|channel| CaptureChannelId::new(format!("demo:{channel}")))
@@ -93,10 +98,37 @@ pub(super) fn feature(
         vec![CHUNK_SAMPLES; CHUNK_COUNT],
         0x5a17_d3a0,
     )
+    .map_err(|error| error.to_string())?
+    .with_simple_trigger(
+        state
+            .trigger_conditions()
+            .iter()
+            .copied()
+            .map(Some)
+            .collect::<Vec<_>>(),
+    )
     .map_err(|error| error.to_string())?;
+    let simple_trigger_channels: Arc<[SimpleTriggerChannel]> = channels
+        .iter()
+        .cloned()
+        .zip(channel_names.iter().cloned())
+        .zip(state.trigger_conditions().iter().copied())
+        .enumerate()
+        .map(
+            |(viewer_channel, ((channel_id, name), condition))| SimpleTriggerChannel {
+                channel_id,
+                viewer_channel,
+                name,
+                enabled: true,
+                condition,
+            },
+        )
+        .collect::<Vec<_>>()
+        .into();
     Ok(Some(Box::new(DemoLiveCaptureFeature {
         channels,
         channel_names,
+        simple_trigger_channels,
         provider: DeterministicFakeProvider::new(config),
     })))
 }

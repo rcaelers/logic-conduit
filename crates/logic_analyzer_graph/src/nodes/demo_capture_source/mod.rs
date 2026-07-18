@@ -4,6 +4,25 @@ mod live_capture;
 
 pub(crate) use builder::DemoCaptureSourceBuilder;
 pub use definition::{DemoCaptureSource, DemoCaptureSourceState};
+use serde_json::Value;
+
+use crate::compiler::LiveCaptureEdit;
+
+fn apply_live_capture_edit(state: &Value, edit: &LiveCaptureEdit) -> Result<Value, String> {
+    let mut state = serde_json::from_value::<DemoCaptureSourceState>(state.clone())
+        .map_err(|error| format!("invalid demo capture state: {error}"))?;
+    let LiveCaptureEdit::SetSimpleTrigger {
+        channel_id,
+        condition,
+    } = edit;
+    let channel = channel_id
+        .as_str()
+        .strip_prefix("demo:")
+        .and_then(|channel| channel.parse::<usize>().ok())
+        .ok_or_else(|| format!("unknown demo capture channel {channel_id}"))?;
+    state.set_trigger_condition(channel, *condition)?;
+    serde_json::to_value(state).map_err(|error| error.to_string())
+}
 
 /// One raw capture row that can be shown independently of a pipeline run.
 pub struct CapturePreviewSignal {
