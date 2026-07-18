@@ -1091,4 +1091,50 @@ mod tests {
         assert_eq!(schema(first.process.as_ref()), schema(second.process.as_ref()));
         assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
     }
+
+    #[test]
+    #[ignore = "requires a connected DSLogic U3Pro16 with runtime firmware and FPGA image"]
+    fn u3pro16_buffered_hardware_capture_finalizes_and_opens_a_replay_source() {
+        let mut graph = NodeGraphWidget::new(nodes::build_registry());
+        let source = graph
+            .add_node_at(nodes::DsLogicU3Pro16::name(), egui::Pos2::ZERO)
+            .unwrap();
+        let mut state = serde_json::from_value::<nodes::U3Pro16State>(
+            graph.graph().nodes[&source].state.clone(),
+        )
+        .unwrap();
+        state.mode.select("Buffer");
+        state.sample_rate.select("1 MHz");
+        state.duration_ms.value = 1;
+        state.channels.enabled.fill(false);
+        state.channels.enabled[0] = true;
+        state.channels.enabled[1] = true;
+        graph.graph_mut().nodes.get_mut(&source).unwrap().state =
+            serde_json::to_value(state).unwrap();
+        let feature = compiler::discover_live_capture_feature(
+            graph.graph(),
+            &compiler::BuilderRegistry::standard(),
+        )
+        .unwrap()
+        .unwrap();
+        let mut coordinator = CaptureCoordinator::new();
+        coordinator.start(feature).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while coordinator.is_active() {
+            assert!(Instant::now() < deadline, "hardware capture timed out");
+            coordinator.poll();
+            std::thread::yield_now();
+        }
+
+        let status = coordinator.status().unwrap();
+        assert_eq!(status.state, CaptureSessionState::Complete, "{:?}", status.error);
+        assert!(coordinator.completed_manifest().unwrap().committed_samples >= 1_024);
+        let replay = coordinator
+            .create_replay_attachment()
+            .unwrap()
+            .expect("finalized hardware capture should be replayable");
+        assert_eq!(replay.source_node, source);
+        assert_eq!(replay.process.output_schema().len(), 2);
+    }
 }

@@ -22,7 +22,10 @@ std::cfg_select! {
             DslFileCaptureDataSource, DslFileSource, open_dsl_chunked_capture,
             open_dsl_chunked_capture_with_progress,
         };
-        pub use dslogic_u3pro16::{DsLogicU3Pro16, LinkSpeed, RusbTransport, UsbTransport};
+        pub use dslogic_u3pro16::{
+            DsLogicCapturePlan, DsLogicTriggerHeader, DsLogicU3Pro16, LinkSpeed,
+            RusbTransport, UsbTransport, u3pro16_buffered_plan,
+        };
         pub use logic_analyzer::{
             CaptureMode, ClockEdge, ClockSource, DsLogicU3Pro16Source, LogicAnalyzer,
             LogicAnalyzerError, LogicAnalyzerInfo, LogicAnalyzerResult, LogicAnalyzerSource,

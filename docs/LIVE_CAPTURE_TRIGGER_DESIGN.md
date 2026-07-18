@@ -11,18 +11,11 @@ can keep the graph fixed during acquisition without creating an architectural de
 
 ## Current baseline
 
-The U3Pro16 graph node already owns device settings and lowers to the UI-independent
-`LogicAnalyzerSource<DsLogicU3Pro16>`. The portable `LogicCaptureConfig` and U3Pro16 packet builder
-already represent hardware trigger stages. The remaining hardware-path limitations are:
-
-- the graph builder always supplies an empty trigger program;
-- starting a graph run opens and starts the hardware source immediately;
-- the driver consumes the trigger header but does not publish its trigger position or acquisition
-  state;
-- the USB source demultiplexes and sends directly into the graph, so downstream backpressure can
-  delay acquisition;
-- capture errors are logged but there is no typed status channel for the application;
-- only file and demo sources provide raw viewer content.
+The U3Pro16 graph node owns device settings and lowers to the UI-independent
+`LogicAnalyzerSource<DsLogicU3Pro16>` for an ordinary direct graph run. In buffered mode it also
+registers a native live-capture feature that uses the authoritative capture-store path. The
+portable `LogicCaptureConfig` and U3Pro16 packet builder represent the hardware trigger stage;
+host-streamed live capture remains the hardware-path limitation addressed by Phase 9.
 
 The existing live graph manager already supplies one important future invariant: hot changes and
 branch restarts take effect from the current stream position and do not rewrite previously emitted
@@ -112,15 +105,28 @@ The UI-independent live-capture foundation is also present:
 - both fake providers pass the same lifecycle, store, trigger, coordinator, growing-view,
   live-analysis, and replay contracts; registration uses the ordinary feature registry, while an
   architecture test guards the application, compiler core, viewer, coordinator, and store against
-  provider/model-specific contracts.
+  provider/model-specific contracts;
+- the native U3Pro16 buffered feature persists one simple condition per physical input through an
+  explicit saved-state schema migration, lowers enabled non-contiguous physical inputs to opaque
+  capture identities and their original graph output ports, and validates the active finite
+  channel/rate/depth tuple before opening hardware;
+- U3Pro16 preparation freezes one validated device plan before Start performs the final arm
+  command; the provider publishes Armed, trigger, on-device capture, upload, progress, and terminal
+  events through the same generic acquisition contract as the fakes;
+- the U3 trigger header supplies the exact trigger sample and delivered sample extent before any
+  raw data is committed, while the upload adapter preserves a sub-sample carry across arbitrary
+  USB transfer boundaries and writes only complete canonical samples; and
+- U3 hardware RLE is an on-device memory-retention mode: the FPGA expands its upload to ordinary
+  interleaved sample bits, so the canonical store records that expanded, driver-independent stream
+  without a device-specific decoder.
 
-The native fakes and application coordinator are selected as complete platform modules. The
-streaming fake is reachable through the existing development/demo node and both providers are used
-by conformance composition; concrete hardware nodes do not yet
-expose a live feature. Native store recovery, retention and reclamation, cleanup, and export do not
-yet exist. The growing summary is currently an in-memory index
-over durable raw storage; sustained-ingest measurement and duration-independent summary storage
-remain Phase 9. The existing `LogicAnalyzerSource` graph-run path remains unchanged.
+The native fakes, U3Pro16 buffered provider, and application coordinator are selected as complete
+platform modules. The streaming fake is reachable through the existing development/demo node and
+both fakes are used by conformance composition. U3Pro16 host streaming, native store recovery,
+retention and reclamation, cleanup, and export do not yet exist. The growing summary is currently
+an in-memory index over durable raw storage; sustained-ingest measurement and
+duration-independent summary storage remain Phase 9. The existing `LogicAnalyzerSource` direct
+graph-run path remains available.
 
 ## Proposed future design
 
@@ -551,13 +557,15 @@ Armed status immediately, but cannot claim to display pre-trigger samples before
 delivers them. Once delivery begins, every returned chunk is uploaded. A later analyzer capable of
 continuous pre-trigger delivery can use the same event/store contract.
 
-Hardware run-length encoding is preserved as part of the negotiated plan and raw session metadata.
-The concrete provider converts device bytes into a versioned canonical packed-sample or canonical
-run representation before commit. If the device payload already matches a canonical encoding, its
-buffer can be adopted without copying. Optional original-device packets may be retained as a
-provenance attachment, but they are never the only replayable copy. Reported progress distinguishes
-transport bytes from logical samples. Final replay therefore depends on neither the current graph
-setting nor the original hardware driver.
+Hardware run-length encoding is preserved as a requested/effective setting in the negotiated plan
+and future durable session metadata. On U3Pro16 it compresses capture memory internally, after
+which the FPGA expands the USB upload to ordinary interleaved samples. The provider therefore
+commits versioned canonical packed samples and carries incomplete narrow-mode samples across USB
+transfers. A device whose transport really returns encoded runs requires an explicit canonical run
+representation or concrete decoding before commit. Optional original-device packets may be
+retained as a provenance attachment, but they are never the only replayable copy. Reported progress
+distinguishes transport bytes from logical samples. Final replay therefore depends on neither the
+current graph setting nor the original hardware driver.
 
 Canonical chunks carry their explicit `CaptureChannelId` table, logical sample range, initial
 levels, and either arbitrary-width packed samples or transition runs. They do not assume a maximum
@@ -1020,10 +1028,14 @@ compiler core, viewer, session coordinator, or store.
 
 #### Phase 8 — U3Pro16 device-buffered acquisition
 
+Status: **complete**.
+
 - Register the concrete U3Pro16 live feature, evolve its saved state explicitly, and lower generic
   channel, rate, depth, simple-trigger, and timebase requests into its provider representation.
 - Negotiate an immutable device-buffered plan, publish the actual trigger position, upload all
-  returned chunks, and preserve hardware run encoding through the canonical-store boundary.
+  returned chunks, and preserve the expanded logical sample stream losslessly across arbitrary USB
+  transfer boundaries. Hardware RLE remains a negotiated device-memory setting because this FPGA
+  expands it before upload.
 - Keep host streaming and the broader capture-policy UI out of this phase.
 
 Gate: packet-fixture tests cover configuration and trigger-header translation; an ignored hardware

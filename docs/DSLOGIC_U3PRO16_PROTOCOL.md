@@ -373,15 +373,16 @@ The trigger-header transfer is exactly 1024 bytes:
 | 8 | 4 | capture-memory start address (`u32`) |
 | 12 | 4 | remaining sample count, low 32 bits |
 | 16 | 4 | remaining sample count, high 32 bits |
-| 20 | 4 | status (`u32`) |
+| 20 | 4 | status (`u32`); bit 0 means the trigger position is valid |
 | 24 | 1000 | reserved |
 
 Reject a short header or incorrect magic. Combine the remaining count as
 `low | (u64(high) << 32)`. For a finite capture it must be strictly less than
-the requested limit. The delivered capture length is then:
+the configured, 1024-sample-aligned extent. The delivered capture length is
+then:
 
 ```text
-actual_samples = (requested_limit - remaining_count) & !1023
+actual_samples = (configured_samples - remaining_count) & !1023
 actual_bytes   = actual_samples / 64 * C * 8
 actual_samples = actual_bytes / C * 8
 ```
@@ -396,9 +397,9 @@ in increasing input-number order.
 Data may end mid-sample when `C` is 3, 6, or 12. Preserve a bit carry between
 USB transfers or expose chunk bit offsets. For finite capture, deliver at most
 `actual_bytes`. For streaming capture, continue until the caller stops the
-run. Run-length mode changes the FPGA output representation but has no
-specified decoder; expose the returned byte stream as opaque packed logic data
-when that flag is enabled.
+run. Run-length mode compresses capture memory inside the FPGA, but the upload
+path expands it back into this ordinary interleaved sample representation.
+Consumers therefore do not decode device-specific RLE bytes.
 
 ### 7.3 Read scheduling and overflow
 

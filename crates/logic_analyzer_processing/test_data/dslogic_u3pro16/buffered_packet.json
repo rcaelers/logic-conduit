@@ -1,0 +1,21 @@
+{
+  "sample_rate_hz": 100000000,
+  "input_mask": 37,
+  "sample_limit": 2048,
+  "trigger_sample": 768,
+  "ram_start": 287454020,
+  "remaining_samples": 0,
+  "expected": {
+    "mode": 9,
+    "divider": 2,
+    "divider_high": 1024,
+    "capture_units": 128,
+    "trigger_position": 1024,
+    "channel_stage_word": 768,
+    "actual_samples": 2048,
+    "trigger_mask0": 65530,
+    "trigger_value0": 5,
+    "trigger_edge0": 1,
+    "trigger_logic0": 0
+  }
+}

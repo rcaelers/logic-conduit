@@ -1,12 +1,14 @@
 //! `DSLogic U3Pro16` graph-node definition — native USB hardware capture source.
 
 use egui::Color32;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
 use node_graph::{
     BoolValue, EnumValue, FloatValue, InlineControl, InputDef, IntValue, NodeBadge, NodeDef,
     OutputDef, PanelSection, PropDef, Socket,
 };
+use signal_processing::SimpleTriggerCondition;
 
 use crate::nodes::registry::{COLOR_SOURCES, Signal};
 
@@ -26,6 +28,8 @@ const U3_RATES: &[(&str, u64)] = &[
     ("500 MHz", 500_000_000),
     ("1 GHz", 1_000_000_000),
 ];
+const U3PRO16_STATE_VERSION: u16 = 1;
+pub(super) const U3PRO16_CHANNELS: usize = 16;
 
 fn u3_rate_names() -> Vec<&'static str> {
     U3_RATES.iter().map(|(name, _)| *name).collect()
@@ -125,8 +129,9 @@ impl InlineControl for ChannelGridValue {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct U3Pro16State {
+    schema_version: u16,
     pub mode: EnumValue,
     pub sample_rate: EnumValue,
     pub duration_ms: IntValue,
@@ -137,9 +142,120 @@ pub struct U3Pro16State {
     pub clock_edge: EnumValue,
     pub channels: ChannelGridValue,
     pub summary: LabelValue,
+    trigger_conditions: Vec<SimpleTriggerCondition>,
     /// Explanation of an auto-clamped rate, surfaced as a node badge.
     #[serde(skip)]
     pub clamp_note: Option<String>,
+    #[serde(skip)]
+    compatibility_warning: Option<String>,
+}
+
+impl Default for U3Pro16State {
+    fn default() -> Self {
+        Self {
+            schema_version: U3PRO16_STATE_VERSION,
+            mode: EnumValue::new(0, &["Stream", "Buffer"]),
+            sample_rate: EnumValue::new(9, &u3_rate_names()),
+            duration_ms: IntValue::new(1000, 1, 60_000),
+            rle: BoolValue::new(false),
+            threshold: FloatValue::new(1.0, 0.0, 5.0, 0.05),
+            filter: BoolValue::new(false),
+            ext_clock: BoolValue::new(false),
+            clock_edge: EnumValue::new(0, &["Rising", "Falling"]),
+            channels: ChannelGridValue::new(U3PRO16_CHANNELS, U3PRO16_CHANNELS),
+            summary: LabelValue::default(),
+            trigger_conditions: vec![SimpleTriggerCondition::Ignore; U3PRO16_CHANNELS],
+            clamp_note: None,
+            compatibility_warning: None,
+        }
+    }
+}
+
+impl U3Pro16State {
+    pub fn trigger_conditions(&self) -> &[SimpleTriggerCondition] {
+        &self.trigger_conditions
+    }
+
+    pub fn set_trigger_condition(
+        &mut self,
+        physical_channel: usize,
+        condition: SimpleTriggerCondition,
+    ) -> Result<(), String> {
+        let Some(current) = self.trigger_conditions.get_mut(physical_channel) else {
+            return Err(format!(
+                "U3Pro16 input {physical_channel} is outside 0..{U3PRO16_CHANNELS}"
+            ));
+        };
+        *current = condition;
+        self.compatibility_warning = None;
+        Ok(())
+    }
+}
+
+#[derive(Deserialize)]
+struct SavedU3Pro16State {
+    #[serde(default)]
+    schema_version: u16,
+    mode: EnumValue,
+    sample_rate: EnumValue,
+    duration_ms: IntValue,
+    rle: BoolValue,
+    threshold: FloatValue,
+    filter: BoolValue,
+    ext_clock: BoolValue,
+    clock_edge: EnumValue,
+    channels: ChannelGridValue,
+    summary: LabelValue,
+    #[serde(default)]
+    trigger_conditions: Vec<SimpleTriggerCondition>,
+}
+
+impl<'de> Deserialize<'de> for U3Pro16State {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let saved: SavedU3Pro16State = serde_json::from_value(value)
+            .map_err(|error| serde::de::Error::custom(error.to_string()))?;
+        let mut warnings = Vec::new();
+        if saved.schema_version != U3PRO16_STATE_VERSION {
+            warnings.push(format!(
+                "updated U3Pro16 settings from schema {} to {}",
+                saved.schema_version, U3PRO16_STATE_VERSION
+            ));
+        }
+        let mut trigger_conditions = saved.trigger_conditions;
+        if trigger_conditions.len() != U3PRO16_CHANNELS {
+            trigger_conditions.resize(U3PRO16_CHANNELS, SimpleTriggerCondition::Ignore);
+            trigger_conditions.truncate(U3PRO16_CHANNELS);
+            warnings.push(format!(
+                "normalized trigger input count to {U3PRO16_CHANNELS}; missing inputs defaulted to Ignore"
+            ));
+        }
+        let mut channels = saved.channels;
+        if channels.enabled.len() != U3PRO16_CHANNELS {
+            channels.enabled.resize(U3PRO16_CHANNELS, false);
+            channels.enabled.truncate(U3PRO16_CHANNELS);
+            warnings.push(format!("normalized channel count to {U3PRO16_CHANNELS}"));
+        }
+        Ok(Self {
+            schema_version: U3PRO16_STATE_VERSION,
+            mode: saved.mode,
+            sample_rate: saved.sample_rate,
+            duration_ms: saved.duration_ms,
+            rle: saved.rle,
+            threshold: saved.threshold,
+            filter: saved.filter,
+            ext_clock: saved.ext_clock,
+            clock_edge: saved.clock_edge,
+            channels,
+            summary: saved.summary,
+            trigger_conditions,
+            clamp_note: None,
+            compatibility_warning: (!warnings.is_empty()).then(|| warnings.join("; ")),
+        })
+    }
 }
 
 pub struct DsLogicU3Pro16;
@@ -167,19 +283,7 @@ impl NodeDef for DsLogicU3Pro16 {
     }
 
     fn state() -> Self::State {
-        U3Pro16State {
-            mode: EnumValue::new(0, &["Stream", "Buffer"]),
-            sample_rate: EnumValue::new(9, &u3_rate_names()),
-            duration_ms: IntValue::new(1000, 1, 60_000),
-            rle: BoolValue::new(false),
-            threshold: FloatValue::new(1.0, 0.0, 5.0, 0.05),
-            filter: BoolValue::new(false),
-            ext_clock: BoolValue::new(false),
-            clock_edge: EnumValue::new(0, &["Rising", "Falling"]),
-            channels: ChannelGridValue::new(16, 16),
-            summary: LabelValue::default(),
-            clamp_note: None,
-        }
+        U3Pro16State::default()
     }
 
     fn props() -> Vec<PropDef<Self::State>> {
@@ -259,6 +363,64 @@ impl NodeDef for DsLogicU3Pro16 {
         if state.channels.enabled_count() == 0 {
             return Some(NodeBadge::warning("No channels enabled"));
         }
-        state.clamp_note.as_ref().map(NodeBadge::warning)
+        state
+            .compatibility_warning
+            .as_ref()
+            .or(state.clamp_note.as_ref())
+            .map(NodeBadge::warning)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use node_graph::NodeDef;
+    use signal_processing::SimpleTriggerCondition::{Falling, High, Ignore};
+
+    use super::{DsLogicU3Pro16, U3PRO16_CHANNELS, U3Pro16State};
+
+    #[test]
+    fn current_state_round_trips_simple_triggers_without_a_warning() {
+        let mut state = U3Pro16State::default();
+        state.set_trigger_condition(2, High).unwrap();
+        state.set_trigger_condition(13, Falling).unwrap();
+        let saved = serde_json::to_value(&state).unwrap();
+        let restored: U3Pro16State = serde_json::from_value(saved).unwrap();
+
+        assert_eq!(restored.trigger_conditions(), state.trigger_conditions());
+        assert!(DsLogicU3Pro16::badge(&restored).is_none());
+    }
+
+    #[test]
+    fn legacy_state_migrates_trigger_inputs_with_a_visible_warning() {
+        let mut saved = serde_json::to_value(U3Pro16State::default()).unwrap();
+        let object = saved.as_object_mut().unwrap();
+        object.remove("schema_version");
+        object.remove("trigger_conditions");
+
+        let restored: U3Pro16State = serde_json::from_value(saved).unwrap();
+
+        assert_eq!(restored.trigger_conditions(), &[Ignore; U3PRO16_CHANNELS]);
+        let warning = DsLogicU3Pro16::badge(&restored).unwrap();
+        assert!(warning.text.contains("schema 0"));
+        assert!(warning.text.contains("defaulted to Ignore"));
+        let current = serde_json::to_value(restored).unwrap();
+        assert_eq!(current["schema_version"], 1);
+        assert_eq!(
+            current["trigger_conditions"].as_array().unwrap().len(),
+            U3PRO16_CHANNELS
+        );
+    }
+
+    #[test]
+    fn malformed_channel_and_trigger_counts_are_normalized() {
+        let mut saved = serde_json::to_value(U3Pro16State::default()).unwrap();
+        saved["channels"]["enabled"] = serde_json::json!([true, false]);
+        saved["trigger_conditions"] = serde_json::json!(["falling"]);
+        let restored: U3Pro16State = serde_json::from_value(saved).unwrap();
+
+        assert_eq!(restored.channels.enabled.len(), U3PRO16_CHANNELS);
+        assert_eq!(restored.trigger_conditions().len(), U3PRO16_CHANNELS);
+        assert_eq!(restored.trigger_conditions()[0], Falling);
+        assert!(DsLogicU3Pro16::badge(&restored).is_some());
     }
 }

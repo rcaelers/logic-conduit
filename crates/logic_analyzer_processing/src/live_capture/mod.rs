@@ -17,6 +17,7 @@ std::cfg_select! {
     _ => {
         mod buffered_fake_native;
         mod fake_native;
+        mod u3pro16_buffered_native;
 
         pub use buffered_fake_native::{
             BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider,
@@ -24,6 +25,7 @@ std::cfg_select! {
         pub use fake_native::{
             DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,
         };
+        pub use u3pro16_buffered_native::DsLogicU3Pro16BufferedProvider;
     }
 }
 

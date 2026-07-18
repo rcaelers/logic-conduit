@@ -99,6 +99,61 @@ impl DsLogicCaptureSettings {
     }
 }
 
+fn settings_from_config(config: &LogicCaptureConfig) -> LogicAnalyzerResult<DsLogicCaptureSettings> {
+    if config.input_mask > u64::from(u16::MAX) {
+        return Err(LogicAnalyzerError::InvalidSettings(
+            "U3Pro16 has only 16 inputs".into(),
+        ));
+    }
+    if config.threshold_volts.is_some_and(|volts| !volts.is_finite()) {
+        return Err(LogicAnalyzerError::InvalidSettings(
+            "threshold must be finite".into(),
+        ));
+    }
+    if config.trigger_percent > 100 {
+        return Err(LogicAnalyzerError::InvalidSettings(
+            "trigger position percentage must be within 0..=100".into(),
+        ));
+    }
+    if config.trigger.stages.len() > 16 {
+        return Err(LogicAnalyzerError::InvalidSettings(
+            "U3Pro16 supports at most 16 trigger stages".into(),
+        ));
+    }
+    let mut settings = DsLogicCaptureSettings::finite(
+        config.sample_rate_hz,
+        config.input_mask as u16,
+        config.sample_limit,
+    );
+    settings.mode = config.mode;
+    settings.trigger_percent = config.trigger_percent;
+    settings.threshold_volts = config.threshold_volts;
+    settings.trigger = config.trigger.clone();
+    settings.run_length = config.encoding == LogicEncodingRequest::RunLength;
+    settings.external_clock = matches!(config.clock, ClockSource::External { .. });
+    settings.external_clock_active_edge = matches!(
+        config.clock,
+        ClockSource::External {
+            edge: ClockEdge::Rising
+        }
+    );
+    settings.input_filter = config.input_filter;
+    Ok(settings)
+}
+
+/// Validates a concrete finite request without opening hardware. Finite-mode
+/// memory/rate constraints are identical at high- and SuperSpeed.
+pub fn u3pro16_buffered_plan(
+    config: &LogicCaptureConfig,
+) -> LogicAnalyzerResult<DsLogicCapturePlan> {
+    if config.mode != CaptureMode::Finite {
+        return Err(LogicAnalyzerError::InvalidSettings(
+            "buffered acquisition requires finite capture mode".into(),
+        ));
+    }
+    build_plan(LinkSpeed::Super, &settings_from_config(config)?)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsbError {
     Timeout,
@@ -310,19 +365,63 @@ pub struct DsLogicU3Pro16<T: UsbTransport = RusbTransport> {
     transport: T,
     info: LogicAnalyzerInfo,
     settings: DsLogicCaptureSettings,
-    plan: Option<CapturePlan>,
+    plan: Option<DsLogicCapturePlan>,
+    trigger_header: Option<DsLogicTriggerHeader>,
+    prepared: bool,
     active: bool,
     header_pending: bool,
     bytes_remaining: Option<usize>,
     bit_position: u64,
 }
 
-#[derive(Clone, Copy)]
-struct CapturePlan {
+/// Immutable, validated device-buffered acquisition plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DsLogicCapturePlan {
     channels: u8,
     actual_samples: u64,
     actual_bytes: usize,
     stream_buffer: usize,
+}
+
+impl DsLogicCapturePlan {
+    pub const fn channel_count(self) -> u8 {
+        self.channels
+    }
+
+    pub const fn actual_samples(self) -> u64 {
+        self.actual_samples
+    }
+
+    pub const fn actual_bytes(self) -> usize {
+        self.actual_bytes
+    }
+}
+
+/// Device header translated into the capture timeline used by the application.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DsLogicTriggerHeader {
+    trigger_sample: Option<u64>,
+    captured_samples: u64,
+    remaining_samples: u64,
+    ram_start: u32,
+}
+
+impl DsLogicTriggerHeader {
+    pub const fn trigger_sample(self) -> Option<u64> {
+        self.trigger_sample
+    }
+
+    pub const fn captured_samples(self) -> u64 {
+        self.captured_samples
+    }
+
+    pub const fn remaining_samples(self) -> u64 {
+        self.remaining_samples
+    }
+
+    pub const fn ram_start(self) -> u32 {
+        self.ram_start
+    }
 }
 
 impl DsLogicU3Pro16<RusbTransport> {
@@ -351,6 +450,8 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
             info,
             settings,
             plan: None,
+            trigger_header: None,
+            prepared: false,
             active: false,
             header_pending: false,
             bytes_remaining: None,
@@ -406,6 +507,38 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         config: LogicCaptureConfig,
     ) -> LogicAnalyzerResult<LogicAnalyzerSource<Self>> {
         LogicAnalyzerSource::new(self, config)
+    }
+
+    /// Validates a finite buffered request against the connected device and
+    /// freezes the plan used by the subsequent `start_capture` call.
+    pub fn negotiate_buffered_capture(
+        &mut self,
+        config: &LogicCaptureConfig,
+    ) -> LogicAnalyzerResult<DsLogicCapturePlan> {
+        if config.mode != CaptureMode::Finite {
+            return Err(LogicAnalyzerError::InvalidSettings(
+                "buffered acquisition requires finite capture mode".into(),
+            ));
+        }
+        self.configure_capture(config)?;
+        let plan = self.plan()?;
+        self.plan = Some(plan);
+        Ok(plan)
+    }
+
+    /// Negotiates and configures the device without arming acquisition.
+    /// `start_capture` then performs only the final Start command.
+    pub fn prepare_buffered_capture(
+        &mut self,
+        config: &LogicCaptureConfig,
+    ) -> LogicAnalyzerResult<DsLogicCapturePlan> {
+        let plan = self.negotiate_buffered_capture(config)?;
+        self.configure_device_capture(plan)?;
+        Ok(plan)
+    }
+
+    pub fn take_trigger_header(&mut self) -> Option<DsLogicTriggerHeader> {
+        self.trigger_header.take()
     }
 
     /// Explicitly dangerous FX2 recovery. Only pass the exact U3Pro16 `.fw` image.
@@ -575,54 +708,17 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
             "the U3Pro16 FPGA is absent or has an incompatible image, and DSLogicU3Pro16.bin was not found; set DSLOGIC_U3PRO16_FPGA_IMAGE to the exact image".into(),
         ))
     }
-    fn plan(&self) -> LogicAnalyzerResult<CapturePlan> {
+    fn plan(&self) -> LogicAnalyzerResult<DsLogicCapturePlan> {
         build_plan(self.transport.link_speed(), &self.settings)
     }
-    fn settings_packet(&self, plan: CapturePlan) -> LogicAnalyzerResult<[u8; 672]> {
+    fn settings_packet(&self, plan: DsLogicCapturePlan) -> LogicAnalyzerResult<[u8; 672]> {
         build_settings_packet(self.transport.link_speed(), &self.settings, plan)
     }
-}
 
-impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
-    fn info(&self) -> &LogicAnalyzerInfo {
-        &self.info
-    }
-    fn configure_capture(&mut self, config: &LogicCaptureConfig) -> LogicAnalyzerResult<()> {
-        if config.input_mask > u64::from(u16::MAX) {
-            return Err(LogicAnalyzerError::InvalidSettings(
-                "U3Pro16 has only 16 inputs".into(),
-            ));
-        }
-        let mut settings = DsLogicCaptureSettings::finite(
-            config.sample_rate_hz,
-            config.input_mask as u16,
-            config.sample_limit,
-        );
-        settings.mode = config.mode;
-        settings.trigger_percent = config.trigger_percent;
-        settings.threshold_volts = config.threshold_volts;
-        settings.trigger = config.trigger.clone();
-        settings.run_length = config.encoding == LogicEncodingRequest::RunLength;
-        settings.external_clock = matches!(config.clock, ClockSource::External { .. });
-        settings.external_clock_active_edge = matches!(
-            config.clock,
-            ClockSource::External {
-                edge: ClockEdge::Rising
-            }
-        );
-        settings.input_filter = config.input_filter;
-        self.settings = settings;
-        Ok(())
-    }
-    fn sample_rate_hz(&self) -> u64 {
-        self.settings.sample_rate_hz
-    }
-    fn start_capture(&mut self) -> LogicAnalyzerResult<()> {
-        if self.active {
-            return Err(LogicAnalyzerError::Protocol(
-                "capture already active".into(),
-            ));
-        }
+    fn configure_device_capture(
+        &mut self,
+        plan: DsLogicCapturePlan,
+    ) -> LogicAnalyzerResult<()> {
         self.ensure_fpga_configured()?;
         if self.command_read_byte(15, 0x04)? != 0x0e {
             return Err(LogicAnalyzerError::Protocol(
@@ -645,7 +741,6 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
             let code = (volts.clamp(0.0, 3.3) / 3.3 * 1.5 / 2.5 * 255.0).floor() as u8;
             self.command_write(14, 0x78, &[code])?;
         }
-        let plan = self.plan()?;
         let packet = self.settings_packet(plan)?;
         self.command_write(9, 0, &[])?;
         if self.transport.link_speed() == LinkSpeed::High {
@@ -657,12 +752,46 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
         self.bulk_write_all(&packet, BULK_TIMEOUT)?;
         self.command_write(6, 0, &[0x80])?;
         self.poll_status(0x80)?;
+        self.prepared = true;
+        Ok(())
+    }
+}
+
+impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
+    fn info(&self) -> &LogicAnalyzerInfo {
+        &self.info
+    }
+    fn configure_capture(&mut self, config: &LogicCaptureConfig) -> LogicAnalyzerResult<()> {
+        self.settings = settings_from_config(config)?;
+        self.plan = None;
+        self.trigger_header = None;
+        self.prepared = false;
+        Ok(())
+    }
+    fn sample_rate_hz(&self) -> u64 {
+        self.settings.sample_rate_hz
+    }
+    fn start_capture(&mut self) -> LogicAnalyzerResult<()> {
+        if self.active {
+            return Err(LogicAnalyzerError::Protocol(
+                "capture already active".into(),
+            ));
+        }
+        let plan = match self.plan {
+            Some(plan) => plan,
+            None => self.plan()?,
+        };
+        if !self.prepared {
+            self.configure_device_capture(plan)?;
+        }
         self.command_write(8, 0, &[])?;
         self.plan = Some(plan);
         self.active = true;
+        self.prepared = false;
         self.header_pending = true;
         self.bytes_remaining = None;
         self.bit_position = 0;
+        self.trigger_header = None;
         Ok(())
     }
     fn next_chunk(&mut self) -> LogicAnalyzerResult<Option<LogicChunk>> {
@@ -672,30 +801,24 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
         let plan = self.plan.ok_or(LogicAnalyzerError::NotCapturing)?;
         if self.header_pending {
             let mut header = [0u8; 1024];
-            let read = usb(
-                self.transport.bulk_read(BULK_IN, &mut header, BULK_TIMEOUT),
-                "trigger header read",
-            )?;
+            let read = match self.transport.bulk_read(BULK_IN, &mut header, BULK_TIMEOUT) {
+                Ok(read) => read,
+                Err(UsbError::Timeout) => return Ok(Some(self.empty_chunk(plan))),
+                Err(UsbError::Other) => {
+                    return Err(LogicAnalyzerError::Transport(
+                        "trigger header read".into(),
+                    ));
+                }
+            };
             if read != header.len() {
                 return Err(LogicAnalyzerError::Protocol(format!(
                     "short trigger header: {read}/1024 bytes"
                 )));
             }
-            if u32::from_le_bytes(header[0..4].try_into().unwrap()) != 0x5555_5555 {
-                return Err(LogicAnalyzerError::Protocol(
-                    "invalid trigger-header magic".into(),
-                ));
-            }
-            let remaining = u32::from_le_bytes(header[12..16].try_into().unwrap()) as u64
-                | ((u32::from_le_bytes(header[16..20].try_into().unwrap()) as u64) << 32);
+            let translated = translate_trigger_header(&header, self.settings.mode, plan)?;
             if self.settings.mode == CaptureMode::Finite {
-                if remaining >= plan.actual_samples {
-                    return Err(LogicAnalyzerError::Protocol(
-                        "trigger header remaining count is outside capture limit".into(),
-                    ));
-                }
-                let delivered_samples = (plan.actual_samples - remaining) & !1023;
-                let delivered_bytes = delivered_samples
+                let delivered_bytes = translated
+                    .captured_samples
                     .checked_div(64)
                     .and_then(|n| n.checked_mul(u64::from(plan.channels)))
                     .and_then(|n| n.checked_mul(8))
@@ -711,6 +834,7 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
                     LogicAnalyzerError::Protocol("capture is too large for this host".into())
                 })?);
             }
+            self.trigger_header = Some(translated);
             self.header_pending = false;
         }
         if let Some(0) = self.bytes_remaining {
@@ -758,11 +882,9 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
             bit_len: read * 8,
             channel_count: plan.channels,
             start_bit: self.bit_position,
-            encoding: if self.settings.run_length {
-                LogicEncoding::Opaque
-            } else {
-                LogicEncoding::InterleavedLsbFirst
-            },
+            // Hardware RLE changes device-memory retention. The FPGA expands
+            // the upload back into ordinary interleaved samples.
+            encoding: LogicEncoding::InterleavedLsbFirst,
         };
         self.bit_position = self
             .bit_position
@@ -781,18 +903,14 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
 }
 
 impl<T: UsbTransport> DsLogicU3Pro16<T> {
-    fn empty_chunk(&self, plan: CapturePlan) -> LogicChunk {
+    fn empty_chunk(&self, plan: DsLogicCapturePlan) -> LogicChunk {
         LogicChunk {
             data: Arc::from([]),
             bit_offset: 0,
             bit_len: 0,
             channel_count: plan.channels,
             start_bit: self.bit_position,
-            encoding: if self.settings.run_length {
-                LogicEncoding::Opaque
-            } else {
-                LogicEncoding::InterleavedLsbFirst
-            },
+            encoding: LogicEncoding::InterleavedLsbFirst,
         }
     }
 }
@@ -804,16 +922,70 @@ impl<T: UsbTransport> Drop for DsLogicU3Pro16<T> {
     }
 }
 
+fn translate_trigger_header(
+    bytes: &[u8],
+    mode: CaptureMode,
+    plan: DsLogicCapturePlan,
+) -> LogicAnalyzerResult<DsLogicTriggerHeader> {
+    if bytes.len() < 24 {
+        return Err(LogicAnalyzerError::Protocol(format!(
+            "short trigger header: {}/24 bytes",
+            bytes.len()
+        )));
+    }
+    if u32::from_le_bytes(bytes[0..4].try_into().unwrap()) != 0x5555_5555 {
+        return Err(LogicAnalyzerError::Protocol(
+            "invalid trigger-header magic".into(),
+        ));
+    }
+    let real_position = u64::from(u32::from_le_bytes(bytes[4..8].try_into().unwrap()));
+    let ram_start = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+    let remaining_samples = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as u64
+        | ((u32::from_le_bytes(bytes[16..20].try_into().unwrap()) as u64) << 32);
+    let status = u32::from_le_bytes(bytes[20..24].try_into().unwrap());
+    let captured_samples = if mode == CaptureMode::Finite {
+        if remaining_samples >= plan.actual_samples {
+            return Err(LogicAnalyzerError::Protocol(
+                "trigger header remaining count is outside capture limit".into(),
+            ));
+        }
+        (plan.actual_samples - remaining_samples) & !1023
+    } else {
+        plan.actual_samples
+    };
+    let trigger_sample = if status & 1 != 0 {
+        if real_position >= captured_samples {
+            return Err(LogicAnalyzerError::Protocol(format!(
+                "trigger sample {real_position} is outside captured extent {captured_samples}"
+            )));
+        }
+        Some(real_position)
+    } else {
+        None
+    };
+    Ok(DsLogicTriggerHeader {
+        trigger_sample,
+        captured_samples,
+        remaining_samples,
+        ram_start,
+    })
+}
+
 fn build_plan(
     speed: LinkSpeed,
     settings: &DsLogicCaptureSettings,
-) -> LogicAnalyzerResult<CapturePlan> {
+) -> LogicAnalyzerResult<DsLogicCapturePlan> {
     if !RATES.contains(&settings.sample_rate_hz) {
         return Err(LogicAnalyzerError::InvalidSettings(
             "sample rate must be one of the device's discrete supported rates".into(),
         ));
     }
     let channels = settings.input_mask.count_ones() as u8;
+    if channels == 0 || settings.sample_limit == 0 {
+        return Err(LogicAnalyzerError::InvalidSettings(
+            "buffered capture requires enabled inputs and a non-zero sample limit".into(),
+        ));
+    }
     let width = 16 - settings.input_mask.leading_zeros() as u8;
     let max = mode_max_rate(speed, settings.mode, width).ok_or_else(|| {
         LogicAnalyzerError::InvalidSettings(
@@ -871,7 +1043,7 @@ fn build_plan(
             512,
         ),
     };
-    Ok(CapturePlan {
+    Ok(DsLogicCapturePlan {
         channels,
         actual_samples,
         actual_bytes: usize::try_from(actual_bytes).map_err(|_| {
@@ -920,7 +1092,7 @@ fn round_up_usize(value: usize, multiple: usize) -> usize {
 fn build_settings_packet(
     speed: LinkSpeed,
     settings: &DsLogicCaptureSettings,
-    plan: CapturePlan,
+    plan: DsLogicCapturePlan,
 ) -> LogicAnalyzerResult<[u8; 672]> {
     let width = 16 - settings.input_mask.leading_zeros() as u8;
     let max_rate = mode_max_rate(speed, settings.mode, width).unwrap();
@@ -1066,7 +1238,301 @@ fn put32(buffer: &mut [u8], offset: usize, value: u32) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    use serde::Deserialize;
+
+    use signal_processing::{
+        CaptureAcquisitionPhase, CaptureCursorItem, CaptureEvent, CaptureQueueReceiveError,
+        CaptureSessionId, CaptureStoreCursor, CaptureStoreDescriptor, NativeCaptureStore,
+        NativeCaptureStoreConfig, bounded_capture_event_queue,
+    };
+
+    use crate::live_capture::{AcquisitionContext, DsLogicU3Pro16BufferedProvider};
+
     use super::*;
+
+    #[derive(Deserialize)]
+    struct PacketFixture {
+        sample_rate_hz: u64,
+        input_mask: u16,
+        sample_limit: u64,
+        trigger_sample: u32,
+        ram_start: u32,
+        remaining_samples: u64,
+        expected: PacketExpected,
+    }
+
+    #[derive(Deserialize)]
+    struct PacketExpected {
+        mode: u16,
+        divider: u16,
+        divider_high: u16,
+        capture_units: u32,
+        trigger_position: u32,
+        channel_stage_word: u16,
+        actual_samples: u32,
+        trigger_mask0: u16,
+        trigger_value0: u16,
+        trigger_edge0: u16,
+        trigger_logic0: u16,
+    }
+
+    fn packet_fixture() -> PacketFixture {
+        serde_json::from_str(include_str!(
+            "../../test_data/dslogic_u3pro16/buffered_packet.json"
+        ))
+        .unwrap()
+    }
+
+    fn fixture_config(fixture: &PacketFixture) -> LogicCaptureConfig {
+        let mut stage = LogicTriggerStage::default();
+        stage.plane0[0] = TriggerCondition::Rising;
+        stage.plane0[2] = TriggerCondition::High;
+        LogicCaptureConfig {
+            trigger: LogicTrigger {
+                stages: vec![stage],
+                serial: false,
+            },
+            trigger_percent: 50,
+            encoding: LogicEncodingRequest::RunLength,
+            ..LogicCaptureConfig::finite(
+                fixture.sample_rate_hz,
+                u64::from(fixture.input_mask),
+                fixture.sample_limit,
+            )
+        }
+    }
+
+    fn fixture_header(fixture: &PacketFixture) -> Vec<u8> {
+        let mut header = vec![0_u8; 1024];
+        put32(&mut header, 0, 0x5555_5555);
+        put32(&mut header, 4, fixture.trigger_sample);
+        put32(&mut header, 8, fixture.ram_start);
+        put32(&mut header, 12, fixture.remaining_samples as u32);
+        put32(&mut header, 16, (fixture.remaining_samples >> 32) as u32);
+        put32(&mut header, 20, 1);
+        header
+    }
+
+    fn get16(bytes: &[u8], offset: usize) -> u16 {
+        u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+    }
+
+    fn get32(bytes: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+    }
+
+    struct FixtureTransport {
+        control_reads: VecDeque<Vec<u8>>,
+        bulk_reads: VecDeque<Vec<u8>>,
+        bulk_writes: Arc<Mutex<Vec<Vec<u8>>>>,
+    }
+
+    impl FixtureTransport {
+        fn new(header: Vec<u8>, data: Vec<u8>) -> (Self, Arc<Mutex<Vec<Vec<u8>>>>) {
+            const UNALIGNED_TRANSFER_BYTES: usize = 257;
+
+            assert!(data.len() > UNALIGNED_TRANSFER_BYTES);
+            let bulk_writes = Arc::new(Mutex::new(Vec::new()));
+            (
+                Self {
+                    control_reads: VecDeque::from([
+                        vec![0x40],
+                        vec![0x0e],
+                        vec![0x0e],
+                        vec![2, 0],
+                        vec![0x08],
+                        vec![0x80],
+                    ]),
+                    bulk_reads: VecDeque::from([
+                        header,
+                        data[..UNALIGNED_TRANSFER_BYTES].to_vec(),
+                        data[UNALIGNED_TRANSFER_BYTES..].to_vec(),
+                    ]),
+                    bulk_writes: Arc::clone(&bulk_writes),
+                },
+                bulk_writes,
+            )
+        }
+    }
+
+    impl UsbTransport for FixtureTransport {
+        fn link_speed(&self) -> LinkSpeed {
+            LinkSpeed::Super
+        }
+
+        fn control_write(
+            &mut self,
+            _request_type: u8,
+            _request: u8,
+            _value: u16,
+            _index: u16,
+            data: &[u8],
+            _timeout: Duration,
+        ) -> Result<usize, UsbError> {
+            Ok(data.len())
+        }
+
+        fn control_read(
+            &mut self,
+            _request_type: u8,
+            _request: u8,
+            _value: u16,
+            _index: u16,
+            data: &mut [u8],
+            _timeout: Duration,
+        ) -> Result<usize, UsbError> {
+            let response = self.control_reads.pop_front().ok_or(UsbError::Other)?;
+            if response.len() != data.len() {
+                return Err(UsbError::Other);
+            }
+            data.copy_from_slice(&response);
+            Ok(data.len())
+        }
+
+        fn bulk_write(
+            &mut self,
+            _endpoint: u8,
+            data: &[u8],
+            _timeout: Duration,
+        ) -> Result<usize, UsbError> {
+            self.bulk_writes.lock().unwrap().push(data.to_vec());
+            Ok(data.len())
+        }
+
+        fn bulk_read(
+            &mut self,
+            _endpoint: u8,
+            data: &mut [u8],
+            _timeout: Duration,
+        ) -> Result<usize, UsbError> {
+            let response = self.bulk_reads.pop_front().ok_or(UsbError::Timeout)?;
+            if response.len() > data.len() {
+                return Err(UsbError::Other);
+            }
+            data[..response.len()].copy_from_slice(&response);
+            Ok(response.len())
+        }
+    }
+
+    #[test]
+    fn buffered_packet_and_trigger_header_match_checked_in_fixture() {
+        let fixture = packet_fixture();
+        let config = fixture_config(&fixture);
+        let mut settings = DsLogicCaptureSettings::finite(
+            config.sample_rate_hz,
+            config.input_mask as u16,
+            config.sample_limit,
+        );
+        settings.trigger = config.trigger;
+        settings.run_length = config.encoding == LogicEncodingRequest::RunLength;
+        let plan = build_plan(LinkSpeed::Super, &settings).unwrap();
+        let packet = build_settings_packet(LinkSpeed::Super, &settings, plan).unwrap();
+        let expected = &fixture.expected;
+
+        assert_eq!(get16(&packet, 6), expected.mode);
+        assert_eq!(get16(&packet, 10), expected.divider);
+        assert_eq!(get16(&packet, 12), expected.divider_high);
+        assert_eq!(get32(&packet, 16), expected.capture_units);
+        assert_eq!(get32(&packet, 22), expected.trigger_position);
+        assert_eq!(get16(&packet, 28), expected.channel_stage_word);
+        assert_eq!(get32(&packet, 32), expected.actual_samples);
+        assert_eq!(get16(&packet, 48), expected.trigger_mask0);
+        assert_eq!(get16(&packet, 112), expected.trigger_value0);
+        assert_eq!(get16(&packet, 176), expected.trigger_edge0);
+        assert_eq!(get16(&packet, 240), expected.trigger_logic0);
+
+        let header = translate_trigger_header(&fixture_header(&fixture), CaptureMode::Finite, plan)
+            .unwrap();
+        assert_eq!(header.trigger_sample(), Some(u64::from(fixture.trigger_sample)));
+        assert_eq!(header.captured_samples(), fixture.sample_limit);
+        assert_eq!(header.remaining_samples(), fixture.remaining_samples);
+        assert_eq!(header.ram_start(), fixture.ram_start);
+    }
+
+    #[test]
+    fn buffered_provider_uploads_fixture_losslessly_and_publishes_actual_trigger() {
+        let fixture = packet_fixture();
+        let config = fixture_config(&fixture);
+        let data = (0..768).map(|index| (index * 37) as u8).collect::<Vec<_>>();
+        let expected_data = data.clone();
+        let (transport, settings_writes) =
+            FixtureTransport::new(fixture_header(&fixture), data);
+        let analyzer = DsLogicU3Pro16::new(transport).unwrap();
+        let channels = vec![
+            signal_processing::CaptureChannelId::new("u3pro16:input:0"),
+            signal_processing::CaptureChannelId::new("u3pro16:input:2"),
+            signal_processing::CaptureChannelId::new("u3pro16:input:5"),
+        ];
+        let provider =
+            DsLogicU3Pro16BufferedProvider::new(analyzer, config, channels.clone()).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let session_id = CaptureSessionId::new(0x8316);
+        let descriptor = CaptureStoreDescriptor::new(session_id, channels).unwrap();
+        let (store, writer) = NativeCaptureStore::create(
+            NativeCaptureStoreConfig::new(directory.path(), descriptor)
+                .with_commit_batch_chunks(1)
+                .unwrap(),
+        )
+        .unwrap();
+        let (events, event_reader) = bounded_capture_event_queue(64).unwrap();
+        let context = AcquisitionContext::new(session_id, Box::new(writer), Box::new(events));
+        let mut acquisition = provider.prepare(context).unwrap();
+
+        acquisition.start().unwrap();
+        let outcome = acquisition.join().unwrap();
+        assert_eq!(outcome.captured_samples, fixture.sample_limit);
+        assert_eq!(outcome.chunk_count, 2);
+        assert!(!outcome.stopped);
+        assert_eq!(settings_writes.lock().unwrap()[0].len(), 672);
+
+        let finalized = store.finalize().unwrap();
+        let mut cursor = finalized.open_cursor().unwrap();
+        let mut sample = 0_u64;
+        loop {
+            match cursor.next().unwrap() {
+                CaptureCursorItem::Chunk(chunk) => {
+                    assert_eq!(chunk.start_sample(), sample);
+                    for relative_sample in 0..chunk.sample_count() {
+                        for channel in 0..3 {
+                            let source_bit = ((sample + relative_sample) * 3) as usize + channel;
+                            let expected = expected_data[source_bit / 8] & (1 << (source_bit % 8)) != 0;
+                            assert_eq!(
+                                chunk.packed_level(relative_sample, channel),
+                                Some(expected),
+                                "sample {} channel {channel}",
+                                sample + relative_sample
+                            );
+                        }
+                    }
+                    sample += chunk.sample_count();
+                }
+                CaptureCursorItem::End => break,
+                CaptureCursorItem::Pending => panic!("finalized fixture cursor cannot be pending"),
+            }
+        }
+        assert_eq!(sample, fixture.sample_limit);
+
+        let mut trigger_sample = None;
+        let mut phases = Vec::new();
+        loop {
+            match event_reader.try_recv() {
+                Ok(CaptureEvent::Triggered { sample, .. }) => trigger_sample = Some(sample),
+                Ok(CaptureEvent::Status(status)) => phases.push(status.phase),
+                Ok(CaptureEvent::Progress { .. }) => {}
+                Ok(CaptureEvent::Failed(failure)) => panic!("fixture failed: {failure:?}"),
+                Err(CaptureQueueReceiveError::Closed) => break,
+                Err(CaptureQueueReceiveError::Empty) => std::thread::yield_now(),
+                Err(CaptureQueueReceiveError::Timeout) => unreachable!(),
+            }
+        }
+        assert_eq!(trigger_sample, Some(u64::from(fixture.trigger_sample)));
+        assert!(phases.contains(&CaptureAcquisitionPhase::CapturingOnDevice));
+        assert!(phases.contains(&CaptureAcquisitionPhase::UploadingBufferedData));
+    }
+
     #[test]
     fn finite_packet_has_protocol_markers() {
         let settings = DsLogicCaptureSettings::finite(100_000_000, 0xffff, 4096);

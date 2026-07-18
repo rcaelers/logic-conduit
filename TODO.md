@@ -68,7 +68,7 @@ Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN
 ## Capture sources
 
 - Implement the dependency-ordered delivery plan in
-  [Live Capture and Trigger Control](docs/LIVE_CAPTURE_TRIGGER_DESIGN.md). Continue with Phase 8 and do
+  [Live Capture and Trigger Control](docs/LIVE_CAPTURE_TRIGGER_DESIGN.md). Continue with Phase 9 and do
   not begin a later phase until the preceding completion gate passes:
   1. **Minimal authoritative store — complete:** sequential staging, committed-prefix cursors,
      finalization, byte-exact replay, bounded memory, and slow-reader isolation are implemented.
@@ -90,9 +90,9 @@ Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN
   7. **Provider-neutrality conformance — complete:** the device-buffered fake, explicit delivery
      and setting capabilities, shared provider/coordinator/viewer/analysis/replay/trigger suite,
      plug-in registration proof, and generic-source architecture guard are implemented.
-  8. **U3Pro16 device-buffered acquisition:** add concrete state migration,
+  8. **U3Pro16 device-buffered acquisition — complete:** concrete state migration,
      negotiation/lowering, trigger-header position, lossless upload, fixture coverage, and an
-     ignored hardware test.
+     ignored hardware test are implemented.
   9. **U3Pro16 host streaming and sustained ingest:** add the streaming profile, tuple validation,
      integrity reporting, bounded-memory benchmarks, and measured optimization only where needed.
   10. **Capture policies and health controls:** add finite/rolling policy, trigger placement,
