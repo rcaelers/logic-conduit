@@ -4,9 +4,7 @@ use std::path::PathBuf;
 
 #[cfg(test)]
 use logic_analyzer_graph::compiler::DiscoveredLiveCaptureFeature;
-use logic_analyzer_graph::compiler::{
-    BuilderRegistry, discover_compiled_live_capture_feature, lower,
-};
+use logic_analyzer_graph::compiler::{BuilderRegistry, discover_live_capture_feature};
 use node_graph::{GraphState, NodeId};
 #[cfg(test)]
 use signal_processing::CaptureStartMode;
@@ -86,17 +84,7 @@ pub(crate) fn capture_availability(
             reason: CaptureCoordinator::backend_unavailable_reason().into(),
         };
     }
-    let compiled = match lower(graph, builders) {
-        Ok(compiled) => compiled,
-        Err(errors) => {
-            let reason = errors
-                .first()
-                .map(|error| error.message.clone())
-                .unwrap_or_else(|| "The graph is not valid for capture".into());
-            return CaptureAvailability::Unavailable { reason };
-        }
-    };
-    match discover_compiled_live_capture_feature(graph, &compiled, builders) {
+    match discover_live_capture_feature(graph, builders) {
         Ok(Some(feature)) => CaptureAvailability::Available {
             source_node: feature.source_node,
             source_title: feature.source_title.clone(),
@@ -226,5 +214,26 @@ pub(crate) trait CaptureCoordinatorContract {
 
     fn graph_editing_enabled(&self) -> bool {
         !self.is_active()
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use logic_analyzer_graph::nodes;
+    use node_graph::{NodeDef, NodeGraphWidget};
+
+    use super::*;
+
+    #[test]
+    fn source_only_graph_is_available_for_raw_capture() {
+        let mut graph = NodeGraphWidget::new(nodes::build_registry());
+        graph
+            .add_node_at(nodes::DemoCaptureSource::name(), egui::Pos2::ZERO)
+            .expect("demo capture source is registered");
+
+        assert!(matches!(
+            capture_availability(graph.graph(), &BuilderRegistry::standard()),
+            CaptureAvailability::Available { .. }
+        ));
     }
 }

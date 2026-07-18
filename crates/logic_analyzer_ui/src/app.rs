@@ -596,16 +596,8 @@ impl App {
         self.node_graph.clear_node_statuses();
         self.run_message = None;
         self.node_graph.sync_node_states();
-        let compiled = match compiler::lower(self.node_graph.graph(), &self.builders) {
-            Ok(compiled) => compiled,
-            Err(errors) => {
-                self.report_compile_errors(&errors);
-                return;
-            }
-        };
-        let feature = match compiler::discover_compiled_live_capture_feature(
+        let feature = match compiler::discover_live_capture_feature(
             self.node_graph.graph(),
-            &compiled,
             &self.builders,
         ) {
             Ok(Some(feature)) => feature,
@@ -690,6 +682,17 @@ impl App {
             self.capture_analysis_error = Some("capture graph snapshot is unavailable".into());
             return;
         };
+        let compiled = match compiler::lower(&graph, &self.builders) {
+            Ok(compiled) => compiled,
+            Err(_) => return,
+        };
+        if !compiled
+            .nodes
+            .iter()
+            .any(|node| node.id == attachment.source_node)
+        {
+            return;
+        }
         let mut ctx = compiler::CompileCtx::default();
         self.logic_analyzer
             .set_derived_lanes(ctx.derived_lanes.clone());

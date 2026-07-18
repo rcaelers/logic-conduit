@@ -101,9 +101,10 @@ The UI-independent live-capture foundation is also present:
   acquisition and summary construction continue;
 - a trigger event advances the UI through Armed and observable Triggered state, records the
   recording origin, and adds an exact red trigger marker to the raw waveform timeline;
-- the application publishes analysis progress and sample lag, enables graph editing only in
-  Recording, routes hot-configurable changes through durable future-only epochs, keeps acquisition
-  controls immutable, and preserves live derived lanes while the analysis cursor catches up;
+- the application publishes analysis progress and sample lag when the graph has an analysis path,
+  enables graph editing only in Recording, routes hot-configurable changes through durable
+  future-only epochs, keeps acquisition controls immutable, and preserves live derived lanes while
+  the analysis cursor catches up;
 - Run on a live-source graph requires its associated finalized session, creates fresh derived lane
   stores without persistent-cache reuse, and atomically replaces the live-derived presentation;
 - `NodeGraphWidget` has a generic host-controlled editing mode: selection, inspection, copy, pan,
@@ -159,7 +160,7 @@ graph-run path remains available.
 ### Scope of the first complete release slice
 
 The first complete release slice supports exactly one live capture source and keeps the node graph
-fixed from Start until the capture and downstream drain both finish. It provides:
+fixed from Start until the capture and any downstream analysis drain finish. It provides:
 
 - trigger controls beside each enabled physical input lane;
 - one combined Start/Stop control in the Logic Analyzer panel title bar;
@@ -570,12 +571,15 @@ fabricates capture progress that its hardware cannot report.
 Start performs these operations in order:
 
 1. Synchronize all inline node controls and snapshot the graph revision.
-2. Resolve exactly one live-capture descriptor and validate the complete graph.
-3. Create fresh raw and derived stores and a gated analysis cursor whose origin is not yet fixed.
+2. Resolve exactly one live-capture descriptor and validate its acquisition settings independently
+   of downstream graph connectivity.
+3. Create a fresh raw store and a gated analysis cursor whose origin is not yet fixed.
 4. Ask the source feature to open the analyzer, negotiate an immutable effective plan, and configure
    it against the raw-store writer, including its trigger program.
-5. Materialize the base graph with a live analysis-cursor override and every downstream
-   subscription ready; later accepted hot configuration is scheduled through explicit epochs.
+5. When the source is retained by a valid sink-reachable graph, create fresh derived stores and
+   materialize that graph with a live analysis-cursor override and every downstream subscription
+   ready; later accepted hot configuration is scheduled through explicit epochs. Otherwise, raw
+   waveform capture proceeds without graph analysis.
 6. Start/arm the prepared acquisition and enter Armed or immediate Recording. A `Triggered` event
    fixes the recording origin and releases the analysis cursor; free-running capture uses its first
    committed sample.
@@ -848,7 +852,7 @@ error indicator. A compact health popover exposes buffer occupancy, input and wr
 storage, retained duration, summary lag, and graph/decoder lag. Warnings appear before a hard
 limit is reached. The existing Node Graph Run control remains separate:
 
-- **Capture Start/Stop** controls hardware acquisition plus its live analysis.
+- **Capture Start/Stop** controls hardware acquisition and its optional live analysis.
 - **Run** re-analyzes the current finalized capture with the current graph.
 
 Run is disabled while capture is active. Start is disabled while a replay run is active. If a live
