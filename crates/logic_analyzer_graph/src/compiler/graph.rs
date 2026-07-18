@@ -28,9 +28,9 @@ use node_graph::{
     VariadicInfo,
 };
 use signal_processing::{
-    AppManager, CaptureChannelId, CaptureStoreCursor, DerivedLanes, DisconnectEvent, InputSub,
-    NodeConfig, OverflowPolicy, PersistentStoreConfig, ProcessNode, SampleBlock, SamplingActivity,
-    SimpleTriggerCondition, ViewerRetention,
+    AppManager, CaptureChannelId, CaptureProviderCapabilities, CaptureStoreCursor, DerivedLanes,
+    DisconnectEvent, InputSub, NodeConfig, OverflowPolicy, PersistentStoreConfig, ProcessNode,
+    SampleBlock, SamplingActivity, SimpleTriggerCondition, ViewerRetention,
 };
 
 use super::cache_platform;
@@ -174,6 +174,7 @@ pub trait LiveCaptureFeature: Send {
     fn channels(&self) -> &[CaptureChannelId];
     fn channel_names(&self) -> &[String];
     fn sample_rate_hz(&self) -> f64;
+    fn capabilities(&self) -> &CaptureProviderCapabilities;
     fn simple_trigger_channels(&self) -> &[SimpleTriggerChannel] {
         &[]
     }
@@ -218,6 +219,10 @@ impl DiscoveredLiveCaptureFeature {
 
     pub fn sample_rate_hz(&self) -> f64 {
         self.feature.sample_rate_hz()
+    }
+
+    pub fn capabilities(&self) -> &CaptureProviderCapabilities {
+        self.feature.capabilities()
     }
 
     pub fn simple_trigger_channels(&self) -> &[SimpleTriggerChannel] {
@@ -449,6 +454,11 @@ fn discover_live_capture_feature_from(
                     Some("live capture channel names do not match its channel table")
                 } else if !feature.sample_rate_hz().is_finite() || feature.sample_rate_hz() <= 0.0 {
                     Some("live capture sample rate must be positive")
+                } else if !feature
+                    .capabilities()
+                    .supports(feature.channels(), feature.sample_rate_hz())
+                {
+                    Some("live capture settings are not advertised by the provider")
                 } else if feature
                     .simple_trigger_channels()
                     .iter()
@@ -1680,10 +1690,14 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    use logic_analyzer_processing::BinaryFileWriter;
+    use logic_analyzer_processing::{
+        AcquisitionContext, AcquisitionResult, BinaryFileWriter, BufferedFakeConfig,
+        BufferedFakeProvider, CaptureAnalysisChannel, CaptureAnalysisSource, PreparedAcquisition,
+    };
     use node_graph::{NodeDef, NodeGraphWidget};
     use signal_processing::{
-        CaptureChannelId, CaptureChunk, CaptureChunkWriter, CaptureSessionId, ConfigValue,
+        CaptureChannelId, CaptureChunk, CaptureChunkWriter, CaptureDataDelivery,
+        CaptureProviderCapabilities, CaptureSessionId, CaptureStoreCursor, ConfigValue,
         CooperativeManager, DerivedLaneData, NativeCaptureStore, NativeCaptureStoreConfig,
         NodeSpec, Pipeline, Sample, Trigger, Word,
     };
@@ -1721,6 +1735,140 @@ mod tests {
     struct InstrumentedCaptureBuilder {
         discovery_calls: Arc<AtomicUsize>,
         provider_build_calls: Arc<AtomicUsize>,
+    }
+
+    struct BufferedPluginBuilder;
+
+    struct BufferedPluginGraphSourceFactory {
+        channels: Arc<[CaptureChannelId]>,
+    }
+
+    struct BufferedPluginFeature {
+        channels: Arc<[CaptureChannelId]>,
+        channel_names: Arc<[String]>,
+        capabilities: CaptureProviderCapabilities,
+        provider: BufferedFakeProvider,
+    }
+
+    impl CaptureGraphSourceFactory for BufferedPluginGraphSourceFactory {
+        fn create(
+            &self,
+            cursor: Box<dyn CaptureStoreCursor>,
+        ) -> Result<Box<dyn ProcessNode>, String> {
+            let channels = self
+                .channels
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, channel)| {
+                    CaptureAnalysisChannel::separate(
+                        channel,
+                        format!("ch{index}"),
+                        format!("block{index}"),
+                    )
+                })
+                .collect();
+            CaptureAnalysisSource::new("buffered-plugin-analysis", cursor, 2_000_000.0, channels)
+                .map(|source| Box::new(source) as Box<dyn ProcessNode>)
+        }
+    }
+
+    impl LiveCaptureFeature for BufferedPluginFeature {
+        fn channels(&self) -> &[CaptureChannelId] {
+            &self.channels
+        }
+
+        fn channel_names(&self) -> &[String] {
+            &self.channel_names
+        }
+
+        fn sample_rate_hz(&self) -> f64 {
+            2_000_000.0
+        }
+
+        fn capabilities(&self) -> &CaptureProviderCapabilities {
+            &self.capabilities
+        }
+
+        fn graph_source_factory(&self) -> Arc<dyn CaptureGraphSourceFactory> {
+            Arc::new(BufferedPluginGraphSourceFactory {
+                channels: Arc::clone(&self.channels),
+            })
+        }
+
+        fn prepare(
+            self: Box<Self>,
+            context: AcquisitionContext,
+        ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
+            self.provider.prepare(context)
+        }
+    }
+
+    impl RuntimeBuilder for BufferedPluginBuilder {
+        fn is_source(&self) -> bool {
+            true
+        }
+
+        fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
+            crate::nodes::DemoCaptureSourceBuilder.accepted_kinds(socket, state)
+        }
+
+        fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
+            crate::nodes::DemoCaptureSourceBuilder.offered_kinds(socket, state)
+        }
+
+        fn input_port(
+            &self,
+            socket: &Socket,
+            member_index: usize,
+            state: &Value,
+            kind: PortKind,
+        ) -> Option<String> {
+            crate::nodes::DemoCaptureSourceBuilder.input_port(socket, member_index, state, kind)
+        }
+
+        fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
+            crate::nodes::DemoCaptureSourceBuilder.output_port(socket, state, kind)
+        }
+
+        fn viewer_channel_origin(&self, socket: &Socket, state: &Value) -> Option<usize> {
+            crate::nodes::DemoCaptureSourceBuilder.viewer_channel_origin(socket, state)
+        }
+
+        fn live_capture_feature(
+            &self,
+            _state: &Value,
+        ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
+            let channels: Arc<[CaptureChannelId]> = vec![
+                CaptureChannelId::new("pod-a:3"),
+                CaptureChannelId::new("pod-q:41"),
+                CaptureChannelId::new("aux-bank:9"),
+            ]
+            .into();
+            let config = BufferedFakeConfig::new(Arc::clone(&channels), 2_000_000, 19, 5, 0x8d31)
+                .map_err(|error| error.to_string())?;
+            let capabilities = config.capabilities().clone();
+            Ok(Some(Box::new(BufferedPluginFeature {
+                channel_names: vec!["Pod A 3".into(), "Pod Q 41".into(), "Aux 9".into()].into(),
+                channels,
+                capabilities,
+                provider: BufferedFakeProvider::new(config),
+            })))
+        }
+
+        fn input_required(&self, socket: &Socket, state: &Value) -> bool {
+            crate::nodes::DemoCaptureSourceBuilder.input_required(socket, state)
+        }
+
+        fn build(
+            &self,
+            name: &str,
+            state: &Value,
+            resolved: &ResolvedInputs,
+            ctx: &mut CompileCtx,
+        ) -> Result<Box<dyn ProcessNode>, String> {
+            crate::nodes::DemoCaptureSourceBuilder.build(name, state, resolved, ctx)
+        }
     }
 
     impl RuntimeBuilder for InstrumentedCaptureBuilder {
@@ -2944,6 +3092,45 @@ mod tests {
 
         assert_eq!(presentation.group_key, "plugin group");
         assert_eq!(presentation.track_key, "plugin track");
+    }
+
+    #[test]
+    fn buffered_provider_registers_through_the_existing_live_feature_contract() {
+        let mut node_types = nodes::build_registry();
+        let mut builders = BuilderRegistry::standard();
+        crate::compiler::PluginContext::new(&mut node_types, &mut builders).register_builder(
+            nodes::DemoCaptureSource::name(),
+            Box::new(BufferedPluginBuilder),
+        );
+        let mut widget = NodeGraphWidget::new(node_types);
+        let source = widget
+            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::ZERO)
+            .unwrap();
+
+        let feature = discover_live_capture_feature(widget.graph(), &builders)
+            .unwrap()
+            .expect("registered builder should expose its live feature");
+
+        assert_eq!(feature.source_node, source);
+        assert_eq!(
+            feature.capabilities().data_delivery(),
+            CaptureDataDelivery::BufferedUpload
+        );
+        assert_eq!(
+            feature.channels(),
+            [
+                CaptureChannelId::new("pod-a:3"),
+                CaptureChannelId::new("pod-q:41"),
+                CaptureChannelId::new("aux-bank:9"),
+            ]
+        );
+        assert_eq!(feature.capabilities().setting_matrix().len(), 2);
+        assert!(
+            feature
+                .capabilities()
+                .supports(feature.channels(), feature.sample_rate_hz())
+        );
+        assert!(!feature.capabilities().supports_force_trigger());
     }
 
     #[test]

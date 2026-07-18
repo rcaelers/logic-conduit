@@ -4,6 +4,7 @@
 //! owns only the canonical data, status, and writer boundaries shared by capture providers,
 //! stores, graph cursors, and viewers.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
@@ -87,6 +88,118 @@ impl CaptureChannelId {
 impl fmt::Display for CaptureChannelId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureDataDelivery {
+    /// Canonical chunks become available while acquisition is still sampling.
+    DuringAcquisition,
+    /// Sampling completes in provider-owned storage before canonical chunks are uploaded.
+    BufferedUpload,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CaptureSettingCombination {
+    channels: Arc<[CaptureChannelId]>,
+    sample_rates_hz: Arc<[u64]>,
+}
+
+impl CaptureSettingCombination {
+    pub fn new(
+        channels: impl Into<Arc<[CaptureChannelId]>>,
+        sample_rates_hz: impl Into<Arc<[u64]>>,
+    ) -> Result<Self, String> {
+        let channels = channels.into();
+        let sample_rates_hz = sample_rates_hz.into();
+        if channels.is_empty() {
+            return Err("a capture setting combination requires at least one channel".into());
+        }
+        if sample_rates_hz.is_empty() || sample_rates_hz.contains(&0) {
+            return Err("capture setting sample rates must be non-zero".into());
+        }
+        let unique_channels: HashSet<_> = channels.iter().collect();
+        if unique_channels.len() != channels.len() {
+            return Err("capture setting channels must be unique".into());
+        }
+        let unique_rates: HashSet<_> = sample_rates_hz.iter().collect();
+        if unique_rates.len() != sample_rates_hz.len() {
+            return Err("capture setting sample rates must be unique".into());
+        }
+        Ok(Self {
+            channels,
+            sample_rates_hz,
+        })
+    }
+
+    pub fn channels(&self) -> &[CaptureChannelId] {
+        &self.channels
+    }
+
+    pub fn sample_rates_hz(&self) -> &[u64] {
+        &self.sample_rates_hz
+    }
+
+    pub fn supports(&self, channels: &[CaptureChannelId], sample_rate_hz: f64) -> bool {
+        self.channels.as_ref() == channels
+            && self
+                .sample_rates_hz
+                .iter()
+                .any(|rate| *rate as f64 == sample_rate_hz)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CaptureProviderCapabilities {
+    data_delivery: CaptureDataDelivery,
+    setting_matrix: Arc<[CaptureSettingCombination]>,
+    force_trigger: bool,
+}
+
+impl CaptureProviderCapabilities {
+    pub fn new(
+        data_delivery: CaptureDataDelivery,
+        setting_matrix: impl Into<Arc<[CaptureSettingCombination]>>,
+        force_trigger: bool,
+    ) -> Result<Self, String> {
+        let setting_matrix = setting_matrix.into();
+        if setting_matrix.is_empty() {
+            return Err("capture capabilities require a non-empty setting matrix".into());
+        }
+        Ok(Self {
+            data_delivery,
+            setting_matrix,
+            force_trigger,
+        })
+    }
+
+    pub fn single(
+        data_delivery: CaptureDataDelivery,
+        channels: impl Into<Arc<[CaptureChannelId]>>,
+        sample_rate_hz: u64,
+    ) -> Self {
+        let setting = CaptureSettingCombination::new(channels, Arc::from([sample_rate_hz]))
+            .expect("single capture capability is valid");
+        Self::new(data_delivery, Arc::from([setting]), false)
+            .expect("single capture capability is valid")
+    }
+
+    pub const fn data_delivery(&self) -> CaptureDataDelivery {
+        self.data_delivery
+    }
+
+    pub fn setting_matrix(&self) -> &[CaptureSettingCombination] {
+        &self.setting_matrix
+    }
+
+    pub const fn supports_force_trigger(&self) -> bool {
+        self.force_trigger
+    }
+
+    pub fn supports(&self, channels: &[CaptureChannelId], sample_rate_hz: f64) -> bool {
+        self.setting_matrix
+            .iter()
+            .any(|setting| setting.supports(channels, sample_rate_hz))
     }
 }
 
@@ -848,7 +961,8 @@ mod tests {
 
     use super::{
         CaptureBufferPool, CaptureChannelId, CaptureChunk, CaptureChunkError, CaptureChunkWriter,
-        CaptureQueueLimits, CaptureSessionId, CaptureWriteError, SimpleTriggerCondition,
+        CaptureDataDelivery, CaptureProviderCapabilities, CaptureQueueLimits, CaptureSessionId,
+        CaptureSettingCombination, CaptureWriteError, SimpleTriggerCondition,
         bounded_capture_queue,
     };
 
@@ -890,6 +1004,59 @@ mod tests {
         assert_eq!(chunk.packed_level(2, 1), Some(true));
         assert_eq!(chunk.packed_level(3, 0), None);
         assert_eq!(chunk.packed_level(0, 3), None);
+    }
+
+    #[test]
+    fn provider_capabilities_validate_and_match_only_explicit_setting_tuples() {
+        let all_channels = channels();
+        let bank_subset = vec![all_channels[0].clone(), all_channels[2].clone()];
+        let capabilities = CaptureProviderCapabilities::new(
+            CaptureDataDelivery::BufferedUpload,
+            vec![
+                CaptureSettingCombination::new(
+                    Arc::clone(&all_channels),
+                    Arc::from([1_000_000_u64]),
+                )
+                .unwrap(),
+                CaptureSettingCombination::new(
+                    bank_subset.clone(),
+                    Arc::from([4_000_000_u64, 8_000_000]),
+                )
+                .unwrap(),
+            ],
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            capabilities.data_delivery(),
+            CaptureDataDelivery::BufferedUpload
+        );
+        assert!(capabilities.supports(&all_channels, 1_000_000.0));
+        assert!(capabilities.supports(&bank_subset, 8_000_000.0));
+        assert!(!capabilities.supports(&all_channels, 8_000_000.0));
+        assert!(!capabilities.supports(&bank_subset, 1_000_000.0));
+        assert!(!capabilities.supports_force_trigger());
+
+        assert!(CaptureSettingCombination::new(Vec::new(), Arc::from([1_u64])).is_err());
+        assert!(
+            CaptureSettingCombination::new(
+                vec![all_channels[0].clone(), all_channels[0].clone()],
+                Arc::from([1_u64]),
+            )
+            .is_err()
+        );
+        assert!(
+            CaptureSettingCombination::new(Arc::clone(&all_channels), Arc::from([0_u64])).is_err()
+        );
+        assert!(
+            CaptureProviderCapabilities::new(
+                CaptureDataDelivery::DuringAcquisition,
+                Vec::new(),
+                false,
+            )
+            .is_err()
+        );
     }
 
     #[test]

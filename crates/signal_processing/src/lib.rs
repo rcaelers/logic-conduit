@@ -84,12 +84,13 @@ pub(crate) use idle::idle_backoff;
 pub use live_capture::{
     CAPTURE_CHUNK_FORMAT_VERSION, CaptureAcquisitionPhase, CaptureBufferLease, CaptureBufferPool,
     CaptureBufferPoolError, CaptureBufferPoolMetrics, CaptureBytes, CaptureChannelId, CaptureChunk,
-    CaptureChunkError, CaptureChunkPayload, CaptureChunkWriter, CaptureEvent,
+    CaptureChunkError, CaptureChunkPayload, CaptureChunkWriter, CaptureDataDelivery, CaptureEvent,
     CaptureEventPublishError, CaptureEventPublisher, CaptureEventQueuePublisher,
     CaptureEventQueueReader, CaptureFailure, CaptureFailureKind, CaptureProgress,
-    CaptureQueueConfigError, CaptureQueueLimits, CaptureQueueReader, CaptureQueueReceiveError,
-    CaptureQueueWriter, CaptureSessionId, CaptureSessionState, CaptureStatus, CaptureWriteError,
-    SimpleTriggerCondition, bounded_capture_event_queue, bounded_capture_queue,
+    CaptureProviderCapabilities, CaptureQueueConfigError, CaptureQueueLimits, CaptureQueueReader,
+    CaptureQueueReceiveError, CaptureQueueWriter, CaptureSessionId, CaptureSessionState,
+    CaptureSettingCombination, CaptureStatus, CaptureWriteError, SimpleTriggerCondition,
+    bounded_capture_event_queue, bounded_capture_queue,
 };
 pub use live_capture_store::*;
 pub use manager::{DisconnectEvent, InputSub, NodeSpec, PipelineManager};

@@ -6,7 +6,10 @@ use logic_analyzer_processing::{
     AcquisitionContext, AcquisitionResult, CaptureAnalysisChannel, CaptureAnalysisSource,
     DeterministicFakeConfig, DeterministicFakeProvider, PreparedAcquisition,
 };
-use signal_processing::{CaptureChannelId, CaptureStoreCursor, ProcessNode};
+use signal_processing::{
+    CaptureChannelId, CaptureDataDelivery, CaptureProviderCapabilities, CaptureSettingCombination,
+    CaptureStoreCursor, ProcessNode,
+};
 
 use crate::compiler::{CaptureGraphSourceFactory, LiveCaptureFeature, SimpleTriggerChannel};
 use crate::nodes::DemoCaptureSourceState;
@@ -46,6 +49,7 @@ struct DemoLiveCaptureFeature {
     channels: Arc<[CaptureChannelId]>,
     channel_names: Arc<[String]>,
     simple_trigger_channels: Arc<[SimpleTriggerChannel]>,
+    capabilities: CaptureProviderCapabilities,
     provider: DeterministicFakeProvider,
 }
 
@@ -60,6 +64,10 @@ impl LiveCaptureFeature for DemoLiveCaptureFeature {
 
     fn sample_rate_hz(&self) -> f64 {
         SAMPLE_RATE_HZ
+    }
+
+    fn capabilities(&self) -> &CaptureProviderCapabilities {
+        &self.capabilities
     }
 
     fn simple_trigger_channels(&self) -> &[SimpleTriggerChannel] {
@@ -125,10 +133,26 @@ pub(super) fn feature(
         )
         .collect::<Vec<_>>()
         .into();
+    let setting_matrix = vec![
+        CaptureSettingCombination::new(Arc::clone(&channels), Arc::from([1_000_000_u64]))
+            .map_err(|error| error.to_string())?,
+        CaptureSettingCombination::new(
+            channels[..4].to_vec(),
+            Arc::from([5_000_000_u64, 10_000_000]),
+        )
+        .map_err(|error| error.to_string())?,
+    ];
+    let capabilities = CaptureProviderCapabilities::new(
+        CaptureDataDelivery::DuringAcquisition,
+        setting_matrix,
+        false,
+    )
+    .map_err(|error| error.to_string())?;
     Ok(Some(Box::new(DemoLiveCaptureFeature {
         channels,
         channel_names,
         simple_trigger_channels,
+        capabilities,
         provider: DeterministicFakeProvider::new(config),
     })))
 }

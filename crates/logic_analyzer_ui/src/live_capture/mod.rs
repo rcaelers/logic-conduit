@@ -23,6 +23,9 @@ std::cfg_select! {
 
 pub(crate) use imp::CaptureCoordinator;
 
+#[cfg(test)]
+mod architecture_tests;
+
 /// Outer `Option` on the coordinator method means "no update"; this inner
 /// option carries either a new growing index or an explicit detach.
 pub(crate) type CaptureWaveformUpdate = Option<Box<dyn CaptureIndex>>;

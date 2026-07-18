@@ -15,8 +15,12 @@ pub use analysis::{CaptureAnalysisChannel, CaptureAnalysisSource};
 std::cfg_select! {
     target_arch = "wasm32" => {}
     _ => {
+        mod buffered_fake_native;
         mod fake_native;
 
+        pub use buffered_fake_native::{
+            BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider,
+        };
         pub use fake_native::{
             DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,
         };
@@ -174,3 +178,6 @@ pub trait PreparedAcquisition: Send {
     fn is_finished(&self) -> bool;
     fn join(self: Box<Self>) -> AcquisitionResult<AcquisitionOutcome>;
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod conformance_tests;

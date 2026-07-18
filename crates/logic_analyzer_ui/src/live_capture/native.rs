@@ -136,7 +136,6 @@ impl CaptureCoordinator {
                 if session_id == status.session_id =>
             {
                 status.state = CaptureSessionState::Triggered;
-                status.phase = CaptureAcquisitionPhase::ReceivingLiveData;
                 status.trigger_sample = Some(sample);
                 status.recording_origin = Some(sample);
                 self.record_state(CaptureSessionState::Triggered);
@@ -505,27 +504,35 @@ mod tests {
     use logic_analyzer_graph::{compiler, nodes};
     use logic_analyzer_processing::{
         AcquisitionContext, AcquisitionError, AcquisitionResult, CaptureAnalysisChannel,
-        CaptureAnalysisSource, DeterministicFakeConfig, DeterministicFakeController,
-        DeterministicFakeProvider, PreparedAcquisition,
+        CaptureAnalysisSource, BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider,
+        DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,
+        PreparedAcquisition,
     };
     use node_graph::{NodeDef, NodeGraphWidget, NodeId};
     use signal_processing::{
-        CaptureChannelId, CaptureSessionState, CaptureStoreCursor, ProcessNode,
-        SimpleTriggerCondition,
+        CaptureChannelId, CaptureDataDelivery, CaptureProviderCapabilities, CaptureSessionState,
+        CaptureStoreCursor, ProcessNode, SimpleTriggerCondition,
     };
 
     use super::{CaptureCoordinator, CaptureCoordinatorContract};
 
+    type PrepareCapture = Box<
+        dyn FnOnce(AcquisitionContext) -> AcquisitionResult<Box<dyn PreparedAcquisition>> + Send,
+    >;
+
     struct FakeFeature {
         channels: Vec<CaptureChannelId>,
         channel_names: Vec<String>,
-        provider: DeterministicFakeProvider,
+        sample_rate_hz: f64,
+        prepare: Option<PrepareCapture>,
         prepare_calls: Arc<AtomicUsize>,
         simple_trigger_channels: Vec<SimpleTriggerChannel>,
+        capabilities: CaptureProviderCapabilities,
     }
 
     struct TestGraphSourceFactory {
         channels: Vec<CaptureChannelId>,
+        sample_rate_hz: f64,
     }
 
     impl CaptureGraphSourceFactory for TestGraphSourceFactory {
@@ -533,7 +540,7 @@ mod tests {
             &self,
             cursor: Box<dyn CaptureStoreCursor>,
         ) -> Result<Box<dyn ProcessNode>, String> {
-            test_analysis_source(&self.channels, cursor)
+            test_analysis_source(&self.channels, self.sample_rate_hz, cursor)
         }
     }
 
@@ -547,7 +554,11 @@ mod tests {
         }
 
         fn sample_rate_hz(&self) -> f64 {
-            1_000_000_000.0
+            self.sample_rate_hz
+        }
+
+        fn capabilities(&self) -> &CaptureProviderCapabilities {
+            &self.capabilities
         }
 
         fn simple_trigger_channels(&self) -> &[SimpleTriggerChannel] {
@@ -557,6 +568,7 @@ mod tests {
         fn graph_source_factory(&self) -> Arc<dyn CaptureGraphSourceFactory> {
             Arc::new(TestGraphSourceFactory {
                 channels: self.channels.clone(),
+                sample_rate_hz: self.sample_rate_hz,
             })
         }
 
@@ -564,14 +576,19 @@ mod tests {
             self: Box<Self>,
             context: AcquisitionContext,
         ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
-            self.prepare_calls.fetch_add(1, Ordering::SeqCst);
-            self.provider.prepare(context)
+            let mut feature = *self;
+            feature.prepare_calls.fetch_add(1, Ordering::SeqCst);
+            feature
+                .prepare
+                .take()
+                .expect("test live-capture feature prepares at most once")(context)
         }
     }
 
     struct FailingFeature {
         channels: Vec<CaptureChannelId>,
         channel_names: Vec<String>,
+        capabilities: CaptureProviderCapabilities,
     }
 
     impl LiveCaptureFeature for FailingFeature {
@@ -587,9 +604,14 @@ mod tests {
             1_000_000_000.0
         }
 
+        fn capabilities(&self) -> &CaptureProviderCapabilities {
+            &self.capabilities
+        }
+
         fn graph_source_factory(&self) -> Arc<dyn CaptureGraphSourceFactory> {
             Arc::new(TestGraphSourceFactory {
                 channels: self.channels.clone(),
+                sample_rate_hz: self.sample_rate_hz(),
             })
         }
 
@@ -605,6 +627,7 @@ mod tests {
 
     fn test_analysis_source(
         channels: &[CaptureChannelId],
+        sample_rate_hz: f64,
         cursor: Box<dyn CaptureStoreCursor>,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let layout = channels
@@ -615,8 +638,16 @@ mod tests {
                 CaptureAnalysisChannel::polymorphic(channel, format!("ch{index}"))
             })
             .collect();
-        CaptureAnalysisSource::new("test-live-analysis", cursor, 1_000_000_000.0, layout)
+        CaptureAnalysisSource::new("test-live-analysis", cursor, sample_rate_hz, layout)
             .map(|source| Box::new(source) as Box<dyn ProcessNode>)
+    }
+
+    fn streaming_capabilities(channels: &[CaptureChannelId]) -> CaptureProviderCapabilities {
+        CaptureProviderCapabilities::single(
+            CaptureDataDelivery::DuringAcquisition,
+            channels.to_vec(),
+            1_000_000_000,
+        )
     }
 
     fn manual_feature_with_counter() -> (
@@ -632,6 +663,7 @@ mod tests {
             .unwrap();
         let (provider, controller) = DeterministicFakeProvider::manually_paced(config);
         let prepare_calls = Arc::new(AtomicUsize::new(0));
+        let capabilities = streaming_capabilities(&channels);
         let feature =
             DiscoveredLiveCaptureFeature::new(
                 NodeId(41),
@@ -639,9 +671,11 @@ mod tests {
                 Box::new(FakeFeature {
                     channel_names: vec!["Bank A 7".into(), "Bank C 2".into()],
                     channels,
-                    provider,
+                    sample_rate_hz: 1_000_000_000.0,
+                    prepare: Some(Box::new(move |context| provider.prepare(context))),
                     prepare_calls: Arc::clone(&prepare_calls),
                     simple_trigger_channels: Vec::new(),
+                    capabilities,
                 }),
             );
         (feature, controller, prepare_calls)
@@ -652,39 +686,106 @@ mod tests {
         (feature, controller)
     }
 
+    fn manual_triggered_feature_with_counter() -> (
+        DiscoveredLiveCaptureFeature,
+        DeterministicFakeController,
+        u64,
+        Arc<AtomicUsize>,
+    ) {
+        let channels = (0..19)
+            .map(|channel| {
+                CaptureChannelId::new(format!("stream-bank-{}:{}", channel % 4, channel * 7 + 3))
+            })
+            .collect::<Vec<_>>();
+        let mut trigger_conditions = vec![None; channels.len()];
+        trigger_conditions[0] = Some(SimpleTriggerCondition::Rising);
+        let config = DeterministicFakeConfig::new(channels.clone(), vec![3, 5, 2, 7], 0x5a17)
+            .unwrap()
+            .with_simple_trigger(trigger_conditions)
+            .unwrap();
+        let trigger_sample = config.first_trigger_sample().unwrap();
+        let (provider, controller) = DeterministicFakeProvider::manually_paced(config);
+        let capabilities = streaming_capabilities(&channels);
+        let prepare_calls = Arc::new(AtomicUsize::new(0));
+        let feature = DiscoveredLiveCaptureFeature::new(
+            NodeId(42),
+            "Triggered Contract Fake",
+            Box::new(FakeFeature {
+                channel_names: (0..channels.len())
+                    .map(|channel| format!("Streaming {channel}"))
+                    .collect(),
+                simple_trigger_channels: vec![SimpleTriggerChannel {
+                    channel_id: channels[0].clone(),
+                    viewer_channel: 0,
+                    name: "Streaming 0".into(),
+                    enabled: true,
+                    condition: SimpleTriggerCondition::Rising,
+                }],
+                channels,
+                sample_rate_hz: 1_000_000_000.0,
+                prepare: Some(Box::new(move |context| provider.prepare(context))),
+                prepare_calls: Arc::clone(&prepare_calls),
+                capabilities,
+            }),
+        );
+        (feature, controller, trigger_sample, prepare_calls)
+    }
+
     fn manual_triggered_feature() -> (
         DiscoveredLiveCaptureFeature,
         DeterministicFakeController,
         u64,
     ) {
+        let (feature, controller, trigger_sample, _) = manual_triggered_feature_with_counter();
+        (feature, controller, trigger_sample)
+    }
+
+    fn buffered_triggered_feature() -> (
+        DiscoveredLiveCaptureFeature,
+        BufferedFakeController,
+        u64,
+        Arc<AtomicUsize>,
+    ) {
         let channels = vec![
-            CaptureChannelId::new("bank-a:7"),
-            CaptureChannelId::new("bank-c:2"),
+            CaptureChannelId::new("pod-a:3"),
+            CaptureChannelId::new("pod-q:41"),
+            CaptureChannelId::new("aux-bank:9"),
         ];
-        let config = DeterministicFakeConfig::new(channels.clone(), vec![3, 5, 2, 7], 0x5a17)
-            .unwrap()
-            .with_simple_trigger(vec![Some(SimpleTriggerCondition::Rising), None])
-            .unwrap();
+        let sample_rate_hz = 2_000_000_u64;
+        let config = BufferedFakeConfig::new(
+            channels.clone(),
+            sample_rate_hz,
+            19,
+            5,
+            0x8d31,
+        )
+        .unwrap()
+        .with_simple_trigger(vec![None, Some(SimpleTriggerCondition::Falling), None])
+        .unwrap();
         let trigger_sample = config.first_trigger_sample().unwrap();
-        let (provider, controller) = DeterministicFakeProvider::manually_paced(config);
+        let capabilities = config.capabilities().clone();
+        let (provider, controller) = BufferedFakeProvider::manually_uploaded(config);
+        let prepare_calls = Arc::new(AtomicUsize::new(0));
         let feature = DiscoveredLiveCaptureFeature::new(
-            NodeId(42),
-            "Triggered Contract Fake",
+            NodeId(43),
+            "Buffered Contract Fake",
             Box::new(FakeFeature {
-                channel_names: vec!["Bank A 7".into(), "Bank C 2".into()],
+                channel_names: vec!["Pod A 3".into(), "Pod Q 41".into(), "Aux 9".into()],
                 simple_trigger_channels: vec![SimpleTriggerChannel {
-                    channel_id: channels[0].clone(),
-                    viewer_channel: 0,
-                    name: "Bank A 7".into(),
+                    channel_id: channels[1].clone(),
+                    viewer_channel: 1,
+                    name: "Pod Q 41".into(),
                     enabled: true,
-                    condition: SimpleTriggerCondition::Rising,
+                    condition: SimpleTriggerCondition::Falling,
                 }],
                 channels,
-                provider,
-                prepare_calls: Arc::new(AtomicUsize::new(0)),
+                sample_rate_hz: sample_rate_hz as f64,
+                prepare: Some(Box::new(move |context| provider.prepare(context))),
+                prepare_calls: Arc::clone(&prepare_calls),
+                capabilities,
             }),
         );
-        (feature, controller, trigger_sample)
+        (feature, controller, trigger_sample, prepare_calls)
     }
 
     fn poll_until(coordinator: &mut CaptureCoordinator, condition: impl Fn(&CaptureCoordinator) -> bool) {
@@ -694,6 +795,114 @@ mod tests {
             coordinator.poll();
             std::thread::yield_now();
         }
+    }
+
+    fn run_triggered_coordinator_contract(
+        feature: DiscoveredLiveCaptureFeature,
+        expected_delivery: CaptureDataDelivery,
+        expected_samples: u64,
+        expected_trigger: u64,
+        prepare_calls: Arc<AtomicUsize>,
+        drive_capture: impl FnOnce(),
+    ) {
+        let source_node = feature.source_node;
+        let channels = feature.channels().to_vec();
+        assert_eq!(
+            feature.capabilities().data_delivery(),
+            expected_delivery
+        );
+
+        let mut coordinator = CaptureCoordinator::new();
+        coordinator.start(feature).unwrap();
+        drive_capture();
+        poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
+
+        let manifest = coordinator.completed_manifest().unwrap();
+        assert_eq!(manifest.descriptor.channels(), channels);
+        assert_eq!(manifest.committed_chunks, 4);
+        assert_eq!(manifest.committed_samples, expected_samples);
+        assert_eq!(coordinator.completed_recording_origin(), Some(expected_trigger));
+        assert_eq!(coordinator.completed_trigger_sample(), Some(expected_trigger));
+        assert_eq!(
+            coordinator.status().unwrap().trigger_sample,
+            Some(expected_trigger)
+        );
+        let states = coordinator.state_history();
+        assert!(states.contains(&CaptureSessionState::Prepared));
+        assert!(states.contains(&CaptureSessionState::Armed));
+        assert!(states.contains(&CaptureSessionState::Triggered));
+        assert!(states.contains(&CaptureSessionState::Recording));
+        assert_eq!(states.last(), Some(&CaptureSessionState::Complete));
+
+        let waveform = coordinator
+            .take_waveform_update()
+            .expect("coordinator should publish a waveform update")
+            .expect("completed capture should retain its waveform");
+        let mut viewer = logic_analyzer_viewer::LogicAnalyzerViewer::new();
+        viewer.set_growing_capture(waveform);
+        assert!(viewer.has_growing_capture());
+        assert!(viewer.growing_capture_complete());
+
+        let analysis = coordinator
+            .take_analysis_attachment()
+            .expect("coordinator should attach live analysis");
+        assert_eq!(analysis.source_node, source_node);
+        let analysis_schema = analysis
+            .process
+            .output_schema()
+            .into_iter()
+            .map(|port| (port.name, port.type_id, port.index, port.sample_kinds))
+            .collect::<Vec<_>>();
+        assert_eq!(analysis_schema.len(), channels.len());
+
+        let first_replay = coordinator
+            .create_replay_attachment()
+            .unwrap()
+            .expect("completed capture should be replayable");
+        let second_replay = coordinator
+            .create_replay_attachment()
+            .unwrap()
+            .expect("every replay should receive a fresh cursor");
+        assert_eq!(first_replay.source_node, source_node);
+        assert_eq!(second_replay.source_node, source_node);
+        let replay_schema = |process: &dyn ProcessNode| {
+            process
+                .output_schema()
+                .into_iter()
+                .map(|port| (port.name, port.type_id, port.index, port.sample_kinds))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(analysis_schema, replay_schema(first_replay.process.as_ref()));
+        assert_eq!(analysis_schema, replay_schema(second_replay.process.as_ref()));
+        assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn streaming_and_buffered_profiles_share_the_coordinator_contract() {
+        let (feature, controller, trigger_sample, prepare_calls) =
+            manual_triggered_feature_with_counter();
+        run_triggered_coordinator_contract(
+            feature,
+            CaptureDataDelivery::DuringAcquisition,
+            17,
+            trigger_sample,
+            prepare_calls,
+            move || controller.grant_chunks(4),
+        );
+
+        let (feature, controller, trigger_sample, prepare_calls) =
+            buffered_triggered_feature();
+        run_triggered_coordinator_contract(
+            feature,
+            CaptureDataDelivery::BufferedUpload,
+            19,
+            trigger_sample,
+            prepare_calls,
+            move || {
+                assert!(controller.wait_until_upload(Duration::from_secs(2)));
+                controller.grant_upload_chunks(4);
+            },
+        );
     }
 
     #[test]
@@ -762,6 +971,11 @@ mod tests {
             Box::new(FailingFeature {
                 channels: vec![CaptureChannelId::new("fake:0")],
                 channel_names: vec!["Fake 0".into()],
+                capabilities: CaptureProviderCapabilities::single(
+                    CaptureDataDelivery::DuringAcquisition,
+                    vec![CaptureChannelId::new("fake:0")],
+                    1_000_000_000,
+                ),
             }),
         );
         let mut coordinator = CaptureCoordinator::new();

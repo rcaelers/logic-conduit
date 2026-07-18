@@ -22,6 +22,7 @@ std::cfg_select! {
     target_arch = "wasm32" => {}
     _ => {
         pub use live_capture::{
+            BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider,
             DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,
         };
         pub use nodes::{

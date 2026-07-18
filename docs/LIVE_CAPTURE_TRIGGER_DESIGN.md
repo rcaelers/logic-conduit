@@ -33,6 +33,9 @@ The UI-independent live-capture foundation is also present:
 - `signal_processing::live_capture` defines opaque session and physical-channel identities,
   lifecycle state, acquisition phase/progress, structured failures, and a versioned immutable
   packed raw chunk with validated unaligned payload access;
+- the same generic contract describes whether samples arrive during acquisition or during a
+  buffered upload, advertises explicit channel/rate setting combinations, and capability-gates
+  Force Trigger without naming a provider or transport;
 - the same contract defines the portable Ignore, Low, High, Rising, Falling, and Either simple
   conditions and publishes an exact raw trigger sample as a generic capture event;
 - `CaptureChunkWriter` and `CaptureEventPublisher` are the generic acquisition boundaries, with
@@ -100,16 +103,20 @@ The UI-independent live-capture foundation is also present:
 - `NodeGraphWidget` has a generic host-controlled editing mode: selection, inspection, copy, pan,
   zoom, and box selection remain available while inline controls, wiring, movement, menus, and
   other mutations are disabled; entering read-only mode cancels and restores an in-progress edit;
-- the native deterministic fake provider generates known packed samples across deliberately
-  unaligned chunk boundaries, evaluates the portable simple-trigger program, and supports manual
-  pacing for exact stop tests; and
-- the fake-provider tests reconstruct every sample, verify lifecycle order and repeated Stop,
-  cover every simple condition and disabled/ignored inputs, round-trip a finalized native store,
-  verify trigger-origin gating and migration, and assert fixed buffer and queue bounds while a
-  paused store reader remains independent.
+- the native streaming fake generates known packed samples across deliberately unaligned chunk
+  boundaries, evaluates the portable simple-trigger program, supports manual pacing, and exercises
+  a nineteen-channel bank-qualified identity table;
+- the second native fake captures into device-owned storage, publishes no chunks until its upload
+  phase, advertises a different channel/rate matrix with non-contiguous bank-qualified identities,
+  and deliberately lacks Force Trigger; and
+- both fake providers pass the same lifecycle, store, trigger, coordinator, growing-view,
+  live-analysis, and replay contracts; registration uses the ordinary feature registry, while an
+  architecture test guards the application, compiler core, viewer, coordinator, and store against
+  provider/model-specific contracts.
 
-The native fake and application coordinator are selected as complete platform modules. The fake is
-reachable only through the existing development/demo node; concrete hardware nodes do not yet
+The native fakes and application coordinator are selected as complete platform modules. The
+streaming fake is reachable through the existing development/demo node and both providers are used
+by conformance composition; concrete hardware nodes do not yet
 expose a live feature. Native store recovery, retention and reclamation, cleanup, and export do not
 yet exist. The growing summary is currently an in-memory index
 over durable raw storage; sustained-ingest measurement and duration-independent summary storage
@@ -996,6 +1003,8 @@ viewer marks it; graph output begins at the defined recording origin; save/load 
 preserve the requested trigger with user-visible compatibility diagnostics.
 
 #### Phase 7 — Provider-neutrality conformance
+
+Status: **complete**.
 
 - Add the second deliberately different fake provider required by the architecture: it buffers on
   the device, exposes data only during upload, lacks Force Trigger, and advertises a different
