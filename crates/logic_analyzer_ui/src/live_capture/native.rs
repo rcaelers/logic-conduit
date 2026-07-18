@@ -13,8 +13,9 @@ use signal_processing::{
     NativeCaptureStore, NativeCaptureStoreConfig, NativeFinalizedCapture,
     bounded_capture_event_queue,
 };
+use signal_processing::live_capture_waveform::NativeGrowingCaptureIndex;
 
-use super::{CaptureCoordinatorContract, CaptureSessionStatus};
+use super::{CaptureCoordinatorContract, CaptureSessionStatus, CaptureWaveformUpdate};
 
 const EVENT_QUEUE_CAPACITY: usize = 1_024;
 const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -27,6 +28,7 @@ enum CaptureCommand {
 struct CompletedCapture {
     _directory: TempDir,
     _capture: NativeFinalizedCapture,
+    waveform: NativeGrowingCaptureIndex,
 }
 
 enum WorkerCompletion {
@@ -37,6 +39,7 @@ enum WorkerCompletion {
 struct ActiveCapture {
     commands: Sender<CaptureCommand>,
     completion: Receiver<WorkerCompletion>,
+    waveforms: Receiver<NativeGrowingCaptureIndex>,
     events: CaptureEventQueueReader,
     worker: Option<JoinHandle<()>>,
     stop_requested: bool,
@@ -46,6 +49,7 @@ pub(crate) struct CaptureCoordinator {
     status: Option<CaptureSessionStatus>,
     active: Option<ActiveCapture>,
     completed: Option<CompletedCapture>,
+    waveform_update: Option<CaptureWaveformUpdate>,
     state_history: Vec<CaptureSessionState>,
 }
 
@@ -55,6 +59,7 @@ impl CaptureCoordinator {
             status: None,
             active: None,
             completed: None,
+            waveform_update: None,
             state_history: Vec::new(),
         }
     }
@@ -126,6 +131,10 @@ impl CaptureCoordinator {
                     status.error = Some(error);
                 }
                 self.record_state(CaptureSessionState::Error);
+                self.waveform_update = Some(match &self.completed {
+                    Some(completed) => Some(Box::new(completed.waveform.clone())),
+                    None => None,
+                });
             }
         }
     }
@@ -163,6 +172,7 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
             .expect("capture event queue capacity is non-zero");
         let (command_sender, command_receiver) = crossbeam_channel::bounded(1);
         let (completion_sender, completion_receiver) = crossbeam_channel::bounded(1);
+        let (waveform_sender, waveform_receiver) = crossbeam_channel::bounded(1);
         let worker = std::thread::Builder::new()
             .name("live-capture-supervisor".into())
             .spawn(move || {
@@ -171,6 +181,7 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
                     feature,
                     Box::new(event_publisher),
                     command_receiver,
+                    waveform_sender,
                 ) {
                     Ok(capture) => WorkerCompletion::Complete(capture),
                     Err(error) => WorkerCompletion::Failed(error),
@@ -193,6 +204,7 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
         self.active = Some(ActiveCapture {
             commands: command_sender,
             completion: completion_receiver,
+            waveforms: waveform_receiver,
             events,
             worker: Some(worker),
             stop_requested: false,
@@ -217,6 +229,13 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
     }
 
     fn poll(&mut self) {
+        if let Some(waveform) = self
+            .active
+            .as_ref()
+            .and_then(|active| active.waveforms.try_recv().ok())
+        {
+            self.waveform_update = Some(Some(Box::new(waveform)));
+        }
         loop {
             let event = self
                 .active
@@ -245,6 +264,10 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
 
     fn status(&self) -> Option<&CaptureSessionStatus> {
         self.status.as_ref()
+    }
+
+    fn take_waveform_update(&mut self) -> Option<CaptureWaveformUpdate> {
+        self.waveform_update.take()
     }
 
     fn is_active(&self) -> bool {
@@ -277,6 +300,7 @@ fn run_capture_worker(
     feature: DiscoveredLiveCaptureFeature,
     events: Box<dyn signal_processing::CaptureEventPublisher>,
     commands: Receiver<CaptureCommand>,
+    waveform_ready: Sender<NativeGrowingCaptureIndex>,
 ) -> Result<CompletedCapture, String> {
     let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
     let descriptor = CaptureStoreDescriptor::new(session_id, feature.channels().to_vec())
@@ -284,6 +308,15 @@ fn run_capture_worker(
     let (store, writer) =
         NativeCaptureStore::create(NativeCaptureStoreConfig::new(directory.path(), descriptor))
             .map_err(|error| error.to_string())?;
+    let source_title = feature.source_title.clone();
+    let (waveform, waveform_worker) = NativeGrowingCaptureIndex::spawn(
+        store.clone(),
+        source_title,
+        feature.sample_rate_hz(),
+        feature.channel_names().to_vec(),
+    )
+    .map_err(|error| error.to_string())?;
+    let _ = waveform_ready.send(waveform.clone());
     let context = AcquisitionContext::new(session_id, Box::new(writer), events);
     let mut acquisition = feature
         .prepare(context)
@@ -310,10 +343,12 @@ fn run_capture_worker(
         }
     }
     acquisition.join().map_err(|error| error.to_string())?;
+    waveform_worker.join().map_err(|error| error.to_string())?;
     let capture = store.finalize().map_err(|error| error.to_string())?;
     Ok(CompletedCapture {
         _directory: directory,
         _capture: capture,
+        waveform,
     })
 }
 
@@ -334,12 +369,21 @@ mod tests {
 
     struct FakeFeature {
         channels: Vec<CaptureChannelId>,
+        channel_names: Vec<String>,
         provider: DeterministicFakeProvider,
     }
 
     impl LiveCaptureFeature for FakeFeature {
         fn channels(&self) -> &[CaptureChannelId] {
             &self.channels
+        }
+
+        fn channel_names(&self) -> &[String] {
+            &self.channel_names
+        }
+
+        fn sample_rate_hz(&self) -> f64 {
+            1_000_000_000.0
         }
 
         fn prepare(
@@ -352,11 +396,20 @@ mod tests {
 
     struct FailingFeature {
         channels: Vec<CaptureChannelId>,
+        channel_names: Vec<String>,
     }
 
     impl LiveCaptureFeature for FailingFeature {
         fn channels(&self) -> &[CaptureChannelId] {
             &self.channels
+        }
+
+        fn channel_names(&self) -> &[String] {
+            &self.channel_names
+        }
+
+        fn sample_rate_hz(&self) -> f64 {
+            1_000_000_000.0
         }
 
         fn prepare(
@@ -381,7 +434,11 @@ mod tests {
             DiscoveredLiveCaptureFeature::new(
                 NodeId(41),
                 "Contract Fake",
-                Box::new(FakeFeature { channels, provider }),
+                Box::new(FakeFeature {
+                    channel_names: vec!["Bank A 7".into(), "Bank C 2".into()],
+                    channels,
+                    provider,
+                }),
             ),
             controller,
         )
@@ -461,6 +518,7 @@ mod tests {
             "Failing Fake",
             Box::new(FailingFeature {
                 channels: vec![CaptureChannelId::new("fake:0")],
+                channel_names: vec!["Fake 0".into()],
             }),
         );
         let mut coordinator = CaptureCoordinator::new();
@@ -483,5 +541,34 @@ mod tests {
                 .is_some_and(|error| error.contains("intentional preparation failure"))
         );
         assert!(coordinator.completed_manifest().is_none());
+    }
+
+    #[test]
+    fn paused_viewer_does_not_delay_manual_capture() {
+        let (feature, controller) = manual_feature();
+        let mut coordinator = CaptureCoordinator::new();
+        coordinator.start(feature).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let index = loop {
+            coordinator.poll();
+            if let Some(Some(index)) = coordinator.take_waveform_update()
+            {
+                break index;
+            }
+            assert!(Instant::now() < deadline, "waveform attachment timed out");
+            std::thread::yield_now();
+        };
+        let mut viewer = logic_analyzer_viewer::LogicAnalyzerViewer::new();
+        viewer.set_growing_capture(index);
+        viewer.toggle_pause_display();
+
+        controller.grant_chunks(4);
+        poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
+
+        assert!(viewer.display_paused());
+        let manifest = coordinator.completed_manifest().unwrap();
+        assert_eq!(manifest.committed_chunks, 4);
+        assert_eq!(manifest.committed_samples, 17);
     }
 }

@@ -118,6 +118,9 @@ impl App {
     }
 
     pub(super) fn platform_sync_capture(&mut self) {
+        if self.logic_analyzer.has_growing_capture() {
+            return;
+        }
         match nodes::capture_file_source(self.node_graph.graph()) {
             Some(nodes::CaptureFileSource::Dsl(file)) => {
                 self.platform.preview_source = None;
@@ -143,6 +146,10 @@ impl App {
                 }
             },
         }
+    }
+
+    pub(super) fn platform_restore_graph_capture(&mut self) {
+        self.platform.preview_source = None;
     }
 
     pub(super) fn platform_before_graph(&mut self) {

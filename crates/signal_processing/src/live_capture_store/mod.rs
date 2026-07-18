@@ -14,8 +14,8 @@ std::cfg_select! {
         mod native;
 
         pub use native::{
-            NativeCaptureCursor, NativeCaptureStore, NativeCaptureStoreConfig,
-            NativeCaptureStoreWriter, NativeFinalizedCapture,
+            NativeCaptureCursor, NativeCaptureRandomReader, NativeCaptureStore,
+            NativeCaptureStoreConfig, NativeCaptureStoreWriter, NativeFinalizedCapture,
         };
     }
 }

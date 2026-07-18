@@ -7,7 +7,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use crate::{
-    CaptureChunk, CaptureChunkPayload, CaptureChunkWriter, CaptureSessionId, CaptureWriteError,
+    CaptureChunk, CaptureChunkPayload, CaptureChunkWriter, CaptureSampledChannel,
+    CaptureSampledWindow, CaptureSessionId, CaptureTransition, CaptureWriteError, Error,
 };
 
 use super::{
@@ -188,6 +189,10 @@ impl NativeCaptureStore {
         NativeCaptureCursor::open(Arc::clone(&self.shared))
     }
 
+    pub fn open_random_reader(&self) -> CaptureStoreResult<NativeCaptureRandomReader> {
+        NativeCaptureRandomReader::open(Arc::clone(&self.shared))
+    }
+
     pub fn finalize(&self) -> CaptureStoreResult<NativeFinalizedCapture> {
         let manifest = {
             let state = self
@@ -263,6 +268,10 @@ impl NativeFinalizedCapture {
 
     pub fn open_cursor(&self) -> CaptureStoreResult<NativeCaptureCursor> {
         NativeCaptureCursor::open(Arc::clone(&self.shared))
+    }
+
+    pub fn open_random_reader(&self) -> CaptureStoreResult<NativeCaptureRandomReader> {
+        NativeCaptureRandomReader::open(Arc::clone(&self.shared))
     }
 }
 
@@ -553,6 +562,140 @@ impl CaptureStoreCursor for NativeCaptureCursor {
     }
 }
 
+/// Random-access exact reader over the committed prefix of a native live
+/// store. Commit records are fixed-size and sample ordered, so locating the
+/// first intersecting chunk is logarithmic and no acquisition-sized index is
+/// retained in memory.
+pub struct NativeCaptureRandomReader {
+    shared: Arc<SharedStore>,
+    data_file: File,
+    commit_file: File,
+}
+
+impl NativeCaptureRandomReader {
+    fn open(shared: Arc<SharedStore>) -> CaptureStoreResult<Self> {
+        let data_file = File::open(shared.directory.join(DATA_FILE_NAME))?;
+        let mut commit_file = File::open(shared.directory.join(COMMIT_FILE_NAME))?;
+        validate_commit_header(&mut commit_file, shared.descriptor.session_id())?;
+        Ok(Self {
+            shared,
+            data_file,
+            commit_file,
+        })
+    }
+
+    pub fn sampled_window(
+        &mut self,
+        channels: &[usize],
+        start_sample: u64,
+        end_sample: u64,
+    ) -> crate::Result<CaptureSampledWindow> {
+        let snapshot = self.shared.snapshot();
+        if start_sample >= end_sample || end_sample > snapshot.committed_samples {
+            return Err(Error::OutOfBounds(end_sample));
+        }
+        for &channel in channels {
+            if channel >= self.shared.descriptor.channels().len() {
+                return Err(Error::InvalidProbe(channel));
+            }
+        }
+
+        let mut sampled = channels
+            .iter()
+            .map(|&channel| CaptureSampledChannel {
+                channel,
+                name: self.shared.descriptor.channels()[channel].to_string(),
+                initial: false,
+                transitions: Vec::new(),
+                waveform: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        let mut current = vec![None; channels.len()];
+        let first_sequence = self
+            .sequence_containing(start_sample, snapshot.committed_chunks)
+            .map_err(store_as_capture_error)?;
+
+        for sequence in first_sequence..snapshot.committed_chunks {
+            let record = read_commit_record_at(&mut self.commit_file, sequence)
+                .map_err(store_as_capture_error)?;
+            if record.start_sample >= end_sample {
+                break;
+            }
+            let chunk = read_record_chunk(&self.shared, &mut self.data_file, record)
+                .map_err(store_as_capture_error)?;
+            let chunk_start = start_sample.max(chunk.start_sample());
+            let chunk_end = end_sample.min(chunk.end_sample());
+            for sample in chunk_start..chunk_end {
+                let relative = sample - chunk.start_sample();
+                for (requested, &channel) in channels.iter().enumerate() {
+                    let value = chunk
+                        .packed_level(relative, channel)
+                        .expect("validated committed chunk contains every requested sample");
+                    match current[requested] {
+                        None => {
+                            sampled[requested].initial = value;
+                            current[requested] = Some(value);
+                        }
+                        Some(previous) if previous != value => {
+                            sampled[requested]
+                                .transitions
+                                .push(CaptureTransition { sample, value });
+                            current[requested] = Some(value);
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+        }
+
+        Ok(CaptureSampledWindow {
+            start_sample,
+            end_sample,
+            sample_step: 1,
+            channels: sampled,
+        })
+    }
+
+    fn sequence_containing(
+        &mut self,
+        sample: u64,
+        committed_chunks: u64,
+    ) -> CaptureStoreResult<u64> {
+        let mut lo = 0_u64;
+        let mut hi = committed_chunks;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let record = read_commit_record_at(&mut self.commit_file, mid)?;
+            if record.start_sample.saturating_add(record.sample_count) <= sample {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo >= committed_chunks {
+            return Err(CaptureStoreError::Corrupt(format!(
+                "no committed chunk contains sample {sample}"
+            )));
+        }
+        let record = read_commit_record_at(&mut self.commit_file, lo)?;
+        if sample < record.start_sample
+            || sample >= record.start_sample.saturating_add(record.sample_count)
+        {
+            return Err(CaptureStoreError::Corrupt(format!(
+                "committed chunks do not cover sample {sample}"
+            )));
+        }
+        Ok(lo)
+    }
+}
+
+fn store_as_capture_error(error: CaptureStoreError) -> Error {
+    match error {
+        CaptureStoreError::Io(error) => Error::Io(error),
+        error => Error::ParseError(error.to_string()),
+    }
+}
+
 fn create_new_file(path: &Path) -> CaptureStoreResult<File> {
     Ok(OpenOptions::new()
         .create_new(true)
@@ -620,6 +763,58 @@ fn decode_commit_record(bytes: &[u8]) -> CaptureStoreResult<CommitRecord> {
         bit_offset: bytes[40],
         encoding: bytes[41],
     })
+}
+
+fn read_commit_record_at(
+    commit_file: &mut File,
+    sequence: u64,
+) -> CaptureStoreResult<CommitRecord> {
+    let offset = u64::from(COMMIT_HEADER_SIZE)
+        .checked_add(
+            sequence
+                .checked_mul(u64::from(COMMIT_RECORD_SIZE))
+                .ok_or_else(|| CaptureStoreError::Corrupt("commit offset overflow".into()))?,
+        )
+        .ok_or_else(|| CaptureStoreError::Corrupt("commit offset overflow".into()))?;
+    commit_file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = [0_u8; COMMIT_RECORD_SIZE as usize];
+    commit_file.read_exact(&mut bytes)?;
+    let record = decode_commit_record(&bytes)?;
+    if record.sequence != sequence {
+        return Err(CaptureStoreError::Corrupt(format!(
+            "commit slot {sequence} contains sequence {}",
+            record.sequence
+        )));
+    }
+    Ok(record)
+}
+
+fn read_record_chunk(
+    shared: &SharedStore,
+    data_file: &mut File,
+    record: CommitRecord,
+) -> CaptureStoreResult<CaptureChunk> {
+    if record.encoding != PACKED_LSB_FIRST_ENCODING {
+        return Err(CaptureStoreError::Corrupt(format!(
+            "unsupported chunk encoding {}",
+            record.encoding
+        )));
+    }
+    let data_len = usize::try_from(record.data_len)
+        .map_err(|_| CaptureStoreError::Corrupt("chunk data length is too large".into()))?;
+    let mut data = vec![0_u8; data_len];
+    data_file.seek(SeekFrom::Start(record.data_offset))?;
+    data_file.read_exact(&mut data)?;
+    CaptureChunk::packed_lsb_first(
+        shared.descriptor.session_id(),
+        record.sequence,
+        record.start_sample,
+        record.sample_count,
+        shared.descriptor.channel_table(),
+        data,
+        record.bit_offset,
+    )
+    .map_err(|error| CaptureStoreError::Corrupt(error.to_string()))
 }
 
 fn write_manifest(directory: &Path, manifest: &CaptureStoreManifest) -> CaptureStoreResult<()> {

@@ -19,6 +19,7 @@ impl LogicAnalyzerViewer {
         }
 
         if dragging {
+            self.leave_live_edge();
             if self.capture_info.is_some() {
                 self.fit_to_capture = false;
             }
@@ -32,6 +33,7 @@ impl LogicAnalyzerViewer {
         if hovered {
             let scroll_delta = ui.input(|input| input.smooth_scroll_delta);
             if scroll_delta.x.abs() > SCROLL_INPUT_EPSILON {
+                self.leave_live_edge();
                 if self.capture_info.is_some() {
                     self.fit_to_capture = false;
                 }
@@ -70,6 +72,7 @@ impl LogicAnalyzerViewer {
     /// Zooms the visible time window by `factor` (< 1 zooms in, > 1 zooms
     /// out) around `pointer_x` (0..1, fraction across `wave_rect`).
     fn zoom_time_axis(&mut self, factor: f64, pointer_x: f64) {
+        self.leave_live_edge();
         if self.capture_info.is_some() {
             self.fit_to_capture = false;
         }

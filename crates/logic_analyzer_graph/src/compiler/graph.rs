@@ -144,6 +144,8 @@ impl ResolvedInputs {
 /// know which provider, transport, or protocol implements this feature.
 pub trait LiveCaptureFeature: Send {
     fn channels(&self) -> &[CaptureChannelId];
+    fn channel_names(&self) -> &[String];
+    fn sample_rate_hz(&self) -> f64;
 
     fn prepare(
         self: Box<Self>,
@@ -172,6 +174,14 @@ impl DiscoveredLiveCaptureFeature {
 
     pub fn channels(&self) -> &[CaptureChannelId] {
         self.feature.channels()
+    }
+
+    pub fn channel_names(&self) -> &[String] {
+        self.feature.channel_names()
+    }
+
+    pub fn sample_rate_hz(&self) -> f64 {
+        self.feature.sample_rate_hz()
     }
 
     pub fn prepare(
@@ -343,11 +353,28 @@ fn discover_live_capture_feature_from(
             continue;
         };
         match builder.live_capture_feature(&node.state) {
-            Ok(Some(feature)) => candidates.push(DiscoveredLiveCaptureFeature::new(
-                node.id,
-                node.title.clone(),
-                feature,
-            )),
+            Ok(Some(feature)) => {
+                let invalid = if feature.channels().is_empty() {
+                    Some("live capture exposes no channels")
+                } else if feature.channel_names().len() != feature.channels().len() {
+                    Some("live capture channel names do not match its channel table")
+                } else if !feature.sample_rate_hz().is_finite() || feature.sample_rate_hz() <= 0.0 {
+                    Some("live capture sample rate must be positive")
+                } else {
+                    None
+                };
+                if let Some(message) = invalid {
+                    return Err(LiveCaptureDiscoveryError {
+                        source_nodes: vec![node.id],
+                        message: format!("{}: {message}", node.title),
+                    });
+                }
+                candidates.push(DiscoveredLiveCaptureFeature::new(
+                    node.id,
+                    node.title.clone(),
+                    feature,
+                ));
+            }
             Ok(None) => {}
             Err(message) => {
                 return Err(LiveCaptureDiscoveryError {

@@ -73,7 +73,15 @@ pub struct LogicAnalyzerViewer {
     pub(crate) viewer_lanes: ViewerLaneRegistry,
     pub(crate) indexed_annotation_cache: HashMap<String, IndexedAnnotationCacheEntry>,
     pub(crate) sampling_overlay: Option<SamplingOverlay>,
+    pub(crate) growing_capture: Option<GrowingCaptureView>,
     hovered_input_context: &'static str,
+}
+
+pub(crate) struct GrowingCaptureView {
+    pub(crate) generation: u64,
+    pub(crate) paused: bool,
+    pub(crate) follow_newest: bool,
+    pub(crate) complete: bool,
 }
 
 impl Default for LogicAnalyzerViewer {
@@ -113,6 +121,7 @@ impl LogicAnalyzerViewer {
             viewer_lanes: ViewerLaneRegistry::new(),
             indexed_annotation_cache: HashMap::new(),
             sampling_overlay: None,
+            growing_capture: None,
             hovered_input_context: "logic_analyzer",
         }
     }
@@ -194,6 +203,7 @@ impl LogicAnalyzerViewer {
     /// the initial view to its full duration. This is the memory-backed
     /// counterpart of [`Self::set_capture_path`].
     pub fn set_channels_with_duration(&mut self, signals: Vec<ChannelSignal>, duration_us: f64) {
+        self.growing_capture = None;
         self.capture_path = None;
         self.capture_info = None;
         self.channel_names.clear();
@@ -230,6 +240,7 @@ impl LogicAnalyzerViewer {
         }
 
         let path = path.to_path_buf();
+        self.growing_capture = None;
         let data_source = match open(&path) {
             Ok(data_source) => data_source,
             Err(err) => {
@@ -276,6 +287,7 @@ impl LogicAnalyzerViewer {
 
     /// Clear a capture when no file-backed source remains in the graph.
     pub fn clear_capture(&mut self) {
+        self.growing_capture = None;
         self.capture_path = None;
         self.capture_info = None;
         self.channels.clear();
@@ -290,6 +302,147 @@ impl LogicAnalyzerViewer {
         self.status = "No capture loaded".to_string();
     }
 
+    /// Attaches a provider-neutral growing waveform query. Acquisition and
+    /// index construction remain owned by the host; this widget only follows
+    /// published generations and samples visible windows.
+    pub fn set_growing_capture(&mut self, sampler: Box<dyn CaptureIndex>) {
+        let metadata = sampler.current_metadata();
+        let display_name = sampler.display_name();
+        let generation = sampler.generation();
+        let complete = sampler.is_complete();
+        self.capture_path = None;
+        self.capture_info = Some(CaptureInfo {
+            display_name,
+            duration_us: metadata.duration_us(),
+            header: metadata.clone(),
+        });
+        self.channels = crate::channel::placeholder_channels(&metadata);
+        self.channel_names.clear();
+        self.row_rename = None;
+        self.sampler = Some(sampler);
+        self.sampled_key = None;
+        self.worker_responses = None;
+        self.index_progress = None;
+        self.cursors.clear();
+        self.drag_cursor = None;
+        self.hover_measurement = None;
+        let duration_us = metadata.duration_us();
+        self.visible_span_us = DEFAULT_VISIBLE_SPAN_US.min(duration_us.max(1.0));
+        self.visible_start_us = (duration_us - self.visible_span_us).max(0.0);
+        self.fit_to_capture = false;
+        self.growing_capture = Some(GrowingCaptureView {
+            generation,
+            paused: false,
+            follow_newest: true,
+            complete,
+        });
+        self.status = if complete {
+            "Captured waveform ready".into()
+        } else {
+            "Following live capture".into()
+        };
+        self.ensure_row_order();
+    }
+
+    pub fn has_growing_capture(&self) -> bool {
+        self.growing_capture.is_some()
+    }
+
+    pub fn growing_capture_complete(&self) -> bool {
+        self.growing_capture
+            .as_ref()
+            .is_none_or(|capture| capture.complete)
+    }
+
+    pub fn display_paused(&self) -> bool {
+        self.growing_capture
+            .as_ref()
+            .is_some_and(|capture| capture.paused)
+    }
+
+    pub fn follows_newest(&self) -> bool {
+        self.growing_capture
+            .as_ref()
+            .is_some_and(|capture| capture.follow_newest)
+    }
+
+    pub fn set_follow_newest(&mut self, follow: bool) {
+        if let Some(capture) = &mut self.growing_capture {
+            capture.follow_newest = follow;
+            if follow {
+                capture.paused = false;
+                capture.generation = capture.generation.wrapping_sub(1);
+            }
+        }
+    }
+
+    pub fn toggle_pause_display(&mut self) {
+        if let Some(capture) = &mut self.growing_capture {
+            capture.paused = !capture.paused;
+            if !capture.paused {
+                capture.generation = capture.generation.wrapping_sub(1);
+            }
+        }
+    }
+
+    pub fn go_live(&mut self) {
+        self.set_follow_newest(true);
+    }
+
+    pub(crate) fn leave_live_edge(&mut self) {
+        if let Some(capture) = &mut self.growing_capture {
+            capture.follow_newest = false;
+        }
+    }
+
+    fn refresh_growing_capture(&mut self) {
+        let Some((paused, follow_newest, known_generation)) = self
+            .growing_capture
+            .as_ref()
+            .map(|view| (view.paused, view.follow_newest, view.generation))
+        else {
+            return;
+        };
+        let Some(sampler) = self.sampler.as_ref() else {
+            return;
+        };
+        let generation = sampler.generation();
+        let complete = sampler.is_complete();
+        if let Some(view) = &mut self.growing_capture {
+            view.complete = complete;
+        }
+        if paused || generation == known_generation {
+            return;
+        }
+
+        let metadata = sampler.current_metadata();
+        if metadata.total_samples == 0 {
+            return;
+        }
+        let duration_us = metadata.duration_us();
+        if let Some(capture) = &mut self.capture_info {
+            capture.header = metadata;
+            capture.duration_us = duration_us;
+        }
+        if follow_newest {
+            self.visible_span_us = self.visible_span_us.min(duration_us.max(1.0));
+            self.visible_start_us = (duration_us - self.visible_span_us).max(0.0);
+        } else {
+            self.clamp_to_capture_duration();
+        }
+        if let Some(view) = &mut self.growing_capture {
+            view.generation = generation;
+        }
+        self.sampled_key = None;
+        self.status = if complete {
+            "Captured waveform ready".into()
+        } else if follow_newest {
+            "Following live capture".into()
+        } else {
+            "Live capture available".into()
+        };
+    }
+
     /// One-line hint of available controls, for a status bar (Phase 4.1).
     pub fn status_hint(&self) -> &'static str {
         "Drag Pan · Scroll Zoom · Double-click ruler to add a cursor · Home Fit"
@@ -301,6 +454,7 @@ impl LogicAnalyzerViewer {
         let painter = ui.painter_at(rect);
 
         self.process_worker_responses();
+        self.refresh_growing_capture();
         // Reconciles `row_order` against the current channels and derived
         // lanes (drops stale rows, appends new ones) before anything this
         // frame does row-position math, so hit-testing, drag, and layout
@@ -369,6 +523,14 @@ impl LogicAnalyzerViewer {
         self.draw(&painter, layout, hover_pointer, cursor_input.active);
         self.show_row_rename(ui.ctx());
         if self.has_live_indexed_annotations() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(50));
+        }
+        if self
+            .growing_capture
+            .as_ref()
+            .is_some_and(|capture| !capture.complete)
+        {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(50));
         }
@@ -454,6 +616,7 @@ impl LogicAnalyzerViewer {
     }
 
     pub(crate) fn fit_capture(&mut self) {
+        self.leave_live_edge();
         if let Some(capture) = self.capture_info.as_ref() {
             self.visible_start_us = 0.0;
             self.visible_span_us = capture.duration_us.max(1.0);
@@ -465,6 +628,7 @@ impl LogicAnalyzerViewer {
     /// recording. Uses capture metadata when available, otherwise the latest
     /// timestamp in loaded channel transitions or derived lanes.
     pub(crate) fn reset_time_view(&mut self) {
+        self.leave_live_edge();
         self.visible_start_us = 0.0;
         if let Some(capture) = self.capture_info.as_ref() {
             self.visible_span_us = capture.duration_us.max(1.0);
@@ -536,12 +700,101 @@ impl LogicAnalyzerViewer {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use signal_processing::{
+        CaptureIndex, CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow,
         DerivedLaneData, DerivedLanes, IndexedAnnotationLane, IndexedAnnotationWriter,
         LiveStoreConfig, Word,
     };
 
     use super::{ChannelSignal, LogicAnalyzerViewer};
+
+    struct GrowingTestIndex {
+        header: CaptureMetadata,
+        total_samples: Arc<AtomicU64>,
+        generation: Arc<AtomicU64>,
+        path: PathBuf,
+    }
+
+    impl CaptureIndex for GrowingTestIndex {
+        fn display_name(&self) -> String {
+            "Growing test".into()
+        }
+
+        fn index_path(&self) -> &Path {
+            &self.path
+        }
+
+        fn header(&self) -> &CaptureMetadata {
+            &self.header
+        }
+
+        fn current_metadata(&self) -> CaptureMetadata {
+            let mut metadata = self.header.clone();
+            metadata.total_samples = self.total_samples.load(Ordering::Relaxed);
+            metadata
+        }
+
+        fn generation(&self) -> u64 {
+            self.generation.load(Ordering::Relaxed)
+        }
+
+        fn is_complete(&self) -> bool {
+            false
+        }
+
+        fn capture_duration_us(&self) -> f64 {
+            self.current_metadata().duration_us()
+        }
+
+        fn sampled_window(
+            &mut self,
+            channels: &[usize],
+            start_sample: u64,
+            end_sample: u64,
+            _target_points: usize,
+        ) -> signal_processing::Result<CaptureSampledWindow> {
+            Ok(CaptureSampledWindow {
+                start_sample,
+                end_sample,
+                sample_step: 1,
+                channels: channels
+                    .iter()
+                    .map(|&channel| CaptureSampledChannel {
+                        channel,
+                        name: channel.to_string(),
+                        initial: false,
+                        transitions: Vec::new(),
+                        waveform: Vec::new(),
+                    })
+                    .collect(),
+            })
+        }
+    }
+
+    fn growing_test_index(
+        total_samples: Arc<AtomicU64>,
+        generation: Arc<AtomicU64>,
+    ) -> GrowingTestIndex {
+        GrowingTestIndex {
+            header: CaptureMetadata {
+                total_probes: 1,
+                samplerate: "1 MHz".into(),
+                samplerate_hz: 1_000_000.0,
+                sample_period: 0.000_001,
+                total_samples: 0,
+                total_blocks: 0,
+                samples_per_block: 64,
+                probe_names: vec!["D0".into()],
+            },
+            total_samples,
+            generation,
+            path: PathBuf::from("growing-test"),
+        }
+    }
 
     #[test]
     fn reset_time_view_fits_in_memory_channels_without_a_capture() {
@@ -582,5 +835,53 @@ mod tests {
 
         assert_eq!(viewer.visible_start_us, 0.0);
         assert_eq!(viewer.visible_span_us, 300.0);
+    }
+
+    #[test]
+    fn pause_display_freezes_the_view_and_go_live_catches_up() {
+        let total_samples = Arc::new(AtomicU64::new(1_000));
+        let generation = Arc::new(AtomicU64::new(1));
+        let mut viewer = LogicAnalyzerViewer::new();
+        viewer.set_growing_capture(Box::new(growing_test_index(
+            Arc::clone(&total_samples),
+            Arc::clone(&generation),
+        )));
+
+        assert!(viewer.follows_newest());
+        assert_eq!(viewer.visible_span_us, 900.0);
+        assert_eq!(viewer.visible_start_us, 100.0);
+
+        total_samples.store(2_000, Ordering::Relaxed);
+        generation.store(2, Ordering::Relaxed);
+        viewer.refresh_growing_capture();
+        assert_eq!(
+            viewer.capture_info.as_ref().unwrap().header.total_samples,
+            2_000
+        );
+        assert_eq!(viewer.visible_start_us, 1_100.0);
+
+        viewer.toggle_pause_display();
+        total_samples.store(3_000, Ordering::Relaxed);
+        generation.store(3, Ordering::Relaxed);
+        viewer.refresh_growing_capture();
+        assert!(viewer.display_paused());
+        assert_eq!(
+            viewer.capture_info.as_ref().unwrap().header.total_samples,
+            2_000
+        );
+        assert_eq!(viewer.visible_start_us, 1_100.0);
+
+        viewer.go_live();
+        viewer.refresh_growing_capture();
+        assert!(!viewer.display_paused());
+        assert!(viewer.follows_newest());
+        assert_eq!(
+            viewer.capture_info.as_ref().unwrap().header.total_samples,
+            3_000
+        );
+        assert_eq!(viewer.visible_start_us, 2_100.0);
+
+        viewer.leave_live_edge();
+        assert!(!viewer.follows_newest());
     }
 }

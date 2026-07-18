@@ -304,6 +304,7 @@ impl App {
 
     fn show_logic_analyzer_status(&mut self, ui: &mut egui::Ui) {
         self.show_capture_controls(ui);
+        self.show_growing_waveform_controls(ui);
         ui.separator();
         ui.label(egui::RichText::new(self.logic_analyzer.status_summary()).weak());
         if let Some(progress) = self.logic_analyzer.index_progress_fraction() {
@@ -415,6 +416,17 @@ impl App {
 
     fn poll_capture(&mut self, ctx: &egui::Context) {
         self.capture.poll();
+        if let Some(update) = self.capture.take_waveform_update() {
+            match update {
+                Some(index) => {
+                    self.logic_analyzer.set_growing_capture(index);
+                }
+                None => {
+                    self.logic_analyzer.clear_capture();
+                    self.platform_restore_graph_capture();
+                }
+            }
+        }
         self.node_graph
             .set_editing_enabled(self.capture.graph_editing_enabled());
         if self.capture.is_active() {
@@ -483,6 +495,37 @@ impl App {
             } else {
                 ui.label(summary);
             }
+        }
+    }
+
+    fn show_growing_waveform_controls(&mut self, ui: &mut egui::Ui) {
+        if !self.logic_analyzer.has_growing_capture()
+            || self.logic_analyzer.growing_capture_complete()
+        {
+            return;
+        }
+
+        ui.separator();
+        let mut follow = self.logic_analyzer.follows_newest();
+        if ui.checkbox(&mut follow, "Follow Newest").changed() {
+            self.logic_analyzer.set_follow_newest(follow);
+        }
+        let paused = self.logic_analyzer.display_paused();
+        if ui
+            .small_button(if paused {
+                "Resume Display"
+            } else {
+                "Pause Display"
+            })
+            .clicked()
+        {
+            self.logic_analyzer.toggle_pause_display();
+        }
+        if ui
+            .add_enabled(paused || !follow, egui::Button::new("Go Live").small())
+            .clicked()
+        {
+            self.logic_analyzer.go_live();
         }
     }
 

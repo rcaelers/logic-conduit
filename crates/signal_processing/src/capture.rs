@@ -310,6 +310,20 @@ pub trait CaptureIndex {
     fn display_name(&self) -> String;
     fn index_path(&self) -> &Path;
     fn header(&self) -> &CaptureMetadata;
+    /// Current metadata snapshot. Finite indexes inherit the immutable
+    /// header; growing indexes override this with their committed extent.
+    fn current_metadata(&self) -> CaptureMetadata {
+        self.header().clone()
+    }
+    /// Monotonic content generation used by viewers to invalidate a sampled
+    /// window without polling or identifying a concrete index type.
+    fn generation(&self) -> u64 {
+        0
+    }
+    /// Whether no later generation can arrive.
+    fn is_complete(&self) -> bool {
+        true
+    }
     fn capture_duration_us(&self) -> f64;
     fn sampled_window(
         &mut self,

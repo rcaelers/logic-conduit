@@ -1,6 +1,6 @@
 use logic_analyzer_graph::compiler::DiscoveredLiveCaptureFeature;
 
-use super::{CaptureCoordinatorContract, CaptureSessionStatus};
+use super::{CaptureCoordinatorContract, CaptureSessionStatus, CaptureWaveformUpdate};
 
 pub(crate) struct CaptureCoordinator;
 
@@ -28,6 +28,10 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
     fn poll(&mut self) {}
 
     fn status(&self) -> Option<&CaptureSessionStatus> {
+        None
+    }
+
+    fn take_waveform_update(&mut self) -> Option<CaptureWaveformUpdate> {
         None
     }
 

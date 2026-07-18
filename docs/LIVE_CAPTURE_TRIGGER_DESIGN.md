@@ -13,18 +13,17 @@ can keep the graph fixed during acquisition without creating an architectural de
 
 The U3Pro16 graph node already owns device settings and lowers to the UI-independent
 `LogicAnalyzerSource<DsLogicU3Pro16>`. The portable `LogicCaptureConfig` and U3Pro16 packet builder
-already represent hardware trigger stages. Today, however:
+already represent hardware trigger stages. The remaining hardware-path limitations are:
 
 - the graph builder always supplies an empty trigger program;
 - starting a graph run opens and starts the hardware source immediately;
 - the driver consumes the trigger header but does not publish its trigger position or acquisition
   state;
-- live raw channels are not exposed through the viewer's capture-query path;
 - the USB source demultiplexes and sends directly into the graph, so downstream backpressure can
   delay acquisition;
 - capture errors are logged but there is no typed status channel for the application;
 - only file and demo sources provide raw viewer content; and
-- there is no immutable captured session that Run can replay.
+- Run cannot yet replay a finalized live-capture session.
 
 The existing live graph manager already supplies one important future invariant: hot changes and
 branch restarts take effect from the current stream position and do not rewrite previously emitted
@@ -45,6 +44,12 @@ The UI-independent live-capture foundation is also present:
 - native live and finalized cursors read commit records and payloads through independent file
   handles, report Pending or End explicitly, and retain no acquisition-sized in-memory commit
   index when paused;
+- the native store provides an exact random reader that binary-searches committed records and reads
+  only authoritative raw chunks intersecting the requested sample window;
+- an independent growing-waveform worker follows committed chunks, incrementally publishes
+  per-channel multiresolution summaries, and never participates in acquisition backpressure;
+- the platform-neutral capture-query contract publishes current metadata, completion state, and a
+  monotonically increasing generation so consumers can follow a growing committed prefix;
 - capture providers can fill a fixed-size reusable buffer pool and transfer immutable payload
   ownership directly to a synchronous store writer;
 - `logic_analyzer_processing::live_capture` defines `AcquisitionContext` and the object-safe
@@ -58,8 +63,14 @@ The UI-independent live-capture foundation is also present:
 - the native application capture coordinator prepares, starts, supervises, stops, and finalizes an
   immediate capture off the UI thread, retaining the previous completed temporary session until a
   new session completes successfully;
+- the coordinator attaches the growing query to the viewer before acquisition completes and keeps
+  the finalized query available after completion;
 - the Logic Analyzer title bar presents the combined Start/Stop control and lifecycle/sample
-  status, while Run and capture exclude one another;
+  status, Follow Newest, Pause/Resume Display, and Go Live controls, while Run and capture exclude
+  one another;
+- the viewer renders exact data from the authoritative store at detailed zoom levels and uses the
+  incremental summaries for wider windows; pausing display freezes its published generation while
+  acquisition and summary construction continue;
 - `NodeGraphWidget` has a generic host-controlled editing mode: selection, inspection, copy, pan,
   zoom, and box selection remain available while inline controls, wiring, movement, menus, and
   other mutations are disabled; entering read-only mode cancels and restores an in-progress edit;
@@ -71,9 +82,10 @@ The UI-independent live-capture foundation is also present:
 
 The native fake and application coordinator are selected as complete platform modules. The fake is
 reachable only through the existing development/demo node; concrete hardware nodes do not yet
-expose a live feature. Native store recovery, waveform summaries, retention, cleanup, export, live
-graph analysis, and viewer use of the captured raw session do not yet exist. The existing
-`LogicAnalyzerSource` graph-run path remains unchanged.
+expose a live feature. Native store recovery, retention and reclamation, cleanup, export, and live
+graph analysis do not yet exist. The growing summary is currently an in-memory index over durable
+raw storage; sustained-ingest measurement and duration-independent summary storage remain Phase 9.
+The existing `LogicAnalyzerSource` graph-run path remains unchanged.
 
 ## Proposed future design
 
@@ -903,6 +915,8 @@ the title bar, displays every lifecycle state, restores graph editing after drai
 finalized session.
 
 #### Phase 3 — Growing live waveform
+
+Status: **complete**.
 
 - Evolve the capture query into a growing timeline and build incremental waveform summaries from
   committed chunks.

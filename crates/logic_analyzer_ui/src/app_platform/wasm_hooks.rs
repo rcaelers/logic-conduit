@@ -85,6 +85,9 @@ impl App {
     }
 
     pub(super) fn platform_sync_capture(&mut self) {
+        if self.logic_analyzer.has_growing_capture() {
+            return;
+        }
         let preview = nodes::capture_preview(self.node_graph.graph());
         let source = preview.as_ref().map(|(id, _)| *id);
         if source == self.platform.preview_source {
@@ -95,6 +98,10 @@ impl App {
             Some((_, signals)) => self.set_capture_preview(signals),
             None => self.logic_analyzer.clear_capture(),
         }
+    }
+
+    pub(super) fn platform_restore_graph_capture(&mut self) {
+        self.platform.preview_source = None;
     }
 
     pub(super) fn platform_before_graph(&mut self) {}

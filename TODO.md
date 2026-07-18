@@ -68,15 +68,16 @@ Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN
 ## Capture sources
 
 - Implement the dependency-ordered delivery plan in
-  [Live Capture and Trigger Control](docs/LIVE_CAPTURE_TRIGGER_DESIGN.md). Continue with Phase 3 and do
+  [Live Capture and Trigger Control](docs/LIVE_CAPTURE_TRIGGER_DESIGN.md). Continue with Phase 4 and do
   not begin a later phase until the preceding completion gate passes:
   1. **Minimal authoritative store — complete:** sequential staging, committed-prefix cursors,
      finalization, byte-exact replay, bounded memory, and slow-reader isolation are implemented.
   2. **Immediate-capture application integration — complete:** generic feature discovery,
      coordinator, title-bar Start/Stop and status, orderly drain, and graph read-only state are
      implemented using the fake provider.
-  3. **Growing live waveform:** add incremental summaries, growing timeline queries, Follow Newest,
-     Pause Display, and Go Live using fake data.
+  3. **Growing live waveform — complete:** incremental summaries, growing exact and summary
+     timeline queries, viewer attachment, Follow Newest, Pause Display, and Go Live are implemented
+     and covered with paced fake-capture tests.
   4. **Independent live graph analysis:** consume committed chunks through a lag-tolerant cursor and
      prove a slow graph neither blocks capture nor loses data.
   5. **Finalized-session Run replay:** add node-ID source overrides and byte-equal live/replay

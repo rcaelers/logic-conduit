@@ -21,6 +21,7 @@ pub mod events;
 mod graph;
 pub mod live_capture;
 pub mod live_capture_store;
+pub mod live_capture_waveform;
 mod manager;
 pub mod node;
 pub mod pipeline;

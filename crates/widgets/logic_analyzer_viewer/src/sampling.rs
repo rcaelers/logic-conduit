@@ -21,6 +21,9 @@ impl LogicAnalyzerViewer {
         let Some(capture) = self.capture_info.as_ref() else {
             return;
         };
+        if capture.header.total_samples == 0 {
+            return;
+        }
         let samplerate_hz = capture.header.samplerate_hz;
         let (visible_start, visible_end) =
             sampled_visible_range(capture, self.visible_start_us, self.visible_span_us);
