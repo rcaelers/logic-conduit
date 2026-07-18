@@ -177,6 +177,7 @@ impl App {
                 if let Some(run) = &mut self.run {
                     run.stop();
                 }
+                self.capture.clear_completed();
                 self.run_message = None;
                 self.error_badges.clear();
                 self.restore_sampling_overlay_setting();
@@ -207,6 +208,7 @@ impl App {
         if let Some(run) = &mut self.run {
             run.stop();
         }
+        self.capture.clear_completed();
         self.run_message = None;
         self.error_badges.clear();
         self.node_graph.new_graph();
@@ -609,14 +611,16 @@ impl App {
                 }
             });
             ui.menu_button("Pipeline", |ui| {
-                if ui
-                    .add_enabled(
-                        !self.capture.is_active(),
-                        egui::Button::new("Run")
-                            .shortcut_text(ui.ctx().format_shortcut(&run_shortcut)),
-                    )
-                    .clicked()
-                {
+                let unavailable = self.run_unavailable_reason();
+                let run = ui.add_enabled(
+                    unavailable.is_none(),
+                    egui::Button::new("Run")
+                        .shortcut_text(ui.ctx().format_shortcut(&run_shortcut)),
+                );
+                if let Some(reason) = unavailable {
+                    run.clone().on_disabled_hover_text(reason);
+                }
+                if run.clicked() {
                     self.run_command();
                     ui.close();
                 }

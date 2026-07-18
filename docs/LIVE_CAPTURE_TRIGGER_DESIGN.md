@@ -22,8 +22,7 @@ already represent hardware trigger stages. The remaining hardware-path limitatio
 - the USB source demultiplexes and sends directly into the graph, so downstream backpressure can
   delay acquisition;
 - capture errors are logged but there is no typed status channel for the application;
-- only file and demo sources provide raw viewer content; and
-- Run cannot yet replay a finalized live-capture session.
+- only file and demo sources provide raw viewer content.
 
 The existing live graph manager already supplies one important future invariant: hot changes and
 branch restarts take effect from the current stream position and do not rewrite previously emitted
@@ -58,9 +57,10 @@ The UI-independent live-capture foundation is also present:
 - `RuntimeBuilder` can expose a state-bound `LiveCaptureFeature`; compiler discovery considers
   only the feature belonging to the source retained by a successfully lowered graph and rejects
   multiple candidates without matching node names;
-- the live feature supplies an explicit, generic runtime-port layout and builds the concrete
-  store-following source process; compiler, application, and store code do not infer ports from
-  node names, channel labels, or protocols;
+- the live feature supplies a reusable graph-source factory that captures its explicit runtime-port
+  layout and timebase before provider ownership is consumed; the same factory creates independent
+  live and finalized-session cursor sources, and generic code does not infer ports from node names,
+  channel labels, or protocols;
 - the native Demo Capture Source exposes the deterministic provider through this development
   feature, while its complete wasm feature module reports no live capability;
 - the native application capture coordinator prepares, starts, supervises, stops, and finalizes an
@@ -71,6 +71,9 @@ The UI-independent live-capture foundation is also present:
 - the coordinator also opens an independent committed-prefix cursor and attaches its concrete
   source process to a separately supervised, fixed compiled graph; decoder backpressure advances
   only that cursor's lag and cannot retain acquisition chunks or delay the store writer;
+- after finalization, the coordinator retains the immutable store, its source `NodeId`, and the
+  captured graph-source factory; each Run opens a fresh finalized cursor and substitutes that
+  source by explicit node ID without rediscovering, opening, or operating the provider;
 - the Logic Analyzer title bar presents the combined Start/Stop control and lifecycle/sample
   status, Follow Newest, Pause/Resume Display, and Go Live controls, while Run and capture exclude
   one another;
@@ -80,6 +83,8 @@ The UI-independent live-capture foundation is also present:
 - the application publishes analysis progress and sample lag, keeps graph editing disabled until
   acquisition and downstream drain are both complete, and preserves live derived lanes while the
   analysis cursor catches up;
+- Run on a live-source graph requires its associated finalized session, creates fresh derived lane
+  stores without persistent-cache reuse, and atomically replaces the live-derived presentation;
 - `NodeGraphWidget` has a generic host-controlled editing mode: selection, inspection, copy, pan,
   zoom, and box selection remain available while inline controls, wiring, movement, menus, and
   other mutations are disabled; entering read-only mode cancels and restores an in-progress edit;
@@ -91,8 +96,8 @@ The UI-independent live-capture foundation is also present:
 
 The native fake and application coordinator are selected as complete platform modules. The fake is
 reachable only through the existing development/demo node; concrete hardware nodes do not yet
-expose a live feature. Native store recovery, retention and reclamation, cleanup, export, and live
-session replay through Run do not yet exist. The growing summary is currently an in-memory index
+expose a live feature. Native store recovery, retention and reclamation, cleanup, and export do not
+yet exist. The growing summary is currently an in-memory index
 over durable raw storage; sustained-ingest measurement and duration-independent summary storage
 remain Phase 9. The existing `LogicAnalyzerSource` graph-run path remains unchanged.
 
@@ -951,6 +956,8 @@ catches up without a sequence gap, and produces the same derived output as proce
 finite fake input.
 
 #### Phase 5 — Finalized-session Run replay
+
+Status: **complete**.
 
 - Add node-ID source overrides and make Run read the finalized raw session without opening a live
   provider.

@@ -12,7 +12,7 @@ use crate::about::AboutWindow;
 use crate::demo_signals;
 use crate::live_capture::{
     CaptureAnalysisAttachment, CaptureAvailability, CaptureCoordinator, CaptureCoordinatorContract,
-    capture_availability,
+    CaptureReplayAttachment, capture_availability,
 };
 use crate::toast::Toasts;
 
@@ -330,15 +330,60 @@ impl App {
         self.node_graph.clear_node_statuses();
         self.run_message = None;
 
+        let replay = match self.capture.replay_source_node() {
+            Some(source_node) if self.node_graph.graph().nodes.contains_key(&source_node) => {
+                match self.capture.create_replay_attachment() {
+                    Ok(Some(replay)) => Some(replay),
+                    Ok(None) => None,
+                    Err(error) => {
+                        self.run_message = Some((error.clone(), true));
+                        self.toasts.error(error);
+                        return;
+                    }
+                }
+            }
+            _ => None,
+        };
+
+        if replay.is_none()
+            && matches!(
+                capture_availability(self.node_graph.graph(), &self.builders),
+                CaptureAvailability::Available { .. }
+            )
+        {
+            let message = "Capture data before running a live-source graph".to_owned();
+            self.run_message = Some((message.clone(), true));
+            self.toasts.error(message);
+            return;
+        }
+
         // Fresh lane store per run: stale lanes vanish atomically.
         let mut ctx = compiler::CompileCtx::default();
-        self.platform_prepare_run(&mut ctx);
+        if replay.is_none() {
+            self.platform_prepare_run(&mut ctx);
+        }
         self.logic_analyzer
             .set_derived_lanes(ctx.derived_lanes.clone());
         self.logic_analyzer
             .set_viewer_lanes(ctx.viewer_lanes.clone());
 
-        match compiler::start_app_run(self.node_graph.graph(), &self.builders, &mut ctx) {
+        let started = match replay {
+            Some(CaptureReplayAttachment {
+                source_node,
+                process,
+            }) => {
+                let mut overrides = compiler::SourceProcessOverrides::new();
+                overrides.insert(source_node, process);
+                compiler::start_app_run_with_source_overrides(
+                    self.node_graph.graph(),
+                    &self.builders,
+                    &mut ctx,
+                    overrides,
+                )
+            }
+            None => compiler::start_app_run(self.node_graph.graph(), &self.builders, &mut ctx),
+        };
+        match started {
             Ok(run) => {
                 self.set_sampling_overlay_candidates(ctx.sampling_overlays);
                 self.run = Some(run);
@@ -367,6 +412,24 @@ impl App {
     fn run_command(&mut self) {
         if !self.is_running() && !self.capture.is_active() && !self.is_capture_analysis_active() {
             self.start_run();
+        }
+    }
+
+    fn run_unavailable_reason(&self) -> Option<String> {
+        if self.is_running() {
+            return Some("The pipeline is already running".into());
+        }
+        if self.capture.is_active() || self.is_capture_analysis_active() {
+            return Some("Wait for live capture analysis to finish".into());
+        }
+        match &self.capture_availability {
+            CaptureAvailability::Available {
+                source_node,
+                source_title,
+            } if self.capture.replay_source_node() != Some(*source_node) => Some(format!(
+                "Capture data from {source_title} before running the pipeline"
+            )),
+            CaptureAvailability::Available { .. } | CaptureAvailability::Unavailable { .. } => None,
         }
     }
 
@@ -792,13 +855,10 @@ impl App {
             ui.spinner();
             ui.label("Analyzing capture…");
         } else {
-            let run = ui.add_enabled(
-                !self.capture.is_active() && !self.is_capture_analysis_active(),
-                egui::Button::new("▶ Run").small(),
-            );
-            if self.capture.is_active() {
-                run.clone()
-                    .on_disabled_hover_text("Stop live capture before running the pipeline");
+            let unavailable = self.run_unavailable_reason();
+            let run = ui.add_enabled(unavailable.is_none(), egui::Button::new("▶ Run").small());
+            if let Some(reason) = unavailable {
+                run.clone().on_disabled_hover_text(reason);
             }
             if run.clicked() {
                 self.run_command();

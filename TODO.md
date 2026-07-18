@@ -68,7 +68,7 @@ Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN
 ## Capture sources
 
 - Implement the dependency-ordered delivery plan in
-  [Live Capture and Trigger Control](docs/LIVE_CAPTURE_TRIGGER_DESIGN.md). Continue with Phase 5 and do
+  [Live Capture and Trigger Control](docs/LIVE_CAPTURE_TRIGGER_DESIGN.md). Continue with Phase 6 and do
   not begin a later phase until the preceding completion gate passes:
   1. **Minimal authoritative store — complete:** sequential staging, committed-prefix cursors,
      finalization, byte-exact replay, bounded memory, and slow-reader isolation are implemented.
@@ -81,8 +81,9 @@ Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN
   4. **Independent live graph analysis — complete:** a provider-owned source process consumes an
      independent committed-store cursor, the fixed graph publishes progress and lag, and throttled
      catch-up tests prove acquisition isolation and finite-reference derived-output equivalence.
-  5. **Finalized-session Run replay:** add node-ID source overrides and byte-equal live/replay
-     derived-output tests that prove no hardware is opened.
+  5. **Finalized-session Run replay — complete:** finalized stores retain their source node and
+     captured source factory, Run creates fresh derived stores through explicit node-ID overrides,
+     and byte-equal tests prove replay performs no provider discovery or device operation.
   6. **Portable simple triggering:** add neutral conditions, lane controls, recording-origin gating,
      a migration/diagnostic contract, and deterministic fake-trigger tests.
   7. **Provider-neutrality conformance:** add a deliberately different buffered fake provider with

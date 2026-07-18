@@ -1,8 +1,8 @@
 use logic_analyzer_graph::compiler::DiscoveredLiveCaptureFeature;
 
 use super::{
-    CaptureAnalysisAttachment, CaptureCoordinatorContract, CaptureSessionStatus,
-    CaptureWaveformUpdate,
+    CaptureAnalysisAttachment, CaptureCoordinatorContract, CaptureReplayAttachment,
+    CaptureSessionStatus, CaptureWaveformUpdate,
 };
 
 pub(crate) struct CaptureCoordinator;
@@ -40,6 +40,14 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
 
     fn take_analysis_attachment(&mut self) -> Option<CaptureAnalysisAttachment> {
         None
+    }
+
+    fn replay_source_node(&self) -> Option<node_graph::NodeId> {
+        None
+    }
+
+    fn create_replay_attachment(&self) -> Result<Option<CaptureReplayAttachment>, String> {
+        Ok(None)
     }
 
     fn is_active(&self) -> bool {

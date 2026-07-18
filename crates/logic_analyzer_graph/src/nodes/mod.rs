@@ -50,6 +50,8 @@ pub use binary_decoder::{BinaryDecoder, BinaryDecoderState};
 pub use buffer::{Buffer, BufferState};
 pub(crate) use catalog::standard_builders;
 pub use counter::{Counter, CounterState};
+#[cfg(test)]
+pub(crate) use demo_capture_source::DemoCaptureSourceBuilder;
 pub use demo_capture_source::{CapturePreviewSignal, DemoCaptureSource, DemoCaptureSourceState};
 pub use file_source::{DslFileSource, DslFileSourceState};
 pub use file_writer::{FileWriter, FileWriterState};

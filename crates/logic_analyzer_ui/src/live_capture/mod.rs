@@ -31,6 +31,12 @@ pub(crate) struct CaptureAnalysisAttachment {
     pub process: Box<dyn ProcessNode>,
 }
 
+/// Fresh source process for re-analyzing one immutable finalized session.
+pub(crate) struct CaptureReplayAttachment {
+    pub source_node: NodeId,
+    pub process: Box<dyn ProcessNode>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CaptureAvailability {
     Available {
@@ -104,6 +110,8 @@ pub(crate) trait CaptureCoordinatorContract {
     fn status(&self) -> Option<&CaptureSessionStatus>;
     fn take_waveform_update(&mut self) -> Option<CaptureWaveformUpdate>;
     fn take_analysis_attachment(&mut self) -> Option<CaptureAnalysisAttachment>;
+    fn replay_source_node(&self) -> Option<NodeId>;
+    fn create_replay_attachment(&self) -> Result<Option<CaptureReplayAttachment>, String>;
     /// Remains true through Error cleanup until the supervisor has returned.
     fn is_active(&self) -> bool;
 

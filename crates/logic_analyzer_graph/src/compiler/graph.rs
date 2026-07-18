@@ -14,6 +14,7 @@
 //! same `Word` runtime type regardless of which decoder produced it.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 use egui::{Color32, Pos2};
 use serde_json::Value;
@@ -138,6 +139,15 @@ impl ResolvedInputs {
 
 // ── Builder trait & registry ─────────────────────────────────────────────────
 
+/// Reusable concrete lowering contract for one captured source.
+///
+/// The feature creates this factory before handing provider ownership to the
+/// acquisition worker. It therefore preserves the captured channel-to-port
+/// mapping and timebase without retaining or rediscovering the provider.
+pub trait CaptureGraphSourceFactory: Send + Sync {
+    fn create(&self, cursor: Box<dyn CaptureStoreCursor>) -> Result<Box<dyn ProcessNode>, String>;
+}
+
 /// State-bound live-acquisition capability supplied by a concrete graph node.
 ///
 /// The compiler and application treat channel identities as opaque and do not
@@ -147,14 +157,10 @@ pub trait LiveCaptureFeature: Send {
     fn channel_names(&self) -> &[String];
     fn sample_rate_hz(&self) -> f64;
 
-    /// Builds the concrete source process that feeds this node's runtime
-    /// ports from an independent committed-store cursor. The feature owns
-    /// the port mapping; generic compiler and application code treat the
-    /// returned process opaquely.
-    fn analysis_source(
-        &self,
-        cursor: Box<dyn CaptureStoreCursor>,
-    ) -> Result<Box<dyn ProcessNode>, String>;
+    /// Captures the concrete runtime port mapping and timebase independently
+    /// of provider ownership. The same factory creates the live-following
+    /// source and every finalized-session replay source.
+    fn graph_source_factory(&self) -> Arc<dyn CaptureGraphSourceFactory>;
 
     fn prepare(
         self: Box<Self>,
@@ -193,11 +199,8 @@ impl DiscoveredLiveCaptureFeature {
         self.feature.sample_rate_hz()
     }
 
-    pub fn analysis_source(
-        &self,
-        cursor: Box<dyn CaptureStoreCursor>,
-    ) -> Result<Box<dyn ProcessNode>, String> {
-        self.feature.analysis_source(cursor)
+    pub fn graph_source_factory(&self) -> Arc<dyn CaptureGraphSourceFactory> {
+        self.feature.graph_source_factory()
     }
 
     pub fn prepare(
@@ -1285,12 +1288,18 @@ pub struct LiveRun {
 }
 
 /// One provider-owned source process used only while a live capture follows
-/// its authoritative store. This is intentionally narrower than the general
-/// finalized-session source overrides introduced in Phase 5.
+/// its authoritative store.
 pub struct LiveAnalysisSource {
     pub source_node: NodeId,
     pub process: Box<dyn ProcessNode>,
 }
+
+/// Explicit source-node replacements used when materializing a graph.
+///
+/// The compiler validates every node ID against the lowered graph and never
+/// interprets the source process or discovers a provider. Live capture and
+/// finalized replay therefore share one substitution mechanism.
+pub type SourceProcessOverrides = HashMap<NodeId, Box<dyn ProcessNode>>;
 
 /// Lowers and materializes `graph` under an [`AppManager`] — real OS threads
 /// natively, a cooperative single-thread runner on wasm.
@@ -1299,7 +1308,7 @@ pub fn start_live(
     registry: &BuilderRegistry,
     ctx: &mut CompileCtx,
 ) -> Result<LiveRun, Vec<CompileError>> {
-    start_live_inner(graph, registry, ctx, None)
+    start_live_inner(graph, registry, ctx, SourceProcessOverrides::new())
 }
 
 /// Starts the fixed compiled graph with its live-capable source replaced by
@@ -1311,14 +1320,16 @@ pub fn start_live_analysis(
     ctx: &mut CompileCtx,
     source: LiveAnalysisSource,
 ) -> Result<LiveRun, Vec<CompileError>> {
-    start_live_inner(graph, registry, ctx, Some(source))
+    let mut overrides = SourceProcessOverrides::new();
+    overrides.insert(source.source_node, source.process);
+    start_live_inner(graph, registry, ctx, overrides)
 }
 
 fn start_live_inner(
     graph: &GraphState,
     registry: &BuilderRegistry,
     ctx: &mut CompileCtx,
-    mut analysis_source: Option<LiveAnalysisSource>,
+    mut source_overrides: SourceProcessOverrides,
 ) -> Result<LiveRun, Vec<CompileError>> {
     let mut compiled = lower(graph, registry)?;
     cache_platform::configure_directory(&mut compiled, ctx.persistent_cache_directory.as_deref());
@@ -1331,15 +1342,11 @@ fn start_live_inner(
 
     let (execution, cache_pruned) = cache_platform::prepare_execution(&compiled, registry);
 
-    if let Some(source) = &analysis_source {
-        let Some(node) = execution
-            .nodes
-            .iter()
-            .find(|node| node.id == source.source_node)
-        else {
+    for source_node in source_overrides.keys().copied() {
+        let Some(node) = execution.nodes.iter().find(|node| node.id == source_node) else {
             return Err(vec![CompileError::on(
-                source.source_node,
-                "live analysis source is not retained by the compiled graph",
+                source_node,
+                "source override is not retained by the compiled graph",
             )]);
         };
         let is_source = registry
@@ -1347,8 +1354,8 @@ fn start_live_inner(
             .is_some_and(RuntimeBuilder::is_source);
         if !is_source {
             return Err(vec![CompileError::on(
-                source.source_node,
-                "live analysis replacement does not target a source node",
+                source_node,
+                "source override does not target a source node",
             )]);
         }
     }
@@ -1362,14 +1369,8 @@ fn start_live_inner(
             )]
         })?;
         ctx.viewer_word_caches.clone_from(&node.viewer_word_caches);
-        let process = if analysis_source
-            .as_ref()
-            .is_some_and(|source| source.source_node == id)
-        {
-            analysis_source
-                .take()
-                .expect("matching live analysis source is present")
-                .process
+        let process = if let Some(process) = source_overrides.remove(&id) {
+            process
         } else {
             builder
                 .build(&node.runtime_name, &node.state, &node.resolved, ctx)
@@ -1582,15 +1583,26 @@ pub fn start_app_run(
     start_live(graph, registry, ctx)
 }
 
+/// Starts an ordinary application run while replacing explicitly identified
+/// source nodes. Finalized-session replay uses this entry point so lowering
+/// cannot invoke the captured provider's discovery or build paths.
+pub fn start_app_run_with_source_overrides(
+    graph: &GraphState,
+    registry: &BuilderRegistry,
+    ctx: &mut CompileCtx,
+    overrides: SourceProcessOverrides,
+) -> Result<AppRun, Vec<CompileError>> {
+    start_live_inner(graph, registry, ctx, overrides)
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    use logic_analyzer_processing::{
-        BinaryFileWriter, CaptureAnalysisChannel, CaptureAnalysisSource,
-    };
+    use logic_analyzer_processing::BinaryFileWriter;
     use node_graph::{NodeDef, NodeGraphWidget};
     use signal_processing::{
         CaptureChannelId, CaptureChunk, CaptureChunkWriter, CaptureSessionId, ConfigValue,
@@ -1626,6 +1638,66 @@ mod tests {
 
     struct ThrottledBinaryBuilder {
         delay: Duration,
+    }
+
+    struct InstrumentedCaptureBuilder {
+        discovery_calls: Arc<AtomicUsize>,
+        provider_build_calls: Arc<AtomicUsize>,
+    }
+
+    impl RuntimeBuilder for InstrumentedCaptureBuilder {
+        fn is_source(&self) -> bool {
+            true
+        }
+
+        fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
+            crate::nodes::DemoCaptureSourceBuilder.accepted_kinds(socket, state)
+        }
+
+        fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
+            crate::nodes::DemoCaptureSourceBuilder.offered_kinds(socket, state)
+        }
+
+        fn input_port(
+            &self,
+            socket: &Socket,
+            member_index: usize,
+            state: &Value,
+            kind: PortKind,
+        ) -> Option<String> {
+            crate::nodes::DemoCaptureSourceBuilder.input_port(socket, member_index, state, kind)
+        }
+
+        fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
+            crate::nodes::DemoCaptureSourceBuilder.output_port(socket, state, kind)
+        }
+
+        fn viewer_channel_origin(&self, socket: &Socket, state: &Value) -> Option<usize> {
+            crate::nodes::DemoCaptureSourceBuilder.viewer_channel_origin(socket, state)
+        }
+
+        fn live_capture_feature(
+            &self,
+            _state: &Value,
+        ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
+            self.discovery_calls.fetch_add(1, Ordering::SeqCst);
+            Err("replay attempted provider discovery".into())
+        }
+
+        fn input_required(&self, socket: &Socket, state: &Value) -> bool {
+            crate::nodes::DemoCaptureSourceBuilder.input_required(socket, state)
+        }
+
+        fn build(
+            &self,
+            _name: &str,
+            _state: &Value,
+            _resolved: &ResolvedInputs,
+            _ctx: &mut CompileCtx,
+        ) -> Result<Box<dyn ProcessNode>, String> {
+            self.provider_build_calls.fetch_add(1, Ordering::SeqCst);
+            Err("replay attempted to build the provider source".into())
+        }
     }
 
     impl RuntimeBuilder for ThrottledBinaryBuilder {
@@ -1780,13 +1852,34 @@ mod tests {
             .unwrap_or_else(|| panic!("binary decoder word lane; actual lanes: {lanes:?}"))
     }
 
+    fn annotation_bytes(annotations: &[signal_processing::Annotation]) -> Vec<u8> {
+        annotations
+            .iter()
+            .flat_map(|annotation| {
+                [
+                    annotation.start_ns.to_le_bytes(),
+                    annotation.end_ns.to_le_bytes(),
+                    annotation.value.to_le_bytes(),
+                ]
+                .into_iter()
+                .flatten()
+            })
+            .collect()
+    }
+
     #[test]
-    fn lagging_live_analysis_catches_up_without_backpressuring_capture() {
+    fn lagging_live_analysis_and_finalized_replay_are_byte_equal_without_provider_operations() {
         const CHUNKS: u64 = 48;
         const SAMPLES_PER_CHUNK: u64 = 128;
 
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let source_node = nodes::test_graphs::build_live_binary_test(&mut widget);
+        let captured_feature =
+            discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
+                .unwrap()
+                .expect("test graph has a live capture feature");
+        assert_eq!(captured_feature.source_node, source_node);
+        let graph_source_factory = captured_feature.graph_source_factory();
         let mut registry = BuilderRegistry::standard();
         registry.insert(
             nodes::BinaryDecoder::name(),
@@ -1794,10 +1887,7 @@ mod tests {
                 delay: Duration::from_millis(3),
             }),
         );
-        let channels = vec![
-            CaptureChannelId::new("test:clock"),
-            CaptureChannelId::new("test:data"),
-        ];
+        let channels = captured_feature.channels().to_vec();
         let session_id = CaptureSessionId::new(0x4c49_5645);
         let directory = tempfile::tempdir().unwrap();
         let descriptor =
@@ -1807,24 +1897,7 @@ mod tests {
                 .unwrap();
 
         let cursor = store.open_cursor().unwrap();
-        let source = CaptureAnalysisSource::new(
-            "throttled-live-source",
-            Box::new(cursor),
-            1_000_000_000.0,
-            channels
-                .iter()
-                .cloned()
-                .enumerate()
-                .map(|(index, channel)| {
-                    CaptureAnalysisChannel::separate(
-                        channel,
-                        format!("ch{index}"),
-                        format!("block{index}"),
-                    )
-                })
-                .collect(),
-        )
-        .unwrap();
+        let source = graph_source_factory.create(Box::new(cursor)).unwrap();
         let mut live_ctx = CompileCtx::default();
         let live_lanes = live_ctx.derived_lanes.clone();
         let mut live_run = start_live_analysis(
@@ -1833,7 +1906,7 @@ mod tests {
             &mut live_ctx,
             LiveAnalysisSource {
                 source_node,
-                process: Box::new(source),
+                process: source,
             },
         )
         .unwrap();
@@ -1874,41 +1947,40 @@ mod tests {
         let live_words = captured_words(&live_lanes);
         assert!(!live_words.is_empty());
 
-        let replay_source = CaptureAnalysisSource::new(
-            "finite-reference-source",
-            Box::new(finalized.open_cursor().unwrap()),
-            1_000_000_000.0,
-            channels
-                .iter()
-                .cloned()
-                .enumerate()
-                .map(|(index, channel)| {
-                    CaptureAnalysisChannel::separate(
-                        channel,
-                        format!("ch{index}"),
-                        format!("block{index}"),
-                    )
-                })
-                .collect(),
-        )
-        .unwrap();
+        let replay_source = graph_source_factory
+            .create(Box::new(finalized.open_cursor().unwrap()))
+            .unwrap();
         let mut reference_ctx = CompileCtx::default();
         let reference_lanes = reference_ctx.derived_lanes.clone();
-        let reference_registry = BuilderRegistry::standard();
-        let mut reference_run = start_live_analysis(
+        let discovery_calls = Arc::new(AtomicUsize::new(0));
+        let provider_build_calls = Arc::new(AtomicUsize::new(0));
+        let mut reference_registry = BuilderRegistry::standard();
+        reference_registry.insert(
+            nodes::DemoCaptureSource::name(),
+            Box::new(InstrumentedCaptureBuilder {
+                discovery_calls: Arc::clone(&discovery_calls),
+                provider_build_calls: Arc::clone(&provider_build_calls),
+            }),
+        );
+        let mut overrides = SourceProcessOverrides::new();
+        overrides.insert(source_node, replay_source);
+        let mut reference_run = start_app_run_with_source_overrides(
             widget.graph(),
             &reference_registry,
             &mut reference_ctx,
-            LiveAnalysisSource {
-                source_node,
-                process: Box::new(replay_source),
-            },
+            overrides,
         )
         .unwrap();
         reference_run.wait();
 
-        assert_eq!(live_words, captured_words(&reference_lanes));
+        let replay_words = captured_words(&reference_lanes);
+        assert_eq!(
+            annotation_bytes(&live_words),
+            annotation_bytes(&replay_words)
+        );
         assert_eq!(final_processed, Some(committed_samples));
+        assert_eq!(discovery_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(provider_build_calls.load(Ordering::SeqCst), 0);
     }
 
     fn run_cooperatively(widget: &NodeGraphWidget) -> (CompiledGraph, Vec<(String, u64)>) {
