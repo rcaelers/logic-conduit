@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use logic_analyzer_processing::nodes::decoders::{BitOrder, CsPolarity, SpiDecoder, SpiMode};
-use logic_analyzer_viewer::SamplingEdge;
+use logic_analyzer_viewer::{SamplingEdge, ViewerOutputPresentation};
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, Word};
 
@@ -29,6 +29,23 @@ impl SpiDecoderBuilder {
 }
 
 impl RuntimeBuilder for SpiDecoderBuilder {
+    fn viewer_output_presentation(
+        &self,
+        socket: &Socket,
+        _state: &Value,
+    ) -> Option<ViewerOutputPresentation> {
+        super::spi_output_presentation(socket.def_index)
+    }
+
+    fn word_display_format(&self, socket: &Socket, state: &Value) -> Option<String> {
+        if !matches!(socket.def_index, 3 | 5) {
+            return None;
+        }
+        Self::parsed(state)
+            .ok()
+            .map(|state| state.display_format.selected().to_string())
+    }
+
     fn sampling_overlay(&self, state: &Value) -> Option<SamplingOverlayDescriptor> {
         let state = Self::parsed(state).ok()?;
         let edge = if state.cpol.selected() == state.cpha.selected() {
@@ -76,13 +93,18 @@ impl RuntimeBuilder for SpiDecoderBuilder {
         }
     }
     fn output_port(&self, socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
-        (kind == PortKind::of::<Word>()).then(|| {
-            match socket.def_index {
-                0 => "mosi_words",
-                _ => "miso_words",
-            }
-            .into()
-        })
+        if kind != PortKind::of::<Word>() {
+            return None;
+        }
+        match socket.def_index {
+            0 => Some("mosi_words".into()),
+            1 => Some("miso_words".into()),
+            2 => Some("mosi_bits".into()),
+            3 => Some("mosi_data".into()),
+            4 => Some("miso_bits".into()),
+            5 => Some("miso_data".into()),
+            _ => None,
+        }
     }
     fn input_required(&self, socket: &Socket, state: &Value) -> bool {
         let Ok(state) = Self::parsed(state) else {

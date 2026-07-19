@@ -183,7 +183,19 @@ The viewer sees only group/track IDs, geometry, generic payload references, and 
 drawing/query facilities. It contains no `uart`, `Bits`, `Data`, start/stop, or UART sentinel
 logic.
 
-SPI and Binary Decoder outputs use the default word presentation.
+### SPI presentation
+
+The SPI builder contributes one compound group for MOSI and, when enabled, one for MISO. Each
+group contains a bit-detail track followed by a data-word track. The SPI renderer formats sampled
+bits as `0` or `1`, delegates data formatting to the selected generic numeric format, and exposes
+both tracks for cursor snapping. Bit cells use midpoints between adjacent sampling edges so the
+detail and data geometry spans the complete clocked word rather than ending at its last sampling
+instant.
+
+The original MOSI/MISO word outputs remain runtime-compatible hidden sockets for saved graphs and
+non-viewer consumers. New Bits/Data sockets carry explicit SPI presentation metadata; generic
+lowering does not inspect their names. Binary Decoder outputs continue to use the default word
+presentation.
 
 ### Sampling overlays
 
@@ -216,14 +228,17 @@ selection, and rendering path.
 
 ### Proposed future adapters
 
-If SPI needs transfer framing or combined MOSI/MISO presentation, an SPI adapter can register a
-compound group through the same contract without changing generic viewer code.
+An SPI transfer-level adapter can later combine related MOSI/MISO words or add transaction framing
+through the same contract without changing generic viewer code.
 
 ### Saved graphs and migration
 
 The presentation registry is derived from the current node definition and is not serialized.
 The UART socket schema remains stable, so existing graphs load without a presentation migration.
-The hidden legacy UART `Words` output remains a normal singleton word lane when connected.
+The hidden legacy UART `Words` output remains a normal singleton word lane when connected. SPI
+state carries an explicit schema version. Loading the earlier two-word-output schema migrates any
+generic View selections to the corresponding Bits/Data pair, preserves explicit legacy word
+connections, and surfaces a one-time node warning.
 
 If a later adapter requires socket or state changes, the concrete node supplies explicit
 deserialize/default or load-migration handling and a user-visible warning. Generic viewer and

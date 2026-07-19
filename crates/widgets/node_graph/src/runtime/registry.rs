@@ -66,6 +66,33 @@ fn build_output_sockets<S>(outputs: &[OutputDef<S>]) -> Vec<Socket> {
         .collect()
 }
 
+/// Refreshes restored output sockets from current definitions while
+/// preserving per-output user state across append-only schema growth.
+/// Semantic reorders remain the concrete node's migration responsibility.
+fn reconcile_output_sockets<S>(sockets: &mut Vec<Socket>, defs: &[OutputDef<S>]) {
+    if sockets.len() <= defs.len()
+        && sockets
+            .iter()
+            .all(|socket| socket.def_index == 0 && socket.variadic.is_none())
+    {
+        for (index, socket) in sockets.iter_mut().enumerate() {
+            socket.def_index = index;
+        }
+    }
+
+    let restored = std::mem::take(sockets);
+    let mut reconciled = build_output_sockets(defs);
+    for previous in restored {
+        let Some(socket) = reconciled.get_mut(previous.def_index) else {
+            continue;
+        };
+        socket.resolved_type = previous.resolved_type;
+        socket.hidden = previous.hidden;
+        socket.show_in_view = previous.show_in_view;
+    }
+    *sockets = reconciled;
+}
+
 /// Brings restored input sockets in line with the current defs. Socket and
 /// def counts legitimately diverge for variadic groups, so sockets are
 /// validated structurally against the defs (via `def_index`); a match keeps
@@ -241,20 +268,7 @@ pub(crate) fn restore_node<T: NodeDef>(node: &mut Node) -> Box<dyn NodeInstance>
     let panel = T::panel();
 
     reconcile_input_sockets(&mut node.inputs, &inputs);
-    if node.outputs.len() != outputs.len() {
-        node.outputs = build_output_sockets(&outputs);
-    } else {
-        for (index, (socket, definition)) in node.outputs.iter_mut().zip(&outputs).enumerate() {
-            socket.name = definition.label.clone();
-            socket.type_name = definition.type_name.to_owned();
-            socket.color = definition.color;
-            socket.shape = definition.shape;
-            socket.allowed.clear();
-            socket.def_index = index;
-            socket.variadic = None;
-            socket.has_control = definition.control.is_some();
-        }
-    }
+    reconcile_output_sockets(&mut node.outputs, &outputs);
 
     node.property_count = properties.len();
     if node.type_name.is_empty() {
@@ -541,6 +555,29 @@ mod tests {
         assert_eq!(node.inputs.len(), 2);
         assert_eq!(node.inputs[0].type_name, "Float");
         assert!(node.inputs[1].is_variadic_placeholder());
+    }
+
+    #[test]
+    fn appended_outputs_preserve_saved_user_flags_by_definition_index() {
+        let old_defs = vec![
+            OutputDef::<()>::new::<FloatSocket>("First"),
+            OutputDef::<()>::new::<FloatSocket>("Second"),
+        ];
+        let mut sockets = build_output_sockets(&old_defs);
+        sockets[1].show_in_view = true;
+        sockets[1].hidden = true;
+        let new_defs = vec![
+            OutputDef::<()>::new::<FloatSocket>("First"),
+            OutputDef::<()>::new::<FloatSocket>("Second"),
+            OutputDef::<()>::new::<FloatSocket>("Appended"),
+        ];
+
+        reconcile_output_sockets(&mut sockets, &new_defs);
+
+        assert_eq!(sockets.len(), 3);
+        assert!(sockets[1].show_in_view);
+        assert!(sockets[1].hidden);
+        assert!(!sockets[2].show_in_view);
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]

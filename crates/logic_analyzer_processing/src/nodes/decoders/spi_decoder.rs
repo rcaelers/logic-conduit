@@ -73,7 +73,64 @@ pub struct SpiDecoder {
     query_miso_word: u64,
     query_bits_collected: usize,
     query_first_clock_edge: Option<u64>,
+    query_bit_timestamps: Vec<u64>,
+    query_mosi_bits: Vec<bool>,
+    query_miso_bits: Vec<bool>,
     cs_activity: Option<SamplingActivity>,
+}
+
+struct SpiWordAnnotations {
+    bits: Vec<Word>,
+    data: Word,
+}
+
+fn spi_word_annotations(
+    value: u64,
+    bit_values: &[bool],
+    timestamps: &[u64],
+) -> Option<SpiWordAnnotations> {
+    if bit_values.len() != timestamps.len() || timestamps.is_empty() {
+        return None;
+    }
+
+    let cell_start = |index: usize| {
+        if timestamps.len() == 1 {
+            timestamps[0]
+        } else if index == 0 {
+            timestamps[0].saturating_sub((timestamps[1] - timestamps[0]) / 2)
+        } else {
+            timestamps[index - 1] + (timestamps[index] - timestamps[index - 1]) / 2
+        }
+    };
+    let cell_end = |index: usize| {
+        if timestamps.len() == 1 {
+            timestamps[0].saturating_add(1)
+        } else if index + 1 == timestamps.len() {
+            let interval = timestamps[index] - timestamps[index - 1];
+            timestamps[index].saturating_add(interval.div_ceil(2))
+        } else {
+            timestamps[index] + (timestamps[index + 1] - timestamps[index]) / 2
+        }
+    };
+
+    let start = cell_start(0);
+    let end = cell_end(timestamps.len() - 1);
+    let bits = bit_values
+        .iter()
+        .enumerate()
+        .map(|(index, &bit)| {
+            let bit_start = cell_start(index);
+            Word::spanning(
+                u64::from(bit),
+                bit_start,
+                cell_end(index).saturating_sub(bit_start).max(1),
+            )
+        })
+        .collect();
+    Some(SpiWordAnnotations {
+        bits,
+        data: Word::spanning(value, start, end.saturating_sub(start).max(1)),
+    })
 }
 
 impl SpiDecoder {
@@ -115,6 +172,9 @@ impl SpiDecoder {
             query_miso_word: 0,
             query_bits_collected: 0,
             query_first_clock_edge: None,
+            query_bit_timestamps: Vec::with_capacity(bits_per_word),
+            query_mosi_bits: Vec::with_capacity(bits_per_word),
+            query_miso_bits: Vec::with_capacity(bits_per_word),
             cs_activity: None,
         }
     }
@@ -204,7 +264,7 @@ impl ProcessNode for SpiDecoder {
     }
 
     fn num_outputs(&self) -> usize {
-        usize::from(self.has_mosi) + usize::from(self.has_miso)
+        3 * (usize::from(self.has_mosi) + usize::from(self.has_miso))
     }
 
     fn input_schema(&self) -> Vec<signal_processing::ports::PortSchema> {
@@ -239,8 +299,8 @@ impl ProcessNode for SpiDecoder {
     fn output_schema(&self) -> Vec<signal_processing::ports::PortSchema> {
         use signal_processing::ports::{PortDirection, PortSchema};
 
-        // Mirrors input_schema()'s conditional-port pattern: MOSI's port
-        // (if present) always comes before MISO's.
+        // Each configured direction retains its legacy word stream and adds
+        // the bit-detail/data pair used by the compound viewer lane.
         let mut schemas = Vec::new();
         if self.has_mosi {
             schemas.push(PortSchema::new::<Word>(
@@ -248,10 +308,30 @@ impl ProcessNode for SpiDecoder {
                 schemas.len(),
                 PortDirection::Output,
             ));
+            schemas.push(PortSchema::new::<Word>(
+                "mosi_bits",
+                schemas.len(),
+                PortDirection::Output,
+            ));
+            schemas.push(PortSchema::new::<Word>(
+                "mosi_data",
+                schemas.len(),
+                PortDirection::Output,
+            ));
         }
         if self.has_miso {
             schemas.push(PortSchema::new::<Word>(
                 "miso_words",
+                schemas.len(),
+                PortDirection::Output,
+            ));
+            schemas.push(PortSchema::new::<Word>(
+                "miso_bits",
+                schemas.len(),
+                PortDirection::Output,
+            ));
+            schemas.push(PortSchema::new::<Word>(
+                "miso_data",
                 schemas.len(),
                 PortDirection::Output,
             ));
@@ -342,29 +422,53 @@ impl SpiDecoder {
         // (i.e. the rising transition); falling-sampling looks for `false`.
         let sampling_value = sample_on_rising;
 
-        // Output port layout mirrors input_schema(): MOSI's port (if
-        // present) always comes before MISO's.
-        let mosi_output = if self.has_mosi {
-            Some(
+        // Each direction owns three adjacent outputs: legacy words, bit
+        // detail, and framed data. All are optional when unconnected.
+        let mosi_base = 0;
+        let miso_base = 3 * usize::from(self.has_mosi);
+        let mosi_output = self
+            .has_mosi
+            .then(|| outputs.get(mosi_base).and_then(|port| port.get::<Word>()))
+            .flatten();
+        let mosi_bits_output = self
+            .has_mosi
+            .then(|| {
                 outputs
-                    .first()
-                    .and_then(|p| p.get::<Word>())
-                    .ok_or_else(|| WorkError::NodeError("Missing MOSI output".into()))?,
-            )
-        } else {
-            None
-        };
-        let miso_output = if self.has_miso {
-            let idx = usize::from(self.has_mosi);
-            Some(
+                    .get(mosi_base + 1)
+                    .and_then(|port| port.get::<Word>())
+            })
+            .flatten();
+        let mosi_data_output = self
+            .has_mosi
+            .then(|| {
                 outputs
-                    .get(idx)
-                    .and_then(|p| p.get::<Word>())
-                    .ok_or_else(|| WorkError::NodeError("Missing MISO output".into()))?,
-            )
-        } else {
-            None
-        };
+                    .get(mosi_base + 2)
+                    .and_then(|port| port.get::<Word>())
+            })
+            .flatten();
+        let miso_output = self
+            .has_miso
+            .then(|| outputs.get(miso_base).and_then(|port| port.get::<Word>()))
+            .flatten();
+        let miso_bits_output = self
+            .has_miso
+            .then(|| {
+                outputs
+                    .get(miso_base + 1)
+                    .and_then(|port| port.get::<Word>())
+            })
+            .flatten();
+        let miso_data_output = self
+            .has_miso
+            .then(|| {
+                outputs
+                    .get(miso_base + 2)
+                    .and_then(|port| port.get::<Word>())
+            })
+            .flatten();
+        let need_mosi_annotations = mosi_bits_output.is_some() || mosi_data_output.is_some();
+        let need_miso_annotations = miso_bits_output.is_some() || miso_data_output.is_some();
+        let need_bit_timestamps = need_mosi_annotations || need_miso_annotations;
 
         let total_samples = cs_query.total_samples();
         let timestamp_step = (1_000_000_000.0 / cs_query.samplerate_hz()) as u64;
@@ -375,6 +479,10 @@ impl SpiDecoder {
         let mut words_emitted: usize = 0;
         let mut mosi_batch = Vec::new();
         let mut miso_batch = Vec::new();
+        let mut mosi_bits_batch = Vec::new();
+        let mut mosi_data_batch = Vec::new();
+        let mut miso_bits_batch = Vec::new();
+        let mut miso_data_batch = Vec::new();
         let mut raw_edges = Vec::<CaptureTransition>::new();
         let mut sample_positions = Vec::<u64>::new();
         let mut mosi_values = Vec::<bool>::new();
@@ -477,6 +585,15 @@ impl SpiDecoder {
                 if miso_query.is_some() && miso_values[index] {
                     self.query_miso_word |= 1 << bit_position(self.query_bits_collected);
                 }
+                if need_bit_timestamps {
+                    self.query_bit_timestamps.push(position_to_ns(clock_edge));
+                }
+                if mosi_query.is_some() && need_mosi_annotations {
+                    self.query_mosi_bits.push(mosi_values[index]);
+                }
+                if miso_query.is_some() && need_miso_annotations {
+                    self.query_miso_bits.push(miso_values[index]);
+                }
                 trace!(
                     "bit {}: CLK edge at {:.9}s, MOSI={}",
                     self.query_bits_collected,
@@ -508,10 +625,29 @@ impl SpiDecoder {
                 if miso_output.is_some() {
                     miso_batch.push(Word::spanning(self.query_miso_word, timestamp, duration));
                 }
+                if let Some(annotations) = spi_word_annotations(
+                    self.query_mosi_word,
+                    &self.query_mosi_bits,
+                    &self.query_bit_timestamps,
+                ) {
+                    mosi_bits_batch.extend(annotations.bits);
+                    mosi_data_batch.push(annotations.data);
+                }
+                if let Some(annotations) = spi_word_annotations(
+                    self.query_miso_word,
+                    &self.query_miso_bits,
+                    &self.query_bit_timestamps,
+                ) {
+                    miso_bits_batch.extend(annotations.bits);
+                    miso_data_batch.push(annotations.data);
+                }
                 self.query_mosi_word = 0;
                 self.query_miso_word = 0;
                 self.query_bits_collected = 0;
                 self.query_first_clock_edge = None;
+                self.query_bit_timestamps.clear();
+                self.query_mosi_bits.clear();
+                self.query_miso_bits.clear();
             }
 
             if window_exhausted {
@@ -525,6 +661,9 @@ impl SpiDecoder {
                 self.query_miso_word = 0;
                 self.query_bits_collected = 0;
                 self.query_first_clock_edge = None;
+                self.query_bit_timestamps.clear();
+                self.query_mosi_bits.clear();
+                self.query_miso_bits.clear();
                 self.query_cs_position = window_end;
                 self.query_window_end = None;
             }
@@ -535,6 +674,18 @@ impl SpiDecoder {
         }
         if let Some(output) = miso_output {
             output.send_batch(miso_batch)?;
+        }
+        if let Some(output) = mosi_bits_output {
+            output.send_batch(mosi_bits_batch)?;
+        }
+        if let Some(output) = mosi_data_output {
+            output.send_batch(mosi_data_batch)?;
+        }
+        if let Some(output) = miso_bits_output {
+            output.send_batch(miso_bits_batch)?;
+        }
+        if let Some(output) = miso_data_output {
+            output.send_batch(miso_data_batch)?;
         }
 
         self.tx_count += words_emitted as u64;
@@ -601,29 +752,45 @@ impl SpiDecoder {
         } else {
             None
         };
-        // Output port layout mirrors input_schema(): MOSI's port (if
-        // present) always comes before MISO's.
-        let mosi_output = if has_mosi {
-            Some(
+        let mosi_base = 0;
+        let miso_base = 3 * usize::from(has_mosi);
+        let mosi_output = has_mosi
+            .then(|| outputs.get(mosi_base).and_then(|port| port.get::<Word>()))
+            .flatten();
+        let mosi_bits_output = has_mosi
+            .then(|| {
                 outputs
-                    .first()
-                    .and_then(|p| p.get::<Word>())
-                    .ok_or_else(|| WorkError::NodeError("Missing MOSI output".into()))?,
-            )
-        } else {
-            None
-        };
-        let miso_output = if has_miso {
-            let idx = usize::from(has_mosi);
-            Some(
+                    .get(mosi_base + 1)
+                    .and_then(|port| port.get::<Word>())
+            })
+            .flatten();
+        let mosi_data_output = has_mosi
+            .then(|| {
                 outputs
-                    .get(idx)
-                    .and_then(|p| p.get::<Word>())
-                    .ok_or_else(|| WorkError::NodeError("Missing MISO output".into()))?,
-            )
-        } else {
-            None
-        };
+                    .get(mosi_base + 2)
+                    .and_then(|port| port.get::<Word>())
+            })
+            .flatten();
+        let miso_output = has_miso
+            .then(|| outputs.get(miso_base).and_then(|port| port.get::<Word>()))
+            .flatten();
+        let miso_bits_output = has_miso
+            .then(|| {
+                outputs
+                    .get(miso_base + 1)
+                    .and_then(|port| port.get::<Word>())
+            })
+            .flatten();
+        let miso_data_output = has_miso
+            .then(|| {
+                outputs
+                    .get(miso_base + 2)
+                    .and_then(|port| port.get::<Word>())
+            })
+            .flatten();
+        let need_mosi_annotations = mosi_bits_output.is_some() || mosi_data_output.is_some();
+        let need_miso_annotations = miso_bits_output.is_some() || miso_data_output.is_some();
+        let need_bit_timestamps = need_mosi_annotations || need_miso_annotations;
 
         // ── 1. Wait for CS to go active ──────────────────────────────────
         // Only read from CS — leave CLK/MOSI/MISO untouched so their edges
@@ -639,13 +806,25 @@ impl SpiDecoder {
         let cs_active_start = cs_active_edge.start_time_ns;
 
         // ── 2. Get CS inactive edge to know the full CS window ───────────
-        let cs_inactive_edge = loop {
-            let edge = cs.recv()?;
-            if !cs_is_active(edge.value) {
-                break edge;
+        let mut cs_terminal_time = cs_active_start;
+        let cs_inactive_time = loop {
+            match cs.recv() {
+                Ok(edge) => {
+                    cs_terminal_time = edge.start_time_ns;
+                    if !cs_is_active(edge.value) {
+                        break edge.start_time_ns;
+                    }
+                }
+                // Capture-backed edge streams terminate with a same-level
+                // sample at the capture end. If CS is still active there,
+                // use that terminal sample as the bounded end of the final
+                // transaction so its complete words are not discarded.
+                Err(WorkError::Shutdown) if cs_terminal_time > cs_active_start => {
+                    break cs_terminal_time;
+                }
+                Err(error) => return Err(error),
             }
         };
-        let cs_inactive_time = cs_inactive_edge.start_time_ns;
         if let Some(activity) = &self.cs_activity {
             activity.record_interval(cs_active_start, cs_inactive_time);
         }
@@ -670,6 +849,10 @@ impl SpiDecoder {
         let mut words_emitted: usize = 0;
         let mut mosi_batch = Vec::new();
         let mut miso_batch = Vec::new();
+        let mut mosi_bits_batch = Vec::new();
+        let mut mosi_data_batch = Vec::new();
+        let mut miso_bits_batch = Vec::new();
+        let mut miso_data_batch = Vec::new();
 
         'word_loop: loop {
             let mut mosi_word: u64 = 0;
@@ -677,6 +860,9 @@ impl SpiDecoder {
             let mut bits_collected: usize = 0;
             // The word's (first, last) sampling-edge timestamps so far.
             let mut clock_edge_span: Option<(u64, u64)> = None;
+            let mut bit_timestamps = Vec::with_capacity(bits_per_word);
+            let mut mosi_bits = Vec::with_capacity(bits_per_word);
+            let mut miso_bits = Vec::with_capacity(bits_per_word);
 
             // Collect bits_per_word bits from CLK sampling edges.
             // MOSI/MISO are read on-demand via value_at_time when a
@@ -735,6 +921,9 @@ impl SpiDecoder {
                                 edge.start_time_ns as f64 / 1_000_000_000.0,
                                 mosi_val,
                             );
+                            if need_mosi_annotations {
+                                mosi_bits.push(mosi_val);
+                            }
                         }
                         None => {
                             // MOSI channel exhausted - signal shutdown
@@ -750,6 +939,9 @@ impl SpiDecoder {
                             if miso_val {
                                 miso_word |= 1 << bit_position(bits_collected);
                             }
+                            if need_miso_annotations {
+                                miso_bits.push(miso_val);
+                            }
                         }
                         None => {
                             // MISO channel exhausted - signal shutdown
@@ -759,6 +951,9 @@ impl SpiDecoder {
                     }
                 }
 
+                if need_bit_timestamps {
+                    bit_timestamps.push(edge.start_time_ns);
+                }
                 bits_collected += 1;
                 if bits_collected >= bits_per_word {
                     break;
@@ -786,6 +981,18 @@ impl SpiDecoder {
                 if miso_output.is_some() {
                     miso_batch.push(Word::spanning(miso_word, timestamp, duration));
                 }
+                if let Some(annotations) =
+                    spi_word_annotations(mosi_word, &mosi_bits, &bit_timestamps)
+                {
+                    mosi_bits_batch.extend(annotations.bits);
+                    mosi_data_batch.push(annotations.data);
+                }
+                if let Some(annotations) =
+                    spi_word_annotations(miso_word, &miso_bits, &bit_timestamps)
+                {
+                    miso_bits_batch.extend(annotations.bits);
+                    miso_data_batch.push(annotations.data);
+                }
             }
         }
 
@@ -794,6 +1001,18 @@ impl SpiDecoder {
         }
         if let Some(output) = miso_output {
             output.send_batch(miso_batch)?;
+        }
+        if let Some(output) = mosi_bits_output {
+            output.send_batch(mosi_bits_batch)?;
+        }
+        if let Some(output) = mosi_data_output {
+            output.send_batch(mosi_data_batch)?;
+        }
+        if let Some(output) = miso_bits_output {
+            output.send_batch(miso_bits_batch)?;
+        }
+        if let Some(output) = miso_data_output {
+            output.send_batch(miso_data_batch)?;
         }
 
         // Write back mutable state
@@ -960,13 +1179,29 @@ mod tests {
             query_input(&watchdog, clk_bits, Arc::clone(&clk_calls), "clk"),
             query_input(&watchdog, mosi_bits, Arc::clone(&mosi_calls), "mosi"),
         ];
-        let (output_tx, output_rx) = bounded::<ChannelMessage<Word>>(4);
-        let outputs = [OutputPort::new_with_watchdog(
-            Sender::new(vec![output_tx]),
-            &watchdog,
-            "spi",
-            "mosi_words",
-        )];
+        let (words_tx, words_rx) = bounded::<ChannelMessage<Word>>(4);
+        let (bits_tx, bits_rx) = bounded::<ChannelMessage<Word>>(4);
+        let (data_tx, data_rx) = bounded::<ChannelMessage<Word>>(4);
+        let outputs = [
+            OutputPort::new_with_watchdog(
+                Sender::new(vec![words_tx]),
+                &watchdog,
+                "spi",
+                "mosi_words",
+            ),
+            OutputPort::new_with_watchdog(
+                Sender::new(vec![bits_tx]),
+                &watchdog,
+                "spi",
+                "mosi_bits",
+            ),
+            OutputPort::new_with_watchdog(
+                Sender::new(vec![data_tx]),
+                &watchdog,
+                "spi",
+                "mosi_data",
+            ),
+        ];
         let activity = SamplingActivity::default();
         let mut decoder =
             SpiDecoder::new(SpiMode::Mode0, 4, true, false).with_cs_activity(activity.clone());
@@ -975,18 +1210,33 @@ mod tests {
             decoder.work(&inputs, &outputs),
             Err(WorkError::Shutdown)
         ));
-        let words: Vec<_> = output_rx
-            .try_iter()
-            .flat_map(|message| match message {
-                ChannelMessage::Sample(word) => vec![word],
-                ChannelMessage::Batch(words) => words,
-                ChannelMessage::EndOfStream => vec![],
-            })
-            .collect();
+        let collect = |rx: crossbeam_channel::Receiver<ChannelMessage<Word>>| -> Vec<Word> {
+            rx.try_iter()
+                .flat_map(|message| match message {
+                    ChannelMessage::Sample(word) => vec![word],
+                    ChannelMessage::Batch(words) => words,
+                    ChannelMessage::EndOfStream => vec![],
+                })
+                .collect()
+        };
+        let words = collect(words_rx);
+        let bits = collect(bits_rx);
+        let data = collect(data_rx);
 
         assert_eq!(words.len(), 10);
         assert!(words.iter().all(|word| word.value == 0b1111));
         assert_eq!(words[0], Word::spanning(0b1111, 11, 6));
+        assert_eq!(bits.len(), 40);
+        assert_eq!(
+            &bits[..4],
+            &[
+                Word::spanning(1, 10, 2),
+                Word::spanning(1, 12, 2),
+                Word::spanning(1, 14, 2),
+                Word::spanning(1, 16, 2),
+            ]
+        );
+        assert_eq!(data[0], Word::spanning(0b1111, 10, 8));
         assert!(clk_calls.next_edges.load(Ordering::Relaxed) > 0);
         assert_eq!(clk_calls.next_edge.load(Ordering::Relaxed), 0);
         assert!(mosi_calls.values_at.load(Ordering::Relaxed) > 0);
@@ -1051,11 +1301,23 @@ mod tests {
             make_input(&miso_samples, "miso"),
         ];
 
-        let (mosi_tx, mosi_rx) = bounded::<ChannelMessage<Word>>(16);
-        let (miso_tx, miso_rx) = bounded::<ChannelMessage<Word>>(16);
+        let output = || {
+            let (tx, rx) = bounded::<ChannelMessage<Word>>(16);
+            (Sender::new(vec![tx]), rx)
+        };
+        let (mosi_words, mosi_words_rx) = output();
+        let (mosi_bits, mosi_bits_rx) = output();
+        let (mosi_data, mosi_data_rx) = output();
+        let (miso_words, miso_words_rx) = output();
+        let (miso_bits, miso_bits_rx) = output();
+        let (miso_data, miso_data_rx) = output();
         let outputs = [
-            OutputPort::new_with_watchdog(Sender::new(vec![mosi_tx]), &wd, "spi", "mosi_words"),
-            OutputPort::new_with_watchdog(Sender::new(vec![miso_tx]), &wd, "spi", "miso_words"),
+            OutputPort::new_with_watchdog(mosi_words, &wd, "spi", "mosi_words"),
+            OutputPort::new_with_watchdog(mosi_bits, &wd, "spi", "mosi_bits"),
+            OutputPort::new_with_watchdog(mosi_data, &wd, "spi", "mosi_data"),
+            OutputPort::new_with_watchdog(miso_words, &wd, "spi", "miso_words"),
+            OutputPort::new_with_watchdog(miso_bits, &wd, "spi", "miso_bits"),
+            OutputPort::new_with_watchdog(miso_data, &wd, "spi", "miso_data"),
         ];
 
         let mut decoder = SpiDecoder::new(SpiMode::Mode0, 4, true, true);
@@ -1077,7 +1339,104 @@ mod tests {
                 .collect()
         };
         // The word spans its sampling edges: first at 100ns, last at 700ns.
-        assert_eq!(collect(mosi_rx), vec![Word::spanning(0b1010, 100, 600)]);
-        assert_eq!(collect(miso_rx), vec![Word::spanning(0b0101, 100, 600)]);
+        assert_eq!(
+            collect(mosi_words_rx),
+            vec![Word::spanning(0b1010, 100, 600)]
+        );
+        assert_eq!(
+            collect(miso_words_rx),
+            vec![Word::spanning(0b0101, 100, 600)]
+        );
+        assert_eq!(
+            collect(mosi_bits_rx),
+            vec![
+                Word::spanning(1, 0, 200),
+                Word::spanning(0, 200, 200),
+                Word::spanning(1, 400, 200),
+                Word::spanning(0, 600, 200),
+            ]
+        );
+        assert_eq!(
+            collect(miso_bits_rx),
+            vec![
+                Word::spanning(0, 0, 200),
+                Word::spanning(1, 200, 200),
+                Word::spanning(0, 400, 200),
+                Word::spanning(1, 600, 200),
+            ]
+        );
+        assert_eq!(collect(mosi_data_rx), vec![Word::spanning(0b1010, 0, 800)]);
+        assert_eq!(collect(miso_data_rx), vec![Word::spanning(0b0101, 0, 800)]);
+    }
+
+    #[test]
+    fn work_streamed_flushes_final_active_cs_window_at_capture_end() {
+        use crossbeam_channel::bounded;
+        use signal_processing::sender::{ChannelMessage, Sender};
+        use signal_processing::watchdog::Watchdog;
+
+        let watchdog = Watchdog::new();
+        let make_input = |samples: &[Sample], port: &str| {
+            let (tx, rx) = bounded::<ChannelMessage<Sample>>(samples.len() + 1);
+            for &sample in samples {
+                tx.send(ChannelMessage::Sample(sample)).unwrap();
+            }
+            drop(tx);
+            InputPort::new_with_watchdog(rx, &watchdog, "spi", port)
+        };
+
+        // The second CS sample is the capture source's terminal same-level
+        // edge, not an inactive transition. The complete word before that
+        // boundary must still be emitted.
+        let inputs = [
+            make_input(&[Sample::new(false, 0), Sample::new(false, 1_000)], "cs"),
+            make_input(
+                &[
+                    Sample::new(false, 0),
+                    Sample::new(true, 100),
+                    Sample::new(false, 200),
+                    Sample::new(true, 300),
+                    Sample::new(false, 400),
+                    Sample::new(true, 500),
+                    Sample::new(false, 600),
+                    Sample::new(true, 700),
+                    Sample::new(true, 1_000),
+                ],
+                "clk",
+            ),
+            make_input(
+                &[
+                    Sample::new(true, 0),
+                    Sample::new(false, 200),
+                    Sample::new(true, 400),
+                    Sample::new(false, 600),
+                    Sample::new(false, 1_000),
+                ],
+                "mosi",
+            ),
+        ];
+        let (output_tx, output_rx) = bounded::<ChannelMessage<Word>>(4);
+        let outputs = [OutputPort::new_with_watchdog(
+            Sender::new(vec![output_tx]),
+            &watchdog,
+            "spi",
+            "mosi_words",
+        )];
+        let mut decoder = SpiDecoder::new(SpiMode::Mode0, 4, true, false);
+
+        assert_eq!(decoder.work(&inputs, &outputs).unwrap(), 1);
+        assert!(matches!(
+            decoder.work(&inputs, &outputs),
+            Err(WorkError::Shutdown)
+        ));
+        let words: Vec<_> = output_rx
+            .try_iter()
+            .flat_map(|message| match message {
+                ChannelMessage::Sample(word) => vec![word],
+                ChannelMessage::Batch(words) => words,
+                ChannelMessage::EndOfStream => vec![],
+            })
+            .collect();
+        assert_eq!(words, vec![Word::spanning(0b1010, 100, 600)]);
     }
 }

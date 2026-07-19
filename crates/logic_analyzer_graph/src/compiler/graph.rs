@@ -2604,7 +2604,7 @@ mod tests {
         // Every saved processing node has a runtime, plus the generic viewer
         // sink synthesized from watched outputs.
         assert_eq!(compiled.nodes.len(), 11);
-        assert_eq!(compiled.edges.len(), 29);
+        assert_eq!(compiled.edges.len(), 30);
 
         let spi_sampling = compiled
             .sampling_overlays
@@ -2636,12 +2636,18 @@ mod tests {
             .find(|n| n.builder == "Viewer")
             .unwrap();
         let lanes = viewer.resolved.members(0);
-        assert_eq!(lanes.len(), 6);
+        assert_eq!(lanes.len(), 7);
         assert!(
             lanes
                 .iter()
                 .any(|(_, input)| input.kind == PortKind::of::<Word>()
-                    && input.source == "SPI Decoder.MOSI Words")
+                    && input.source == "SPI Decoder.MOSI Bits")
+        );
+        assert!(
+            lanes
+                .iter()
+                .any(|(_, input)| input.kind == PortKind::of::<Word>()
+                    && input.source == "SPI Decoder.MOSI Data")
         );
         assert!(
             lanes
@@ -3435,6 +3441,43 @@ mod tests {
         // valid partial compound group rather than relying on a Bits lane
         // being present or discoverable by name.
         assert_eq!(tracks, ["frame"]);
+    }
+
+    #[test]
+    fn spi_viewer_tracks_form_explicit_mosi_and_miso_groups() {
+        let widget = binary_decoder_demo_widget();
+        let spi = node_by_def(&widget, "SPI Decoder");
+        let compiled = lower(widget.graph(), &BuilderRegistry::standard()).unwrap();
+        let viewer = compiled
+            .nodes
+            .iter()
+            .find(|node| node.builder == "Viewer")
+            .unwrap();
+        let mut tracks = viewer
+            .resolved
+            .members(0)
+            .into_iter()
+            .filter(|(_, input)| input.source_node == spi)
+            .filter_map(|(_, input)| {
+                input.viewer_presentation.as_ref().map(|presentation| {
+                    (
+                        presentation.group_key.as_str(),
+                        presentation.track_key.as_str(),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        tracks.sort_unstable();
+
+        assert_eq!(
+            tracks,
+            [
+                ("miso", "bits"),
+                ("miso", "data"),
+                ("mosi", "bits"),
+                ("mosi", "data"),
+            ]
+        );
     }
 
     #[test]

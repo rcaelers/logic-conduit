@@ -252,6 +252,9 @@ pub(crate) mod test_graphs {
         widget.set_node_state(
             spi,
             serde_json::to_value(SpiDecoderState {
+                schema_version: 1,
+                compatibility_warning: None,
+                display_format: crate::nodes::uart_decoder::default_display_format(),
                 word_size: IntValue::new(8, 1, 64),
                 cpol: EnumValue::new(0, &["0", "1"]),
                 cpha: EnumValue::new(0, &["0", "1"]),
@@ -315,8 +318,10 @@ pub(crate) mod test_graphs {
             (gate, "Out"),
             (start, "Match"),
             (stop, "Match"),
-            (spi, "MOSI Words"),
-            (spi, "MISO Words"),
+            (spi, "MOSI Bits"),
+            (spi, "MOSI Data"),
+            (spi, "MISO Bits"),
+            (spi, "MISO Data"),
             (decoder, "Words"),
             (formatter, "Text"),
         ] {
@@ -387,6 +392,9 @@ pub(crate) mod test_graphs {
         widget.set_node_state(
             spi,
             serde_json::to_value(SpiDecoderState {
+                schema_version: 1,
+                compatibility_warning: None,
+                display_format: crate::nodes::uart_decoder::default_display_format(),
                 word_size: IntValue::new(24, 1, 32),
                 cpol: EnumValue::new(0, &["0", "1"]),
                 cpha: EnumValue::new(0, &["0", "1"]),
@@ -469,7 +477,8 @@ pub(crate) mod test_graphs {
         // lowering, keeping presentation choices out of the saved graph's
         // processing topology.
         for (node, output) in [
-            (spi, "MOSI Words"),
+            (spi, "MOSI Bits"),
+            (spi, "MOSI Data"),
             (start, "Match"),
             (stop, "Match"),
             (latch, "Q"),
@@ -590,7 +599,7 @@ mod tests {
                 .flat_map(|node| &node.outputs)
                 .filter(|output| output.show_in_view)
                 .count(),
-            8
+            10
         );
         let (_, preview) = crate::nodes::capture_preview(widget.graph())
             .expect("demo source should provide a pre-run capture preview");
