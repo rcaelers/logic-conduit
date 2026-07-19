@@ -35,6 +35,9 @@ See `docs/DECODER_VIEW_LANE_DESIGN.md` for the detailed viewer-lane decision.
 - Reusable widgets live below `crates/widgets` and must remain independent of
   concrete nodes and protocols.
 
+See `docs/RESPONSIBILITY_AND_VISIBILITY_DESIGN.md` for symbol ownership,
+visibility, error-boundary, and enforcement rules.
+
 # Platform boundaries
 
 - Do not scatter `#[cfg(target_arch = "wasm32")]` or its inverse across
