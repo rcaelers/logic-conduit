@@ -1,6 +1,13 @@
 use super::*;
 
 impl App {
+    pub(super) fn platform_clear_capture_caches(
+        &mut self,
+        _configs: &[signal_processing::PersistentStoreConfig],
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
     pub(super) fn platform_load_startup_file(&mut self, _file: Option<&std::path::Path>) {}
 
     pub(super) fn platform_prepare_run(&mut self, _ctx: &mut compiler::CompileCtx) {}
@@ -56,8 +63,7 @@ impl App {
                 let unavailable = self.run_unavailable_reason();
                 let run = ui.add_enabled(
                     unavailable.is_none(),
-                    egui::Button::new("Run")
-                        .shortcut_text(ui.ctx().format_shortcut(&run_shortcut)),
+                    egui::Button::new("Run").shortcut_text(ui.ctx().format_shortcut(&run_shortcut)),
                 );
                 if let Some(reason) = unavailable {
                     run.clone().on_disabled_hover_text(reason);

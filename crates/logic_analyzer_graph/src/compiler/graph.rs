@@ -1679,6 +1679,14 @@ impl LiveRun {
         &self.compiled.sampling_overlays
     }
 
+    pub fn persistent_cache_configs(&self) -> Vec<PersistentStoreConfig> {
+        self.compiled
+            .nodes
+            .iter()
+            .flat_map(|node| node.viewer_word_caches.iter().flatten().cloned())
+            .collect()
+    }
+
     /// Diffs the edited graph against what is running and applies the
     /// difference live. On any error the running pipeline is untouched
     /// (edits either fail up front in `diff`, or — for build failures midway

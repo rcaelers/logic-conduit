@@ -120,26 +120,6 @@ pub(crate) struct CaptureSessionStatus {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RecentCaptureSession {
-    pub session_id: Option<CaptureSessionId>,
-    pub outcome: CaptureSessionOutcome,
-    pub committed_samples: u64,
-    pub bytes: u64,
-    pub kept: bool,
-    pub recovered: bool,
-    pub error: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct CaptureCleanupAdvisory {
-    pub total_sessions: usize,
-    pub total_bytes: u64,
-    pub over_session_limit: usize,
-    pub over_byte_limit: u64,
-    pub discard_candidates: Vec<CaptureSessionId>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CaptureExportStatus {
     pub format_label: String,
     pub destination: PathBuf,

@@ -159,9 +159,9 @@ The native fakes, U3Pro16 buffered and streaming providers, and application coor
 selected as complete platform modules. The streaming fake is reachable through the existing
 development/demo node and both fakes are used by conformance composition. Native capture sessions
 use checksummed commit records, interruption-safe bounded reclamation, explicit pinning, and a
-configurable recent-session repository. Finalized sessions expose pinned, cancellable background
-raw export without routing format logic through the UI. The existing `LogicAnalyzerSource` direct
-graph-run path remains available.
+single replaceable working repository. Finalized captures expose pinned, cancellable background
+save without routing format logic through the UI. The existing `LogicAnalyzerSource` direct graph-
+run path remains available.
 
 ## Proposed future design
 
@@ -944,26 +944,22 @@ original live analysis from its epoch log is a separate explicit mode.
 
 ### Session ownership, replacement, and recovery
 
-Starting a capture does not destroy the current completed session. The previous session remains
-viewable throughout Preparing and until the new session has its first valid data commit. The viewer
-then switches to the new session, and the prior session moves into the budgeted recent-captures
-list. A failed preparation therefore leaves the previous display and Run input unchanged.
+The application owns exactly one temporary capture. Starting another capture releases its viewer,
+analysis, replay, derived-cache, waveform-index, and raw-store handles, waits for the prior index
+worker, and removes the prior capture repository before acquisition preparation begins. Capture
+data therefore has no keep/reopen/history UI and is not application-document state.
 
-Each session has a durable identity and one explicit outcome: InProgress, Complete, Stopped,
-CancelledBeforeTrigger, Incomplete, Aborted, or Corrupt. Clean completion does not imply that the
-session has been saved to a user location. The recent list marks sessions the user explicitly
-keeps, supports reopening a session and making it the Run input, and requires an explicit discard
-decision. It never evicts a session automatically. Its count and storage budgets are configurable;
-exceeding either budget produces cleanup advice with unkept, unpinned candidates. A displayed
-finalized capture can be exported without changing recent-session ownership.
+The internal capture has a durable identity and one explicit outcome: InProgress, Complete,
+Stopped, CancelledBeforeTrigger, Incomplete, Aborted, or Corrupt. The identity coordinates the
+provider, store, index, analysis, and background save; it is not a user-visible session. A clean
+completion does not imply persistence at a user-selected location. Abandoned working repositories
+are not restored as sessions and are removed before the next acquisition. Users preserve a
+finalized capture explicitly with **Save Capture Data** before starting another acquisition.
 
-The append-only commit log and manifest are recovery records as well as live indexes. Metadata and
+The append-only commit log and manifest still provide integrity during acquisition. Metadata and
 commit records are flushed at bounded intervals, with the interval chosen so it does not stall the
-device reader. On startup, the application scans only its session directory and offers recoverable
-incomplete sessions. Recovery validates sequence ranges and checksums, truncates an uncommitted
-file tail, preserves the valid committed prefix, and keeps the Incomplete outcome visible. A
-session is never auto-deleted before this recovery decision merely because the previous process
-did not shut down cleanly.
+device reader. Replacement waits for capture-owned pins and workers before deleting the directory,
+so no store or index is removed while a consumer can still access it.
 
 ### Later live-capture capabilities
 
@@ -1004,29 +1000,21 @@ inference, or arbitrary device callbacks.
 
 The graph file stores capture and trigger *configuration*, not temporary raw bytes. Each concrete
 source state stores an optional neutral `TriggerProgram`; legacy per-channel condition arrays
-migrate into its common digital form with a visible node warning. Application document metadata may
-record the current capture reference, source node ID, and session manifest once the capture has a
-durable location.
+migrate into its common digital form with a visible node warning. Application documents do not
+retain a reference to temporary capture data.
 
-The generic session record stores its opaque physical-channel table, exact sample rate, channel
+The internal capture record stores its opaque physical-channel table, exact sample rate, channel
 names, actual trigger sample, recording origin, retained start, logical sample count, encoded byte
-count, outcome, and ownership state. The negotiated effective capture plan is stored alongside it.
-The application sidecar stores the graph snapshot and source identity needed for replay; exporters
-do not depend on that application-specific sidecar.
+count, and outcome. The negotiated effective capture plan is stored alongside it. The application
+sidecar stores the graph snapshot and source identity needed for immediate replay; saving does not
+depend on that application-specific sidecar.
 
-The finalized internal session is the lossless source for exporters:
-
-- a DSL exporter writes raw physical channels, names, sample rate, and trigger position;
-- the portable exporter writes sigrok v2 digital logic data and preserves the trigger in an
-  optional compatible metadata key, with an explicit warning because v2 has no standard trigger
-  position field; and
-- each format publishes its derived-data capability. The current raw formats report derived data
-  as unsupported, and the UI exposes them only as raw export rather than silently dropping lanes.
-
-Saving raw capture and saving derived analysis are separate checkable operations even when one
-dialog offers both. The application warns when a target format cannot represent a derived payload.
-Exporters live in `logic_analyzer_processing`; file dialogs and overwrite confirmation remain in
-the native application service.
+The finalized internal capture is the lossless source for **Save Capture Data**. The command writes
+a compressed sigrok v2 `.sr` file containing the raw physical channels, channel names, and sample
+rate. It preserves the trigger in an optional compatible metadata key and reports a warning because
+v2 has no standard trigger-position field. Derived lanes are not represented by this raw format and
+are not silently presented as saved. The exporter lives in `logic_analyzer_processing`; the file
+dialog and overwrite confirmation remain in the native application service.
 
 ### Failure and integrity rules
 
@@ -1042,7 +1030,8 @@ the native application service.
 - Pausing display updates does not pause acquisition or consume additional unbounded queue space.
 - Low-storage and buffer-pressure warnings are raised before exhaustion; exhaustion still produces
   an explicit integrity outcome rather than silently shortening retention.
-- Store cleanup cannot remove a session pinned by the viewer, an analysis cursor, or an exporter.
+- Capture replacement first releases viewer and analysis handles and cannot proceed during save;
+  store cleanup therefore never removes data pinned by a consumer.
 - Hardware and graph errors retain the successfully committed raw prefix for explicit recovery or
   discard, with its incomplete status visible.
 - Abrupt termination leaves a recoverable commit-log prefix; recovery never guesses that an

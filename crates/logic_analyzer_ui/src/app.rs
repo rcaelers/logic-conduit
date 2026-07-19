@@ -46,14 +46,6 @@ fn planned_waveform_span_us(plan: &signal_processing::CaptureSessionPlan) -> Opt
     Some(samples as f64 * 1_000_000.0 / plan.sample_rate_hz as f64)
 }
 
-enum RecentCaptureAction {
-    Open(signal_processing::CaptureSessionId),
-    Close,
-    SetKept(signal_processing::CaptureSessionId, bool),
-    Reclaim(signal_processing::CaptureSessionId),
-    Discard(signal_processing::CaptureSessionId),
-}
-
 fn saved_sampling_overlay(graph: &GraphState) -> Result<Option<NodeId>, serde_json::Error> {
     graph.extension(SAMPLING_OVERLAY_EXTENSION)
 }
@@ -597,7 +589,11 @@ impl App {
     }
 
     fn start_capture_command(&mut self, mode: signal_processing::CaptureStartMode) {
-        if self.capture.is_active() || self.is_running() || self.is_capture_analysis_active() {
+        if self.capture.is_active()
+            || self.is_running()
+            || self.is_capture_analysis_active()
+            || self.capture.export_status().is_some()
+        {
             return;
         }
         for id in self.error_badges.drain(..) {
@@ -623,8 +619,25 @@ impl App {
         self.capture_graph = Some(self.node_graph.graph().clone());
         self.capture_epoch_observed_graph = serde_json::to_vec(self.node_graph.graph()).ok();
         self.capture_epoch_request_in_flight = false;
+        let capture_cache_configs = self
+            .capture_analysis
+            .as_ref()
+            .map(compiler::AppRun::persistent_cache_configs)
+            .unwrap_or_default();
         self.capture_analysis = None;
         self.capture_analysis_error = None;
+        self.logic_analyzer
+            .set_derived_lanes(signal_processing::DerivedLanes::new());
+        if let Err(error) = self.platform_clear_capture_caches(&capture_cache_configs) {
+            self.capture_graph = None;
+            self.capture_epoch_observed_graph = None;
+            self.toasts
+                .error(format!("Could not remove previous capture cache: {error}"));
+            return;
+        }
+        // Capture data is replaceable working state. Drop the viewer's index
+        // handle before the coordinator removes the previous store and index.
+        self.logic_analyzer.clear_capture();
         match self
             .capture
             .start_with_graph(feature, self.node_graph.graph(), mode)
@@ -980,7 +993,11 @@ impl App {
                 });
             }
         } else {
-            let availability = if self.is_running() {
+            let availability = if self.capture.export_status().is_some() {
+                CaptureAvailability::Unavailable {
+                    reason: "Wait for Save Capture Data to finish".into(),
+                }
+            } else if self.is_running() {
                 CaptureAvailability::Unavailable {
                     reason: "Stop the pipeline before starting capture".into(),
                 }
@@ -1050,8 +1067,6 @@ impl App {
                 });
             }
         }
-
-        self.show_recent_capture_menu(ui);
 
         if let Some(export) = self.capture.export_status().cloned() {
             ui.separator();
@@ -1163,166 +1178,6 @@ impl App {
             } else if self.capture.is_active() {
                 ui.label("Analysis · waiting for committed data");
             }
-        }
-    }
-
-    fn show_recent_capture_menu(&mut self, ui: &mut egui::Ui) {
-        let sessions = self.capture.recent_session_views();
-        if sessions.is_empty() {
-            return;
-        }
-        let current = self.capture.current_session_id();
-        let can_manage =
-            !self.capture.is_active() && !self.is_running() && !self.is_capture_analysis_active();
-        let advisory = self.capture.cleanup_advisory().ok();
-        let mut action = None;
-        ui.menu_button("Captures", |ui| {
-            if let Some(advisory) = &advisory
-                && (advisory.over_session_limit != 0 || advisory.over_byte_limit != 0)
-            {
-                ui.colored_label(
-                    egui::Color32::from_rgb(220, 170, 90),
-                    format!(
-                        "Storage limit exceeded · {} sessions · {}",
-                        advisory.total_sessions,
-                        format_bytes(advisory.total_bytes)
-                    ),
-                );
-                ui.label("Choose captures to keep or discard; cleanup is never automatic.");
-                ui.separator();
-            }
-            for (index, session) in sessions.iter().enumerate() {
-                let identifier = session.session_id.map_or_else(
-                    || "unknown".to_owned(),
-                    |id| format!("{:08x}", id.get() & 0xffff_ffff),
-                );
-                let mut label = format!(
-                    "{} · {} · {} samples · {}",
-                    capture_outcome_name(session.outcome),
-                    identifier,
-                    session.committed_samples,
-                    format_bytes(session.bytes)
-                );
-                if session.kept {
-                    label.push_str(" · kept");
-                }
-                if session.recovered {
-                    label.push_str(" · recovered");
-                }
-                if session.session_id == current {
-                    label.push_str(" · displayed");
-                }
-                if session.session_id.is_some_and(|session_id| {
-                    advisory
-                        .as_ref()
-                        .is_some_and(|advisory| advisory.discard_candidates.contains(&session_id))
-                }) {
-                    label.push_str(" · cleanup candidate");
-                }
-                ui.menu_button(label, |ui| {
-                    if let Some(error) = &session.error {
-                        ui.colored_label(egui::Color32::from_rgb(230, 120, 120), error);
-                    }
-                    let Some(session_id) = session.session_id else {
-                        ui.label("This corrupt directory has no recoverable session identity.");
-                        return;
-                    };
-                    if current == Some(session_id) {
-                        if ui
-                            .add_enabled(can_manage, egui::Button::new("Close Capture"))
-                            .clicked()
-                        {
-                            action = Some(RecentCaptureAction::Close);
-                            ui.close();
-                        }
-                    } else if ui
-                        .add_enabled(
-                            can_manage
-                                && !matches!(
-                                    session.outcome,
-                                    signal_processing::CaptureSessionOutcome::Corrupt
-                                ),
-                            egui::Button::new("Open Capture"),
-                        )
-                        .clicked()
-                    {
-                        action = Some(RecentCaptureAction::Open(session_id));
-                        ui.close();
-                    }
-                    if ui
-                        .add_enabled(
-                            can_manage
-                                && !matches!(
-                                    session.outcome,
-                                    signal_processing::CaptureSessionOutcome::Corrupt
-                                ),
-                            egui::Button::new(if session.kept {
-                                "Release Keep"
-                            } else {
-                                "Keep Capture"
-                            }),
-                        )
-                        .clicked()
-                    {
-                        action = Some(RecentCaptureAction::SetKept(session_id, !session.kept));
-                        ui.close();
-                    }
-                    let not_displayed = current != Some(session_id);
-                    if ui
-                        .add_enabled(
-                            can_manage
-                                && not_displayed
-                                && !matches!(
-                                    session.outcome,
-                                    signal_processing::CaptureSessionOutcome::Corrupt
-                                ),
-                            egui::Button::new("Apply Retention Policy"),
-                        )
-                        .on_disabled_hover_text("Close a displayed capture before reclaiming it")
-                        .clicked()
-                    {
-                        action = Some(RecentCaptureAction::Reclaim(session_id));
-                        ui.close();
-                    }
-                    if ui
-                        .add_enabled(
-                            can_manage && not_displayed,
-                            egui::Button::new("Discard Capture"),
-                        )
-                        .on_disabled_hover_text("Close a displayed capture before discarding it")
-                        .clicked()
-                    {
-                        action = Some(RecentCaptureAction::Discard(session_id));
-                        ui.close();
-                    }
-                });
-                if index + 1 != sessions.len() {
-                    ui.separator();
-                }
-            }
-        });
-
-        let result = match action {
-            Some(RecentCaptureAction::Open(session_id)) => {
-                self.capture.open_recent_session(session_id, &self.builders)
-            }
-            Some(RecentCaptureAction::Close) => {
-                self.capture.clear_completed();
-                Ok(())
-            }
-            Some(RecentCaptureAction::SetKept(session_id, kept)) => {
-                self.capture.set_session_kept(session_id, kept)
-            }
-            Some(RecentCaptureAction::Reclaim(session_id)) => {
-                self.capture.reclaim_session(session_id)
-            }
-            Some(RecentCaptureAction::Discard(session_id)) => {
-                self.capture.discard_session(session_id)
-            }
-            None => Ok(()),
-        };
-        if let Err(error) = result {
-            self.toasts.error(error);
         }
     }
 

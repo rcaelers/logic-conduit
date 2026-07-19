@@ -4,11 +4,21 @@ use logic_analyzer_processing::{DslFileCaptureDataSource, SigrokFileCaptureDataS
 
 use super::*;
 use crate::app_platform::{FileCommand, GuardedAction};
-use crate::live_capture::CaptureRawExportFormat;
 #[cfg(target_os = "macos")]
 use crate::app_platform::{NativeMenuCommand, notify_recent_files_changed};
+use crate::live_capture::CaptureRawExportFormat;
 
 impl App {
+    pub(super) fn platform_clear_capture_caches(
+        &mut self,
+        configs: &[signal_processing::PersistentStoreConfig],
+    ) -> Result<(), String> {
+        for config in configs {
+            signal_processing::clear_cache_entry(config).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
     fn can_replace_graph(&mut self) -> bool {
         if self.capture.is_active() || self.is_capture_analysis_active() {
             self.toasts
@@ -79,8 +89,7 @@ impl App {
                 NativeMenuCommand::ClearRecent => FileCommand::ClearRecent,
                 NativeMenuCommand::Save => FileCommand::Save,
                 NativeMenuCommand::SaveAs => FileCommand::SaveAs,
-                NativeMenuCommand::ExportDslCapture => FileCommand::ExportDslCapture,
-                NativeMenuCommand::ExportPortableCapture => FileCommand::ExportPortableCapture,
+                NativeMenuCommand::SaveCaptureData => FileCommand::SaveCaptureData,
                 NativeMenuCommand::Quit => FileCommand::Quit,
             };
             self.execute_file_command(command, ctx);
@@ -106,13 +115,12 @@ impl App {
             .panel_layout
             .split_fraction("logic_analyzer", "node_graph")
             .unwrap_or(0.42);
-        self.platform
-            .save(
-                storage,
-                analyzer_split,
-                self.panel_layout.state().clone(),
-                self.node_graph.ui_prefs(),
-            );
+        self.platform.save(
+            storage,
+            analyzer_split,
+            self.panel_layout.state().clone(),
+            self.node_graph.ui_prefs(),
+        );
     }
 
     pub(super) fn platform_before_ui(&mut self, _ui: &mut egui::Ui) {
@@ -157,7 +165,9 @@ impl App {
                             .collect::<Vec<_>>()
                     });
                     match live_channels {
-                        Some(layout) if self.platform.live_channel_layout.as_ref() != Some(&layout) => {
+                        Some(layout)
+                            if self.platform.live_channel_layout.as_ref() != Some(&layout) =>
+                        {
                             self.logic_analyzer.set_channels(
                                 layout
                                     .iter()
@@ -334,13 +344,9 @@ impl App {
         }
     }
 
-    fn choose_and_export_capture(&mut self, format: CaptureRawExportFormat) {
-        let (extension, title, file_name) = match format {
-            CaptureRawExportFormat::Dsl => ("dsl", "Export raw DSL capture", "capture.dsl"),
-            CaptureRawExportFormat::Portable => {
-                ("sr", "Export raw portable session", "capture.sr")
-            }
-        };
+    fn choose_and_save_capture_data(&mut self) {
+        let format = CaptureRawExportFormat::Portable;
+        let (extension, title, file_name) = ("sr", "Save Capture Data", "capture.sr");
         let mut dialog = rfd::FileDialog::new()
             .set_title(title)
             .set_file_name(file_name)
@@ -398,12 +404,7 @@ impl App {
             FileCommand::SaveAs => {
                 self.save_file_as();
             }
-            FileCommand::ExportDslCapture => {
-                self.choose_and_export_capture(CaptureRawExportFormat::Dsl);
-            }
-            FileCommand::ExportPortableCapture => {
-                self.choose_and_export_capture(CaptureRawExportFormat::Portable);
-            }
+            FileCommand::SaveCaptureData => self.choose_and_save_capture_data(),
             FileCommand::Quit => self.request_quit(ctx),
         }
     }
@@ -650,28 +651,17 @@ impl App {
                     ui.close();
                 }
                 ui.separator();
-                ui.menu_button("Export Raw Capture", |ui| {
-                    let can_export = self.capture.current_session_id().is_some()
-                        && !self.capture.is_active()
-                        && self.capture.export_status().is_none();
-                    if ui
-                        .add_enabled(can_export, egui::Button::new("DSL Capture..."))
-                        .clicked()
-                    {
-                        command = Some(FileCommand::ExportDslCapture);
-                        ui.close();
-                    }
-                    if ui
-                        .add_enabled(can_export, egui::Button::new("Portable Session..."))
-                        .clicked()
-                    {
-                        command = Some(FileCommand::ExportPortableCapture);
-                        ui.close();
-                    }
-                    if !can_export {
-                        ui.weak("Display a finalized capture before exporting raw data.");
-                    }
-                });
+                let can_save_capture = self.capture.current_session_id().is_some()
+                    && !self.capture.is_active()
+                    && self.capture.export_status().is_none();
+                if ui
+                    .add_enabled(can_save_capture, egui::Button::new("Save Capture Data..."))
+                    .on_disabled_hover_text("Finish a capture before saving its data")
+                    .clicked()
+                {
+                    command = Some(FileCommand::SaveCaptureData);
+                    ui.close();
+                }
                 ui.separator();
                 if ui
                     .add(
@@ -708,8 +698,7 @@ impl App {
                 let unavailable = self.run_unavailable_reason();
                 let run = ui.add_enabled(
                     unavailable.is_none(),
-                    egui::Button::new("Run")
-                        .shortcut_text(ui.ctx().format_shortcut(&run_shortcut)),
+                    egui::Button::new("Run").shortcut_text(ui.ctx().format_shortcut(&run_shortcut)),
                 );
                 if let Some(reason) = unavailable {
                     run.clone().on_disabled_hover_text(reason);

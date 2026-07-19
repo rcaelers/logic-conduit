@@ -10,10 +10,7 @@ use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
-use logic_analyzer_graph::compiler::{
-    BuilderRegistry, CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature,
-    discover_live_capture_feature,
-};
+use logic_analyzer_graph::compiler::{CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature};
 use logic_analyzer_processing::{
     AcquisitionContext, CaptureExportObserver, CaptureExportProgress, CaptureExportReport,
     CaptureExportRequest, RawCaptureExportFormat, export_finalized_capture,
@@ -22,19 +19,18 @@ use signal_processing::{
     CaptureAcquisitionPhase, CaptureCompletion, CaptureDataDelivery, CaptureEvent,
     CaptureEventPublishError, CaptureEventPublisher, CaptureEventQueueReader, CaptureHealth,
     CaptureIndex, CaptureMetadata, CaptureProgress, CaptureQueueReceiveError, CaptureRecordingGate,
-    CaptureSampledWindow, CaptureSessionCleanupPlan, CaptureSessionId, CaptureSessionOutcome,
-    CaptureSessionPlan, CaptureSessionState, CaptureStartMode, CaptureStoreDescriptor,
-    CaptureTimelineMetadata, NativeCaptureSessionPin, NativeCaptureSessionRepository,
-    NativeCaptureSessionRepositoryConfig, NativeCaptureSessionSummary, NativeCaptureStore,
-    NativeCaptureStoreConfig, NativeFinalizedCapture, NativeGrowingCaptureIndex,
-    NativeGrowingCaptureIndexWorker, RecordingStart, TriggerTimeoutAction,
-    bounded_capture_event_queue, default_capture_session_directory,
+    CaptureSampledWindow, CaptureSessionId, CaptureSessionOutcome, CaptureSessionPlan,
+    CaptureSessionState, CaptureStartMode, CaptureStoreDescriptor, CaptureTimelineMetadata,
+    NativeCaptureSessionPin, NativeCaptureSessionRepository, NativeCaptureSessionRepositoryConfig,
+    NativeCaptureSessionSummary, NativeCaptureStore, NativeCaptureStoreConfig,
+    NativeFinalizedCapture, NativeGrowingCaptureIndex, NativeGrowingCaptureIndexWorker,
+    RecordingStart, TriggerTimeoutAction, bounded_capture_event_queue,
+    default_capture_session_directory,
 };
 
 use super::{
-    CaptureAnalysisAttachment, CaptureCleanupAdvisory, CaptureCoordinatorContract,
-    CaptureExportCompletion, CaptureExportStatus, CaptureReplayAttachment, CaptureSessionStatus,
-    CaptureWaveformUpdate, RecentCaptureSession,
+    CaptureAnalysisAttachment, CaptureCoordinatorContract, CaptureExportCompletion,
+    CaptureExportStatus, CaptureReplayAttachment, CaptureSessionStatus, CaptureWaveformUpdate,
 };
 
 const EVENT_QUEUE_CAPACITY: usize = 1_024;
@@ -47,15 +43,13 @@ static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CaptureRawExportFormat {
-    Dsl,
     Portable,
 }
 
 impl CaptureRawExportFormat {
     pub(crate) const fn label(self) -> &'static str {
         match self {
-            Self::Dsl => "DSL capture",
-            Self::Portable => "portable session",
+            Self::Portable => "PulseView capture",
         }
     }
 }
@@ -306,7 +300,6 @@ struct ActiveExport {
 pub(crate) struct CaptureCoordinator {
     repository: NativeCaptureSessionRepository,
     recent_sessions: Vec<NativeCaptureSessionSummary>,
-    cleanup_plan: CaptureSessionCleanupPlan,
     _ephemeral_root: Option<TempDir>,
     status: Option<CaptureSessionStatus>,
     active: Option<ActiveCapture>,
@@ -348,12 +341,10 @@ impl CaptureCoordinator {
         repository: NativeCaptureSessionRepository,
         ephemeral_root: Option<TempDir>,
     ) -> Self {
-        let (recent_sessions, cleanup_plan) =
-            repository.scan_with_cleanup_plan().unwrap_or_default();
+        let (recent_sessions, _) = repository.scan_with_cleanup_plan().unwrap_or_default();
         Self {
             repository,
             recent_sessions,
-            cleanup_plan,
             _ephemeral_root: ephemeral_root,
             status: None,
             active: None,
@@ -370,21 +361,6 @@ impl CaptureCoordinator {
             configuration_epoch_notice: None,
             state_history: Vec::new(),
         }
-    }
-
-    pub(crate) fn recent_session_views(&self) -> Vec<RecentCaptureSession> {
-        self.recent_sessions
-            .iter()
-            .map(|session| RecentCaptureSession {
-                session_id: session.session_id,
-                outcome: session.outcome,
-                committed_samples: session.committed_samples,
-                bytes: session.bytes,
-                kept: session.kept,
-                recovered: session.recovery.recovered,
-                error: session.error.clone(),
-            })
-            .collect()
     }
 
     pub(crate) fn current_session_id(&self) -> Option<CaptureSessionId> {
@@ -421,7 +397,6 @@ impl CaptureCoordinator {
             .map_err(|error| format!("could not pin capture for export: {error}"))?;
         let total_samples = capture.manifest().committed_samples;
         let raw_format = match format {
-            CaptureRawExportFormat::Dsl => RawCaptureExportFormat::Dsl,
             CaptureRawExportFormat::Portable => RawCaptureExportFormat::SigrokV2,
         };
         let request = CaptureExportRequest {
@@ -563,182 +538,6 @@ impl CaptureCoordinator {
         }
     }
 
-    pub(crate) fn cleanup_advisory(&self) -> Result<CaptureCleanupAdvisory, String> {
-        Ok(CaptureCleanupAdvisory {
-            total_sessions: self.cleanup_plan.total_sessions,
-            total_bytes: self.cleanup_plan.total_bytes,
-            over_session_limit: self.cleanup_plan.over_session_limit,
-            over_byte_limit: self.cleanup_plan.over_byte_limit,
-            discard_candidates: self.cleanup_plan.discard_candidates.clone(),
-        })
-    }
-
-    pub(crate) fn set_session_kept(
-        &mut self,
-        session_id: CaptureSessionId,
-        kept: bool,
-    ) -> Result<(), String> {
-        self.repository
-            .set_kept(session_id, kept)
-            .map_err(|error| error.to_string())?;
-        self.refresh_recent_sessions();
-        Ok(())
-    }
-
-    pub(crate) fn discard_session(&mut self, session_id: CaptureSessionId) -> Result<(), String> {
-        if self.current_session_id() == Some(session_id) {
-            return Err("close the displayed capture before discarding it".into());
-        }
-        self.repository
-            .discard(session_id)
-            .map_err(|error| error.to_string())?;
-        self.refresh_recent_sessions();
-        Ok(())
-    }
-
-    pub(crate) fn reclaim_session(&mut self, session_id: CaptureSessionId) -> Result<(), String> {
-        if self.current_session_id() == Some(session_id) {
-            return Err("close the displayed capture before reclaiming it".into());
-        }
-        self.repository
-            .reclaim_to_policy(session_id)
-            .map_err(|error| error.to_string())?;
-        self.refresh_recent_sessions();
-        Ok(())
-    }
-
-    pub(crate) fn open_recent_session(
-        &mut self,
-        session_id: CaptureSessionId,
-        builders: &BuilderRegistry,
-    ) -> Result<(), String> {
-        if self.is_active() {
-            return Err("a live capture is active".into());
-        }
-        if self.current_session_id() == Some(session_id) {
-            return Ok(());
-        }
-        let (capture, session_pin) = self
-            .repository
-            .open(session_id)
-            .map_err(|error| error.to_string())?;
-        let application = read_application_metadata(session_pin.directory())?;
-        let feature = discover_live_capture_feature(&application.graph, builders)
-            .map_err(|error| error.message)?
-            .ok_or_else(|| "the captured graph has no live capture source".to_owned())?;
-        let source_node = node_graph::NodeId(application.source_node);
-        if feature.source_node != source_node {
-            return Err("the captured source identity differs from its graph snapshot".into());
-        }
-        let manifest = capture.manifest();
-        if feature.channels() != manifest.descriptor.channels() {
-            return Err("the captured channel table differs from its graph snapshot".into());
-        }
-        if feature.sample_rate_hz().to_bits() != application.sample_rate_hz.to_bits() {
-            return Err("the captured sample rate differs from its graph snapshot".into());
-        }
-        if application.channel_names.len() != manifest.descriptor.channels().len() {
-            return Err("the captured channel names do not match its channel table".into());
-        }
-        if !application.sample_rate_hz.is_finite() || application.sample_rate_hz <= 0.0 {
-            return Err("the captured sample rate is invalid".into());
-        }
-        let metadata = capture
-            .session_metadata()
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "the capture has no durable session metadata".to_owned())?;
-        let sample_rate_hz = metadata
-            .timeline
-            .as_ref()
-            .map(CaptureTimelineMetadata::sample_rate_hz)
-            .unwrap_or(application.sample_rate_hz);
-        let channel_names = metadata
-            .timeline
-            .as_ref()
-            .map(|timeline| timeline.channel_names().to_vec())
-            .unwrap_or(application.channel_names);
-        if feature.sample_rate_hz().to_bits() != sample_rate_hz.to_bits() {
-            return Err("the captured sample rate differs from its timeline metadata".into());
-        }
-        if channel_names.len() != manifest.descriptor.channels().len() {
-            return Err("the captured channel names do not match its channel table".into());
-        }
-        let session_plan = capture.session_plan().map_err(|error| error.to_string())?;
-        if let Some(plan) = &session_plan
-            && plan.sample_rate_hz as f64 != sample_rate_hz
-        {
-            return Err("the captured sample rate differs from its session plan".into());
-        }
-        let trigger_sample = metadata
-            .timeline
-            .as_ref()
-            .and_then(CaptureTimelineMetadata::trigger_sample)
-            .or_else(|| {
-                session_plan.as_ref().and_then(|plan| {
-                    (plan.policy.effective.start == RecordingStart::Trigger)
-                        .then_some(plan.policy.effective.trigger_placement)
-                        .flatten()
-                        .and_then(|placement| match placement {
-                            signal_processing::TriggerPlacement::SamplesBefore(sample) => {
-                                Some(sample)
-                            }
-                            signal_processing::TriggerPlacement::Fraction(_)
-                            | signal_processing::TriggerPlacement::DurationBefore(_) => None,
-                        })
-                })
-            });
-        let (waveform, waveform_worker) = NativeGrowingCaptureIndex::rebuild(
-            &capture,
-            application.source_title,
-            sample_rate_hz,
-            channel_names,
-        )
-        .map_err(|error| error.to_string())?;
-        if let Some(trigger_sample) = trigger_sample {
-            waveform.set_trigger_sample(trigger_sample);
-        }
-        let waveform_update = self.pinned_waveform_update(session_id, waveform.clone())?;
-        let completion = completion_for_outcome(metadata.outcome);
-        let progress = CaptureProgress {
-            captured_samples: Some(manifest.committed_samples),
-            ..CaptureProgress::default()
-        };
-        self.status = Some(CaptureSessionStatus {
-            session_id,
-            source_node,
-            source_title: feature.source_title.clone(),
-            state: CaptureSessionState::Complete,
-            phase: CaptureAcquisitionPhase::Finalizing,
-            progress,
-            health: CaptureHealth::default(),
-            commands: signal_processing::CaptureCommandCapabilities::new(
-                false, false, false, false,
-            ),
-            session_plan: session_plan.clone(),
-            trigger_sample,
-            recording_origin: metadata.recording_origin,
-            outcome: metadata.outcome,
-            completion,
-            error: None,
-        });
-        self.replace_completed(CompletedCapture {
-            _session_pin: session_pin,
-            capture,
-            waveform: waveform.clone(),
-            source_node,
-            graph_source_factory: feature.graph_source_factory(),
-            recording_origin: metadata.recording_origin,
-            session_plan,
-            outcome: metadata.outcome,
-            completion,
-            waveform_worker: Some(waveform_worker),
-        });
-        self.waveform_update = Some(waveform_update);
-        self.analysis_attachment = None;
-        self.refresh_recent_sessions();
-        Ok(())
-    }
-
     fn pinned_waveform_update(
         &self,
         session_id: CaptureSessionId,
@@ -755,9 +554,8 @@ impl CaptureCoordinator {
     }
 
     fn refresh_recent_sessions(&mut self) {
-        if let Ok((sessions, plan)) = self.repository.scan_with_cleanup_plan() {
+        if let Ok((sessions, _)) = self.repository.scan_with_cleanup_plan() {
             self.recent_sessions = sessions;
-            self.cleanup_plan = plan;
         }
     }
 
@@ -783,6 +581,7 @@ impl CaptureCoordinator {
         if mode == CaptureStartMode::CaptureNow && !commands.capture_now {
             return Err("this capture source does not support Capture Now".into());
         }
+        self.discard_all_capture_data()?;
         let session_id = fresh_session_id();
         let source_node = feature.source_node;
         let source_title = feature.source_title.clone();
@@ -872,6 +671,46 @@ impl CaptureCoordinator {
             stop_requested: false,
             abort_requested: false,
         });
+        Ok(())
+    }
+
+    fn discard_all_capture_data(&mut self) -> Result<(), String> {
+        if self.is_active() {
+            return Err("cannot replace capture data while acquisition is active".into());
+        }
+        if self.active_export.is_some() {
+            return Err("cannot replace capture data while it is being saved".into());
+        }
+
+        self.analysis_attachment = None;
+        self.waveform_update = None;
+        self.status = None;
+        self.export_status = None;
+        self.export_notice = None;
+
+        let mut completed = self.completed.take().into_iter().collect::<Vec<_>>();
+        completed.append(&mut self.retired);
+        for capture in &mut completed {
+            if let Some(worker) = capture.waveform_worker.take() {
+                worker.join().map_err(|error| {
+                    format!("could not finish the previous capture index: {error}")
+                })?;
+            }
+        }
+        drop(completed);
+
+        self.refresh_recent_sessions();
+        let session_ids = self
+            .recent_sessions
+            .iter()
+            .filter_map(|session| session.session_id)
+            .collect::<Vec<_>>();
+        for session_id in session_ids {
+            self.repository
+                .discard(session_id)
+                .map_err(|error| format!("could not remove previous capture data: {error}"))?;
+        }
+        self.refresh_recent_sessions();
         Ok(())
     }
 
@@ -1412,6 +1251,7 @@ fn write_application_metadata(
     Ok(())
 }
 
+#[cfg(test)]
 fn read_application_metadata(directory: &Path) -> Result<CaptureApplicationMetadata, String> {
     let path = directory.join(APPLICATION_METADATA_FILE);
     recover_application_metadata_file(directory)?;
@@ -1440,6 +1280,7 @@ fn read_application_metadata(directory: &Path) -> Result<CaptureApplicationMetad
     Ok(metadata)
 }
 
+#[cfg(test)]
 fn recover_application_metadata_file(directory: &Path) -> Result<(), String> {
     let final_path = directory.join(APPLICATION_METADATA_FILE);
     let temporary = directory.join(APPLICATION_METADATA_TEMP_FILE);
@@ -1876,20 +1717,6 @@ fn resolve_configuration_epoch(
     write_application_metadata(directory, metadata)
 }
 
-const fn completion_for_outcome(outcome: CaptureSessionOutcome) -> Option<CaptureCompletion> {
-    match outcome {
-        CaptureSessionOutcome::Complete => Some(CaptureCompletion::Finished),
-        CaptureSessionOutcome::Stopped => Some(CaptureCompletion::Stopped),
-        CaptureSessionOutcome::CancelledBeforeTrigger => {
-            Some(CaptureCompletion::CancelledBeforeTrigger)
-        }
-        CaptureSessionOutcome::Incomplete | CaptureSessionOutcome::Aborted => {
-            Some(CaptureCompletion::Aborted)
-        }
-        CaptureSessionOutcome::InProgress | CaptureSessionOutcome::Corrupt => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1905,13 +1732,13 @@ mod tests {
         AcquisitionContext, AcquisitionError, AcquisitionResult, BufferedFakeConfig,
         BufferedFakeController, BufferedFakeProvider, CaptureAnalysisChannel,
         CaptureAnalysisSource, DeterministicFakeConfig, DeterministicFakeController,
-        DeterministicFakeProvider, DslCaptureReader, PreparedAcquisition,
+        DeterministicFakeProvider, PreparedAcquisition, SigrokCaptureReader,
     };
     use node_graph::{NodeDef, NodeGraphWidget, NodeId};
     use signal_processing::{
         CaptureCapacityEstimate, CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery,
-        CapturePolicy, CaptureProviderCapabilities, CaptureSessionOutcome, CaptureSessionPlan,
-        CaptureSessionState, CaptureSource, CaptureStartMode, CaptureStoreCursor, CompletionPolicy,
+        CapturePolicy, CaptureProviderCapabilities, CaptureSessionPlan, CaptureSessionState,
+        CaptureSource, CaptureStartMode, CaptureStoreCursor, CompletionPolicy,
         EffectiveCapturePolicy, ProcessNode, RecordingStart, RetentionPolicy,
         SimpleTriggerCondition, TriggerTimeout, TriggerTimeoutAction,
     };
@@ -2380,7 +2207,7 @@ mod tests {
     }
 
     #[test]
-    fn finalized_capture_exports_in_background_and_reopens() {
+    fn finalized_capture_saves_as_pulseview_data_in_background_and_reopens() {
         let (feature, controller) = manual_feature();
         let mut coordinator = CaptureCoordinator::new();
         coordinator
@@ -2390,9 +2217,9 @@ mod tests {
         poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
 
         let output_dir = tempfile::tempdir().unwrap();
-        let output = output_dir.path().join("background.dsl");
+        let output = output_dir.path().join("background.sr");
         coordinator
-            .start_export_current(CaptureRawExportFormat::Dsl, output.clone())
+            .start_export_current(CaptureRawExportFormat::Portable, output.clone())
             .unwrap();
         poll_until(&mut coordinator, |coordinator| {
             coordinator.export_status().is_none()
@@ -2401,7 +2228,7 @@ mod tests {
         assert_eq!(completion.destination, output);
         assert!(completion.warnings.is_empty());
 
-        let reader = DslCaptureReader::open(&completion.destination).unwrap();
+        let reader = SigrokCaptureReader::open(&completion.destination).unwrap();
         assert_eq!(reader.metadata().samplerate_hz, 1_000_000_000.0);
         assert_eq!(reader.metadata().probe_names, ["Bank A 7", "Bank C 2"]);
         assert_eq!(reader.metadata().total_samples, 17);
@@ -2500,9 +2327,9 @@ mod tests {
     }
 
     #[test]
-    fn finalized_session_can_be_kept_reopened_replayed_and_explicitly_discarded() {
+    fn starting_a_new_capture_discards_the_previous_store_and_index() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
-        let source = graph
+        graph
             .add_node_at(nodes::DemoCaptureSource::name(), egui::Pos2::ZERO)
             .unwrap();
         let builders = compiler::BuilderRegistry::standard();
@@ -2514,53 +2341,25 @@ mod tests {
             .start_with_graph(feature, graph.graph(), CaptureStartMode::SavedPolicy)
             .unwrap();
         poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
-
-        let session_id = coordinator.current_session_id().unwrap();
-        assert!(matches!(
-            coordinator.discard_session(session_id),
-            Err(error) if error.contains("close the displayed capture")
-        ));
-        coordinator.set_session_kept(session_id, true).unwrap();
-        assert!(coordinator.recent_session_views()[0].kept);
-
-        coordinator.clear_completed();
-        assert!(
-            coordinator
-                .take_waveform_update()
-                .is_some_and(|update| update.is_none())
-        );
-        coordinator
-            .open_recent_session(session_id, &builders)
-            .unwrap();
-        assert_eq!(coordinator.replay_source_node(), Some(source));
-        assert_eq!(
-            coordinator.status().unwrap().outcome,
-            CaptureSessionOutcome::Complete
-        );
-        assert_eq!(coordinator.status().unwrap().trigger_sample, None);
-        assert_eq!(coordinator.status().unwrap().recording_origin, Some(0));
-        assert!(coordinator.create_replay_attachment().unwrap().is_some());
-        let reopened = coordinator
-            .take_waveform_update()
+        let first_session = coordinator.current_session_id().unwrap();
+        let first_directory = coordinator
+            .completed
+            .as_ref()
             .unwrap()
-            .expect("reopened capture publishes its waveform");
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while !reopened.is_complete() {
-            assert!(Instant::now() < deadline, "waveform rebuild timed out");
-            coordinator.poll();
-            std::thread::yield_now();
-        }
-        coordinator.poll();
-        coordinator.set_session_kept(session_id, false).unwrap();
-        coordinator.clear_completed();
-        coordinator.poll();
-        assert!(matches!(
-            coordinator.discard_session(session_id),
-            Err(error) if error.contains("pinned")
-        ));
-        drop(reopened);
-        coordinator.discard_session(session_id).unwrap();
-        assert!(coordinator.recent_session_views().is_empty());
+            ._session_pin
+            .directory()
+            .to_owned();
+        assert!(first_directory.exists());
+
+        let feature = compiler::discover_live_capture_feature(graph.graph(), &builders)
+            .unwrap()
+            .unwrap();
+        coordinator
+            .start_with_graph(feature, graph.graph(), CaptureStartMode::SavedPolicy)
+            .unwrap();
+        assert!(!first_directory.exists());
+        poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
+        assert_ne!(coordinator.current_session_id(), Some(first_session));
     }
 
     #[test]

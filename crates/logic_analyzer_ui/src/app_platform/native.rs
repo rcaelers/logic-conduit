@@ -10,8 +10,7 @@ pub(crate) enum FileCommand {
     ClearRecent,
     Save,
     SaveAs,
-    ExportDslCapture,
-    ExportPortableCapture,
+    SaveCaptureData,
     Quit,
 }
 
@@ -72,8 +71,7 @@ pub enum NativeMenuCommand {
     ClearRecent,
     Save,
     SaveAs,
-    ExportDslCapture,
-    ExportPortableCapture,
+    SaveCaptureData,
     Quit,
     Run,
     Stop,
