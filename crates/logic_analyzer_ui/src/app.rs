@@ -1042,30 +1042,6 @@ impl App {
                     }
                 });
             }
-            if let CaptureAvailability::Available {
-                session_plan: Some(plan),
-                ..
-            } = &availability
-            {
-                ui.menu_button("Capacity", |ui| {
-                    ui.label(format!(
-                        "Worst-case input: {}/s",
-                        format_bytes(plan.capacity.worst_case_bytes_per_second)
-                    ));
-                    if let Some(bytes) = plan.capacity.finite_capture_bytes {
-                        ui.label(format!("Finite capture: {}", format_bytes(bytes)));
-                    }
-                    if let Some(duration) = plan.capacity.retained_duration {
-                        ui.label(format!(
-                            "Retained duration: {:.3} s",
-                            duration.as_secs_f64()
-                        ));
-                    }
-                    for warning in &plan.capacity.warnings {
-                        ui.colored_label(egui::Color32::from_rgb(220, 170, 90), warning);
-                    }
-                });
-            }
         }
 
         if let Some(export) = self.capture.export_status().cloned() {
