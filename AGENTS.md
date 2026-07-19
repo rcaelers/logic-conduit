@@ -17,6 +17,13 @@ See `docs/DECODER_VIEW_LANE_DESIGN.md` for the detailed viewer-lane decision.
 
 # Crate boundaries
 
+- Place every type, function, and implementation module under the component whose
+  stated responsibility includes that behavior. Do not expose unrelated helpers from
+  a domain module or crate merely because their implementation is reusable. When
+  multiple domains need a capability, extract it into a neutral lower-level module or
+  crate with that capability as an explicit responsibility; consumers depend on that
+  shared owner rather than reaching through one another. Treat `pub`, `pub(crate)`,
+  re-exports, and module visibility as architectural contracts, not convenience access.
 - `signal_processing` is UI-independent generic runtime, capture, and derived-data
   infrastructure.
 - `logic_analyzer_processing` owns UI-independent concrete capture sources,
