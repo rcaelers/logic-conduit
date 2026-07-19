@@ -1,7 +1,7 @@
 //! Native persistent-cache capability boundary.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -40,10 +40,7 @@ pub(super) fn assign_viewer_caches(compiled: &mut CompiledGraph) {
                 continue;
             };
             if let Some(key) = persistent_lane_key(compiled, viewer_id, member, edge) {
-                *slot = Some(PersistentStoreConfig::new(
-                    signal_processing::default_cache_directory(),
-                    key,
-                ));
+                *slot = Some(PersistentStoreConfig::new(PathBuf::new(), key));
             }
         }
         assignments.push((viewer_id, caches));
@@ -143,8 +140,10 @@ fn prepare_cache(compiled: &CompiledGraph) {
 pub(super) fn cache_configs_by_node(
     graph: &GraphState,
     registry: &BuilderRegistry,
+    directory: &Path,
 ) -> Result<HashMap<NodeId, Vec<PersistentStoreConfig>>, Vec<CompileError>> {
-    let compiled = super::lower(graph, registry)?;
+    let mut compiled = super::lower(graph, registry)?;
+    configure_directory(&mut compiled, Some(directory));
     let mut result: HashMap<NodeId, Vec<PersistentStoreConfig>> = HashMap::new();
     for viewer in compiled
         .nodes

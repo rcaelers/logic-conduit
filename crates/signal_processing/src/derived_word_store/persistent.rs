@@ -59,31 +59,6 @@ pub struct PersistentCacheStats {
     pub removed_bytes: u64,
 }
 
-pub fn default_cache_directory() -> PathBuf {
-    #[cfg(target_os = "macos")]
-    if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home)
-            .join("Library")
-            .join("Caches")
-            .join("dsl")
-            .join("derived");
-    }
-    #[cfg(target_os = "windows")]
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(local).join("dsl").join("derived");
-    }
-    if let Some(cache) = std::env::var_os("XDG_CACHE_HOME") {
-        return PathBuf::from(cache).join("dsl").join("derived");
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home)
-            .join(".cache")
-            .join("dsl")
-            .join("derived");
-    }
-    std::env::temp_dir().join("dsl").join("derived")
-}
-
 pub fn cleanup_cache(
     directory: &Path,
     max_total_bytes: u64,

@@ -64,12 +64,10 @@ impl Trigger {
     }
 }
 
-/// A single decoded word from any serial/parallel decoder (SPI, parallel
-/// bus, UART, I2C, …) — every decoder's output reduces to this: one value
-/// up to 64 bits wide, timestamped where it started. No decoder needs a
-/// payload type of its own beyond this — a decoder that wants to expose
-/// two independent word-shaped things (e.g. SPI's MOSI and MISO) does so
-/// via two output ports, not two fields on one struct.
+/// A single decoded word from any framed or sampled word stream: one value up
+/// to 64 bits wide, timestamped where it started. A producer that exposes two
+/// independent word-shaped streams uses two output ports rather than two
+/// fields on one value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Word {
     pub value: u64,

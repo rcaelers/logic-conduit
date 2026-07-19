@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use logic_analyzer_processing::{DslFileCaptureDataSource, SigrokFileCaptureDataSource};
 
 use super::*;
-use crate::app_platform::{FileCommand, GuardedAction};
+use crate::app_platform::{FileCommand, GuardedAction, derived_cache_directory};
 #[cfg(target_os = "macos")]
 use crate::app_platform::{NativeMenuCommand, notify_recent_files_changed};
 use crate::live_capture::CaptureRawExportFormat;
@@ -37,7 +37,7 @@ impl App {
 
     pub(super) fn platform_prepare_run(&mut self, ctx: &mut compiler::CompileCtx) {
         self.refresh_derived_cache_nodes();
-        ctx.persistent_cache_directory = Some(signal_processing::default_cache_directory());
+        ctx.persistent_cache_directory = Some(derived_cache_directory());
     }
 
     pub(super) fn platform_raw_input_hook(
@@ -760,7 +760,11 @@ impl App {
 
     pub(super) fn refresh_derived_cache_nodes(&mut self) {
         self.platform.derived_cache_nodes =
-            compiler::derived_cache_configs_by_node(self.node_graph.graph(), &self.builders)
+            compiler::derived_cache_configs_by_node(
+                self.node_graph.graph(),
+                &self.builders,
+                &derived_cache_directory(),
+            )
                 .map(|inventory| {
                     inventory
                         .into_keys()
@@ -784,6 +788,7 @@ impl App {
         let configs = match compiler::derived_cache_configs_by_node(
             self.node_graph.graph(),
             &self.builders,
+            &derived_cache_directory(),
         ) {
             Ok(mut inventory) => inventory.remove(&node_id).unwrap_or_default(),
             Err(errors) => {
@@ -839,7 +844,7 @@ impl App {
             return;
         }
         self.release_derived_data_handles();
-        let directory = signal_processing::default_cache_directory();
+        let directory = derived_cache_directory();
         match signal_processing::clear_cache(&directory) {
             Ok(stats) if stats.removed_entries == 0 && stats.removed_bytes == 0 => {
                 self.toasts.info("No derived data caches found");

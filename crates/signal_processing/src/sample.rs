@@ -37,12 +37,11 @@ impl fmt::Display for Sample {
 
 /// A block of packed-bit samples from a single channel
 ///
-/// Carries raw packed-bit data directly from DSL file blocks, enabling O(1) bit
-/// lookup instead of per-edge channel operations. Each block typically covers
-/// ~16M samples (~2MB packed).
+/// Carries raw packed-bit data from block-oriented capture sources, enabling
+/// O(1) bit lookup instead of per-edge channel operations.
 ///
-/// All channels in a DSL file share the same block structure:
-/// - Same `samples_per_block` (typically 2^24 = 16,777,216)
+/// Channels in one capture share the same block structure:
+/// - Same `samples_per_block`
 /// - Same sample positions (all sampled at the same hardware clock)
 /// - Blocks are aligned by block number across channels
 ///
@@ -52,8 +51,8 @@ impl fmt::Display for Sample {
 /// ## Bit Packing Format
 ///
 /// LSB-first within each byte: bit N is at `data[N/8] >> (N%8) & 1`.
-/// This matches the DSLogic on-disk format, so blocks can be sent with
-/// zero transformation from the ZIP archive.
+/// Sources whose native representation uses this packing can publish blocks
+/// without transforming their payload.
 #[derive(Clone, Debug)]
 pub struct SampleBlock {
     /// Packed bit data (LSB-first), with shared zero-copy backing and range.

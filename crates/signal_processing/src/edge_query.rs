@@ -4,12 +4,11 @@
 //! connection protocol: a channel-scoped, object-safe query surface a
 //! consuming node can hold instead of a streamed [`super::sample::Sample`]
 //! channel. One instance answers queries for exactly one channel, so a
-//! future pass-through node (a logic gate, say) can hold one `Arc<dyn
-//! EdgeQuery>` per input and build a new one for its own output purely by
+//! pass-through or combining node can hold one `Arc<dyn EdgeQuery>` per input
+//! and build a new one for its own output purely by
 //! combining them — `next_edge`/`value_at` are enough to do that lazily,
-//! without ever streaming. Nothing here is wasm-gated: only the concrete
-//! file-backed implementation in `nodes::dsl_file` is (it depends on the
-//! native-only waveform index).
+//! without ever streaming. The contract is platform-neutral; implementations
+//! that require a native index are selected at their implementation boundary.
 use crate::Result;
 use crate::capture::CaptureTransition;
 

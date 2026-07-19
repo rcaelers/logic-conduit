@@ -67,12 +67,11 @@ use super::watchdog::Watchdog;
 ///
 /// This manager deliberately does **not** get `SampleKind` negotiation
 /// (the `Sample`/`SampleBlock` port-unification work `PipelineManager`
-/// has): the only two producers that ever declare more than one
-/// `SampleKind` — `DslFileSource` and `LogicAnalyzerSource` — are both
-/// excluded from the cooperative platform, i.e. unreachable from this
-/// manager by construction. A connection here still
+/// has): polymorphic raw-channel producers are excluded from the cooperative
+/// platform registry and are unreachable from this manager by construction.
+/// A connection here still
 /// requires an exact `TypeId` match, which is correct as long as that
-/// stays true — if a wasm-reachable node ever needs to negotiate
+/// stays true. If a cooperative-platform node ever needs to negotiate
 /// `SampleKind`, mirror `manager.rs`'s `build_output_lists`/
 /// `negotiate_sample_kind_list`/`output_port_from_lists` here too.
 fn is_level_type(type_id: TypeId) -> bool {

@@ -11,7 +11,10 @@ std::cfg_select! {
         #[path = "native.rs"]
         mod imp;
 
-        pub(crate) use imp::{FileCommand, GuardedAction, PlatformState};
+        pub(crate) use imp::{
+            FileCommand, GuardedAction, PlatformState, capture_session_directory,
+            derived_cache_directory,
+        };
     }
 }
 

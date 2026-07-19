@@ -91,12 +91,6 @@ impl NativeCaptureSessionRepository {
         })
     }
 
-    pub fn standard() -> CaptureStoreResult<Self> {
-        Self::new(NativeCaptureSessionRepositoryConfig::new(
-            default_capture_session_directory(),
-        ))
-    }
-
     pub fn root(&self) -> &Path {
         self.config.root()
     }
@@ -361,34 +355,6 @@ impl Drop for NativeCaptureSessionPin {
             if *count == 0 {
                 pins.sessions.remove(&self.session_id);
             }
-        }
-    }
-}
-
-pub fn default_capture_session_directory() -> PathBuf {
-    std::cfg_select! {
-        target_os = "macos" => {
-            std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .map(|home| home.join("Library").join("Caches").join("dsl").join("captures"))
-                .unwrap_or_else(|| std::env::temp_dir().join("dsl").join("captures"))
-        }
-        target_os = "windows" => {
-            std::env::var_os("LOCALAPPDATA")
-                .map(PathBuf::from)
-                .map(|local| local.join("dsl").join("captures"))
-                .unwrap_or_else(|| std::env::temp_dir().join("dsl").join("captures"))
-        }
-        _ => {
-            std::env::var_os("XDG_CACHE_HOME")
-                .map(PathBuf::from)
-                .or_else(|| {
-                    std::env::var_os("HOME")
-                        .map(PathBuf::from)
-                        .map(|home| home.join(".cache"))
-                })
-                .map(|cache| cache.join("dsl").join("captures"))
-                .unwrap_or_else(|| std::env::temp_dir().join("dsl").join("captures"))
         }
     }
 }

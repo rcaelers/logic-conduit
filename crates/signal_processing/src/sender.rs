@@ -23,8 +23,8 @@ use super::watchdog::{OperationGuard, WatchdogHandle};
 ///
 /// Wraps data flowing through channels so sources can explicitly signal
 /// when no more data will be sent. This is essential for self-threading
-/// nodes (like `DslFileSource`) where `split_senders()` creates cloned
-/// channel handles — dropping a clone doesn't close the channel because
+/// nodes where `split_senders()` creates cloned channel handles — dropping a
+/// clone doesn't close the channel because
 /// the original `Sender` in `OutputPort` still holds its handles.
 ///
 /// Nodes never see this enum directly — `Sender::send()` wraps values
@@ -397,7 +397,7 @@ impl<T: Clone + Send> Sender<T> {
     /// broadcasting from a single thread. Each returned Sender sends to
     /// exactly one destination.
     ///
-    /// For nodes that need per-destination parallelism (like DslFileSource),
+    /// For nodes that need per-destination parallelism,
     /// use this to get independent senders and spawn your own threads.
     ///
     /// # Example

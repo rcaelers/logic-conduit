@@ -5,7 +5,7 @@ pub use super::super::cache::{
     reset_decoded_block_cache_stats,
 };
 pub use super::super::persistent::{
-    cleanup_cache, clear_cache, clear_cache_entry, default_cache_directory,
+    cleanup_cache, clear_cache, clear_cache_entry,
 };
 #[path = "../store.rs"]
 pub(crate) mod store;

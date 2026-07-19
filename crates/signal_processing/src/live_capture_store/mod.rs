@@ -23,7 +23,6 @@ std::cfg_select! {
         pub use repository_native::{
             CaptureSessionCleanupPlan, NativeCaptureSessionPin, NativeCaptureSessionRepository,
             NativeCaptureSessionRepositoryConfig, NativeCaptureSessionSummary,
-            default_capture_session_directory,
         };
     }
 }

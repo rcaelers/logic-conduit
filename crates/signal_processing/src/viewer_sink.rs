@@ -1252,7 +1252,7 @@ mod tests {
         assert_eq!(summary.len(), 3);
     }
 
-    /// A word carrying a real duration (SPI, UART) is stored closed at its
+    /// A word carrying a real duration is stored closed at its
     /// true end immediately — never patched to the next word's start, never
     /// left open for the renderer to estimate.
     #[test]
@@ -1260,9 +1260,8 @@ mod tests {
         let store = DerivedLanes::new();
         let lane = store.register("w", DerivedLaneData::Annotations(Vec::new()));
 
-        // A 24-bit SPI-like word spanning 2_300ns, followed much later by
-        // another; the first's end must stay its own, not stretch to the
-        // second's start.
+        // A word spanning 2_300ns, followed much later by another; the first's
+        // end must stay its own, not stretch to the second's start.
         store.append_word_batch(lane, [(1_000, 2_300, 0x600081)]);
         {
             let lanes = store.read();

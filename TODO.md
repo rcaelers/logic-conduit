@@ -1,18 +1,5 @@
 # TODO
 
-## Responsibility and visibility cleanup
-
-Related design: [Responsibility and Visibility Design](docs/RESPONSIBILITY_AND_VISIBILITY_DESIGN.md).
-
-- Remove concrete source/protocol examples from generic runtime documentation and replace them
-  with descriptions of the capability involved.
-- Move application cache-directory naming and environment policy out of `signal_processing`; the
-  host supplies a namespace and location through configuration.
-- Replace the target-dependent `AppManager` type alias with an explicit platform-neutral manager
-  facade or capability contract while retaining whole-module backend selection.
-- Add architecture checks for prohibited concrete terminology in generic crates and for complete,
-  publicly nameable trait signatures.
-
 ## Logic-analyzer viewer
 
 - Add global and per-lane height zoom, using modifier + scroll-wheel input.

@@ -1347,8 +1347,9 @@ pub(super) fn compiled_node(compiled: &CompiledGraph, id: NodeId) -> &CompiledNo
 pub fn derived_cache_configs_by_node(
     graph: &GraphState,
     registry: &BuilderRegistry,
+    directory: &std::path::Path,
 ) -> Result<HashMap<NodeId, Vec<PersistentStoreConfig>>, Vec<CompileError>> {
-    cache_platform::cache_configs_by_node(graph, registry)
+    cache_platform::cache_configs_by_node(graph, registry, directory)
 }
 
 /// Input subscriptions for `id`, matched to the built node's input schema.
@@ -3168,7 +3169,9 @@ mod tests {
             .map(|config| config.cache_key)
             .collect();
 
-        let inventory = derived_cache_configs_by_node(widget.graph(), &registry).unwrap();
+        let inventory =
+            derived_cache_configs_by_node(widget.graph(), &registry, std::path::Path::new("cache"))
+                .unwrap();
         let actual = inventory[&viewer.id]
             .iter()
             .map(|config| config.cache_key)

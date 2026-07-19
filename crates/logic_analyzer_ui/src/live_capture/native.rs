@@ -25,13 +25,13 @@ use signal_processing::{
     NativeCaptureSessionSummary, NativeCaptureStore, NativeCaptureStoreConfig,
     NativeFinalizedCapture, NativeGrowingCaptureIndex, NativeGrowingCaptureIndexWorker,
     RecordingStart, TriggerTimeoutAction, bounded_capture_event_queue,
-    default_capture_session_directory,
 };
 
 use super::{
     CaptureAnalysisAttachment, CaptureCoordinatorContract, CaptureExportCompletion,
     CaptureExportStatus, CaptureReplayAttachment, CaptureSessionStatus, CaptureWaveformUpdate,
 };
+use crate::app_platform::capture_session_directory;
 
 const EVENT_QUEUE_CAPACITY: usize = 1_024;
 const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -329,7 +329,7 @@ impl CaptureCoordinator {
     }
 
     pub(crate) fn configured(max_recent_sessions: usize, max_total_bytes: u64) -> Self {
-        let config = NativeCaptureSessionRepositoryConfig::new(default_capture_session_directory())
+        let config = NativeCaptureSessionRepositoryConfig::new(capture_session_directory())
             .with_limits(max_recent_sessions, max_total_bytes)
             .expect("embedded live-capture limits are valid");
         let repository = NativeCaptureSessionRepository::new(config)

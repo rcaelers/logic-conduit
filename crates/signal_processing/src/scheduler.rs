@@ -13,7 +13,7 @@
 //!    `work()` once to start the node, then waits for `should_stop()` to signal completion.
 //!    The node returns `is_self_threading() = true` to indicate this pattern.
 //!
-//! Example self-threading node: `DslFileSource` spawns per-channel reader threads internally.
+//! A self-threading source can, for example, spawn one reader per output destination.
 
 use std::collections::HashMap;
 use std::sync::Arc;

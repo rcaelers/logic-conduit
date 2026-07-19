@@ -26,6 +26,7 @@ pub(super) fn prepare_execution(
 pub(super) fn cache_configs_by_node(
     _graph: &GraphState,
     _registry: &BuilderRegistry,
+    _directory: &std::path::Path,
 ) -> Result<HashMap<NodeId, Vec<PersistentStoreConfig>>, Vec<CompileError>> {
     Ok(HashMap::new())
 }

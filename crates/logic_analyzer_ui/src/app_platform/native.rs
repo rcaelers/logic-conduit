@@ -3,6 +3,42 @@ use std::path::PathBuf;
 
 use node_graph::NodeId;
 
+fn application_cache_directory() -> PathBuf {
+    std::cfg_select! {
+        target_os = "macos" => {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .map(|home| home.join("Library").join("Caches").join("dsl"))
+                .unwrap_or_else(|| std::env::temp_dir().join("dsl"))
+        }
+        target_os = "windows" => {
+            std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .map(|local| local.join("dsl"))
+                .unwrap_or_else(|| std::env::temp_dir().join("dsl"))
+        }
+        _ => {
+            std::env::var_os("XDG_CACHE_HOME")
+                .map(PathBuf::from)
+                .or_else(|| {
+                    std::env::var_os("HOME")
+                        .map(PathBuf::from)
+                        .map(|home| home.join(".cache"))
+                })
+                .map(|cache| cache.join("dsl"))
+                .unwrap_or_else(|| std::env::temp_dir().join("dsl"))
+        }
+    }
+}
+
+pub(crate) fn derived_cache_directory() -> PathBuf {
+    application_cache_directory().join("derived")
+}
+
+pub(crate) fn capture_session_directory() -> PathBuf {
+    application_cache_directory().join("captures")
+}
+
 pub(crate) enum FileCommand {
     New,
     Load,

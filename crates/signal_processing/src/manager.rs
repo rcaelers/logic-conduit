@@ -1584,8 +1584,8 @@ mod tests {
         }
     }
 
-    /// A consumer that deliberately excludes EdgeQuery, mirroring the
-    /// Binary Decoder's explicit packed-stream strategy.
+    /// A consumer that deliberately excludes `EdgeQuery` and therefore
+    /// requires the streamed protocol.
     struct StreamProbe {
         got_stream: Arc<AtomicBool>,
         buffer: VecDeque<NumberSample>,

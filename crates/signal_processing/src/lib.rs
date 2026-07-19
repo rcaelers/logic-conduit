@@ -11,7 +11,11 @@
 //! - **Scheduler**: Manages node lifecycle and parallel execution
 //! - **Derived data**: Generic viewer-lane storage and queries
 
+#[cfg(test)]
+mod architecture_tests;
+
 pub mod advanced_trigger;
+mod app_manager;
 pub mod capture;
 mod capture_policy;
 mod cooperative_manager;
@@ -43,7 +47,6 @@ std::cfg_select! {
         #[path = "idle_wasm.rs"]
         mod idle;
 
-        pub type AppManager = CooperativeManager;
     }
     _ => {
         mod archive_capture_store;
@@ -53,11 +56,9 @@ std::cfg_select! {
         pub mod waveform_index;
         pub mod worker_pool;
 
-        pub type AppManager = PipelineManager;
         pub use derived_word_store::{
             DecodedBlockCacheStats, cleanup_cache, clear_cache, clear_cache_entry,
-            configure_decoded_block_cache, decoded_block_cache_stats, default_cache_directory,
-            reset_decoded_block_cache_stats,
+            configure_decoded_block_cache, decoded_block_cache_stats, reset_decoded_block_cache_stats,
         };
         pub use waveform_index::{
             CaptureIndexProgress, IndexSampler, NativeGrowingCaptureIndex,
@@ -74,6 +75,7 @@ pub use advanced_trigger::{
     TriggerValidationCode, TriggerValidationDiagnostic, TriggerValidationErrors,
     ValidatedTriggerProgram,
 };
+pub use app_manager::AppManager;
 pub use capture::{
     BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureIndex,
     CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,

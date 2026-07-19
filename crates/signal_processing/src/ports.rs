@@ -47,8 +47,8 @@ pub struct PortSchema {
     /// Payload kinds (`Sample` vs `SampleBlock`) this *output* port can
     /// produce, most preferred first — see [`super::sample_kind::negotiate`].
     /// Default empty, meaning "not polymorphic — `type_id` is the only
-    /// option," true of every port except a handful of raw-channel sources
-    /// (`DslFileSource`, `LogicAnalyzerSource`). Input ports leave this
+    /// option," true of every port except polymorphic raw-channel sources.
+    /// Input ports leave this
     /// empty too: negotiation always resolves an input to its own declared
     /// `type_id`, so there's no separate "accepted kinds" concept to
     /// declare on the consuming side.
@@ -295,14 +295,14 @@ impl OutputPort {
     }
 
     /// Clone the underlying Sender for this port.
-    /// Used by nodes that spawn their own worker threads (e.g., DslFileSource).
+    /// Used by nodes that spawn their own worker threads.
     pub fn clone_sender<T: Send + Clone + 'static>(&self) -> Option<Sender<T>> {
         self.find::<T>().cloned()
     }
 
     /// Split the underlying broadcast Sender into individual senders (one per destination).
     ///
-    /// For nodes that need per-destination parallelism (e.g., DslFileSource),
+    /// For nodes that need per-destination parallelism,
     /// this allows spawning one thread per destination. Each returned Sender
     /// sends to exactly one destination.
     ///

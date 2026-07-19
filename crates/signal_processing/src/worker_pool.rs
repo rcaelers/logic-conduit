@@ -32,7 +32,7 @@ impl WorkerPool {
                         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
                     }
                 })
-                .expect("failed to start shared DSL compute worker");
+                .expect("failed to start shared signal-processing compute worker");
         }
         Self { sender, workers }
     }

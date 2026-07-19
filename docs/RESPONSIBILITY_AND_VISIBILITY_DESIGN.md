@@ -32,6 +32,11 @@ The crate boundaries in `AGENTS.md` are enforced at both dependency and symbol l
 Concrete aliases are declared beside their concrete implementation. A common abstraction module
 does not import one implementation merely to publish a convenience alias.
 
+Generic storage accepts explicit working, persistent-cache, and session-repository directories.
+The native application platform owns the application namespace and operating-system directory
+policy, then passes resolved paths through configuration. Generic crates do not inspect host
+environment variables to choose an application location.
+
 ## Visibility rules
 
 Use the narrowest visibility that contains every intended consumer:
@@ -63,6 +68,9 @@ Native and wasm public surfaces share the platform-neutral data model. Native-on
 USB, mmap, worker, export, and host-integration capabilities are selected as complete modules or
 registry entries. A platform facade exposes a complete contract; consumers do not depend on an
 unnameable backend type or a target-dependent collection of incidental helpers.
+
+`AppManager` is one such facade. Its public type and operations are identical on every target;
+whole implementation files delegate to the threaded native manager or cooperative wasm manager.
 
 ## Enforcement
 
