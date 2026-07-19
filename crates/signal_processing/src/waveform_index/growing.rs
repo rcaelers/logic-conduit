@@ -6,15 +6,16 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::{
-    CaptureCursorItem, CaptureIndex, CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow,
-    CaptureStoreCursor, CaptureWaveformSegment, Error, NativeCaptureRandomReader,
-    NativeCaptureStore, NativeFinalizedCapture, Result, exact_window_sample_limit,
+    CaptureCursorItem, CaptureIndex, CaptureMetadata, CaptureSampledWindow, CaptureStoreCursor,
+    Error, NativeCaptureRandomReader, NativeCaptureStore, NativeFinalizedCapture, Result,
 };
+
+use super::query::{GroupSummary, sample_summary_channel};
+use super::{exact_window_sample_limit, select_summary_resolution};
 
 const LEAF_SAMPLES: u64 = 64;
 const FAN_OUT: usize = 64;
 const QUERY_WAIT: Duration = Duration::from_millis(50);
-const WAVEFORM_RECORD_SIZE: usize = 17;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct WaveformRecord {
@@ -29,9 +30,7 @@ impl WaveformRecord {
     fn combine(records: &[Self]) -> Self {
         let first = records[0];
         let last = records[records.len() - 1];
-        let boundary_activity = records
-            .windows(2)
-            .any(|pair| pair[0].last != pair[1].first);
+        let boundary_activity = records.windows(2).any(|pair| pair[0].last != pair[1].first);
         Self {
             start_sample: first.start_sample,
             end_sample: last.end_sample,
@@ -41,21 +40,14 @@ impl WaveformRecord {
         }
     }
 
-    fn encode(self) -> [u8; WAVEFORM_RECORD_SIZE] {
-        let mut bytes = [0_u8; WAVEFORM_RECORD_SIZE];
-        bytes[0..8].copy_from_slice(&self.start_sample.to_le_bytes());
-        bytes[8..16].copy_from_slice(&self.end_sample.to_le_bytes());
-        bytes[16] = u8::from(self.first)
-            | (u8::from(self.last) << 1)
-            | (u8::from(self.activity) << 2);
-        bytes
+    fn flags(self) -> u8 {
+        u8::from(self.first) | (u8::from(self.last) << 1) | (u8::from(self.activity) << 2)
     }
 
-    fn decode(bytes: [u8; WAVEFORM_RECORD_SIZE]) -> Self {
-        let flags = bytes[16];
+    fn from_flags(flags: u8, start_sample: u64, end_sample: u64) -> Self {
         Self {
-            start_sample: u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
-            end_sample: u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+            start_sample,
+            end_sample,
             first: flags & 1 != 0,
             last: flags & 2 != 0,
             activity: flags & 4 != 0,
@@ -67,12 +59,13 @@ impl WaveformRecord {
 struct WaveformTier {
     path: PathBuf,
     writer: BufWriter<File>,
+    span: u64,
     records: u64,
     pending: Vec<WaveformRecord>,
 }
 
 impl WaveformTier {
-    fn create(path: PathBuf) -> Result<Self> {
+    fn create(path: PathBuf, span: u64) -> Result<Self> {
         let writer = OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -80,48 +73,76 @@ impl WaveformTier {
         Ok(Self {
             path,
             writer: BufWriter::new(writer),
+            span,
             records: 0,
             pending: Vec::with_capacity(FAN_OUT),
         })
     }
 
-    fn push(&mut self, record: WaveformRecord) -> Result<Option<WaveformRecord>> {
-        self.writer.write_all(&record.encode())?;
-        self.records += 1;
-        self.pending.push(record);
-        if self.pending.len() == FAN_OUT {
-            let combined = WaveformRecord::combine(&self.pending);
-            self.pending.clear();
-            Ok(Some(combined))
-        } else {
-            Ok(None)
-        }
-    }
+    fn extend(&mut self, records: &[WaveformRecord]) -> Result<Vec<WaveformRecord>> {
+        let flags = records
+            .iter()
+            .map(|record| record.flags())
+            .collect::<Vec<_>>();
+        self.writer.write_all(&flags)?;
+        self.records = self.records.saturating_add(records.len() as u64);
 
-    fn read_range(&self, first: u64, last: u64) -> Result<Vec<WaveformRecord>> {
-        if first >= last || last > self.records {
-            return Ok(Vec::new());
+        let mut folded = Vec::with_capacity((self.pending.len() + records.len()) / FAN_OUT);
+        for &record in records {
+            self.pending.push(record);
+            if self.pending.len() == FAN_OUT {
+                folded.push(WaveformRecord::combine(&self.pending));
+                self.pending.clear();
+            }
         }
-        let record_size = WAVEFORM_RECORD_SIZE as u64;
-        let offset = first
-            .checked_mul(record_size)
-            .ok_or_else(|| Error::ParseError("waveform summary offset overflow".into()))?;
-        let count = usize::try_from(last - first)
-            .map_err(|_| Error::ParseError("waveform summary window is too large".into()))?;
-        let mut reader = File::open(&self.path)?;
-        reader.seek(SeekFrom::Start(offset))?;
-        let mut records = Vec::with_capacity(count);
-        for _ in 0..count {
-            let mut bytes = [0_u8; WAVEFORM_RECORD_SIZE];
-            reader.read_exact(&mut bytes)?;
-            records.push(WaveformRecord::decode(bytes));
-        }
-        Ok(records)
+        Ok(folded)
     }
 
     fn flush(&mut self) -> Result<()> {
         self.writer.flush()?;
         Ok(())
+    }
+
+    fn snapshot(&self) -> WaveformTierSnapshot {
+        WaveformTierSnapshot {
+            path: self.path.clone(),
+            span: self.span,
+            records: self.records,
+            pending: self.pending.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct WaveformTierSnapshot {
+    path: PathBuf,
+    span: u64,
+    records: u64,
+    pending: Vec<WaveformRecord>,
+}
+
+impl WaveformTierSnapshot {
+    fn read_range(&self, first: u64, last: u64) -> Result<Vec<WaveformRecord>> {
+        if first >= last || last > self.records {
+            return Ok(Vec::new());
+        }
+        let count = usize::try_from(last - first)
+            .map_err(|_| Error::ParseError("waveform summary window is too large".into()))?;
+        let mut reader = File::open(&self.path)?;
+        reader.seek(SeekFrom::Start(first))?;
+        let mut flags = vec![0_u8; count];
+        reader.read_exact(&mut flags)?;
+        let mut records = Vec::with_capacity(count);
+        for (relative, flags) in flags.into_iter().enumerate() {
+            let index = first + relative as u64;
+            let start_sample = index.saturating_mul(self.span);
+            records.push(WaveformRecord::from_flags(
+                flags,
+                start_sample,
+                start_sample.saturating_add(self.span),
+            ));
+        }
+        Ok(records)
     }
 }
 
@@ -142,19 +163,29 @@ impl WaveformMipmap {
     }
 
     fn push(&mut self, record: WaveformRecord) -> Result<()> {
-        self.push_at(0, record)
+        self.extend_at(0, &[record])
     }
 
-    fn push_at(&mut self, tier: usize, record: WaveformRecord) -> Result<()> {
+    fn extend(&mut self, records: &[WaveformRecord]) -> Result<()> {
+        self.extend_at(0, records)
+    }
+
+    fn extend_at(&mut self, tier: usize, records: &[WaveformRecord]) -> Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
         if tier == self.tiers.len() {
             let path = self
                 .directory
                 .join(format!("capture.waveform.{}.{}", self.channel, tier));
-            self.tiers.push(WaveformTier::create(path)?);
+            let span = tier_span(tier).ok_or_else(|| {
+                Error::ParseError("growing waveform tier span overflow".into())
+            })?;
+            self.tiers.push(WaveformTier::create(path, span)?);
         }
-        let folded = self.tiers[tier].push(record)?;
-        if let Some(folded) = folded {
-            self.push_at(tier + 1, folded)?;
+        let folded = self.tiers[tier].extend(records)?;
+        if !folded.is_empty() {
+            self.extend_at(tier + 1, &folded)?;
         }
         Ok(())
     }
@@ -170,38 +201,64 @@ impl WaveformMipmap {
         Ok(())
     }
 
-    fn sampled_window(
+    fn snapshot(&self) -> WaveformMipmapSnapshot {
+        WaveformMipmapSnapshot {
+            tiers: self.tiers.iter().map(WaveformTier::snapshot).collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct WaveformMipmapSnapshot {
+    tiers: Vec<WaveformTierSnapshot>,
+}
+
+impl WaveformMipmapSnapshot {
+
+    fn sampled_records(
         &self,
         start_sample: u64,
         end_sample: u64,
+        resolution_samples: u64,
         target_points: usize,
         tail: Option<WaveformRecord>,
-    ) -> Result<Vec<WaveformRecord>> {
-        let budget = target_points.max(1).saturating_mul(2);
-        for tier_index in (0..self.tiers.len()).rev() {
+    ) -> Result<(Vec<WaveformRecord>, u64)> {
+        let populated = self
+            .tiers
+            .iter()
+            .enumerate()
+            .filter(|(_, tier)| tier.records > 0)
+            .map(|(tier, summary)| (tier, summary.span))
+            .collect::<Vec<_>>();
+        let selected_span = select_summary_resolution(
+            resolution_samples,
+            target_points,
+            populated.iter().map(|(_, span)| *span),
+        );
+        if let Some(selected) = populated
+            .iter()
+            .position(|(_, span)| Some(*span) == selected_span)
+        {
+            let (tier_index, span) = populated[selected];
             let tier = &self.tiers[tier_index];
-            if tier.records == 0 {
-                continue;
-            }
-            let span = tier_span(tier_index).unwrap_or(u64::MAX);
             let first = (start_sample / span).min(tier.records);
             let last = end_sample.div_ceil(span).min(tier.records);
-            if last.saturating_sub(first) <= budget as u64 || tier_index == 0 {
-                let mut result = tier.read_range(first, last)?;
-                self.append_uncovered_tail(tier_index, start_sample, end_sample, &mut result);
-                if let Some(tail) = tail
-                    && tail.end_sample > start_sample
-                    && tail.start_sample < end_sample
-                {
-                    result.push(tail);
-                }
-                return Ok(result);
+            let mut result = tier.read_range(first, last)?;
+            self.append_uncovered_tail(tier_index, start_sample, end_sample, &mut result);
+            if let Some(tail) = tail
+                && tail.end_sample > start_sample
+                && tail.start_sample < end_sample
+            {
+                result.push(tail);
             }
+            return Ok((result, span));
         }
-        Ok(tail
-            .into_iter()
-            .filter(|tail| tail.end_sample > start_sample && tail.start_sample < end_sample)
-            .collect())
+        Ok((
+            tail.into_iter()
+                .filter(|tail| tail.end_sample > start_sample && tail.start_sample < end_sample)
+                .collect(),
+            LEAF_SAMPLES,
+        ))
     }
 
     fn append_uncovered_tail(
@@ -479,9 +536,7 @@ impl GrowingState {
         indexed_samples: u64,
     ) -> Result<()> {
         for (mipmap, records) in self.channels.iter_mut().zip(completed) {
-            for record in records {
-                mipmap.push(record)?;
-            }
+            mipmap.extend(&records)?;
         }
         for mipmap in &mut self.channels {
             mipmap.flush()?;
@@ -583,7 +638,7 @@ impl NativeGrowingCaptureIndex {
             store.directory(),
         )));
         let cursor = store
-            .open_cursor()
+            .open_live_cursor()
             .map_err(|error| Error::ParseError(error.to_string()))?;
         let worker_state = Arc::clone(&state);
         let channels = header.total_probes;
@@ -598,7 +653,12 @@ impl NativeGrowingCaptureIndex {
             state,
             random_reader: None,
         };
-        Ok((query, NativeGrowingCaptureIndexWorker { handle: Some(handle) }))
+        Ok((
+            query,
+            NativeGrowingCaptureIndexWorker {
+                handle: Some(handle),
+            },
+        ))
     }
 
     fn snapshot_metadata(&self) -> CaptureMetadata {
@@ -639,7 +699,7 @@ impl NativeGrowingCaptureIndex {
         if self.random_reader.is_none() {
             self.random_reader = Some(
                 self.store
-                    .open_random_reader()
+                    .open_live_random_reader()
                     .map_err(|error| Error::ParseError(error.to_string()))?,
             );
         }
@@ -658,44 +718,58 @@ impl NativeGrowingCaptureIndex {
         &self,
         channels: &[usize],
         start_sample: u64,
-        end_sample: u64,
+        available_end_sample: u64,
+        grid_end_sample: u64,
         target_points: usize,
     ) -> Result<CaptureSampledWindow> {
-        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
-        if let Some(error) = &state.error {
-            return Err(Error::ParseError(error.clone()));
-        }
+        let snapshots = {
+            let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+            if let Some(error) = &state.error {
+                return Err(Error::ParseError(error.clone()));
+            }
+            let mut snapshots = Vec::with_capacity(channels.len());
+            for &channel in channels {
+                let Some(mipmap) = state.channels.get(channel) else {
+                    return Err(Error::InvalidProbe(channel));
+                };
+                snapshots.push((channel, mipmap.snapshot(), state.tails[channel]));
+            }
+            snapshots
+        };
+
         let mut sampled = Vec::with_capacity(channels.len());
         let mut sample_step = 1_u64;
-        for &channel in channels {
-            let Some(mipmap) = state.channels.get(channel) else {
-                return Err(Error::InvalidProbe(channel));
-            };
-            let records = mipmap.sampled_window(
+        for (channel, mipmap, tail) in snapshots {
+            let (records, group_samples) = mipmap.sampled_records(
                 start_sample,
-                end_sample,
+                available_end_sample,
+                grid_end_sample.saturating_sub(start_sample),
                 target_points,
-                state.tails[channel],
+                tail,
             )?;
-            sample_step = sample_step.max(
-                records
-                    .iter()
-                    .map(|record| record.end_sample - record.start_sample)
-                    .max()
-                    .unwrap_or(1),
-            );
+            sample_step = sample_step.max(group_samples);
             let initial = records.first().is_some_and(|record| record.first);
-            sampled.push(CaptureSampledChannel {
+            sampled.push(sample_summary_channel(
                 channel,
-                name: self.header.probe_names[channel].clone(),
+                self.header.probe_names[channel].clone(),
                 initial,
-                transitions: Vec::new(),
-                waveform: records_to_segments(&records, start_sample, end_sample),
-            });
+                start_sample,
+                available_end_sample,
+                grid_end_sample,
+                target_points,
+                |visible_start, visible_end, fallback_first| {
+                    Ok(records_range_summary(
+                        &records,
+                        visible_start,
+                        visible_end,
+                        fallback_first,
+                    ))
+                },
+            )?);
         }
         Ok(CaptureSampledWindow {
             start_sample,
-            end_sample,
+            end_sample: available_end_sample,
             sample_step,
             channels: sampled,
         })
@@ -748,12 +822,20 @@ impl CaptureIndex for NativeGrowingCaptureIndex {
         if metadata.total_samples == 0 {
             return Err(Error::OutOfBounds(end_sample));
         }
+        let requested_end_sample = end_sample.max(start_sample.saturating_add(1));
         let start_sample = start_sample.min(metadata.total_samples - 1);
         let end_sample = end_sample.clamp(start_sample + 1, metadata.total_samples);
-        if end_sample - start_sample <= exact_window_sample_limit(target_points) {
+        let grid_end_sample = requested_end_sample.max(end_sample);
+        if grid_end_sample.saturating_sub(start_sample) <= exact_window_sample_limit(target_points) {
             self.exact_window(channels, start_sample, end_sample)
         } else {
-            self.summary_window(channels, start_sample, end_sample, target_points)
+            self.summary_window(
+                channels,
+                start_sample,
+                end_sample,
+                grid_end_sample,
+                target_points,
+            )
         }
     }
 }
@@ -844,35 +926,31 @@ fn run_index_worker(
     }
 }
 
-fn records_to_segments(
+fn records_range_summary(
     records: &[WaveformRecord],
     start_sample: u64,
     end_sample: u64,
-) -> Vec<CaptureWaveformSegment> {
-    let mut segments = Vec::with_capacity(records.len());
-    for record in records {
-        let start = record.start_sample.max(start_sample);
-        let end = record.end_sample.min(end_sample);
-        if start >= end {
-            continue;
-        }
-        let segment = if record.activity {
-            CaptureWaveformSegment::Activity {
-                start_sample: start,
-                end_sample: end,
-                first: record.first,
-                last: record.last,
-            }
-        } else {
-            CaptureWaveformSegment::Level {
-                start_sample: start,
-                end_sample: end,
-                value: record.first,
-            }
+    fallback_first: bool,
+) -> GroupSummary {
+    let first_index = records.partition_point(|record| record.end_sample <= start_sample);
+    let count = records[first_index..].partition_point(|record| record.start_sample < end_sample);
+    let overlapping = &records[first_index..first_index + count];
+    let Some(first_record) = overlapping.first() else {
+        return GroupSummary {
+            first: fallback_first,
+            toggle: false,
+            last: fallback_first,
         };
-        segments.push(segment);
+    };
+    let last_record = overlapping[overlapping.len() - 1];
+    let boundary_toggle = overlapping
+        .windows(2)
+        .any(|pair| pair[0].last != pair[1].first);
+    GroupSummary {
+        first: first_record.first,
+        toggle: boundary_toggle || overlapping.iter().any(|record| record.activity),
+        last: last_record.last,
     }
-    segments
 }
 
 fn format_sample_rate(sample_rate_hz: f64) -> String {
@@ -900,7 +978,7 @@ mod tests {
         NativeCaptureStoreConfig,
     };
 
-    use super::{FAN_OUT, NativeGrowingCaptureIndex, summary_masks};
+    use super::{FAN_OUT, LEAF_SAMPLES, NativeGrowingCaptureIndex, summary_masks};
 
     fn level_at(sample: u64, channel: usize) -> bool {
         (sample / (37 + channel as u64 * 11) + channel as u64).is_multiple_of(2)
@@ -919,7 +997,8 @@ mod tests {
         for relative in 0..sample_count {
             for channel in 0..channels.len() {
                 if level_at(start_sample + relative, channel) {
-                    let bit = usize::from(bit_offset) + relative as usize * channels.len() + channel;
+                    let bit =
+                        usize::from(bit_offset) + relative as usize * channels.len() + channel;
                     bytes[bit / 8] |= 1 << (bit % 8);
                 }
             }
@@ -966,9 +1045,8 @@ mod tests {
                         level_at(start + sample_count - 1, channel),
                         "last: {channel_count} channels, sample {start}, channel {channel}"
                     );
-                    let expected_activity = (start + 1..start + sample_count).any(|sample| {
-                        level_at(sample - 1, channel) != level_at(sample, channel)
-                    });
+                    let expected_activity = (start + 1..start + sample_count)
+                        .any(|sample| level_at(sample - 1, channel) != level_at(sample, channel));
                     assert_eq!(
                         activity & (1 << channel) != 0,
                         expected_activity,
@@ -1027,7 +1105,10 @@ mod tests {
         let live = index.sampled_window(&[0, 1], 0, 75, 75).unwrap();
         for channel in &live.channels {
             assert_eq!(channel.initial, level_at(0, channel.channel));
-            assert_eq!(channel.transitions, expected_transitions(channel.channel, 0, 75));
+            assert_eq!(
+                channel.transitions,
+                expected_transitions(channel.channel, 0, 75)
+            );
         }
 
         writer
@@ -1066,8 +1147,10 @@ mod tests {
                         end_sample,
                         value,
                     } => {
-                        assert!((start_sample..end_sample)
-                            .all(|sample| level_at(sample, channel.channel) == value));
+                        assert!(
+                            (start_sample..end_sample)
+                                .all(|sample| level_at(sample, channel.channel) == value)
+                        );
                         (start_sample, end_sample)
                     }
                     CaptureWaveformSegment::Activity {
@@ -1119,13 +1202,7 @@ mod tests {
         let mut start = 0_u64;
         for sequence in 0..256 {
             writer
-                .append(chunk(
-                    session,
-                    Arc::clone(&channels),
-                    sequence,
-                    start,
-                    4096,
-                ))
+                .append(chunk(session, Arc::clone(&channels), sequence, start, 4096))
                 .unwrap();
             start += 4096;
         }
@@ -1140,9 +1217,28 @@ mod tests {
             "summary RAM must be bounded by fold state, not capture duration"
         );
         assert_eq!(store.snapshot().resident_commit_records, 0);
-        assert!(temporary.path().join("capture.waveform.0.0").is_file());
+        let leaf_path = temporary.path().join("capture.waveform.0.0");
+        assert!(leaf_path.is_file());
+        assert_eq!(
+            std::fs::metadata(leaf_path).unwrap().len(),
+            1_048_576 / LEAF_SAMPLES,
+            "leaf summaries store one implicit-position flag byte per 64 samples"
+        );
         let old_window = index.sampled_window(&[0, 1], 0, 4096, 8).unwrap();
         assert_eq!(old_window.start_sample, 0);
         assert_eq!(old_window.end_sample, 4096);
+
+        // This range is above the exact-scan limit, but its 64-sample leaf
+        // records still fit the display budget. A live query must not jump to
+        // a capture-wide folded tier merely because that tier now exists.
+        let fine_summary = index.sampled_window(&[0], 100_000, 200_000, 1_000).unwrap();
+        assert_eq!(fine_summary.sample_step, 64);
+
+        // Conversely, a capture-wide query must climb to a folded tier. Its
+        // result is GPU/display work, so it must remain proportional to the
+        // viewport budget rather than the number of 64-sample leaves.
+        let coarse_summary = index.sampled_window(&[0], 0, 1_048_576, 100).unwrap();
+        assert!(coarse_summary.sample_step >= 4_096);
+        assert!(coarse_summary.channels[0].waveform.len() <= 200);
     }
 }

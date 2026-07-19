@@ -264,7 +264,7 @@ ports handle it.
 
 ## Waveform index
 
-The capture-file mipmap index (`waveform_index/`), raw block cache, and the
-incremental derived-lane index (`derived_index.rs`) are documented in
+The finite and growing capture mipmap index (`waveform_index/`), the finite archive capture store
+(`archive_capture_store/`), and the incremental derived-lane index (`derived_index.rs`) are documented in
 [LOGIC_ANALYZER_VIEWER_DESIGN.md](LOGIC_ANALYZER_VIEWER_DESIGN.md) — they live in this
 crate but exist to serve the viewer.

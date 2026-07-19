@@ -36,6 +36,16 @@ use self::font_platform::load_symbol_fonts;
 
 const SAMPLING_OVERLAY_EXTENSION: &str = "logic_analyzer_ui.sampling_overlay";
 
+fn planned_waveform_span_us(plan: &signal_processing::CaptureSessionPlan) -> Option<f64> {
+    let bytes = plan.capacity.finite_capture_bytes?;
+    let channels = u64::try_from(plan.channel_count).ok()?;
+    if channels == 0 || plan.sample_rate_hz == 0 {
+        return None;
+    }
+    let samples = bytes.checked_mul(8)?.div_ceil(channels);
+    Some(samples as f64 * 1_000_000.0 / plan.sample_rate_hz as f64)
+}
+
 enum RecentCaptureAction {
     Open(signal_processing::CaptureSessionId),
     Close,
@@ -649,10 +659,16 @@ impl App {
         if let Some(attachment) = self.capture.take_analysis_attachment() {
             self.start_capture_analysis(attachment);
         }
+        let planned_span_us = self
+            .capture
+            .status()
+            .and_then(|status| status.session_plan.as_ref())
+            .and_then(planned_waveform_span_us);
         if let Some(update) = self.capture.take_waveform_update() {
             match update {
                 Some(index) => {
-                    self.logic_analyzer.set_growing_capture(index);
+                    self.logic_analyzer
+                        .set_growing_capture_with_planned_span(index, planned_span_us);
                 }
                 None => {
                     self.logic_analyzer.clear_capture();

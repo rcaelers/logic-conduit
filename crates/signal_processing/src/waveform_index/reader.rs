@@ -2,20 +2,15 @@ use std::path::Path;
 
 use super::builder::IndexBuilder;
 use super::exact_window_sample_limit;
+use super::query::{GroupSummary, sample_summary_channel};
+use super::select_summary_resolution;
 use super::storage::{IndexReader, LevelsView};
 use super::types::{
     CaptureIndexProgress, SAMPLES_PER_L1_BIT, SAMPLES_PER_L2_BIT, SAMPLES_PER_L3_BIT, bit,
 };
-use crate::raw_block_cache::RawBlockCache;
-use crate::capture::{BlockCaptureSource, BlockData, CaptureDataSource, CaptureIndex, CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow, CaptureTransition, CaptureWaveformSegment, packed_bit};
+use crate::capture::{BlockCaptureSource, BlockData, CaptureDataSource, CaptureIndex, CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow, CaptureTransition, packed_bit};
+use crate::archive_capture_store::NativeArchiveCaptureStore;
 use crate::{Error, Result};
-
-#[derive(Clone, Copy)]
-struct GroupSummary {
-    first: bool,
-    toggle: bool,
-    last: bool,
-}
 
 /// Windowed sampler for indexed capture data.
 ///
@@ -27,7 +22,7 @@ pub struct IndexSampler<R: BlockCaptureSource> {
     raw_reader: R,
     /// Sparse on-disk cache of decompressed raw blocks; optional because the
     /// sampler works (more slowly) without it.
-    raw_cache: Option<RawBlockCache>,
+    archive_store: Option<NativeArchiveCaptureStore>,
 }
 
 impl<R> IndexSampler<R>
@@ -38,13 +33,13 @@ where
         display_name: String,
         storage: IndexReader,
         raw_reader: R,
-        raw_cache: Option<RawBlockCache>,
+        archive_store: Option<NativeArchiveCaptureStore>,
     ) -> Self {
         Self {
             display_name,
             storage,
             raw_reader,
-            raw_cache,
+            archive_store,
         }
     }
 
@@ -71,7 +66,7 @@ where
                 .build(progress)?;
         }
 
-        let raw_cache = RawBlockCache::open(
+        let archive_store = NativeArchiveCaptureStore::open(
             &index_path.with_extension("raw"),
             &header,
             fingerprint.revision,
@@ -80,7 +75,12 @@ where
         let storage = IndexReader::open(index_path, header, fingerprint.revision)?;
         let display_name = data_source.display_name();
         let raw_reader = data_source.open_reader()?;
-        Ok(Self::new(display_name, storage, raw_reader, raw_cache))
+        Ok(Self::new(
+            display_name,
+            storage,
+            raw_reader,
+            archive_store,
+        ))
     }
 
     pub fn display_name(&self) -> String {
@@ -144,7 +144,7 @@ where
     }
 
     /// Value of `channel` at `position`. O(1) after the containing block is
-    /// cached (raw block cache, or the raw reader's own LRU).
+    /// cached (archive capture store, or the raw reader's own LRU).
     pub fn value_at(&mut self, channel: usize, position: u64) -> Result<bool> {
         if channel >= self.header().total_probes {
             return Err(Error::InvalidProbe(channel));
@@ -407,22 +407,22 @@ where
         let end_sample = end_sample.clamp(start_sample + 1, total_samples);
         let samples = end_sample - start_sample;
         let target_points = target_points.max(1);
-        let target_points_u64 = target_points as u64;
-        let sample_step = samples.div_ceil(target_points_u64).max(1);
 
         if samples <= exact_window_sample_limit(target_points) {
             return self.exact_sampled_window(channels, start_sample, end_sample);
         }
 
-        let group_samples = if sample_step >= self.header().samples_per_block {
-            self.header().samples_per_block
-        } else if sample_step >= SAMPLES_PER_L3_BIT {
-            SAMPLES_PER_L3_BIT
-        } else if sample_step >= SAMPLES_PER_L2_BIT {
-            SAMPLES_PER_L2_BIT
-        } else {
-            SAMPLES_PER_L1_BIT
-        };
+        let group_samples = select_summary_resolution(
+            samples,
+            target_points,
+            [
+                SAMPLES_PER_L1_BIT,
+                SAMPLES_PER_L2_BIT,
+                SAMPLES_PER_L3_BIT,
+                self.header().samples_per_block,
+            ],
+        )
+        .expect("waveform indexes always provide an L1 summary");
 
         let mut sampled_channels = Vec::with_capacity(channels.len());
         for &channel in channels {
@@ -545,36 +545,36 @@ where
         })
     }
 
-    /// Packed block bytes, preferring the sparse raw cache over the (usually
+    /// Packed block bytes, preferring the sparse archive store over the (usually
     /// compressed) capture source; freshly decompressed blocks are stored in
     /// the cache for later zero-copy reads.
     fn cached_packed_block(&mut self, channel: usize, block: u64) -> Result<BlockData> {
         if let Some(data) = self
-            .raw_cache
+            .archive_store
             .as_ref()
-            .and_then(|cache| cache.get(channel, block))
+            .and_then(|store| store.get(channel, block))
         {
             return Ok(data);
         }
         let data = self.raw_reader.read_packed_block(channel, block)?;
-        if let Some(cache) = self.raw_cache.as_mut() {
-            cache.put(channel, block, &data);
+        if let Some(store) = self.archive_store.as_mut() {
+            store.put(channel, block, &data);
         }
         Ok(data)
     }
 
     /// Returns one packed capture block for an external streaming source.
     ///
-    /// Existing raw-cache entries are reused, but a miss is read directly
+    /// Existing archive-store entries are reused, but a miss is read directly
     /// from the capture source without populating the cache. Sequential graph
-    /// processing may visit the complete capture, whereas the raw cache is
+    /// processing may visit the complete capture, whereas the archive store is
     /// intentionally sparse and reserved for regions inspected through
     /// random-access queries.
     pub fn packed_block(&mut self, channel: usize, block: u64) -> Result<BlockData> {
         if let Some(data) = self
-            .raw_cache
+            .archive_store
             .as_ref()
-            .and_then(|cache| cache.get(channel, block))
+            .and_then(|store| store.get(channel, block))
         {
             return Ok(data);
         }
@@ -600,49 +600,24 @@ where
             .cloned()
             .unwrap_or_else(|| format!("Probe{}", channel));
         let initial = self.indexed_initial_value(channel, start_sample, group_samples)?;
-        let transitions = Vec::new();
-        let mut waveform = Vec::new();
-
-        let samples = end_sample - start_sample;
-        let target_points = target_points.max(1) as u64;
-        let mut previous_end = start_sample;
-        let mut previous_value = initial;
-
-        for point in 0..target_points {
-            let visible_start = start_sample + samples.saturating_mul(point) / target_points;
-            let visible_end = if point + 1 == target_points {
-                end_sample
-            } else {
-                start_sample + samples.saturating_mul(point + 1) / target_points
-            };
-            if visible_end <= visible_start || visible_start < previous_end {
-                continue;
-            }
-            previous_end = visible_end;
-
-            let summary = self.indexed_display_range_summary(
-                channel,
-                visible_start,
-                visible_end,
-                group_samples,
-                previous_value,
-            )?;
-            self.append_pixel_waveform(
-                visible_start,
-                visible_end,
-                summary,
-                &mut previous_value,
-                &mut waveform,
-            );
-        }
-
-        Ok(CaptureSampledChannel {
+        sample_summary_channel(
             channel,
             name,
             initial,
-            transitions,
-            waveform,
-        })
+            start_sample,
+            end_sample,
+            end_sample,
+            target_points,
+            |visible_start, visible_end, previous_value| {
+                self.indexed_display_range_summary(
+                    channel,
+                    visible_start,
+                    visible_end,
+                    group_samples,
+                    previous_value,
+                )
+            },
+        )
     }
 
     /// Group-aligned value entering `sample`, derived purely from the index.
@@ -803,77 +778,9 @@ where
         }
     }
 
-    fn append_pixel_waveform(
-        &self,
-        start_sample: u64,
-        end_sample: u64,
-        summary: GroupSummary,
-        previous_value: &mut bool,
-        waveform: &mut Vec<CaptureWaveformSegment>,
-    ) {
-        if end_sample <= start_sample {
-            return;
-        }
-
-        if summary.toggle {
-            push_activity(
-                waveform,
-                start_sample,
-                end_sample,
-                *previous_value,
-                summary.last,
-            );
-            *previous_value = summary.last;
-            return;
-        }
-
-        if summary.first == *previous_value {
-            push_level(waveform, start_sample, end_sample, summary.first);
-            *previous_value = summary.last;
-            return;
-        }
-
-        waveform.push(CaptureWaveformSegment::Edge {
-            sample: start_sample,
-            before: *previous_value,
-            after: summary.first,
-        });
-        push_level(waveform, start_sample, end_sample, summary.first);
-        *previous_value = summary.last;
-    }
-
     fn block_for_sample(&self, sample: u64) -> u64 {
         sample / self.header().samples_per_block
     }
-}
-
-fn push_level(
-    waveform: &mut Vec<CaptureWaveformSegment>,
-    start_sample: u64,
-    end_sample: u64,
-    value: bool,
-) {
-    if end_sample <= start_sample {
-        return;
-    }
-
-    if let Some(CaptureWaveformSegment::Level {
-        end_sample: previous_end,
-        value: previous_value,
-        ..
-    }) = waveform.last_mut()
-        && *previous_end == start_sample
-        && *previous_value == value
-    {
-        *previous_end = end_sample;
-        return;
-    }
-
-    waveform.push(CaptureWaveformSegment::Level {
-        start_sample,
-        end_sample,
-        value,
-    });
 }
 
 /// Loads the 64-sample word at `word_index` from LSB-first packed bytes,
@@ -898,38 +805,6 @@ fn range_mask(lo: usize, hi: usize) -> u64 {
         (1_u64 << hi) - 1
     };
     upper & !((1_u64 << lo) - 1)
-}
-
-/// Appends an activity range, merging it into a directly adjacent preceding
-/// activity segment. Busy regions produce long runs of per-point activity;
-/// merging collapses them into one segment per run (`first` stays the value
-/// entering the run, `last` tracks the value leaving it), which shrinks the
-/// window payload and the per-frame draw work substantially.
-fn push_activity(
-    waveform: &mut Vec<CaptureWaveformSegment>,
-    start_sample: u64,
-    end_sample: u64,
-    first: bool,
-    last: bool,
-) {
-    if let Some(CaptureWaveformSegment::Activity {
-        end_sample: previous_end,
-        last: previous_last,
-        ..
-    }) = waveform.last_mut()
-        && *previous_end == start_sample
-    {
-        *previous_end = end_sample;
-        *previous_last = last;
-        return;
-    }
-
-    waveform.push(CaptureWaveformSegment::Activity {
-        start_sample,
-        end_sample,
-        first,
-        last,
-    });
 }
 
 fn bit_range_any(words: &[u64], first_bit: usize, last_bit: usize) -> bool {

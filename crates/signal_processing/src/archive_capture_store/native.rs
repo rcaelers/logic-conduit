@@ -1,4 +1,4 @@
-//! Lazy cache of decompressed raw capture blocks.
+//! Native sparse cache of decompressed archive blocks.
 //!
 //! Capture archives store their packed sample blocks deflate-compressed,
 //! which precludes random access: reading a few kilobytes of samples costs a
@@ -34,7 +34,7 @@ const VERSION: u32 = 1;
 const HEADER_SIZE: usize = 64;
 const SLOT_REGION_ALIGN: usize = 4096;
 
-pub(crate) struct RawBlockCache {
+pub(crate) struct NativeArchiveCaptureStore {
     file: File,
     /// One validity bit per slot; kept in memory and written back on drop.
     bitmap: Vec<u8>,
@@ -47,7 +47,7 @@ pub(crate) struct RawBlockCache {
     samples_per_block: u64,
 }
 
-impl RawBlockCache {
+impl NativeArchiveCaptureStore {
     pub(crate) fn open(path: &Path, header: &CaptureMetadata, revision: u64) -> Result<Self> {
         let channels = header.total_probes;
         let total_blocks = header.total_blocks;
@@ -157,7 +157,7 @@ impl RawBlockCache {
     }
 }
 
-impl Drop for RawBlockCache {
+impl Drop for NativeArchiveCaptureStore {
     fn drop(&mut self) {
         if !self.bitmap_dirty {
             return;

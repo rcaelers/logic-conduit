@@ -19,18 +19,16 @@ use logic_analyzer_processing::{
     CaptureExportRequest, RawCaptureExportFormat, export_finalized_capture,
 };
 use signal_processing::{
-    CaptureAcquisitionPhase, CaptureCompletion, CaptureEvent, CaptureEventPublishError,
-    CaptureEventPublisher, CaptureEventQueueReader, CaptureHealth, CaptureIndex, CaptureMetadata,
-    CaptureProgress, CaptureQueueReceiveError, CaptureRecordingGate, CaptureSampledWindow,
-    CaptureSessionCleanupPlan, CaptureSessionId, CaptureSessionOutcome, CaptureSessionPlan,
-    CaptureSessionState, CaptureStartMode, CaptureStoreDescriptor, NativeCaptureSessionPin,
-    NativeCaptureSessionRepository, NativeCaptureSessionRepositoryConfig,
-    NativeCaptureSessionSummary, NativeCaptureStore, NativeCaptureStoreConfig,
-    NativeFinalizedCapture, RecordingStart, TriggerTimeoutAction, CaptureTimelineMetadata,
+    CaptureAcquisitionPhase, CaptureCompletion, CaptureDataDelivery, CaptureEvent,
+    CaptureEventPublishError, CaptureEventPublisher, CaptureEventQueueReader, CaptureHealth,
+    CaptureIndex, CaptureMetadata, CaptureProgress, CaptureQueueReceiveError, CaptureRecordingGate,
+    CaptureSampledWindow, CaptureSessionCleanupPlan, CaptureSessionId, CaptureSessionOutcome,
+    CaptureSessionPlan, CaptureSessionState, CaptureStartMode, CaptureStoreDescriptor,
+    CaptureTimelineMetadata, NativeCaptureSessionPin, NativeCaptureSessionRepository,
+    NativeCaptureSessionRepositoryConfig, NativeCaptureSessionSummary, NativeCaptureStore,
+    NativeCaptureStoreConfig, NativeFinalizedCapture, NativeGrowingCaptureIndex,
+    NativeGrowingCaptureIndexWorker, RecordingStart, TriggerTimeoutAction,
     bounded_capture_event_queue, default_capture_session_directory,
-};
-use signal_processing::live_capture_waveform::{
-    NativeGrowingCaptureIndex, NativeGrowingCaptureIndexWorker,
 };
 
 use super::{
@@ -222,22 +220,24 @@ impl CaptureEventPublisher for RecordingEventPublisher {
         {
             let transferred = progress.transferred_bytes.unwrap_or(self.last_health_bytes);
             let bytes = transferred.saturating_sub(self.last_health_bytes);
-            let rate = u64::try_from(
-                (u128::from(bytes) * 1_000_000_000_u128)
-                    / elapsed.as_nanos().max(1),
-            )
-            .unwrap_or(u64::MAX);
+            let rate =
+                u64::try_from((u128::from(bytes) * 1_000_000_000_u128) / elapsed.as_nanos().max(1))
+                    .unwrap_or(u64::MAX);
             let snapshot = self.store.snapshot();
             let indexed = self.waveform.current_metadata().total_samples;
+            let captured = progress.captured_samples.unwrap_or_else(|| {
+                self.runtime
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .captured_samples
+            });
             let _ = self.inner.publish(CaptureEvent::Health {
                 session_id: self.store.descriptor().session_id(),
                 health: CaptureHealth {
                     input_bytes_per_second: Some(rate),
                     write_bytes_per_second: Some(rate),
                     retained_samples: Some(snapshot.committed_samples),
-                    summary_lag_samples: Some(
-                        snapshot.committed_samples.saturating_sub(indexed),
-                    ),
+                    summary_lag_samples: Some(captured.saturating_sub(indexed)),
                     ..CaptureHealth::default()
                 },
             });
@@ -318,8 +318,7 @@ pub(crate) struct CaptureCoordinator {
     export_notice: Option<Result<CaptureExportCompletion, String>>,
     active_export: Option<ActiveExport>,
     pending_configuration_epoch: Option<PendingConfigurationEpoch>,
-    configuration_epoch_preparation:
-        Option<Result<super::PreparedConfigurationEpoch, String>>,
+    configuration_epoch_preparation: Option<Result<super::PreparedConfigurationEpoch, String>>,
     configuration_epoch_resolutions: Vec<Receiver<Result<(), String>>>,
     configuration_epoch_notice: Option<Result<(), String>>,
     state_history: Vec<CaptureSessionState>,
@@ -337,11 +336,9 @@ impl CaptureCoordinator {
     }
 
     pub(crate) fn configured(max_recent_sessions: usize, max_total_bytes: u64) -> Self {
-        let config = NativeCaptureSessionRepositoryConfig::new(
-            default_capture_session_directory(),
-        )
-        .with_limits(max_recent_sessions, max_total_bytes)
-        .expect("embedded live-capture limits are valid");
+        let config = NativeCaptureSessionRepositoryConfig::new(default_capture_session_directory())
+            .with_limits(max_recent_sessions, max_total_bytes)
+            .expect("embedded live-capture limits are valid");
         let repository = NativeCaptureSessionRepository::new(config)
             .expect("the live-capture session directory must be available");
         Self::with_repository(repository, None)
@@ -351,7 +348,8 @@ impl CaptureCoordinator {
         repository: NativeCaptureSessionRepository,
         ephemeral_root: Option<TempDir>,
     ) -> Self {
-        let (recent_sessions, cleanup_plan) = repository.scan_with_cleanup_plan().unwrap_or_default();
+        let (recent_sessions, cleanup_plan) =
+            repository.scan_with_cleanup_plan().unwrap_or_default();
         Self {
             repository,
             recent_sessions,
@@ -399,9 +397,7 @@ impl CaptureCoordinator {
         self.export_status.as_ref()
     }
 
-    pub(crate) fn take_export_notice(
-        &mut self,
-    ) -> Option<Result<CaptureExportCompletion, String>> {
+    pub(crate) fn take_export_notice(&mut self) -> Option<Result<CaptureExportCompletion, String>> {
         self.export_notice.take()
     }
 
@@ -491,15 +487,16 @@ impl CaptureCoordinator {
             status.total_samples = progress.total_samples;
         }
 
-        let completion = self.active_export.as_ref().and_then(|active| {
-            match active.completion.try_recv() {
-                Ok(completion) => Some(completion),
-                Err(TryRecvError::Empty) => None,
-                Err(TryRecvError::Disconnected) => {
-                    Some(Err("capture export worker stopped without a result".into()))
-                }
-            }
-        });
+        let completion =
+            self.active_export
+                .as_ref()
+                .and_then(|active| match active.completion.try_recv() {
+                    Ok(completion) => Some(completion),
+                    Err(TryRecvError::Empty) => None,
+                    Err(TryRecvError::Disconnected) => {
+                        Some(Err("capture export worker stopped without a result".into()))
+                    }
+                });
         let Some(completion) = completion else {
             return;
         };
@@ -509,40 +506,43 @@ impl CaptureCoordinator {
             let _ = worker.join();
         }
         self.export_status = None;
-        self.export_notice = Some(completion.map(|report| CaptureExportCompletion {
-            destination: report.destination,
-            warnings: report
-                .warnings
-                .into_iter()
-                .map(|warning| warning.message().to_owned())
-                .collect(),
+        self.export_notice = Some(completion.map(|report| {
+            CaptureExportCompletion {
+                destination: report.destination,
+                warnings: report
+                    .warnings
+                    .into_iter()
+                    .map(|warning| warning.message().to_owned())
+                    .collect(),
+            }
         }));
     }
 
     fn poll_configuration_epochs(&mut self) {
-        let preparation = self
-            .pending_configuration_epoch
-            .as_ref()
-            .and_then(|pending| match pending.response.try_recv() {
-                Ok(result) => Some(result),
-                Err(TryRecvError::Empty) => None,
-                Err(TryRecvError::Disconnected) => Some(Err(
-                    "capture supervisor stopped while preparing a configuration epoch".into(),
-                )),
-            });
+        let preparation =
+            self.pending_configuration_epoch
+                .as_ref()
+                .and_then(|pending| match pending.response.try_recv() {
+                    Ok(result) => Some(result),
+                    Err(TryRecvError::Empty) => None,
+                    Err(TryRecvError::Disconnected) => Some(Err(
+                        "capture supervisor stopped while preparing a configuration epoch".into(),
+                    )),
+                });
         if let Some(preparation) = preparation {
             let pending = self
                 .pending_configuration_epoch
                 .take()
                 .expect("preparation came from a pending epoch");
-            self.configuration_epoch_preparation = Some(preparation.map(|prepared| {
-                super::PreparedConfigurationEpoch {
-                    epoch_id: prepared.epoch_id,
-                    source_sample: prepared.source_sample,
-                    boundary: prepared.boundary,
-                    graph: pending.graph,
-                }
-            }));
+            self.configuration_epoch_preparation =
+                Some(
+                    preparation.map(|prepared| super::PreparedConfigurationEpoch {
+                        epoch_id: prepared.epoch_id,
+                        source_sample: prepared.source_sample,
+                        boundary: prepared.boundary,
+                        graph: pending.graph,
+                    }),
+                );
         }
 
         let mut index = 0;
@@ -711,7 +711,9 @@ impl CaptureCoordinator {
             phase: CaptureAcquisitionPhase::Finalizing,
             progress,
             health: CaptureHealth::default(),
-            commands: signal_processing::CaptureCommandCapabilities::new(false, false, false, false),
+            commands: signal_processing::CaptureCommandCapabilities::new(
+                false, false, false, false,
+            ),
             session_plan: session_plan.clone(),
             trigger_sample,
             recording_origin: metadata.recording_origin,
@@ -797,14 +799,14 @@ impl CaptureCoordinator {
             .unwrap_or_else(|| !feature.has_trigger_program())
             .then_some(0);
         let application_metadata = graph.map(|graph| CaptureApplicationMetadata {
-                    format_version: APPLICATION_METADATA_VERSION,
-                    source_node: source_node.0,
-                    source_title: source_title.clone(),
-                    sample_rate_hz: feature.sample_rate_hz(),
-                    channel_names: feature.channel_names().to_vec(),
-                    graph: graph.clone(),
-                    configuration_epochs: Vec::new(),
-                });
+            format_version: APPLICATION_METADATA_VERSION,
+            source_node: source_node.0,
+            source_title: source_title.clone(),
+            sample_rate_hz: feature.sample_rate_hz(),
+            channel_names: feature.channel_names().to_vec(),
+            graph: graph.clone(),
+            configuration_epochs: Vec::new(),
+        });
         let repository = self.repository.clone();
         let (event_publisher, events) = bounded_capture_event_queue(EVENT_QUEUE_CAPACITY)
             .expect("capture event queue capacity is non-zero");
@@ -961,17 +963,13 @@ impl CaptureCoordinator {
                 session_id,
                 progress,
             } if session_id == status.session_id => status.progress = progress,
-            CaptureEvent::Health { session_id, health }
-                if session_id == status.session_id =>
-            {
+            CaptureEvent::Health { session_id, health } if session_id == status.session_id => {
                 status.health = health;
             }
             CaptureEvent::Plan { session_id, plan } if session_id == status.session_id => {
                 status.session_plan = Some(plan);
             }
-            CaptureEvent::Triggered { session_id, sample }
-                if session_id == status.session_id =>
-            {
+            CaptureEvent::Triggered { session_id, sample } if session_id == status.session_id => {
                 status.state = CaptureSessionState::Triggered;
                 status.trigger_sample = Some(sample);
                 status.recording_origin = Some(sample);
@@ -1214,10 +1212,7 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
         }
         let mut hold_triggered_state = false;
         loop {
-            let event = self
-                .active
-                .as_ref()
-                .map(|active| active.events.try_recv());
+            let event = self.active.as_ref().map(|active| active.events.try_recv());
             match event {
                 Some(Ok(event)) => {
                     hold_triggered_state = self.apply_event(event);
@@ -1260,10 +1255,7 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
         self.analysis_attachment.take()
     }
 
-    fn request_configuration_epoch(
-        &mut self,
-        graph: node_graph::GraphState,
-    ) -> Result<(), String> {
+    fn request_configuration_epoch(&mut self, graph: node_graph::GraphState) -> Result<(), String> {
         if self.pending_configuration_epoch.is_some()
             || self.configuration_epoch_preparation.is_some()
         {
@@ -1303,10 +1295,9 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
         epoch_id: u64,
         resolution: super::ConfigurationEpochResolution,
     ) -> Result<(), String> {
-        let active = self
-            .active
-            .as_ref()
-            .ok_or_else(|| "capture ended before the configuration epoch was resolved".to_owned())?;
+        let active = self.active.as_ref().ok_or_else(|| {
+            "capture ended before the configuration epoch was resolved".to_owned()
+        })?;
         let (response_sender, response) = crossbeam_channel::bounded(1);
         active
             .commands
@@ -1336,8 +1327,8 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
             .capture
             .open_cursor()
             .map_err(|error| format!("could not open finalized capture: {error}"))?;
-        let cursor = CaptureRecordingGate::finalized(completed.recording_origin)
-            .cursor(Box::new(cursor));
+        let cursor =
+            CaptureRecordingGate::finalized(completed.recording_origin).cursor(Box::new(cursor));
         let process = completed
             .graph_source_factory
             .create(Box::new(cursor))
@@ -1424,8 +1415,8 @@ fn write_application_metadata(
 fn read_application_metadata(directory: &Path) -> Result<CaptureApplicationMetadata, String> {
     let path = directory.join(APPLICATION_METADATA_FILE);
     recover_application_metadata_file(directory)?;
-    let bytes = fs::read(&path)
-        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    let bytes =
+        fs::read(&path).map_err(|error| format!("could not read {}: {error}", path.display()))?;
     let mut metadata = serde_json::from_slice::<CaptureApplicationMetadata>(&bytes)
         .map_err(|error| format!("invalid {}: {error}", path.display()))?;
     if metadata.format_version != 1 && metadata.format_version != APPLICATION_METADATA_VERSION {
@@ -1507,6 +1498,8 @@ fn run_capture_worker(
         .as_ref()
         .map(|plan| plan.policy.effective.start == RecordingStart::Trigger)
         .unwrap_or_else(|| feature.has_trigger_program());
+    let host_enforces_completion =
+        feature.capabilities().data_delivery() == CaptureDataDelivery::DuringAcquisition;
     let recording_gate = if triggered_recording {
         CaptureRecordingGate::pending()
     } else {
@@ -1514,14 +1507,14 @@ fn run_capture_worker(
     };
     let descriptor = CaptureStoreDescriptor::new(session_id, feature.channels().to_vec())
         .map_err(|error| error.to_string())?;
-    let (store, writer) =
-        NativeCaptureStore::create(NativeCaptureStoreConfig::new(session_pin.directory(), descriptor))
-            .map_err(|error| error.to_string())?;
-    let timeline = CaptureTimelineMetadata::new(
-        feature.sample_rate_hz(),
-        feature.channel_names().to_vec(),
-    )
+    let (store, writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
+        session_pin.directory(),
+        descriptor,
+    ))
     .map_err(|error| error.to_string())?;
+    let timeline =
+        CaptureTimelineMetadata::new(feature.sample_rate_hz(), feature.channel_names().to_vec())
+            .map_err(|error| error.to_string())?;
     store
         .write_timeline_metadata(timeline)
         .map_err(|error| error.to_string())?;
@@ -1652,7 +1645,8 @@ fn run_capture_worker(
             }
         }
         let origin = trigger_sample.or((!triggered_recording).then_some(0));
-        if !stop_requested
+        if host_enforces_completion
+            && !stop_requested
             && let (Some(plan), Some(origin)) = (&session_plan, origin)
             && let Some(completion) = plan
                 .policy
@@ -1665,7 +1659,15 @@ fn run_capture_worker(
                 .request_stop()
                 .map_err(|error| error.to_string())?;
         }
-        if !waveform_published && store.snapshot().committed_chunks != 0 {
+        let waveform_metadata = waveform.current_metadata();
+        if !waveform_published
+            && waveform_ready_for_publication(
+                triggered_recording,
+                trigger_sample,
+                waveform_metadata.total_samples,
+                store.snapshot().committed_chunks != 0,
+            )
+        {
             let _ = waveform_ready.send(waveform.clone());
             waveform_published = true;
         }
@@ -1745,9 +1747,7 @@ fn run_capture_worker(
     let session_outcome = match outcome.completion {
         CaptureCompletion::Finished => CaptureSessionOutcome::Complete,
         CaptureCompletion::Stopped => CaptureSessionOutcome::Stopped,
-        CaptureCompletion::CancelledBeforeTrigger => {
-            CaptureSessionOutcome::CancelledBeforeTrigger
-        }
+        CaptureCompletion::CancelledBeforeTrigger => CaptureSessionOutcome::CancelledBeforeTrigger,
         CaptureCompletion::Aborted => CaptureSessionOutcome::Aborted,
     };
     let trigger_sample = runtime
@@ -1775,6 +1775,21 @@ fn run_capture_worker(
     })
 }
 
+fn waveform_ready_for_publication(
+    triggered_recording: bool,
+    trigger_sample: Option<u64>,
+    indexed_samples: u64,
+    has_written_chunks: bool,
+) -> bool {
+    if !has_written_chunks {
+        return false;
+    }
+    if !triggered_recording {
+        return true;
+    }
+    trigger_sample.is_some_and(|sample| indexed_samples > sample)
+}
+
 fn prepare_configuration_epoch(
     metadata: &mut Option<CaptureApplicationMetadata>,
     directory: &Path,
@@ -1789,10 +1804,7 @@ fn prepare_configuration_epoch(
     let recording_origin = recording_gate
         .recording_origin()
         .ok_or_else(|| "capture has not reached its recording origin".to_owned())?;
-    let source_sample = store
-        .snapshot()
-        .committed_samples
-        .max(recording_origin);
+    let source_sample = store.snapshot().committed_samples.max(recording_origin);
     let analysis_sample = source_sample.saturating_sub(recording_origin);
     let timestamp_step_ns = (1_000_000_000.0 / sample_rate_hz).round();
     if !timestamp_step_ns.is_finite()
@@ -1803,27 +1815,29 @@ fn prepare_configuration_epoch(
             "capture sample rate {sample_rate_hz} Hz cannot represent an epoch timestamp"
         ));
     }
-    let timestamp_ns = analysis_sample.saturating_mul(timestamp_step_ns as u64);
+    let timestamp_ns = source_sample.saturating_mul(timestamp_step_ns as u64);
     let epoch_id = metadata
         .configuration_epochs
         .last()
         .map_or(Ok(1), |epoch| epoch.epoch_id.checked_add(1).ok_or(()))
         .map_err(|()| "configuration epoch ID overflow".to_owned())?;
     metadata.graph = graph.clone();
-    metadata.configuration_epochs.push(PersistedConfigurationEpoch {
-        epoch_id,
-        source_sample,
-        analysis_sample,
-        timestamp_ns,
-        graph,
-        outcome: PersistedConfigurationEpochOutcome::Pending,
-        message: None,
-    });
+    metadata
+        .configuration_epochs
+        .push(PersistedConfigurationEpoch {
+            epoch_id,
+            source_sample,
+            analysis_sample,
+            timestamp_ns,
+            graph,
+            outcome: PersistedConfigurationEpochOutcome::Pending,
+            message: None,
+        });
     write_application_metadata(directory, metadata)?;
     Ok(WorkerPreparedConfigurationEpoch {
         epoch_id,
         source_sample,
-        boundary: signal_processing::ConfigurationBoundary::new(analysis_sample, timestamp_ns),
+        boundary: signal_processing::ConfigurationBoundary::new(source_sample, timestamp_ns),
     })
 }
 
@@ -1842,16 +1856,17 @@ fn resolve_configuration_epoch(
         .find(|epoch| epoch.epoch_id == epoch_id)
         .ok_or_else(|| format!("configuration epoch {epoch_id} is missing"))?;
     if epoch.outcome != PersistedConfigurationEpochOutcome::Pending {
-        return Err(format!("configuration epoch {epoch_id} is already resolved"));
+        return Err(format!(
+            "configuration epoch {epoch_id} is already resolved"
+        ));
     }
     let (outcome, message) = match resolution {
         super::ConfigurationEpochResolution::Applied => {
             (PersistedConfigurationEpochOutcome::Applied, None)
         }
-        super::ConfigurationEpochResolution::Deferred(message) => (
-            PersistedConfigurationEpochOutcome::Deferred,
-            Some(message),
-        ),
+        super::ConfigurationEpochResolution::Deferred(message) => {
+            (PersistedConfigurationEpochOutcome::Deferred, Some(message))
+        }
         super::ConfigurationEpochResolution::Failed(message) => {
             (PersistedConfigurationEpochOutcome::Failed, Some(message))
         }
@@ -1877,8 +1892,8 @@ const fn completion_for_outcome(outcome: CaptureSessionOutcome) -> Option<Captur
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
     use logic_analyzer_graph::compiler::{
@@ -1887,10 +1902,10 @@ mod tests {
     };
     use logic_analyzer_graph::{compiler, nodes};
     use logic_analyzer_processing::{
-        AcquisitionContext, AcquisitionError, AcquisitionResult, CaptureAnalysisChannel,
-        CaptureAnalysisSource, BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider,
-        DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,
-        DslCaptureReader, PreparedAcquisition,
+        AcquisitionContext, AcquisitionError, AcquisitionResult, BufferedFakeConfig,
+        BufferedFakeController, BufferedFakeProvider, CaptureAnalysisChannel,
+        CaptureAnalysisSource, DeterministicFakeConfig, DeterministicFakeController,
+        DeterministicFakeProvider, DslCaptureReader, PreparedAcquisition,
     };
     use node_graph::{NodeDef, NodeGraphWidget, NodeId};
     use signal_processing::{
@@ -1901,7 +1916,20 @@ mod tests {
         SimpleTriggerCondition, TriggerTimeout, TriggerTimeoutAction,
     };
 
-    use super::{CaptureCoordinator, CaptureCoordinatorContract, CaptureRawExportFormat};
+    use super::{
+        CaptureCoordinator, CaptureCoordinatorContract, CaptureRawExportFormat,
+        waveform_ready_for_publication,
+    };
+
+    #[test]
+    fn triggered_waveform_is_published_only_with_its_complete_trigger_prefix() {
+        assert!(!waveform_ready_for_publication(true, None, 200, true));
+        assert!(!waveform_ready_for_publication(true, Some(110), 110, true));
+        assert!(waveform_ready_for_publication(true, Some(110), 111, true));
+        assert!(!waveform_ready_for_publication(true, Some(0), 1, false));
+
+        assert!(waveform_ready_for_publication(false, None, 0, true));
+    }
 
     type PrepareCapture = Box<
         dyn FnOnce(AcquisitionContext) -> AcquisitionResult<Box<dyn PreparedAcquisition>> + Send,
@@ -2054,26 +2082,24 @@ mod tests {
             CaptureChannelId::new("bank-a:7"),
             CaptureChannelId::new("bank-c:2"),
         ];
-        let config = DeterministicFakeConfig::new(channels.clone(), sample_counts, 0x5a17)
-            .unwrap();
+        let config = DeterministicFakeConfig::new(channels.clone(), sample_counts, 0x5a17).unwrap();
         let (provider, controller) = DeterministicFakeProvider::manually_paced(config);
         let prepare_calls = Arc::new(AtomicUsize::new(0));
         let capabilities = streaming_capabilities(&channels);
-        let feature =
-            DiscoveredLiveCaptureFeature::new(
-                NodeId(41),
-                "Contract Fake",
-                Box::new(FakeFeature {
-                    channel_names: vec!["Bank A 7".into(), "Bank C 2".into()],
-                    channels,
-                    sample_rate_hz: 1_000_000_000.0,
-                    prepare: Some(Box::new(move |context| provider.prepare(context))),
-                    prepare_calls: Arc::clone(&prepare_calls),
-                    simple_trigger_channels: Vec::new(),
-                    capabilities,
-                    session_plan: None,
-                }),
-            );
+        let feature = DiscoveredLiveCaptureFeature::new(
+            NodeId(41),
+            "Contract Fake",
+            Box::new(FakeFeature {
+                channel_names: vec!["Bank A 7".into(), "Bank C 2".into()],
+                channels,
+                sample_rate_hz: 1_000_000_000.0,
+                prepare: Some(Box::new(move |context| provider.prepare(context))),
+                prepare_calls: Arc::clone(&prepare_calls),
+                simple_trigger_channels: Vec::new(),
+                capabilities,
+                session_plan: None,
+            }),
+        );
         (feature, controller, prepare_calls)
     }
 
@@ -2197,20 +2223,22 @@ mod tests {
             CaptureChannelId::new("aux-bank:9"),
         ];
         let sample_rate_hz = 2_000_000_u64;
-        let config = BufferedFakeConfig::new(
-            channels.clone(),
-            sample_rate_hz,
-            19,
-            5,
-            0x8d31,
-        )
-        .unwrap()
-        .with_simple_trigger(vec![None, Some(SimpleTriggerCondition::Falling), None])
-        .unwrap();
+        let config = BufferedFakeConfig::new(channels.clone(), sample_rate_hz, 19, 5, 0x8d31)
+            .unwrap()
+            .with_simple_trigger(vec![None, Some(SimpleTriggerCondition::Falling), None])
+            .unwrap();
         let trigger_sample = config.first_trigger_sample().unwrap();
         let capabilities = config.capabilities().clone();
         let (provider, controller) = BufferedFakeProvider::manually_uploaded(config);
         let prepare_calls = Arc::new(AtomicUsize::new(0));
+        let policy = CapturePolicy {
+            start: RecordingStart::Trigger,
+            trigger_placement: None,
+            retention_before_origin: RetentionPolicy::Everything,
+            retention_after_origin: RetentionPolicy::Everything,
+            completion: CompletionPolicy::SamplesAfterOrigin(1),
+            trigger_timeout: None,
+        };
         let feature = DiscoveredLiveCaptureFeature::new(
             NodeId(43),
             "Buffered Contract Fake",
@@ -2228,13 +2256,30 @@ mod tests {
                 prepare: Some(Box::new(move |context| provider.prepare(context))),
                 prepare_calls: Arc::clone(&prepare_calls),
                 capabilities,
-                session_plan: None,
+                session_plan: Some(CaptureSessionPlan {
+                    sample_rate_hz,
+                    channel_count: 3,
+                    policy: EffectiveCapturePolicy {
+                        requested: policy.clone(),
+                        effective: policy,
+                    },
+                    capacity: CaptureCapacityEstimate {
+                        worst_case_bytes_per_second: 750_000,
+                        finite_capture_bytes: Some(8),
+                        retained_duration: None,
+                        sustainable: None,
+                        warnings: Vec::new(),
+                    },
+                }),
             }),
         );
         (feature, controller, trigger_sample, prepare_calls)
     }
 
-    fn poll_until(coordinator: &mut CaptureCoordinator, condition: impl Fn(&CaptureCoordinator) -> bool) {
+    fn poll_until(
+        coordinator: &mut CaptureCoordinator,
+        condition: impl Fn(&CaptureCoordinator) -> bool,
+    ) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while !condition(coordinator) {
             assert!(Instant::now() < deadline, "capture coordinator timed out");
@@ -2253,10 +2298,7 @@ mod tests {
     ) {
         let source_node = feature.source_node;
         let channels = feature.channels().to_vec();
-        assert_eq!(
-            feature.capabilities().data_delivery(),
-            expected_delivery
-        );
+        assert_eq!(feature.capabilities().data_delivery(), expected_delivery);
 
         let mut coordinator = CaptureCoordinator::new();
         coordinator
@@ -2269,8 +2311,14 @@ mod tests {
         assert_eq!(manifest.descriptor.channels(), channels);
         assert_eq!(manifest.committed_chunks, 4);
         assert_eq!(manifest.committed_samples, expected_samples);
-        assert_eq!(coordinator.completed_recording_origin(), Some(expected_trigger));
-        assert_eq!(coordinator.completed_trigger_sample(), Some(expected_trigger));
+        assert_eq!(
+            coordinator.completed_recording_origin(),
+            Some(expected_trigger)
+        );
+        assert_eq!(
+            coordinator.completed_trigger_sample(),
+            Some(expected_trigger)
+        );
         assert_eq!(
             coordinator.status().unwrap().trigger_sample,
             Some(expected_trigger)
@@ -2320,8 +2368,14 @@ mod tests {
                 .map(|port| (port.name, port.type_id, port.index, port.sample_kinds))
                 .collect::<Vec<_>>()
         };
-        assert_eq!(analysis_schema, replay_schema(first_replay.process.as_ref()));
-        assert_eq!(analysis_schema, replay_schema(second_replay.process.as_ref()));
+        assert_eq!(
+            analysis_schema,
+            replay_schema(first_replay.process.as_ref())
+        );
+        assert_eq!(
+            analysis_schema,
+            replay_schema(second_replay.process.as_ref())
+        );
         assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
     }
 
@@ -2366,8 +2420,7 @@ mod tests {
             move || controller.grant_chunks(4),
         );
 
-        let (feature, controller, trigger_sample, prepare_calls) =
-            buffered_triggered_feature();
+        let (feature, controller, trigger_sample, prepare_calls) = buffered_triggered_feature();
         run_triggered_coordinator_contract(
             feature,
             CaptureDataDelivery::BufferedUpload,
@@ -2430,7 +2483,10 @@ mod tests {
             if coordinator.take_analysis_attachment().is_some() {
                 break;
             }
-            assert!(Instant::now() < deadline, "analysis attachment was not delivered");
+            assert!(
+                Instant::now() < deadline,
+                "analysis attachment was not delivered"
+            );
             std::thread::yield_now();
         }
         poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
@@ -2468,7 +2524,11 @@ mod tests {
         assert!(coordinator.recent_session_views()[0].kept);
 
         coordinator.clear_completed();
-        assert!(coordinator.take_waveform_update().is_some_and(|update| update.is_none()));
+        assert!(
+            coordinator
+                .take_waveform_update()
+                .is_some_and(|update| update.is_none())
+        );
         coordinator
             .open_recent_session(session_id, &builders)
             .unwrap();
@@ -2534,7 +2594,10 @@ mod tests {
             ]
         );
         let manifest = coordinator.completed_manifest().unwrap();
-        assert_eq!(manifest.descriptor.session_id(), coordinator.status().unwrap().session_id);
+        assert_eq!(
+            manifest.descriptor.session_id(),
+            coordinator.status().unwrap().session_id
+        );
         assert_eq!(manifest.committed_chunks, 2);
         assert_eq!(manifest.committed_samples, 8);
     }
@@ -2562,10 +2625,10 @@ mod tests {
         });
 
         let mut edited = graph.clone();
-        edited.set_extension("test.configuration_epoch", 1_u64).unwrap();
-        coordinator
-            .request_configuration_epoch(edited)
+        edited
+            .set_extension("test.configuration_epoch", 1_u64)
             .unwrap();
+        coordinator.request_configuration_epoch(edited).unwrap();
         let prepared = loop {
             coordinator.poll();
             if let Some(result) = coordinator.take_configuration_epoch_preparation() {
@@ -2628,16 +2691,13 @@ mod tests {
         });
         controller.grant_chunks(1);
         let mut edited = graph.clone();
-        edited.set_extension("test.configuration_epoch", 2_u64).unwrap();
-        coordinator
-            .request_configuration_epoch(edited)
+        edited
+            .set_extension("test.configuration_epoch", 2_u64)
             .unwrap();
+        coordinator.request_configuration_epoch(edited).unwrap();
         loop {
             coordinator.poll();
-            if coordinator
-                .take_configuration_epoch_preparation()
-                .is_some()
-            {
+            if coordinator.take_configuration_epoch_preparation().is_some() {
                 break;
             }
             std::thread::yield_now();
@@ -2827,12 +2887,7 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(
-            feature
-                .session_plan()
-                .unwrap()
-                .policy
-                .requested
-                .start,
+            feature.session_plan().unwrap().policy.requested.start,
             signal_processing::RecordingStart::Trigger
         );
 
@@ -2909,8 +2964,14 @@ mod tests {
         controller.grant_chunks(4);
         poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
 
-        assert_eq!(coordinator.completed_recording_origin(), Some(expected_trigger));
-        assert_eq!(coordinator.completed_trigger_sample(), Some(expected_trigger));
+        assert_eq!(
+            coordinator.completed_recording_origin(),
+            Some(expected_trigger)
+        );
+        assert_eq!(
+            coordinator.completed_trigger_sample(),
+            Some(expected_trigger)
+        );
         assert_eq!(
             coordinator.status().unwrap().trigger_sample,
             Some(expected_trigger)
@@ -2920,10 +2981,88 @@ mod tests {
         assert!(states.contains(&CaptureSessionState::Triggered));
         assert!(states.contains(&CaptureSessionState::Recording));
         assert!(
-            states.iter().position(|state| *state == CaptureSessionState::Armed)
+            states
+                .iter()
+                .position(|state| *state == CaptureSessionState::Armed)
                 < states
                     .iter()
                     .position(|state| *state == CaptureSessionState::Triggered)
+        );
+    }
+
+    #[test]
+    fn buffered_trigger_reveals_the_marker_with_the_indexed_pretrigger_prefix() {
+        let (feature, controller, trigger_sample, _) = buffered_triggered_feature();
+        let mut coordinator = CaptureCoordinator::new();
+        coordinator
+            .start(feature, CaptureStartMode::SavedPolicy)
+            .unwrap();
+
+        assert!(controller.wait_until_upload(Duration::from_secs(2)));
+        poll_until(&mut coordinator, |coordinator| {
+            coordinator
+                .status()
+                .is_some_and(|status| status.trigger_sample == Some(trigger_sample))
+        });
+        assert!(coordinator.take_waveform_update().is_none());
+
+        let mut granted_chunks = 0;
+        if trigger_sample >= 5 {
+            controller.grant_upload_chunks(1);
+            granted_chunks = 1;
+            poll_until(&mut coordinator, |coordinator| {
+                coordinator
+                    .status()
+                    .and_then(|status| status.progress.captured_samples)
+                    .is_some_and(|samples| samples >= 5)
+            });
+            assert!(coordinator.take_waveform_update().is_none());
+        }
+
+        controller.grant_upload_chunks(4 - granted_chunks);
+        poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
+        let waveform = coordinator
+            .take_waveform_update()
+            .expect("triggered capture should publish its waveform")
+            .expect("completed triggered capture should retain its waveform");
+        let metadata = waveform.current_metadata();
+        assert_eq!(metadata.trigger_sample, Some(trigger_sample));
+        assert!(metadata.total_samples > trigger_sample);
+    }
+
+    #[test]
+    fn buffered_upload_is_not_cut_short_by_host_completion_policy() {
+        let (feature, controller, trigger_sample, _) = buffered_triggered_feature();
+        assert_eq!(trigger_sample, 10);
+        let mut coordinator = CaptureCoordinator::new();
+        coordinator
+            .start(feature, CaptureStartMode::SavedPolicy)
+            .unwrap();
+
+        assert!(controller.wait_until_upload(Duration::from_secs(2)));
+        controller.grant_upload_chunks(3);
+        poll_until(&mut coordinator, |coordinator| {
+            coordinator
+                .status()
+                .and_then(|status| status.progress.captured_samples)
+                == Some(15)
+        });
+
+        let deadline = Instant::now() + Duration::from_millis(30);
+        while Instant::now() < deadline {
+            coordinator.poll();
+            std::thread::yield_now();
+        }
+        assert!(
+            coordinator.is_active(),
+            "the host must not stop an upload for data already captured on the device"
+        );
+
+        controller.grant_upload_chunks(1);
+        poll_until(&mut coordinator, |coordinator| !coordinator.is_active());
+        assert_eq!(
+            coordinator.completed_manifest().unwrap().committed_samples,
+            19
         );
     }
 
@@ -2939,8 +3078,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         let index = loop {
             coordinator.poll();
-            if let Some(Some(index)) = coordinator.take_waveform_update()
-            {
+            if let Some(Some(index)) = coordinator.take_waveform_update() {
                 break index;
             }
             assert!(Instant::now() < deadline, "waveform attachment timed out");
@@ -2993,7 +3131,10 @@ mod tests {
                 .map(|port| (port.name, port.type_id, port.index, port.sample_kinds))
                 .collect::<Vec<_>>()
         };
-        assert_eq!(schema(first.process.as_ref()), schema(second.process.as_ref()));
+        assert_eq!(
+            schema(first.process.as_ref()),
+            schema(second.process.as_ref())
+        );
         assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
     }
 
@@ -3035,7 +3176,12 @@ mod tests {
         }
 
         let status = coordinator.status().unwrap();
-        assert_eq!(status.state, CaptureSessionState::Complete, "{:?}", status.error);
+        assert_eq!(
+            status.state,
+            CaptureSessionState::Complete,
+            "{:?}",
+            status.error
+        );
         assert!(coordinator.completed_manifest().unwrap().committed_samples >= 1_024);
         let replay = coordinator
             .create_replay_attachment()
@@ -3087,8 +3233,16 @@ mod tests {
         }
 
         let status = coordinator.status().unwrap();
-        assert_eq!(status.state, CaptureSessionState::Complete, "{:?}", status.error);
-        assert_eq!(coordinator.completed_manifest().unwrap().committed_samples, 10_000);
+        assert_eq!(
+            status.state,
+            CaptureSessionState::Complete,
+            "{:?}",
+            status.error
+        );
+        assert_eq!(
+            coordinator.completed_manifest().unwrap().committed_samples,
+            10_000
+        );
         let replay = coordinator
             .create_replay_attachment()
             .unwrap()

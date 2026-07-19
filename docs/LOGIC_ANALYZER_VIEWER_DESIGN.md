@@ -11,8 +11,8 @@ Implementation:
 - egui widget: [crates/widgets/logic_analyzer_viewer](../crates/widgets/logic_analyzer_viewer)
   (`viewer.rs`, `channel.rs`, `cursor.rs`, `draw/`, `input.rs`, `sampling.rs`, `worker.rs`)
 - Index build/query engine: [crates/signal_processing/src/waveform_index/](../crates/signal_processing/src/waveform_index)
-  (`builder.rs`, `storage.rs`, `reader.rs`, `types.rs`)
-- Raw block decompression cache: [crates/signal_processing/src/raw_block_cache.rs](../crates/signal_processing/src/raw_block_cache.rs)
+  (`builder.rs`, `growing.rs`, `query.rs`, `storage.rs`, `reader.rs`, `types.rs`)
+- Finite archive capture store: [crates/signal_processing/src/archive_capture_store/](../crates/signal_processing/src/archive_capture_store)
 - Capture reader / data source: [crates/logic_analyzer_processing/src/nodes/dsl_file.rs](../crates/logic_analyzer_processing/src/nodes/dsl_file.rs)
   (`DslCaptureReader`, `DslFileCaptureDataSource`)
 - Common capture types / traits: [crates/signal_processing/src/capture.rs](../crates/signal_processing/src/capture.rs)
@@ -75,23 +75,28 @@ one channel.
   │    └─ DslCaptureReader               (ZipArchive + small LRU of decompressed blocks)
   │
   ├─ Waveform index (crates/signal_processing/src/waveform_index)
-  │    ├─ IndexBuilder     — builds the sidecar `.dsl.idx` on worker threads
-  │    ├─ IndexReader      — mmaps the sidecar, serves directory + leaf lookups
-  │    └─ IndexSampler     — public query API: sampled_window() over a viewport
+  │    ├─ IndexBuilder              — builds finite sidecars on worker threads
+  │    ├─ IndexReader               — mmaps finite directory + leaf summaries
+  │    ├─ IndexSampler              — finite sampled_window() query handle
+  │    └─ NativeGrowingCaptureIndex — growing sampled_window() query handle
   │
-  ├─ RawBlockCache                       — sidecar `.dsl.idx.raw`: decompressed raw blocks,
-  │                                        populated lazily for deep-zoom exact reads
+  ├─ Archive capture store (crates/signal_processing/src/archive_capture_store)
+  │    └─ NativeArchiveCaptureStore — optional `.dsl.idx.raw` exact-read store
   │
   └─ LogicAnalyzerViewer (egui)          — UI widget
        ├─ background thread             — opens capture, builds/validates index, reports progress
        └─ UI thread                     — samples the visible window synchronously and paints it
 ```
 
-`IndexSampler` is the single entry point used by the UI: it owns the `IndexReader` (mmapped
-sidecar), a raw `BlockCaptureSource` reader, and an optional `RawBlockCache`. Opening it
-builds the index if missing/stale, otherwise it just validates and mmaps the existing sidecar.
-The viewer holds it as `Box<dyn CaptureIndex>` — the trait seam that keeps the widget crate
-decoupled from the index implementation (and empty on wasm).
+`IndexSampler` and `NativeGrowingCaptureIndex` are the finite and growing handles of one waveform
+index subsystem. They share the exact-window threshold, resolution-selection policy, capture-query
+contract, per-pixel summary sampler, and presentation data types. Finite bitmap summaries and
+growing tier summaries are storage backends for that shared query algorithm; neither backend emits
+drawable summary spans directly. The finite handle owns an `IndexReader`, a raw
+`BlockCaptureSource`, and an optional `NativeArchiveCaptureStore`; the growing handle follows
+committed chunks in the authoritative live store. The viewer holds either one as
+`Box<dyn CaptureIndex>` — the trait seam that keeps the widget crate decoupled from storage
+implementations (and empty on wasm).
 
 ---
 
@@ -104,7 +109,7 @@ decoupled from the index implementation (and empty on wasm).
 | Chunk / leaf | The serialized index payload for one (channel, block) pair: `valid_samples`, flags, and (if active) the L1/L2/L3 mipmap bitmaps |
 | Directory entry | The per-(channel, block) directory record: chunk offset/length plus a duplicated top-level (L3) summary, so coarse queries never need to touch the payload |
 | Sidecar index | The persistent `.dsl.idx` file: header + directory + chunk payloads |
-| Raw block cache | The persistent `.dsl.idx.raw` file: lazily-populated decompressed raw blocks for exact/deep-zoom reads |
+| Archive capture store | The disposable `.dsl.idx.raw` file: lazily-populated decompressed archive blocks for exact/deep-zoom reads |
 
 Every (channel, block) pair gets its own directory entry and chunk; the directory entry's
 embedded L3 summary is what makes the coarsest zoom level cheap without another index level.
@@ -206,9 +211,9 @@ it into place on `finish()`; a dropped, unfinished writer removes the temp file.
 
 ---
 
-## Raw Block Cache (`.dsl.idx.raw`)
+## Archive Capture Store (`.dsl.idx.raw`)
 
-[raw_block_cache.rs](../crates/signal_processing/src/raw_block_cache.rs) keeps a sparse sidecar with
+[archive_capture_store/native.rs](../crates/signal_processing/src/archive_capture_store/native.rs) keeps a sparse sidecar with
 one fixed-size slot per (channel, block), used only by the **exact** (deep-zoom / raw-scan)
 query path — it is not part of the mipmap index.
 
@@ -251,7 +256,7 @@ completed (channel, block) job).
 ## Runtime Querying — `IndexSampler`
 
 `IndexSampler::open_data_source_with_progress` builds the index if the sidecar is
-missing/invalid, opens the (optional) `RawBlockCache`, mmaps the index, and opens a raw
+missing/invalid, opens the optional `NativeArchiveCaptureStore`, mmaps the index, and opens a raw
 `BlockCaptureSource` reader for exact reads.
 
 ### `sampled_window(channels, start_sample, end_sample, target_points)`
@@ -292,7 +297,7 @@ The exact path returns `transitions` (empty `waveform`); the indexed path return
 ### Raw block reads
 
 Both the exact path and the raw-cache-backed reads for the UI's hover measurement (below) go
-through `cached_packed_block`, which prefers the `RawBlockCache` slot map and falls back to
+through `cached_packed_block`, which prefers the `NativeArchiveCaptureStore` slot map and falls back to
 `raw_reader.read_packed_block` (decompressing from the ZIP), storing the result back into the
 cache.
 
@@ -429,7 +434,7 @@ ruler double-click suppresses fit-to-capture for the same event.
 |---|---|
 | Multi-GB file, limited RAM | Index chunks are mmapped, not resident; only touched pages are faulted in |
 | Zoom to full view | One block per rendered point at coarsest zoom; directory-only `l3_toggle`/`l3_last` avoids touching chunk payloads |
-| Zoom to single sample | Exact path scans raw packed blocks (via `RawBlockCache` or ZIP decompression) once the viewport is within one L1 group per point |
+| Zoom to single sample | Exact path scans raw packed blocks (via `NativeArchiveCaptureStore` or ZIP decompression) once the viewport is within one L1 group per point |
 | Viewing during index build | `Opened`/`Status`/`IndexProgress` messages let the UI show metadata and a progress bar before the sampler exists |
 | Constant / idle signals | No L1/L2/L3 payload stored; directory `toggle` bit cleared; reconstructed from `first`/`last` alone |
 | Boundary transitions | Patched into an otherwise-constant block's summaries by `apply_boundary_transition` |

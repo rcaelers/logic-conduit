@@ -23,7 +23,6 @@ pub mod events;
 mod graph;
 pub mod live_capture;
 pub mod live_capture_store;
-pub mod live_capture_waveform;
 mod manager;
 pub mod node;
 pub mod pipeline;
@@ -47,9 +46,9 @@ std::cfg_select! {
         pub type AppManager = CooperativeManager;
     }
     _ => {
+        mod archive_capture_store;
         #[path = "idle_native.rs"]
         mod idle;
-        mod raw_block_cache;
         pub mod waveform_index;
         pub mod worker_pool;
 
@@ -59,7 +58,10 @@ std::cfg_select! {
             configure_decoded_block_cache, decoded_block_cache_stats, default_cache_directory,
             reset_decoded_block_cache_stats,
         };
-        pub use waveform_index::{CaptureIndexProgress, IndexSampler, exact_window_sample_limit};
+        pub use waveform_index::{
+            CaptureIndexProgress, IndexSampler, NativeGrowingCaptureIndex,
+            NativeGrowingCaptureIndexWorker, exact_window_sample_limit,
+        };
     }
 }
 

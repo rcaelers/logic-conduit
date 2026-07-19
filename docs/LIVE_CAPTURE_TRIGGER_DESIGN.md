@@ -46,6 +46,9 @@ The UI-independent live-capture foundation is also present:
 - its native implementation appends canonical payloads to a sequential data file, publishes only
   fully synced batches through a fixed-size commit log, and finalizes a manifest that can be
   reopened without the acquisition provider;
+- a separate written-prefix commit log makes newly appended chunks available to the growing
+  waveform and its exact reader without waiting for the durable fsync batch; recovery and ordinary
+  store cursors continue to use only the durable commit log;
 - the native store atomically persists an optional generic session plan containing both requested
   and negotiated effective policy and capacity metadata; old captures without this sidecar remain
   valid, while malformed metadata is reported as corruption;
@@ -54,10 +57,11 @@ The UI-independent live-capture foundation is also present:
   index when paused;
 - a shared recording-origin gate keeps analysis pending while armed, clips the one chunk crossing
   the trigger, and presents both live analysis and finalized replay as a zero-based post-origin
-  stream while leaving the authoritative raw prefix intact;
-- the native store provides an exact random reader that binary-searches committed records and reads
-  only authoritative raw chunks intersecting the requested sample window;
-- an independent growing-waveform worker follows committed chunks, incrementally publishes
+  stream while leaving the authoritative raw prefix intact; the cursor also exposes its generic
+  capture-timeline offset so timestamped graph output aligns with the raw trigger position;
+- the native store provides exact random readers that binary-search durable or written-prefix
+  records and read only authoritative raw chunks intersecting the requested sample window;
+- the waveform-index subsystem's growing worker follows written-prefix chunks, incrementally publishes
   per-channel multiresolution summaries, and never participates in acquisition backpressure;
 - the platform-neutral capture-query contract publishes current metadata, completion state, and a
   monotonically increasing generation so consumers can follow a growing committed prefix;
@@ -143,9 +147,13 @@ The UI-independent live-capture foundation is also present:
   explicit integrity failures;
 - aligned U3 transfers share their immutable payload with the canonical chunk without repacking,
   while narrow transfers use one byte-wise transformation with a sub-sample carry; and
-- growing waveform summaries store historical fixed-size records in sequential per-channel tier
-  files. RAM retains only incomplete fold groups and active tails, and packed-word summary building
-  processes at most 64 channels without creating per-sample objects.
+- growing waveform summaries store one-byte first/last/activity records with implicit positions in
+  sequential per-channel tier files. RAM retains only incomplete fold groups and active tails,
+  packed-word summary building processes at most 64 channels without creating per-sample objects,
+  and the tiers feed the same bounded per-pixel query algorithm as finite waveform-index summaries;
+- growing queries clone only tier paths, counts, and bounded fold tails while holding the index read
+  lock, then release it before file I/O and per-pixel sampling, so painting cannot block publication
+  of newly summarized chunks.
 
 The native fakes, U3Pro16 buffered and streaming providers, and application coordinator are
 selected as complete platform modules. The streaming fake is reachable through the existing
@@ -502,11 +510,13 @@ distinct in the generic contract:
 
 - **Device buffered:** sampling first accumulates in analyzer memory. Waveform bytes may be
   unavailable until the trigger, requested depth, or manual Stop completes, after which an Upload
-  phase transfers them to the authoritative store. This path can support higher sample rates but
-  has a hardware-depth limit.
+  phase transfers them to the authoritative store. The device-enforced acquisition plan determines
+  the finite extent; host completion policy never truncates an upload containing data already
+  captured by the device. This path can support higher sample rates but has a hardware-depth limit.
 - **Host streamed:** chunks are transferred and committed while sampling. This path enables a
-  growing live waveform and longer captures, but its sustainable sample rate depends on link speed,
-  enabled channel count, encoding, and host throughput.
+  growing live waveform and longer captures, and the host enforces the negotiated post-origin
+  completion point. Its sustainable sample rate depends on link speed, enabled channel count,
+  encoding, and host throughput.
 
 Opening the device performs a capability handshake and produces an immutable `CapturePlan` before
 arming. The plan records device identity, relevant firmware/logic revisions, transport/link class,
@@ -693,8 +703,11 @@ loss-of-integrity error; data is never silently dropped.
 Before the trigger, committed raw chunks remain available to the session store but the gated graph
 cursor emits nothing. On `Triggered`, the store records the exact origin and the cursor begins at
 that sample. Thus hardware capture/upload can be active while Armed, whereas graph logging and
-derived output begin only when the trigger activates. A later pre-trigger-display option can query
-the retained raw prefix without changing analysis semantics.
+derived output begin only when the trigger activates. Processing remains zero-based after the
+origin, but the analysis source adds the cursor's timeline offset to emitted timestamps so derived
+lanes overlay the corresponding raw samples rather than appearing at the start of the retained
+pre-trigger window. A later pre-trigger-display option can query the retained raw prefix without
+changing analysis semantics.
 
 The native store supplies:
 
@@ -788,7 +801,17 @@ This removes the application's current file-source/demo-source branching and kee
 independent of U3Pro16, DSL, and third-party capture formats.
 
 New generations request repaint and extend the scrollbar/fit range. Trigger position renders as a
-ruler marker distinct from ordinary cursors.
+ruler marker distinct from ordinary cursors. A growing query derives its summary resolution and
+pixel-bucket boundaries from the requested viewport, including its planned future extent, rather
+than from the currently written prefix. Completed pixels therefore remain visually stable while
+new samples extend only the frontier; completing a capture does not re-bucket the existing
+waveform.
+
+For triggered buffered acquisition, the growing waveform index follows uploaded chunks privately
+while the trigger prefix is incomplete. The application publishes the waveform to the viewer only
+after the trigger is known and the index includes that sample. The first visible triggered frame
+therefore contains the complete available pre-trigger prefix and its trigger marker together;
+subsequent post-trigger samples extend the visible frontier normally.
 
 ### Live-view navigation
 

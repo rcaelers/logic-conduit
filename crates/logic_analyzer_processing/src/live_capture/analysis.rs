@@ -195,6 +195,7 @@ impl CaptureAnalysisSource {
         let sample_count = usize::try_from(chunk.sample_count()).map_err(|_| {
             WorkError::NodeError("live analysis chunk is too large for this platform".into())
         })?;
+        let timeline_offset_samples = self.cursor.timeline_offset_samples();
 
         for (channel_index, channel) in self.channels.iter().enumerate() {
             if let Some(sender) = outputs
@@ -214,7 +215,7 @@ impl CaptureAnalysisSource {
                 sender
                     .send(SampleBlock::new(
                         packed,
-                        chunk.start_sample(),
+                        chunk.start_sample().saturating_add(timeline_offset_samples),
                         sample_count,
                         self.timestamp_step_ns,
                     ))
@@ -240,6 +241,7 @@ impl CaptureAnalysisSource {
                             chunk
                                 .start_sample()
                                 .saturating_add(relative as u64)
+                                .saturating_add(timeline_offset_samples)
                                 .saturating_mul(self.timestamp_step_ns),
                         ));
                         last = Some(value);
@@ -261,7 +263,10 @@ impl CaptureAnalysisSource {
     }
 
     fn finish_edges(&mut self, outputs: &[OutputPort]) -> WorkResult<()> {
-        let end_ns = self.next_sample.saturating_mul(self.timestamp_step_ns);
+        let end_ns = self
+            .next_sample
+            .saturating_add(self.cursor.timeline_offset_samples())
+            .saturating_mul(self.timestamp_step_ns);
         for (channel_index, channel) in self.channels.iter().enumerate() {
             let Some(value) = self.last_levels[channel_index] else {
                 continue;
@@ -315,5 +320,110 @@ impl ProcessNode for CaptureAnalysisSource {
                 Err(WorkError::Shutdown)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crossbeam_channel::bounded;
+
+    use signal_processing::sender::{ChannelMessage, Sender};
+    use signal_processing::watchdog::Watchdog;
+    use signal_processing::{
+        CaptureChunk, CaptureCursorItem, CaptureSessionId, CaptureStoreCursor, CaptureStoreResult,
+    };
+
+    use super::*;
+
+    struct OffsetCursor {
+        next: Option<CaptureChunk>,
+        offset_samples: u64,
+    }
+
+    impl CaptureStoreCursor for OffsetCursor {
+        fn next(&mut self) -> CaptureStoreResult<CaptureCursorItem> {
+            Ok(self
+                .next
+                .take()
+                .map_or(CaptureCursorItem::End, CaptureCursorItem::Chunk))
+        }
+
+        fn wait_next(&mut self, _timeout: Duration) -> CaptureStoreResult<CaptureCursorItem> {
+            self.next()
+        }
+
+        fn next_sequence(&self) -> u64 {
+            u64::from(self.next.is_none())
+        }
+
+        fn timeline_offset_samples(&self) -> u64 {
+            self.offset_samples
+        }
+    }
+
+    #[test]
+    fn analysis_timestamps_map_back_to_the_raw_capture_timeline() {
+        let channel = CaptureChannelId::new("probe:0");
+        let chunk = CaptureChunk::packed_lsb_first(
+            CaptureSessionId::new(1),
+            0,
+            0,
+            2,
+            Arc::from([channel.clone()]),
+            [0b10],
+            0,
+        )
+        .unwrap();
+        let cursor = OffsetCursor {
+            next: Some(chunk),
+            offset_samples: 100,
+        };
+        let mut source = CaptureAnalysisSource::new(
+            "analysis",
+            Box::new(cursor),
+            1_000_000_000.0,
+            vec![CaptureAnalysisChannel::separate(channel, "edge", "block")],
+        )
+        .unwrap();
+        let watchdog = Watchdog::new();
+        let (edge_tx, edge_rx) = bounded::<ChannelMessage<Sample>>(4);
+        let outputs = [
+            OutputPort::new_with_watchdog(
+                Sender::new(vec![edge_tx]),
+                &watchdog,
+                "analysis",
+                "edge",
+            ),
+            OutputPort::new_with_watchdog(
+                Sender::<SampleBlock>::new(Vec::new()),
+                &watchdog,
+                "analysis",
+                "block",
+            ),
+        ];
+
+        assert_eq!(source.work(&[], &outputs).unwrap(), 2);
+        assert!(matches!(
+            source.work(&[], &outputs),
+            Err(WorkError::Shutdown)
+        ));
+        let edges = edge_rx
+            .try_iter()
+            .flat_map(|message| match message {
+                ChannelMessage::Sample(sample) => vec![sample],
+                ChannelMessage::Batch(samples) => samples,
+                ChannelMessage::EndOfStream => vec![],
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            edges,
+            vec![
+                Sample::new(false, 100),
+                Sample::new(true, 101),
+                Sample::new(true, 102),
+            ]
+        );
     }
 }

@@ -193,6 +193,12 @@ pub trait CaptureStoreCursor: Send {
     fn next(&mut self) -> CaptureStoreResult<CaptureCursorItem>;
     fn wait_next(&mut self, timeout: Duration) -> CaptureStoreResult<CaptureCursorItem>;
     fn next_sequence(&self) -> u64;
+
+    /// Sample offset that maps this cursor's zero-based processing timeline
+    /// back onto the authoritative capture timeline for timestamped output.
+    fn timeline_offset_samples(&self) -> u64 {
+        0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -382,6 +388,10 @@ impl CaptureStoreCursor for RecordingCaptureCursor {
 
     fn next_sequence(&self) -> u64 {
         self.output_sequence
+    }
+
+    fn timeline_offset_samples(&self) -> u64 {
+        self.gate.recording_origin().unwrap_or(0)
     }
 }
 

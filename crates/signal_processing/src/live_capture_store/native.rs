@@ -22,6 +22,7 @@ use super::{
 
 const DATA_FILE_NAME: &str = "capture.data";
 const COMMIT_FILE_NAME: &str = "capture.commits";
+const LIVE_COMMIT_FILE_NAME: &str = "capture.live.commits";
 const MANIFEST_FILE_NAME: &str = "capture.manifest";
 const MANIFEST_TEMP_FILE_NAME: &str = "capture.manifest.tmp";
 const PLAN_FILE_NAME: &str = "capture.plan.json";
@@ -97,6 +98,9 @@ impl NativeCaptureStoreConfig {
 
 #[derive(Debug)]
 struct StoreState {
+    visible_chunks: u64,
+    visible_samples: u64,
+    visible_data_bytes: u64,
     committed_chunks: u64,
     committed_samples: u64,
     committed_data_bytes: u64,
@@ -137,6 +141,19 @@ impl SharedStore {
         }
     }
 
+    fn live_snapshot(&self) -> CaptureStoreSnapshot {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        CaptureStoreSnapshot {
+            committed_chunks: state.visible_chunks,
+            committed_samples: state.visible_samples,
+            committed_data_bytes: state.visible_data_bytes,
+            writer_open: state.writer_open,
+            writer_failed: state.writer_failure.is_some(),
+            finalized: state.finalized,
+            resident_commit_records: 0,
+        }
+    }
+
     fn record_writer_failure(&self, error: &CaptureStoreError) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.writer_failure = Some(error.to_string());
@@ -162,6 +179,7 @@ impl NativeCaptureStore {
         fs::create_dir_all(&config.directory)?;
         let data_path = config.directory.join(DATA_FILE_NAME);
         let commit_path = config.directory.join(COMMIT_FILE_NAME);
+        let live_commit_path = config.directory.join(LIVE_COMMIT_FILE_NAME);
         let manifest_path = config.directory.join(MANIFEST_FILE_NAME);
         let plan_path = config.directory.join(PLAN_FILE_NAME);
         let plan_temp_path = config.directory.join(PLAN_TEMP_FILE_NAME);
@@ -169,6 +187,7 @@ impl NativeCaptureStore {
         let session_temp_path = config.directory.join(SESSION_TEMP_FILE_NAME);
         if data_path.exists()
             || commit_path.exists()
+            || live_commit_path.exists()
             || manifest_path.exists()
             || plan_path.exists()
             || plan_temp_path.exists()
@@ -191,6 +210,8 @@ impl NativeCaptureStore {
         let mut commit_file = create_new_file(&commit_path)?;
         write_commit_header(&mut commit_file, config.descriptor.session_id())?;
         commit_file.sync_data()?;
+        let mut live_commit_file = create_new_file(&live_commit_path)?;
+        write_commit_header(&mut live_commit_file, config.descriptor.session_id())?;
         write_session_metadata(
             &config.directory,
             &CaptureSessionMetadata {
@@ -209,6 +230,9 @@ impl NativeCaptureStore {
             directory: config.directory,
             descriptor: config.descriptor,
             state: Mutex::new(StoreState {
+                visible_chunks: 0,
+                visible_samples: 0,
+                visible_data_bytes: 0,
                 committed_chunks: 0,
                 committed_samples: 0,
                 committed_data_bytes: 0,
@@ -225,6 +249,7 @@ impl NativeCaptureStore {
             shared,
             data_file,
             commit_file,
+            live_commit_file,
             pending: Vec::with_capacity(config.commit_batch_chunks),
             commit_batch_chunks: config.commit_batch_chunks,
             next_sequence: 0,
@@ -248,11 +273,19 @@ impl NativeCaptureStore {
     }
 
     pub fn open_cursor(&self) -> CaptureStoreResult<NativeCaptureCursor> {
-        NativeCaptureCursor::open(Arc::clone(&self.shared))
+        NativeCaptureCursor::open(Arc::clone(&self.shared), CursorVisibility::Durable)
+    }
+
+    pub(crate) fn open_live_cursor(&self) -> CaptureStoreResult<NativeCaptureCursor> {
+        NativeCaptureCursor::open(Arc::clone(&self.shared), CursorVisibility::Written)
     }
 
     pub fn open_random_reader(&self) -> CaptureStoreResult<NativeCaptureRandomReader> {
-        NativeCaptureRandomReader::open(Arc::clone(&self.shared))
+        NativeCaptureRandomReader::open(Arc::clone(&self.shared), CursorVisibility::Durable)
+    }
+
+    pub(crate) fn open_live_random_reader(&self) -> CaptureStoreResult<NativeCaptureRandomReader> {
+        NativeCaptureRandomReader::open(Arc::clone(&self.shared), CursorVisibility::Written)
     }
 
     pub fn write_session_plan(&self, plan: &CaptureSessionPlan) -> CaptureStoreResult<()> {
@@ -411,6 +444,9 @@ impl NativeFinalizedCapture {
                 directory,
                 descriptor: manifest.descriptor,
                 state: Mutex::new(StoreState {
+                    visible_chunks: manifest.committed_chunks,
+                    visible_samples: manifest.committed_samples,
+                    visible_data_bytes: manifest.committed_data_bytes,
                     committed_chunks: manifest.committed_chunks,
                     committed_samples: manifest.committed_samples,
                     committed_data_bytes: manifest.committed_data_bytes,
@@ -486,6 +522,9 @@ impl NativeFinalizedCapture {
             directory: directory.clone(),
             descriptor: metadata.descriptor.clone(),
             state: Mutex::new(StoreState {
+                visible_chunks: complete_records,
+                visible_samples: 0,
+                visible_data_bytes: 0,
                 committed_chunks: complete_records,
                 committed_samples: 0,
                 committed_data_bytes: 0,
@@ -568,6 +607,9 @@ impl NativeFinalizedCapture {
                 directory,
                 descriptor: manifest.descriptor,
                 state: Mutex::new(StoreState {
+                    visible_chunks: manifest.committed_chunks,
+                    visible_samples: manifest.committed_samples,
+                    visible_data_bytes: manifest.committed_data_bytes,
                     committed_chunks: manifest.committed_chunks,
                     committed_samples: manifest.committed_samples,
                     committed_data_bytes: manifest.committed_data_bytes,
@@ -743,11 +785,11 @@ impl NativeFinalizedCapture {
     }
 
     pub fn open_cursor(&self) -> CaptureStoreResult<NativeCaptureCursor> {
-        NativeCaptureCursor::open(Arc::clone(&self.shared))
+        NativeCaptureCursor::open(Arc::clone(&self.shared), CursorVisibility::Durable)
     }
 
     pub fn open_random_reader(&self) -> CaptureStoreResult<NativeCaptureRandomReader> {
-        NativeCaptureRandomReader::open(Arc::clone(&self.shared))
+        NativeCaptureRandomReader::open(Arc::clone(&self.shared), CursorVisibility::Durable)
     }
 
     pub fn session_plan(&self) -> CaptureStoreResult<Option<CaptureSessionPlan>> {
@@ -800,6 +842,7 @@ pub struct NativeCaptureStoreWriter {
     shared: Arc<SharedStore>,
     data_file: File,
     commit_file: File,
+    live_commit_file: File,
     pending: Vec<CommitRecord>,
     commit_batch_chunks: usize,
     next_sequence: u64,
@@ -867,10 +910,24 @@ impl NativeCaptureStoreWriter {
             checksum: 0,
         };
         record.checksum = commit_record_checksum(record, bytes);
+        let mut encoded = Vec::with_capacity(usize::from(COMMIT_RECORD_SIZE));
+        encode_commit_record(record, &mut encoded);
+        self.live_commit_file.write_all(&encoded)?;
         self.pending.push(record);
         self.next_sequence = next_sequence;
         self.next_sample = chunk.end_sample();
         self.next_data_offset = next_data_offset;
+        {
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            state.visible_chunks = self.next_sequence;
+            state.visible_samples = self.next_sample;
+            state.visible_data_bytes = self.next_data_offset;
+            self.shared.changed.notify_all();
+        }
         if self.pending.len() >= self.commit_batch_chunks {
             self.flush_pending()?;
         }
@@ -954,6 +1011,12 @@ impl Drop for NativeCaptureStoreWriter {
     }
 }
 
+#[derive(Clone, Copy)]
+enum CursorVisibility {
+    Durable,
+    Written,
+}
+
 pub struct NativeCaptureCursor {
     shared: Arc<SharedStore>,
     data_file: File,
@@ -961,12 +1024,29 @@ pub struct NativeCaptureCursor {
     next_sequence: u64,
     next_sample: u64,
     commit_format_version: u16,
+    visibility: CursorVisibility,
 }
 
 impl NativeCaptureCursor {
-    fn open(shared: Arc<SharedStore>) -> CaptureStoreResult<Self> {
+    fn open(
+        shared: Arc<SharedStore>,
+        visibility: CursorVisibility,
+    ) -> CaptureStoreResult<Self> {
         let data_file = File::open(shared.directory.join(DATA_FILE_NAME))?;
-        let mut commit_file = File::open(shared.directory.join(COMMIT_FILE_NAME))?;
+        let finalized = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .finalized;
+        let commit_name = match visibility {
+            CursorVisibility::Written
+                if !finalized && shared.directory.join(LIVE_COMMIT_FILE_NAME).is_file() =>
+            {
+                LIVE_COMMIT_FILE_NAME
+            }
+            CursorVisibility::Durable | CursorVisibility::Written => COMMIT_FILE_NAME,
+        };
+        let mut commit_file = File::open(shared.directory.join(commit_name))?;
         let commit_format_version =
             validate_commit_header(&mut commit_file, shared.descriptor.session_id())?;
         Ok(Self {
@@ -976,7 +1056,15 @@ impl NativeCaptureCursor {
             next_sequence: 0,
             next_sample: 0,
             commit_format_version,
+            visibility,
         })
+    }
+
+    fn available_chunks(&self, state: &StoreState) -> u64 {
+        match self.visibility {
+            CursorVisibility::Durable => state.committed_chunks,
+            CursorVisibility::Written => state.visible_chunks,
+        }
     }
 
     fn next_available(&mut self, wait: Option<Duration>) -> CaptureStoreResult<CaptureCursorItem> {
@@ -986,7 +1074,7 @@ impl NativeCaptureCursor {
                 .state
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            if self.next_sequence >= state.committed_chunks {
+            if self.next_sequence >= self.available_chunks(&state) {
                 if let Some(error) = &state.writer_failure {
                     return Err(CaptureStoreError::WriterFailed(error.clone()));
                 }
@@ -1000,11 +1088,11 @@ impl NativeCaptureCursor {
                     .shared
                     .changed
                     .wait_timeout_while(state, timeout, |current| {
-                        self.next_sequence >= current.committed_chunks && current.writer_open
+                        self.next_sequence >= self.available_chunks(current) && current.writer_open
                     })
                     .unwrap_or_else(|error| error.into_inner());
                 state = new_state;
-                if self.next_sequence >= state.committed_chunks {
+                if self.next_sequence >= self.available_chunks(&state) {
                     if let Some(error) = &state.writer_failure {
                         return Err(CaptureStoreError::WriterFailed(error.clone()));
                     }
@@ -1088,12 +1176,29 @@ pub struct NativeCaptureRandomReader {
     data_file: File,
     commit_file: File,
     commit_format_version: u16,
+    visibility: CursorVisibility,
 }
 
 impl NativeCaptureRandomReader {
-    fn open(shared: Arc<SharedStore>) -> CaptureStoreResult<Self> {
+    fn open(
+        shared: Arc<SharedStore>,
+        visibility: CursorVisibility,
+    ) -> CaptureStoreResult<Self> {
         let data_file = File::open(shared.directory.join(DATA_FILE_NAME))?;
-        let mut commit_file = File::open(shared.directory.join(COMMIT_FILE_NAME))?;
+        let finalized = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .finalized;
+        let commit_name = match visibility {
+            CursorVisibility::Written
+                if !finalized && shared.directory.join(LIVE_COMMIT_FILE_NAME).is_file() =>
+            {
+                LIVE_COMMIT_FILE_NAME
+            }
+            CursorVisibility::Durable | CursorVisibility::Written => COMMIT_FILE_NAME,
+        };
+        let mut commit_file = File::open(shared.directory.join(commit_name))?;
         let commit_format_version =
             validate_commit_header(&mut commit_file, shared.descriptor.session_id())?;
         Ok(Self {
@@ -1101,6 +1206,7 @@ impl NativeCaptureRandomReader {
             data_file,
             commit_file,
             commit_format_version,
+            visibility,
         })
     }
 
@@ -1110,7 +1216,10 @@ impl NativeCaptureRandomReader {
         start_sample: u64,
         end_sample: u64,
     ) -> crate::Result<CaptureSampledWindow> {
-        let snapshot = self.shared.snapshot();
+        let snapshot = match self.visibility {
+            CursorVisibility::Durable => self.shared.snapshot(),
+            CursorVisibility::Written => self.shared.live_snapshot(),
+        };
         if start_sample >= end_sample || end_sample > snapshot.committed_samples {
             return Err(Error::OutOfBounds(end_sample));
         }
@@ -2418,10 +2527,15 @@ mod tests {
             .unwrap();
         let (store, mut writer) = NativeCaptureStore::create(config).unwrap();
         let mut cursor = store.open_cursor().unwrap();
+        let mut live_cursor = store.open_live_cursor().unwrap();
         writer.append(chunk(&descriptor, 0, 0, 3)).unwrap();
 
         assert_eq!(store.snapshot().committed_chunks, 0);
         assert_eq!(cursor.next().unwrap(), CaptureCursorItem::Pending);
+        assert!(matches!(
+            live_cursor.next().unwrap(),
+            CaptureCursorItem::Chunk(_)
+        ));
         writer.finish().unwrap();
         assert_eq!(store.snapshot().committed_chunks, 1);
         assert!(matches!(cursor.next().unwrap(), CaptureCursorItem::Chunk(_)));

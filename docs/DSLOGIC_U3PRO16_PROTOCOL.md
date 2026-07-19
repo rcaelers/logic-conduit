@@ -179,6 +179,13 @@ Registers required for logic acquisition:
 | `0x70` | acquisition control: `00` clear, `02` force ready, `04` force stop |
 | `0x78` | input-threshold DAC code |
 
+The internal sample clock is supplied by a volatile ADF4360 synthesizer and
+must be initialized after opening a power-cycled device. For the 500 MHz FPGA
+clock, write `0x01` to register `0x4a`; write `01 61 00 30` and then
+`01 40 f1 46` to register `0x48` one byte at a time; wait 10 ms; then write
+`01 62 3d 40` to register `0x48` one byte at a time. Skip this initialization
+when acquisition explicitly uses an external clock.
+
 For a requested threshold `V` in volts, write
 `floor(V / 3.3 * 1.5 / 2.5 * 255)` to register `0x78`. Validate and clamp `V`
 in the API before conversion.
@@ -363,14 +370,19 @@ In serial-trigger mode, do not replicate stage 3.
 
 ## 7. Acquisition sequence
 
-1. Send command 9 with zero data to stop any prior acquisition.
-2. Build, declare, and send the 672-byte capture-settings packet.
-3. Queue one 1024-byte bulk-IN read for the trigger header and one or more
+1. Initialize the internal 500 MHz clock synthesizer unless external-clock
+   acquisition is selected.
+2. Send command 9 with zero data to stop any prior acquisition.
+3. Build, declare, and send the 672-byte capture-settings packet.
+4. Queue one 1024-byte bulk-IN read for the trigger header and one or more
    bulk-IN data reads on endpoint `0x86`.
-4. Send command 8 with zero data.
-5. Process the trigger header, then process the data stream.
+5. Send command 8 with zero data.
+6. Process the trigger header, then process the data stream.
 
-The trigger-header read must be queued before data reads and before command 8.
+The trigger-header read must be queued before data reads and before command 8. Streaming capture
+polls that queued header without blocking on every receive iteration; once it completes, the
+driver publishes the trigger position before continuing with the available data. Leaving the
+completed header queued would keep the session armed and its analysis cursor gated indefinitely.
 
 ### 7.1 Trigger header
 
@@ -399,17 +411,22 @@ actual_samples = actual_bytes / C * 8
 
 ### 7.2 Logic data
 
-Following the trigger header, endpoint `0x86` returns a continuous packed
-logic-data stream. For a chunk of `N` bytes, its nominal sample count is
-`N * 8 / C`. Samples are least-significant-bit first and input positions are
-in increasing input-number order.
+Following the trigger header, endpoint `0x86` returns `LA_CROSS_DATA`. For a
+chunk of `N` bytes, its nominal sample count is `N * 8 / C`. The wire stream is
+divided into `C * 8`-byte blocks representing 64 samples. Within each block,
+each enabled input contributes one consecutive eight-byte, least-significant-
+bit-first sample vector, in increasing input-number order. Transpose every
+block into ordinary sample-major packed bits before publishing it to generic
+capture infrastructure.
 
-Data may end mid-sample when `C` is 3, 6, or 12. Preserve a bit carry between
-USB transfers or expose chunk bit offsets. For finite capture, deliver at most
-`actual_bytes`. For streaming capture, continue until the caller stops the
-run. Run-length mode compresses capture memory inside the FPGA, but the upload
-path expands it back into this ordinary interleaved sample representation.
-Consumers therefore do not decode device-specific RLE bytes.
+USB transfers may end partway through a 64-sample cross-data block. Preserve
+the incomplete block between transfers. After transposition, data may end
+mid-byte when `C` is 3, 6, or 12, so preserve the canonical bit carry as well.
+For finite capture, deliver at most `actual_bytes`. For streaming capture,
+continue until the caller stops the run. Run-length mode compresses capture
+memory inside the FPGA, but the upload path expands it back into this ordinary
+sample representation. Consumers therefore do not decode device-specific RLE
+bytes.
 
 ### 7.3 Read scheduling and overflow
 
@@ -417,8 +434,11 @@ Let `B = ceil(rate / 1000 * C / 8)` bytes/ms.
 
 | Link | Stream buffer | Queued stream data reads |
 | --- | --- | --- |
-| SuperSpeed | `round_up(10 * B, 1024)` | `min(64, ceil(40 * B / buffer_size))` |
-| High Speed | `round_up(20 * B, 512)` | `min(64, ceil(100 * B / buffer_size))` |
+| SuperSpeed | `round_up(ceil(B / 2), 1024)` | 4 |
+| High Speed | `round_up(ceil(B / 2), 512)` | 4 |
+
+Each queued transfer represents approximately 0.5 ms of signal time. Multiple outstanding reads
+maintain link utilization without making transfer completion the dominant live-view latency.
 
 For finite capture, use a 1 MiB data-read buffer. A stream-transfer timeout is
 `base + floor(base / 4)` ms, where `base = floor(total_queued_bytes / B)`;

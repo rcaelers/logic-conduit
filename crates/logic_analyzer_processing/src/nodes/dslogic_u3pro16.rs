@@ -5,8 +5,8 @@
 //! added without changing capture packet construction or graph integration.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -30,8 +30,13 @@ const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 const FPGA_DONE_TIMEOUT: Duration = Duration::from_secs(5);
 const FPGA_UPLOAD_SETTLE: Duration = Duration::from_millis(20);
 const STREAMING_DATA_RECEIVE_DEPTH: u8 = 4;
+/// Target half a millisecond of signal time per host-streaming transfer.
+/// Four queued transfers preserve USB throughput while keeping the written
+/// prefix close enough to the device for interactive waveform following.
+const STREAMING_TRANSFER_PARTS_PER_MS: u64 = 2;
 const FPGA_DIVIDER_CLOCK_HZ: u64 = 500_000_000;
 const FPGA_PRE_DIVIDER: u64 = 5;
+const ADC_CONTROL_ADDRESS: u16 = 0x48;
 const RUNTIME_MANUFACTURER: &str = "DreamSourceLab";
 const RUNTIME_PRODUCT: &str = "USB-based DSL Instrument v2";
 const RATES: &[u64] = &[
@@ -108,13 +113,18 @@ impl DsLogicCaptureSettings {
     }
 }
 
-fn settings_from_config(config: &LogicCaptureConfig) -> LogicAnalyzerResult<DsLogicCaptureSettings> {
+fn settings_from_config(
+    config: &LogicCaptureConfig,
+) -> LogicAnalyzerResult<DsLogicCaptureSettings> {
     if config.input_mask > u64::from(u16::MAX) {
         return Err(LogicAnalyzerError::InvalidSettings(
             "U3Pro16 has only 16 inputs".into(),
         ));
     }
-    if config.threshold_volts.is_some_and(|volts| !volts.is_finite()) {
+    if config
+        .threshold_volts
+        .is_some_and(|volts| !volts.is_finite())
+    {
         return Err(LogicAnalyzerError::InvalidSettings(
             "threshold must be finite".into(),
         ));
@@ -484,9 +494,8 @@ impl UsbTransport for RusbTransport {
             .expect("queued read exists");
         // SAFETY: completion was observed, so libusb no longer accesses the
         // transfer or its buffer.
-        let (status, actual_length) = unsafe {
-            ((*queued.transfer).status, (*queued.transfer).actual_length)
-        };
+        let (status, actual_length) =
+            unsafe { ((*queued.transfer).status, (*queued.transfer).actual_length) };
         unsafe { rusb::ffi::libusb_free_transfer(queued.transfer) };
         if status != rusb::constants::LIBUSB_TRANSFER_COMPLETED || actual_length < 0 {
             return Err(if status == rusb::constants::LIBUSB_TRANSFER_TIMED_OUT {
@@ -577,6 +586,7 @@ pub struct DsLogicU3Pro16<T: UsbTransport = RusbTransport> {
     header_receive_queued: bool,
     queued_data_receives: u8,
     queued_data_receive_bytes: usize,
+    device_block_carry: Vec<u8>,
     bytes_remaining: Option<usize>,
     bit_position: u64,
 }
@@ -668,6 +678,7 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
             header_receive_queued: false,
             queued_data_receives: 0,
             queued_data_receive_bytes: 0,
+            device_block_carry: Vec::new(),
             bytes_remaining: None,
             bit_position: 0,
         })
@@ -713,7 +724,9 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         // Some U3Pro16 firmware revisions leave the configured-status bit
         // clear after a successful upload. The logic-version register is the
         // authoritative compatibility check in that case.
-        let configuration_error = if let Err(status_error) = self.poll_status_for(0x40, FPGA_DONE_TIMEOUT) {
+        let configuration_error = if let Err(status_error) =
+            self.poll_status_for(0x40, FPGA_DONE_TIMEOUT)
+        {
             let logic_version = self.logic_version()?;
             if logic_version != 0x0e {
                 tracing::debug!(
@@ -907,6 +920,26 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         Ok(version)
     }
 
+    fn configure_internal_clock(&mut self) -> LogicAnalyzerResult<()> {
+        // The U3Pro16 sample clock is supplied by an ADF4360 synthesizer. Its
+        // configuration is volatile, so a freshly power-cycled device can
+        // configure and arm the FPGA successfully but never produce samples
+        // until this sequence has been written.
+        self.command_write(14, ADC_CONTROL_ADDRESS + 2, &[0x01])?;
+        for value in [0x01, 0x61, 0x00, 0x30] {
+            self.command_write(14, ADC_CONTROL_ADDRESS, &[value])?;
+        }
+        for value in [0x01, 0x40, 0xf1, 0x46] {
+            self.command_write(14, ADC_CONTROL_ADDRESS, &[value])?;
+        }
+        thread::sleep(Duration::from_millis(10));
+        for value in [0x01, 0x62, 0x3d, 0x40] {
+            self.command_write(14, ADC_CONTROL_ADDRESS, &[value])?;
+        }
+        tracing::debug!("configured U3Pro16 internal 500 MHz clock");
+        Ok(())
+    }
+
     fn poll_status(&mut self, required: u8) -> LogicAnalyzerResult<u8> {
         self.poll_status_for(required, STATUS_TIMEOUT)
     }
@@ -1068,10 +1101,7 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         build_settings_packet(self.transport.link_speed(), &self.settings, plan)
     }
 
-    fn configure_device_capture(
-        &mut self,
-        plan: DsLogicCapturePlan,
-    ) -> LogicAnalyzerResult<()> {
+    fn configure_device_capture(&mut self, plan: DsLogicCapturePlan) -> LogicAnalyzerResult<()> {
         self.ensure_fpga_configured()?;
         if self.ready_logic_version()? != 0x0e {
             return Err(LogicAnalyzerError::Protocol(
@@ -1084,6 +1114,9 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
                 "unsupported runtime firmware major version {}",
                 firmware[0]
             )));
+        }
+        if !self.settings.external_clock {
+            self.configure_internal_clock()?;
         }
         if let Some(volts) = self.settings.threshold_volts {
             if !volts.is_finite() {
@@ -1107,6 +1140,92 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         self.poll_status(0x80)?;
         self.prepared = true;
         Ok(())
+    }
+
+    fn poll_trigger_header(&mut self, plan: DsLogicCapturePlan) -> LogicAnalyzerResult<bool> {
+        if !self.header_pending {
+            return Ok(true);
+        }
+
+        let header = if self.header_receive_queued {
+            let timeout = if self.settings.mode == CaptureMode::Streaming {
+                Duration::ZERO
+            } else {
+                BULK_TIMEOUT
+            };
+            match self.transport.take_queued_bulk_read(1024, timeout) {
+                Ok(Some(header)) => header,
+                Ok(None) => {
+                    tracing::debug!(
+                        "queued trigger header was unavailable; falling back to a synchronous receive"
+                    );
+                    self.header_receive_queued = false;
+                    let mut header = vec![0; 1024];
+                    let read = match self.transport.bulk_read(BULK_IN, &mut header, BULK_TIMEOUT) {
+                        Ok(read) => read,
+                        Err(UsbError::Timeout) => return Ok(false),
+                        Err(UsbError::Other) => {
+                            return Err(LogicAnalyzerError::Transport(
+                                "trigger header read".into(),
+                            ));
+                        }
+                    };
+                    header.truncate(read);
+                    header
+                }
+                Err(UsbError::Timeout) => return Ok(false),
+                Err(UsbError::Other) => {
+                    return Err(LogicAnalyzerError::Transport(
+                        "queued trigger header read".into(),
+                    ));
+                }
+            }
+        } else {
+            let mut header = vec![0; 1024];
+            let read = match self.transport.bulk_read(BULK_IN, &mut header, BULK_TIMEOUT) {
+                Ok(read) => read,
+                Err(UsbError::Timeout) => return Ok(false),
+                Err(UsbError::Other) => {
+                    return Err(LogicAnalyzerError::Transport("trigger header read".into()));
+                }
+            };
+            header.truncate(read);
+            header
+        };
+
+        self.header_receive_queued = false;
+        if header.len() != 1024 {
+            return Err(LogicAnalyzerError::Protocol(format!(
+                "short trigger header: {}/1024 bytes",
+                header.len()
+            )));
+        }
+        tracing::debug!(
+            prefix = ?&header[..16],
+            "received U3Pro16 trigger header"
+        );
+        let translated = translate_trigger_header(&header, self.settings.mode, plan)?;
+        if self.settings.mode == CaptureMode::Finite {
+            let delivered_bytes = translated
+                .captured_samples
+                .checked_div(64)
+                .and_then(|n| n.checked_mul(u64::from(plan.channels)))
+                .and_then(|n| n.checked_mul(8))
+                .ok_or_else(|| {
+                    LogicAnalyzerError::Protocol("capture byte count overflow".into())
+                })?;
+            if delivered_bytes > plan.actual_bytes as u64 {
+                return Err(LogicAnalyzerError::Protocol(
+                    "trigger header requests more data than the capture buffer".into(),
+                ));
+            }
+            self.bytes_remaining = Some(usize::try_from(delivered_bytes).map_err(|_| {
+                LogicAnalyzerError::Protocol("capture is too large for this host".into())
+            })?);
+        }
+        self.trigger_header = Some(translated);
+        self.header_pending = false;
+        Ok(true)
     }
 
     fn check_streaming_integrity(&mut self) -> LogicAnalyzerResult<()> {
@@ -1175,7 +1294,10 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
                 }
             }
         }
-        tracing::debug!(header_receive_queued, "prepared U3Pro16 trigger header receive");
+        tracing::debug!(
+            header_receive_queued,
+            "prepared U3Pro16 trigger header receive"
+        );
         tracing::debug!(
             queued_data_receives,
             initial_data_receive_bytes,
@@ -1192,93 +1314,21 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
         self.header_receive_queued = header_receive_queued;
         self.queued_data_receives = queued_data_receives;
         self.queued_data_receive_bytes = initial_data_receive_bytes;
+        self.device_block_carry.clear();
         self.bytes_remaining = None;
         self.bit_position = 0;
         self.trigger_header = None;
         Ok(())
     }
+
     fn next_chunk(&mut self) -> LogicAnalyzerResult<Option<LogicChunk>> {
         if !self.active {
             return Err(LogicAnalyzerError::NotCapturing);
         }
         let plan = self.plan.ok_or(LogicAnalyzerError::NotCapturing)?;
-        if self.header_pending
-            && (self.settings.mode == CaptureMode::Finite || !self.header_receive_queued)
-        {
-            let header = if self.header_receive_queued {
-                match self.transport.take_queued_bulk_read(1024, BULK_TIMEOUT) {
-                    Ok(Some(header)) => header,
-                    Ok(None) => {
-                        tracing::debug!(
-                            "queued trigger header was unavailable; falling back to a synchronous receive"
-                        );
-                        self.header_receive_queued = false;
-                        let mut header = vec![0; 1024];
-                        let read = match self.transport.bulk_read(BULK_IN, &mut header, BULK_TIMEOUT) {
-                            Ok(read) => read,
-                            Err(UsbError::Timeout) => return Ok(Some(self.empty_chunk(plan))),
-                            Err(UsbError::Other) => {
-                                return Err(LogicAnalyzerError::Transport(
-                                    "trigger header read".into(),
-                                ));
-                            }
-                        };
-                        header.truncate(read);
-                        header
-                    }
-                    Err(UsbError::Timeout) => return Ok(Some(self.empty_chunk(plan))),
-                    Err(UsbError::Other) => {
-                        return Err(LogicAnalyzerError::Transport(
-                            "queued trigger header read".into(),
-                        ));
-                    }
-                }
-            } else {
-                let mut header = vec![0; 1024];
-                let read = match self.transport.bulk_read(BULK_IN, &mut header, BULK_TIMEOUT) {
-                    Ok(read) => read,
-                    Err(UsbError::Timeout) => return Ok(Some(self.empty_chunk(plan))),
-                    Err(UsbError::Other) => {
-                        return Err(LogicAnalyzerError::Transport(
-                            "trigger header read".into(),
-                        ));
-                    }
-                };
-                header.truncate(read);
-                header
-            };
-            self.header_receive_queued = false;
-            if header.len() != 1024 {
-                return Err(LogicAnalyzerError::Protocol(format!(
-                    "short trigger header: {}/1024 bytes",
-                    header.len()
-                )));
-            }
-            tracing::debug!(
-                prefix = ?&header[..16],
-                "received U3Pro16 trigger header"
-            );
-            let translated = translate_trigger_header(&header, self.settings.mode, plan)?;
-            if self.settings.mode == CaptureMode::Finite {
-                let delivered_bytes = translated
-                    .captured_samples
-                    .checked_div(64)
-                    .and_then(|n| n.checked_mul(u64::from(plan.channels)))
-                    .and_then(|n| n.checked_mul(8))
-                    .ok_or_else(|| {
-                        LogicAnalyzerError::Protocol("capture byte count overflow".into())
-                    })?;
-                if delivered_bytes > plan.actual_bytes as u64 {
-                    return Err(LogicAnalyzerError::Protocol(
-                        "trigger header requests more data than the capture buffer".into(),
-                    ));
-                }
-                self.bytes_remaining = Some(usize::try_from(delivered_bytes).map_err(|_| {
-                    LogicAnalyzerError::Protocol("capture is too large for this host".into())
-                })?);
-            }
-            self.trigger_header = Some(translated);
-            self.header_pending = false;
+        let header_ready = self.poll_trigger_header(plan)?;
+        if !header_ready && self.settings.mode == CaptureMode::Finite {
+            return Ok(Some(self.empty_chunk(plan)));
         }
         if let Some(0) = self.bytes_remaining {
             self.active = false;
@@ -1295,10 +1345,10 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
         };
         let mut consumed_queued_data = false;
         let mut data = if self.queued_data_receives > 0 {
-            match self.transport.take_queued_bulk_read(
-                self.queued_data_receive_bytes,
-                timeout,
-            ) {
+            match self
+                .transport
+                .take_queued_bulk_read(self.queued_data_receive_bytes, timeout)
+            {
                 Ok(Some(data)) => {
                     self.queued_data_receives -= 1;
                     consumed_queued_data = true;
@@ -1369,6 +1419,15 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
                 LogicAnalyzerError::Protocol("received more than requested capture data".into())
             })?;
         }
+        let data = canonicalize_cross_blocks(
+            &mut self.device_block_carry,
+            &data,
+            usize::from(plan.channels),
+        )?;
+        let read = data.len();
+        if read == 0 {
+            return Ok(Some(self.empty_chunk(plan)));
+        }
         let chunk = LogicChunk {
             data: Arc::from(data),
             bit_offset: 0,
@@ -1397,6 +1456,7 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
         self.header_receive_queued = false;
         self.queued_data_receives = 0;
         self.queued_data_receive_bytes = 0;
+        self.device_block_carry.clear();
         Ok(())
     }
 }
@@ -1419,6 +1479,80 @@ impl<T: UsbTransport> Drop for DsLogicU3Pro16<T> {
         let _ = self.stop_capture();
         let _ = self.transport.close();
     }
+}
+
+fn canonicalize_cross_blocks(
+    carry: &mut Vec<u8>,
+    incoming: &[u8],
+    channel_count: usize,
+) -> LogicAnalyzerResult<Vec<u8>> {
+    let block_bytes = channel_count
+        .checked_mul(8)
+        .ok_or_else(|| LogicAnalyzerError::Protocol("cross-data block size overflow".into()))?;
+    if channel_count == 0 || channel_count > 16 {
+        return Err(LogicAnalyzerError::Protocol(format!(
+            "invalid cross-data channel count {channel_count}"
+        )));
+    }
+    carry.extend_from_slice(incoming);
+    let complete_bytes = carry.len() / block_bytes * block_bytes;
+    if complete_bytes == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut output = Vec::with_capacity(complete_bytes);
+    let mut accumulator = 0_u64;
+    let mut accumulator_bits = 0_u32;
+    for block in carry[..complete_bytes].chunks_exact(block_bytes) {
+        for sample_byte in 0..8 {
+            let mut transposed_groups = [0_u64; 2];
+            for (group, transposed) in transposed_groups
+                .iter_mut()
+                .enumerate()
+                .take(channel_count.div_ceil(8))
+            {
+                let mut rows = 0_u64;
+                for row in 0..8 {
+                    let channel = group * 8 + row;
+                    if channel < channel_count {
+                        rows |= u64::from(block[channel * 8 + sample_byte]) << (row * 8);
+                    }
+                }
+                *transposed = transpose_8x8(rows);
+            }
+            for sample in 0..8 {
+                for (group, transposed) in transposed_groups
+                    .iter()
+                    .enumerate()
+                    .take(channel_count.div_ceil(8))
+                {
+                    let width = (channel_count - group * 8).min(8) as u32;
+                    let value = (transposed >> (sample * 8)) & ((1_u64 << width) - 1);
+                    accumulator |= value << accumulator_bits;
+                    accumulator_bits += width;
+                    while accumulator_bits >= 8 {
+                        output.push(accumulator as u8);
+                        accumulator >>= 8;
+                        accumulator_bits -= 8;
+                    }
+                }
+            }
+        }
+    }
+    debug_assert_eq!(accumulator_bits, 0);
+    let remainder = carry.split_off(complete_bytes);
+    *carry = remainder;
+    Ok(output)
+}
+
+#[inline]
+fn transpose_8x8(mut value: u64) -> u64 {
+    let mut swap = (value ^ (value >> 7)) & 0x00aa_00aa_00aa_00aa;
+    value ^= swap ^ (swap << 7);
+    swap = (value ^ (value >> 14)) & 0x0000_cccc_0000_cccc;
+    value ^= swap ^ (swap << 14);
+    swap = (value ^ (value >> 28)) & 0x0000_0000_f0f0_f0f0;
+    value ^ swap ^ (swap << 28)
 }
 
 fn translate_trigger_header(
@@ -1524,18 +1658,14 @@ fn build_plan(
     )?;
     let stream_buffer = match speed {
         LinkSpeed::Super => round_up_usize(
-            usize::try_from(bytes_per_ms.checked_mul(10).ok_or_else(|| {
-                LogicAnalyzerError::InvalidSettings("stream buffer overflow".into())
-            })?)
+            usize::try_from(bytes_per_ms.div_ceil(STREAMING_TRANSFER_PARTS_PER_MS))
             .map_err(|_| {
                 LogicAnalyzerError::InvalidSettings("stream buffer is too large".into())
             })?,
             1024,
         ),
         LinkSpeed::High => round_up_usize(
-            usize::try_from(bytes_per_ms.checked_mul(20).ok_or_else(|| {
-                LogicAnalyzerError::InvalidSettings("stream buffer overflow".into())
-            })?)
+            usize::try_from(bytes_per_ms.div_ceil(STREAMING_TRANSFER_PARTS_PER_MS))
             .map_err(|_| {
                 LogicAnalyzerError::InvalidSettings("stream buffer is too large".into())
             })?,
@@ -1715,13 +1845,7 @@ fn trigger_words(
         }
     }
     let stage = stage.unwrap();
-    (
-        mask,
-        value,
-        edge,
-        trigger_logic_word(stage),
-        stage.count,
-    )
+    (mask, value, edge, trigger_logic_word(stage), stage.count)
 }
 fn trigger_logic_word(stage: &LogicTriggerStage) -> u16 {
     let logic = match stage.logic {
@@ -1748,22 +1872,20 @@ fn put32(buffer: &mut [u8], offset: usize, value: u32) {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
     use serde::Deserialize;
 
     use signal_processing::{
-        CaptureAcquisitionPhase, CaptureCursorItem, CaptureEvent, CaptureFailureKind,
-        CaptureQueueReceiveError, CaptureSessionId, CaptureStoreCursor,
-        CaptureStoreDescriptor, NativeCaptureStore, NativeCaptureStoreConfig,
-        bounded_capture_event_queue,
+        CaptureAcquisitionPhase, CaptureCursorItem, CaptureEvent, CaptureFailureKind, CaptureIndex,
+        CaptureQueueReceiveError, CaptureSessionId, CaptureStoreCursor, CaptureStoreDescriptor,
+        NativeCaptureStore, NativeCaptureStoreConfig, bounded_capture_event_queue,
     };
 
     use crate::live_capture::{
-        AcquisitionContext, DsLogicU3Pro16BufferedProvider,
-        DsLogicU3Pro16StreamingProvider,
+        AcquisitionContext, DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider,
     };
 
     use super::*;
@@ -1864,8 +1986,28 @@ mod tests {
         u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
     }
 
+    fn encode_cross_blocks(canonical: &[u8], channel_count: usize) -> Vec<u8> {
+        let bit_count = canonical.len() * 8;
+        assert!(bit_count.is_multiple_of(channel_count * 64));
+        let sample_count = bit_count / channel_count;
+        let mut encoded = vec![0_u8; canonical.len()];
+        for sample in 0..sample_count {
+            for channel in 0..channel_count {
+                let canonical_bit = sample * channel_count + channel;
+                if canonical[canonical_bit / 8] & (1 << (canonical_bit % 8)) != 0 {
+                    let block = sample / 64;
+                    let block_sample = sample % 64;
+                    let encoded_bit = block * channel_count * 64 + channel * 64 + block_sample;
+                    encoded[encoded_bit / 8] |= 1 << (encoded_bit % 8);
+                }
+            }
+        }
+        encoded
+    }
+
     struct FixtureTransport {
         control_reads: VecDeque<Vec<u8>>,
+        control_writes: Arc<Mutex<Vec<Vec<u8>>>>,
         bulk_reads: VecDeque<Vec<u8>>,
         bulk_writes: Arc<Mutex<Vec<Vec<u8>>>>,
         idle_stream: bool,
@@ -1889,10 +2031,12 @@ mod tests {
             const UNALIGNED_TRANSFER_BYTES: usize = 257;
 
             assert!(data.len() > UNALIGNED_TRANSFER_BYTES);
+            let data = encode_cross_blocks(&data, 3);
             let bulk_writes = Arc::new(Mutex::new(Vec::new()));
             (
                 Self {
                     control_reads: Self::control_reads(),
+                    control_writes: Arc::new(Mutex::new(Vec::new())),
                     bulk_reads: VecDeque::from([
                         header,
                         data[..UNALIGNED_TRANSFER_BYTES].to_vec(),
@@ -1906,15 +2050,14 @@ mod tests {
             )
         }
 
-        fn overflowing_stream(
-            header: Vec<u8>,
-        ) -> (Self, Arc<Mutex<Vec<Vec<u8>>>>) {
+        fn overflowing_stream(header: Vec<u8>) -> (Self, Arc<Mutex<Vec<Vec<u8>>>>) {
             let bulk_writes = Arc::new(Mutex::new(Vec::new()));
             let mut control_reads = Self::control_reads();
             control_reads.push_back(vec![0x10]);
             (
                 Self {
                     control_reads,
+                    control_writes: Arc::new(Mutex::new(Vec::new())),
                     bulk_reads: VecDeque::from([header]),
                     bulk_writes: Arc::clone(&bulk_writes),
                     idle_stream: false,
@@ -1927,6 +2070,7 @@ mod tests {
         fn idle_stream(header: Vec<u8>) -> Self {
             Self {
                 control_reads: Self::control_reads(),
+                control_writes: Arc::new(Mutex::new(Vec::new())),
                 bulk_reads: VecDeque::from([header]),
                 bulk_writes: Arc::new(Mutex::new(Vec::new())),
                 idle_stream: true,
@@ -1949,6 +2093,7 @@ mod tests {
             data: &[u8],
             _timeout: Duration,
         ) -> Result<usize, UsbError> {
+            self.control_writes.lock().unwrap().push(data.to_vec());
             Ok(data.len())
         }
 
@@ -2223,9 +2368,12 @@ mod tests {
         assert_eq!(get16(&packet, 176), expected.trigger_edge0);
         assert_eq!(get16(&packet, 240), expected.trigger_logic0);
 
-        let header = translate_trigger_header(&fixture_header(&fixture), CaptureMode::Finite, plan)
-            .unwrap();
-        assert_eq!(header.trigger_sample(), Some(u64::from(fixture.trigger_sample)));
+        let header =
+            translate_trigger_header(&fixture_header(&fixture), CaptureMode::Finite, plan).unwrap();
+        assert_eq!(
+            header.trigger_sample(),
+            Some(u64::from(fixture.trigger_sample))
+        );
         assert_eq!(header.captured_samples(), fixture.sample_limit);
         assert_eq!(header.remaining_samples(), fixture.remaining_samples);
         assert_eq!(header.ram_start(), fixture.ram_start);
@@ -2271,9 +2419,77 @@ mod tests {
     }
 
     #[test]
+    fn cross_data_blocks_are_transposed_and_preserved_across_usb_boundaries() {
+        let channel_count = 3;
+        let mut canonical = vec![0_u8; channel_count * 8 * 2];
+        for sample in 0..128 {
+            for channel in 0..channel_count {
+                if (sample + channel * 3).is_multiple_of(5 + channel) {
+                    let bit = sample * channel_count + channel;
+                    canonical[bit / 8] |= 1 << (bit % 8);
+                }
+            }
+        }
+        let encoded = encode_cross_blocks(&canonical, channel_count);
+        let mut carry = Vec::new();
+
+        let first = canonicalize_cross_blocks(&mut carry, &encoded[..17], channel_count).unwrap();
+        let second = canonicalize_cross_blocks(&mut carry, &encoded[17..], channel_count).unwrap();
+
+        assert!(first.is_empty());
+        assert!(carry.is_empty());
+        assert_eq!(second, canonical);
+    }
+
+    #[test]
+    fn internal_clock_configuration_matches_the_u3pro16_500_mhz_sequence() {
+        let control_writes = Arc::new(Mutex::new(Vec::new()));
+        let transport = FixtureTransport {
+            control_reads: VecDeque::new(),
+            control_writes: Arc::clone(&control_writes),
+            bulk_reads: VecDeque::new(),
+            bulk_writes: Arc::new(Mutex::new(Vec::new())),
+            idle_stream: false,
+            short_bulk_write: false,
+        };
+        let mut analyzer = DsLogicU3Pro16::new(transport).unwrap();
+
+        analyzer.configure_internal_clock().unwrap();
+
+        let writes = control_writes.lock().unwrap();
+        let register_writes = writes
+            .iter()
+            .map(|payload| {
+                assert_eq!(payload[0], 14);
+                assert_eq!(payload[3], 1);
+                (u16::from_le_bytes([payload[1], payload[2]]), payload[4])
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            register_writes,
+            vec![
+                (0x4a, 0x01),
+                (0x48, 0x01),
+                (0x48, 0x61),
+                (0x48, 0x00),
+                (0x48, 0x30),
+                (0x48, 0x01),
+                (0x48, 0x40),
+                (0x48, 0xf1),
+                (0x48, 0x46),
+                (0x48, 0x01),
+                (0x48, 0x62),
+                (0x48, 0x3d),
+                (0x48, 0x40),
+            ]
+        );
+    }
+
+    #[test]
     fn fpga_configuration_rejects_a_short_bitstream_upload() {
         let transport = FixtureTransport {
             control_reads: VecDeque::from([vec![0x00], vec![0x20]]),
+            control_writes: Arc::new(Mutex::new(Vec::new())),
             bulk_reads: VecDeque::new(),
             bulk_writes: Arc::new(Mutex::new(Vec::new())),
             idle_stream: false,
@@ -2292,15 +2508,12 @@ mod tests {
 
     #[test]
     fn fpga_configuration_allows_delayed_done_after_gpif_completion() {
-        let mut control_reads = VecDeque::from([
-            vec![0x00],
-            vec![0x20],
-            vec![0x80],
-        ]);
+        let mut control_reads = VecDeque::from([vec![0x00], vec![0x20], vec![0x80]]);
         control_reads.extend((0..55).map(|_| vec![0xab]));
         control_reads.push_back(vec![0xeb]);
         let transport = FixtureTransport {
             control_reads,
+            control_writes: Arc::new(Mutex::new(Vec::new())),
             bulk_reads: VecDeque::new(),
             bulk_writes: Arc::new(Mutex::new(Vec::new())),
             idle_stream: false,
@@ -2322,6 +2535,7 @@ mod tests {
                 vec![0, 0, 0, 0, 0],
                 vec![0, 0, 0, 0, 0x0e],
             ]),
+            control_writes: Arc::new(Mutex::new(Vec::new())),
             bulk_reads: VecDeque::new(),
             bulk_writes: Arc::clone(&bulk_writes),
             idle_stream: false,
@@ -2376,13 +2590,31 @@ mod tests {
     }
 
     #[test]
+    fn streaming_polls_the_prequeued_trigger_header() {
+        let fixture = packet_fixture();
+        let mut config = fixture_config(&fixture);
+        config.mode = CaptureMode::Streaming;
+        let data = (0..768).map(|index| (index * 37) as u8).collect::<Vec<_>>();
+        let transport = PrequeuedHeaderTransport::new(fixture_header(&fixture), data);
+        let mut analyzer = DsLogicU3Pro16::new(transport).unwrap();
+
+        analyzer.configure_capture(&config).unwrap();
+        analyzer.start_capture().unwrap();
+        analyzer.next_chunk().unwrap();
+
+        assert_eq!(
+            analyzer.take_trigger_header().and_then(|header| header.trigger_sample()),
+            Some(u64::from(fixture.trigger_sample))
+        );
+    }
+
+    #[test]
     fn buffered_provider_uploads_fixture_losslessly_and_publishes_actual_trigger() {
         let fixture = packet_fixture();
         let config = fixture_config(&fixture);
         let data = (0..768).map(|index| (index * 37) as u8).collect::<Vec<_>>();
         let expected_data = data.clone();
-        let (transport, settings_writes) =
-            FixtureTransport::new(fixture_header(&fixture), data);
+        let (transport, settings_writes) = FixtureTransport::new(fixture_header(&fixture), data);
         let analyzer = DsLogicU3Pro16::new(transport).unwrap();
         let channels = vec![
             signal_processing::CaptureChannelId::new("u3pro16:input:0"),
@@ -2423,7 +2655,8 @@ mod tests {
                     for relative_sample in 0..chunk.sample_count() {
                         for channel in 0..3 {
                             let source_bit = ((sample + relative_sample) * 3) as usize + channel;
-                            let expected = expected_data[source_bit / 8] & (1 << (source_bit % 8)) != 0;
+                            let expected =
+                                expected_data[source_bit / 8] & (1 << (source_bit % 8)) != 0;
                             assert_eq!(
                                 chunk.packed_level(relative_sample, channel),
                                 Some(expected),
@@ -2466,7 +2699,7 @@ mod tests {
         config.mode = CaptureMode::Streaming;
         let data = (0..768).map(|index| (index * 37) as u8).collect::<Vec<_>>();
         let expected_data = data.clone();
-        let (transport, _) = FixtureTransport::new(fixture_header(&fixture), data);
+        let transport = PrequeuedHeaderTransport::new(fixture_header(&fixture), data);
         let analyzer = DsLogicU3Pro16::new(transport).unwrap();
         let channels = vec![
             signal_processing::CaptureChannelId::new("u3pro16:input:0"),
@@ -2523,12 +2756,13 @@ mod tests {
         assert_eq!(sample, fixture.sample_limit);
 
         let mut phases = Vec::new();
+        let mut trigger_sample = None;
         loop {
             match event_reader.try_recv() {
                 Ok(CaptureEvent::Status(status)) => phases.push(status.phase),
+                Ok(CaptureEvent::Triggered { sample, .. }) => trigger_sample = Some(sample),
                 Ok(
-                    CaptureEvent::Triggered { .. }
-                    | CaptureEvent::Progress { .. }
+                    CaptureEvent::Progress { .. }
                     | CaptureEvent::Health { .. }
                     | CaptureEvent::Plan { .. },
                 ) => {}
@@ -2538,6 +2772,7 @@ mod tests {
                 Err(CaptureQueueReceiveError::Timeout) => unreachable!(),
             }
         }
+        assert_eq!(trigger_sample, Some(u64::from(fixture.trigger_sample)));
         assert!(phases.contains(&CaptureAcquisitionPhase::ReceivingLiveData));
     }
 
@@ -2574,11 +2809,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let session_id = CaptureSessionId::new(0x8319);
         let descriptor = CaptureStoreDescriptor::new(session_id, channels).unwrap();
-        let (_store, writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
-            directory.path(),
-            descriptor,
-        ))
-        .unwrap();
+        let (_store, writer) =
+            NativeCaptureStore::create(NativeCaptureStoreConfig::new(directory.path(), descriptor))
+                .unwrap();
         let (events, event_reader) = bounded_capture_event_queue(64).unwrap();
         let context = AcquisitionContext::new(session_id, Box::new(writer), Box::new(events));
         let mut acquisition = provider.prepare(context).unwrap();
@@ -2586,7 +2819,10 @@ mod tests {
 
         let error = acquisition.join().unwrap_err();
 
-        assert!(matches!(error, crate::live_capture::AcquisitionError::Integrity(_)));
+        assert!(matches!(
+            error,
+            crate::live_capture::AcquisitionError::Integrity(_)
+        ));
         let mut failure = None;
         loop {
             match event_reader.try_recv() {
@@ -2618,11 +2854,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let session_id = CaptureSessionId::new(0x8318);
         let descriptor = CaptureStoreDescriptor::new(session_id, channels).unwrap();
-        let (store, writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
-            directory.path(),
-            descriptor,
-        ))
-        .unwrap();
+        let (store, writer) =
+            NativeCaptureStore::create(NativeCaptureStoreConfig::new(directory.path(), descriptor))
+                .unwrap();
         let (events, _event_reader) = bounded_capture_event_queue(64).unwrap();
         let context = AcquisitionContext::new(session_id, Box::new(writer), Box::new(events));
         let mut acquisition = provider.prepare(context).unwrap();
@@ -2673,7 +2907,7 @@ mod tests {
     #[test]
     #[ignore = "release-mode sustained-ingest benchmark; run with --release --ignored benchmark_streaming_ingest"]
     fn benchmark_streaming_ingest_store_summary_and_consumer_lag() {
-        use signal_processing::live_capture_waveform::NativeGrowingCaptureIndex;
+        use signal_processing::NativeGrowingCaptureIndex;
 
         for (channels_count, rate_hz, samples) in [
             (3_usize, 1_000_000_000_u64, 32_000_000_u64),
@@ -2693,9 +2927,7 @@ mod tests {
                 DsLogicU3Pro16::new(GeneratedStreamingTransport::new(data_bytes)).unwrap();
             let channels = (0..channels_count)
                 .map(|channel| {
-                    signal_processing::CaptureChannelId::new(format!(
-                        "u3pro16:input:{channel}"
-                    ))
+                    signal_processing::CaptureChannelId::new(format!("u3pro16:input:{channel}"))
                 })
                 .collect::<Vec<_>>();
             let provider =
@@ -2703,9 +2935,10 @@ mod tests {
             let directory = tempfile::tempdir().unwrap();
             let session_id = CaptureSessionId::new(0x9000 + channels_count as u128);
             let descriptor = CaptureStoreDescriptor::new(session_id, channels.clone()).unwrap();
-            let (store, writer) = NativeCaptureStore::create(
-                NativeCaptureStoreConfig::new(directory.path(), descriptor),
-            )
+            let (store, writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
+                directory.path(),
+                descriptor,
+            ))
             .unwrap();
             let (index, index_worker) = NativeGrowingCaptureIndex::spawn(
                 store.clone(),
@@ -2716,17 +2949,37 @@ mod tests {
                     .collect(),
             )
             .unwrap();
+            let viewer_stop = Arc::new(AtomicBool::new(false));
+            let viewer_stop_worker = Arc::clone(&viewer_stop);
+            let mut viewer_index = index.clone();
+            let viewer_channels = (0..channels_count).collect::<Vec<_>>();
+            let viewer = std::thread::spawn(move || {
+                while !viewer_stop_worker.load(Ordering::Relaxed) {
+                    let total_samples = viewer_index.current_metadata().total_samples;
+                    if total_samples > 0 {
+                        let _ = viewer_index.sampled_window(
+                            &viewer_channels,
+                            0,
+                            total_samples,
+                            1_920,
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(8));
+                }
+            });
             let analyzed_samples = Arc::new(AtomicU64::new(0));
             let analyzed_samples_worker = Arc::clone(&analyzed_samples);
             let mut slow_cursor = store.open_cursor().unwrap();
-            let slow_consumer = std::thread::spawn(move || loop {
-                match slow_cursor.wait_next(Duration::from_millis(50)).unwrap() {
-                    CaptureCursorItem::Chunk(chunk) => {
-                        analyzed_samples_worker.store(chunk.end_sample(), Ordering::Relaxed);
-                        std::thread::sleep(Duration::from_millis(1));
+            let slow_consumer = std::thread::spawn(move || {
+                loop {
+                    match slow_cursor.wait_next(Duration::from_millis(50)).unwrap() {
+                        CaptureCursorItem::Chunk(chunk) => {
+                            analyzed_samples_worker.store(chunk.end_sample(), Ordering::Relaxed);
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        CaptureCursorItem::Pending => {}
+                        CaptureCursorItem::End => break,
                     }
-                    CaptureCursorItem::Pending => {}
-                    CaptureCursorItem::End => break,
                 }
             });
             let (events, _event_reader) = bounded_capture_event_queue(4096).unwrap();
@@ -2738,6 +2991,9 @@ mod tests {
             let outcome = acquisition.join().unwrap();
             let acquisition_elapsed = started.elapsed();
             let lag_at_finish = samples.saturating_sub(analyzed_samples.load(Ordering::Relaxed));
+            let summary_lag_at_finish = samples.saturating_sub(index.current_metadata().total_samples);
+            viewer_stop.store(true, Ordering::Relaxed);
+            viewer.join().unwrap();
             let summary_started = Instant::now();
             index_worker.join().unwrap();
             slow_consumer.join().unwrap();
@@ -2746,7 +3002,7 @@ mod tests {
 
             let mib = data_bytes as f64 / (1024.0 * 1024.0);
             eprintln!(
-                "u3-stream channels={channels_count} rate_hz={rate_hz} samples={samples} data_mib={mib:.1} acquisition_s={:.3} ingest_mib_s={:.1} optional_consumer_lag_samples={lag_at_finish} summary_catchup_s={:.3} resident_summary_records={}",
+                "u3-stream channels={channels_count} rate_hz={rate_hz} samples={samples} data_mib={mib:.1} acquisition_s={:.3} ingest_mib_s={:.1} optional_consumer_lag_samples={lag_at_finish} summary_lag_samples={summary_lag_at_finish} summary_catchup_s={:.3} resident_summary_records={}",
                 acquisition_elapsed.as_secs_f64(),
                 mib / acquisition_elapsed.as_secs_f64(),
                 catch_up_elapsed.as_secs_f64(),

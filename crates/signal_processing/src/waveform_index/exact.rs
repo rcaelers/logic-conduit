@@ -807,7 +807,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_block_cache_serves_reopened_exact_windows() -> Result<()> {
+    fn archive_capture_store_serves_reopened_exact_windows() -> Result<()> {
         let samples_per_block = 4_096_u64;
         let total_samples = samples_per_block * 2;
         let blocks = single_channel_blocks_from_fn(total_samples, samples_per_block, |sample| {
@@ -855,7 +855,7 @@ mod tests {
     }
 
     #[test]
-    fn external_packed_stream_does_not_fill_sparse_raw_cache() -> Result<()> {
+    fn external_packed_stream_does_not_fill_sparse_archive_store() -> Result<()> {
         let samples_per_block = 4_096_u64;
         let source = MemoryCaptureDataSource::new(
             samples_per_block,

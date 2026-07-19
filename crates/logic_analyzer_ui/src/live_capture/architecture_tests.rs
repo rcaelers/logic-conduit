@@ -29,7 +29,7 @@ fn generic_capture_components_contain_no_provider_or_model_contracts() {
         ),
         (
             "growing waveform contract",
-            include_str!("../../../signal_processing/src/live_capture_waveform/mod.rs"),
+            include_str!("../../../signal_processing/src/waveform_index/mod.rs"),
         ),
         (
             "viewer",

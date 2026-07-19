@@ -87,6 +87,7 @@ pub(crate) struct GrowingCaptureView {
     pub(crate) paused: bool,
     pub(crate) follow_newest: bool,
     pub(crate) complete: bool,
+    pub(crate) planned_span_us: Option<f64>,
 }
 
 impl Default for LogicAnalyzerViewer {
@@ -337,6 +338,17 @@ impl LogicAnalyzerViewer {
     /// index construction remain owned by the host; this widget only follows
     /// published generations and samples visible windows.
     pub fn set_growing_capture(&mut self, sampler: Box<dyn CaptureIndex>) {
+        self.set_growing_capture_with_planned_span(sampler, None);
+    }
+
+    /// Attaches a growing waveform while preserving a host-provided capture
+    /// window. The planned span is generic presentation metadata: it may be
+    /// longer than the samples committed so far, leaving future time visible.
+    pub fn set_growing_capture_with_planned_span(
+        &mut self,
+        sampler: Box<dyn CaptureIndex>,
+        planned_span_us: Option<f64>,
+    ) {
         let metadata = sampler.current_metadata();
         let display_name = sampler.display_name();
         let generation = sampler.generation();
@@ -358,7 +370,9 @@ impl LogicAnalyzerViewer {
         self.drag_cursor = None;
         self.hover_measurement = None;
         let duration_us = metadata.duration_us();
-        self.visible_span_us = DEFAULT_VISIBLE_SPAN_US.min(duration_us.max(1.0));
+        let planned_span_us = planned_span_us.filter(|span| span.is_finite() && *span > 0.0);
+        self.visible_span_us =
+            planned_span_us.unwrap_or_else(|| DEFAULT_VISIBLE_SPAN_US.min(duration_us.max(1.0)));
         self.visible_start_us = (duration_us - self.visible_span_us).max(0.0);
         self.fit_to_capture = false;
         self.growing_capture = Some(GrowingCaptureView {
@@ -366,6 +380,7 @@ impl LogicAnalyzerViewer {
             paused: false,
             follow_newest: true,
             complete,
+            planned_span_us,
         });
         self.status = if complete {
             "Captured waveform ready".into()
@@ -427,10 +442,15 @@ impl LogicAnalyzerViewer {
     }
 
     fn refresh_growing_capture(&mut self) {
-        let Some((paused, follow_newest, known_generation)) = self
-            .growing_capture
-            .as_ref()
-            .map(|view| (view.paused, view.follow_newest, view.generation))
+        let Some((paused, follow_newest, known_generation, planned_span_us)) =
+            self.growing_capture.as_ref().map(|view| {
+                (
+                    view.paused,
+                    view.follow_newest,
+                    view.generation,
+                    view.planned_span_us,
+                )
+            })
         else {
             return;
         };
@@ -456,7 +476,8 @@ impl LogicAnalyzerViewer {
             capture.duration_us = duration_us;
         }
         if follow_newest {
-            self.visible_span_us = self.visible_span_us.min(duration_us.max(1.0));
+            self.visible_span_us =
+                planned_span_us.unwrap_or_else(|| self.visible_span_us.min(duration_us.max(1.0)));
             self.visible_start_us = (duration_us - self.visible_span_us).max(0.0);
         } else {
             self.clamp_to_capture_duration();
@@ -566,7 +587,7 @@ impl LogicAnalyzerViewer {
             .is_some_and(|capture| !capture.complete)
         {
             ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(50));
+                .request_repaint_after(std::time::Duration::from_millis(8));
         }
         if self.capture_path.is_some() && self.capture_info.is_none() {
             ui.ctx()
@@ -928,5 +949,29 @@ mod tests {
 
         viewer.leave_live_edge();
         assert!(!viewer.follows_newest());
+    }
+
+    #[test]
+    fn planned_live_span_stays_visible_while_samples_arrive() {
+        let total_samples = Arc::new(AtomicU64::new(10_000));
+        let generation = Arc::new(AtomicU64::new(1));
+        let mut viewer = LogicAnalyzerViewer::new();
+        viewer.set_growing_capture_with_planned_span(
+            Box::new(growing_test_index(
+                Arc::clone(&total_samples),
+                Arc::clone(&generation),
+            )),
+            Some(1_000_000.0),
+        );
+
+        assert_eq!(viewer.visible_span_us, 1_000_000.0);
+        assert_eq!(viewer.visible_start_us, 0.0);
+
+        total_samples.store(20_000, Ordering::Relaxed);
+        generation.store(2, Ordering::Relaxed);
+        viewer.refresh_growing_capture();
+
+        assert_eq!(viewer.visible_span_us, 1_000_000.0);
+        assert_eq!(viewer.visible_start_us, 0.0);
     }
 }

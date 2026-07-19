@@ -25,8 +25,19 @@ impl LogicAnalyzerViewer {
             return;
         }
         let samplerate_hz = capture.header.samplerate_hz;
-        let (visible_start, visible_end) =
-            sampled_visible_range(capture, self.visible_start_us, self.visible_span_us);
+        let sampling_extent = self
+            .growing_capture
+            .as_ref()
+            .and_then(|view| view.planned_span_us)
+            .map(|span_us| us_to_sample(span_us, samplerate_hz))
+            .unwrap_or(capture.header.total_samples)
+            .max(capture.header.total_samples);
+        let (visible_start, visible_end) = sampled_visible_range(
+            capture,
+            self.visible_start_us,
+            self.visible_span_us,
+            sampling_extent,
+        );
         let target_points = layout.wave_rect.width().max(1.0).round() as usize;
 
         let key = (visible_start, visible_end, target_points);
@@ -449,13 +460,26 @@ pub(crate) fn visible_sample_range(
     (visible_start, visible_end)
 }
 
-fn sampled_visible_range(capture: &CaptureInfo, start_us: f64, span_us: f64) -> (u64, u64) {
-    let (visible_start, visible_end) = visible_sample_range(capture, start_us, span_us);
+fn sampled_visible_range(
+    capture: &CaptureInfo,
+    start_us: f64,
+    span_us: f64,
+    sampling_extent: u64,
+) -> (u64, u64) {
+    let samplerate_hz = capture.header.samplerate_hz;
+    let sampling_extent = sampling_extent.max(1);
+    let (visible_start, visible_end) = if sampling_extent == capture.header.total_samples {
+        visible_sample_range(capture, start_us, span_us)
+    } else {
+        let visible_start =
+            us_to_sample(start_us, samplerate_hz).min(sampling_extent.saturating_sub(1));
+        let visible_end = us_to_sample(start_us + span_us, samplerate_hz)
+            .clamp(visible_start + 1, sampling_extent);
+        (visible_start, visible_end)
+    };
     (
         visible_start.saturating_sub(1),
-        visible_end
-            .saturating_add(1)
-            .min(capture.header.total_samples),
+        visible_end.saturating_add(1).min(sampling_extent),
     )
 }
 
@@ -487,13 +511,25 @@ mod tests {
     fn sampled_visible_range_adds_boundary_guard_samples() {
         let capture = capture(1_000);
         assert_eq!(visible_sample_range(&capture, 0.010, 0.022), (10, 32));
-        assert_eq!(sampled_visible_range(&capture, 0.010, 0.022), (9, 33));
+        assert_eq!(
+            sampled_visible_range(&capture, 0.010, 0.022, 1_000),
+            (9, 33)
+        );
     }
 
     #[test]
     fn sampled_visible_range_clamps_at_capture_edges() {
         let capture = capture(100);
-        assert_eq!(sampled_visible_range(&capture, 0.0, 0.010), (0, 11));
-        assert_eq!(sampled_visible_range(&capture, 0.095, 0.010), (94, 100));
+        assert_eq!(sampled_visible_range(&capture, 0.0, 0.010, 100), (0, 11));
+        assert_eq!(
+            sampled_visible_range(&capture, 0.095, 0.010, 100),
+            (94, 100)
+        );
+    }
+
+    #[test]
+    fn sampled_visible_range_preserves_a_planned_future_extent() {
+        let capture = capture(100);
+        assert_eq!(sampled_visible_range(&capture, 0.0, 0.500, 1_000), (0, 501));
     }
 }
