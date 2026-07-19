@@ -31,12 +31,13 @@ The UI-independent live-capture foundation is also present:
 - generic capture-policy contracts validate immediate or triggered start, finite or manual
   completion, trigger placement and timeout action, requested retention, and provider-advertised
   combinations before acquisition begins;
-- capacity planning reports the worst-case packed input rate, finite capture size, retained
-  duration, configured or available storage limit, sustainability, and early warnings without
-  assuming compression;
-- a pin-aware retention tracker computes a monotonic safe-reclamation boundary for pre-trigger,
-  post-trigger, recent-duration, and recent-byte policies and rejects any attempted reclamation
-  beyond a required consumer position;
+- a capture session plan carries the finite capture window directly in samples when the source
+  knows it, so acquisition and presentation share one exact timeline extent without deriving it
+  from a storage estimate;
+- within the active capture, a pin-aware retention tracker computes a monotonic safe-reclamation
+  boundary for pre-trigger, post-trigger, recent-duration, and recent-byte policies and rejects
+  any attempted reclamation beyond a required consumer position; it does not retain prior
+  captures;
 - the same contract defines the portable Ignore, Low, High, Rising, Falling, and Either simple
   conditions and publishes an exact raw trigger sample as a generic capture event;
 - `CaptureChunkWriter` and `CaptureEventPublisher` are the generic acquisition boundaries, with

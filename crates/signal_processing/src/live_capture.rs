@@ -344,8 +344,7 @@ pub struct CaptureHealth {
     pub write_bytes_per_second: Option<u64>,
     pub buffer_used_bytes: Option<u64>,
     pub buffer_capacity_bytes: Option<u64>,
-    pub available_storage_bytes: Option<u64>,
-    pub retained_samples: Option<u64>,
+    pub stored_samples: Option<u64>,
     pub summary_lag_samples: Option<u64>,
     pub graph_lag_samples: Option<u64>,
 }

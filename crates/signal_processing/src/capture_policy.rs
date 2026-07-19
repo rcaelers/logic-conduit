@@ -551,30 +551,13 @@ pub enum CaptureStartMode {
     CaptureNow,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CaptureCapacityRequest {
-    pub sample_rate_hz: u64,
-    pub channel_count: usize,
-    pub capture_window_samples: Option<u64>,
-    pub storage_budget_bytes: Option<u64>,
-    pub available_storage_bytes: Option<u64>,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct CaptureCapacityEstimate {
-    pub worst_case_bytes_per_second: u64,
-    pub finite_capture_bytes: Option<u64>,
-    pub retained_duration: Option<Duration>,
-    pub sustainable: Option<bool>,
-    pub warnings: Vec<String>,
-}
-
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct CaptureSessionPlan {
     pub sample_rate_hz: u64,
     pub channel_count: usize,
+    #[serde(default)]
+    pub capture_window_samples: Option<u64>,
     pub policy: EffectiveCapturePolicy,
-    pub capacity: CaptureCapacityEstimate,
 }
 
 impl CaptureSessionPlan {
@@ -604,72 +587,6 @@ impl CaptureSessionPlan {
         }
         self
     }
-}
-
-pub fn estimate_capture_capacity(
-    request: CaptureCapacityRequest,
-    policy: &CapturePolicy,
-) -> Result<CaptureCapacityEstimate, CapturePolicyError> {
-    if request.sample_rate_hz == 0 || request.channel_count == 0 {
-        return Err(CapturePolicyError::Invalid(
-            "capacity estimation requires a non-zero rate and channel count".into(),
-        ));
-    }
-    let bits_per_second = u128::from(request.sample_rate_hz)
-        .checked_mul(request.channel_count as u128)
-        .ok_or_else(|| CapturePolicyError::Invalid("input-rate calculation overflow".into()))?;
-    let worst_case_bytes_per_second = u64::try_from(bits_per_second.div_ceil(8))
-        .map_err(|_| CapturePolicyError::Invalid("input rate is too large".into()))?;
-    let finite_capture_bytes = request
-        .capture_window_samples
-        .map(|samples| packed_bytes(samples, request.channel_count))
-        .transpose()?;
-    let retained_duration = retained_duration(
-        policy.retention_after_origin,
-        request.sample_rate_hz,
-        worst_case_bytes_per_second,
-    );
-    let required_bytes = match policy.retention_after_origin {
-        RetentionPolicy::Everything | RetentionPolicy::DeviceManaged => finite_capture_bytes,
-        RetentionPolicy::RecentDuration(duration) => Some(
-            duration_to_bytes(duration, worst_case_bytes_per_second)
-                .ok_or_else(|| CapturePolicyError::Invalid("retention size overflows".into()))?,
-        ),
-        RetentionPolicy::RecentBytes(bytes) => Some(bytes),
-    };
-    let limiting_budget = match (
-        request.storage_budget_bytes,
-        request.available_storage_bytes,
-    ) {
-        (Some(budget), Some(available)) => Some(budget.min(available)),
-        (Some(budget), None) => Some(budget),
-        (None, Some(available)) => Some(available),
-        (None, None) => None,
-    };
-    let sustainable = required_bytes
-        .zip(limiting_budget)
-        .map(|(required, limit)| required <= limit);
-    let mut warnings = Vec::new();
-    if sustainable == Some(false) {
-        warnings.push("requested retention exceeds the configured or available storage".into());
-    } else if let (Some(required), Some(limit)) = (required_bytes, limiting_budget)
-        && u128::from(required) * 100 >= u128::from(limit) * 80
-    {
-        warnings.push("requested retention uses at least 80% of the storage limit".into());
-    }
-    if required_bytes.is_none() {
-        warnings.push("unbounded capture has no finite worst-case storage requirement".into());
-    }
-    if request.available_storage_bytes.is_none() {
-        warnings.push("available storage is not reported by this platform".into());
-    }
-    Ok(CaptureCapacityEstimate {
-        worst_case_bytes_per_second,
-        finite_capture_bytes,
-        retained_duration,
-        sustainable,
-        warnings,
-    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -811,37 +728,6 @@ fn duration_to_samples(duration: Duration, sample_rate_hz: u64) -> Result<u64, C
     u64::try_from(samples).map_err(|_| CapturePolicyError::Invalid("duration is too long".into()))
 }
 
-fn packed_bytes(samples: u64, channels: usize) -> Result<u64, CapturePolicyError> {
-    let bits = u128::from(samples)
-        .checked_mul(channels as u128)
-        .ok_or_else(|| CapturePolicyError::Invalid("capture-size calculation overflow".into()))?;
-    u64::try_from(bits.div_ceil(8))
-        .map_err(|_| CapturePolicyError::Invalid("capture is too large".into()))
-}
-
-fn duration_to_bytes(duration: Duration, bytes_per_second: u64) -> Option<u64> {
-    let bytes = duration
-        .as_nanos()
-        .checked_mul(u128::from(bytes_per_second))?
-        .div_ceil(1_000_000_000);
-    u64::try_from(bytes).ok()
-}
-
-fn retained_duration(
-    retention: RetentionPolicy,
-    sample_rate_hz: u64,
-    bytes_per_second: u64,
-) -> Option<Duration> {
-    match retention {
-        RetentionPolicy::Everything | RetentionPolicy::DeviceManaged => None,
-        RetentionPolicy::RecentDuration(duration) => Some(duration),
-        RetentionPolicy::RecentBytes(bytes) => Some(Duration::from_secs_f64(
-            bytes as f64 / bytes_per_second as f64,
-        )),
-    }
-    .filter(|duration| !duration.is_zero() && sample_rate_hz > 0)
-}
-
 fn retention_boundary(
     policy: RetentionPolicy,
     extent_samples: u64,
@@ -871,12 +757,10 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        CaptureCapacityEstimate, CaptureCapacityRequest, CaptureFraction, CapturePolicy,
-        CapturePolicyCapabilities, CapturePolicyContext, CapturePolicyError,
-        CaptureRetentionTracker, CaptureSessionPlan, CompletionPolicy, CompletionPolicyKind,
-        RecordingStart, RetentionPolicy, RetentionPolicyKind, TriggerPlacement,
-        TriggerPlacementCapability, TriggerTimeout, TriggerTimeoutAction,
-        estimate_capture_capacity,
+        CaptureFraction, CapturePolicy, CapturePolicyCapabilities, CapturePolicyContext,
+        CapturePolicyError, CaptureRetentionTracker, CaptureSessionPlan, CompletionPolicy,
+        CompletionPolicyKind, RecordingStart, RetentionPolicy, RetentionPolicyKind,
+        TriggerPlacement, TriggerPlacementCapability, TriggerTimeout, TriggerTimeoutAction,
     };
 
     fn selectable() -> CapturePolicyCapabilities {
@@ -941,14 +825,8 @@ mod tests {
         let actual = CaptureSessionPlan {
             sample_rate_hz: 1_000,
             channel_count: 1,
+            capture_window_samples: Some(1_000),
             policy: effective,
-            capacity: CaptureCapacityEstimate {
-                worst_case_bytes_per_second: 125,
-                finite_capture_bytes: Some(125),
-                retained_duration: None,
-                sustainable: None,
-                warnings: Vec::new(),
-            },
         }
         .with_actual_trigger_sample(200);
         assert_eq!(
@@ -996,50 +874,6 @@ mod tests {
             selectable().negotiate(&policy, context),
             Err(CapturePolicyError::Invalid(_))
         ));
-    }
-
-    #[test]
-    fn capacity_estimate_uses_worst_case_packed_rate_and_storage_limits() {
-        let policy = CapturePolicy {
-            retention_after_origin: RetentionPolicy::RecentDuration(Duration::from_secs(2)),
-            ..CapturePolicy::default()
-        };
-        let estimate = estimate_capture_capacity(
-            CaptureCapacityRequest {
-                sample_rate_hz: 500_000_000,
-                channel_count: 3,
-                capture_window_samples: Some(1_000_000_000),
-                storage_budget_bytes: Some(300_000_000),
-                available_storage_bytes: Some(1_000_000_000),
-            },
-            &policy,
-        )
-        .unwrap();
-
-        assert_eq!(estimate.worst_case_bytes_per_second, 187_500_000);
-        assert_eq!(estimate.finite_capture_bytes, Some(375_000_000));
-        assert_eq!(estimate.retained_duration, Some(Duration::from_secs(2)));
-        assert_eq!(estimate.sustainable, Some(false));
-        assert!(!estimate.warnings.is_empty());
-
-        let near_limit = estimate_capture_capacity(
-            CaptureCapacityRequest {
-                sample_rate_hz: 8_000,
-                channel_count: 1,
-                capture_window_samples: Some(8_000),
-                storage_budget_bytes: Some(1_200),
-                available_storage_bytes: None,
-            },
-            &CapturePolicy::default(),
-        )
-        .unwrap();
-        assert_eq!(near_limit.sustainable, Some(true));
-        assert!(
-            near_limit
-                .warnings
-                .iter()
-                .any(|warning| warning.contains("80%"))
-        );
     }
 
     #[test]

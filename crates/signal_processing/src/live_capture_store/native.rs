@@ -2000,10 +2000,10 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::{
-        CaptureCapacityEstimate, CaptureChannelId, CaptureChunk, CaptureChunkWriter,
-        CaptureFraction, CapturePolicy, CaptureSessionId, CaptureSessionPlan, CaptureStoreCursor,
-        CaptureSessionOutcome, CaptureTimelineMetadata, CompletionPolicy, EffectiveCapturePolicy,
-        RecordingStart, RetentionPolicy, TriggerPlacement,
+        CaptureChannelId, CaptureChunk, CaptureChunkWriter, CaptureFraction, CapturePolicy,
+        CaptureSessionId, CaptureSessionOutcome, CaptureSessionPlan, CaptureStoreCursor,
+        CaptureTimelineMetadata, CompletionPolicy, EffectiveCapturePolicy, RecordingStart,
+        RetentionPolicy, TriggerPlacement,
     };
 
     use super::{
@@ -2039,16 +2039,10 @@ mod tests {
         CaptureSessionPlan {
             sample_rate_hz: 500_000_000,
             channel_count: 3,
+            capture_window_samples: Some(1_024),
             policy: EffectiveCapturePolicy {
                 requested: policy.clone(),
                 effective: policy,
-            },
-            capacity: CaptureCapacityEstimate {
-                worst_case_bytes_per_second: 187_500_000,
-                finite_capture_bytes: Some(384),
-                retained_duration: Some(Duration::from_secs(2)),
-                sustainable: Some(true),
-                warnings: vec!["capacity estimate test".into()],
             },
         }
     }

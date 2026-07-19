@@ -13,14 +13,14 @@ use signal_processing::{
     CapturePolicyCapabilities, CapturePolicyContext, CaptureProviderCapabilities,
     CaptureSessionPlan, CaptureStartMode, CaptureStoreCursor, CompletionPolicyKind, ProcessNode,
     RecordingStart, RetentionPolicyKind, TriggerPlacementCapability, TriggerTimeoutAction,
-    TriggerProgram, estimate_capture_capacity,
+    TriggerProgram,
 };
 
 use crate::compiler::{
     CaptureGraphSourceFactory, LiveCaptureFeature, SimpleTriggerChannel, parse_state,
 };
 
-use super::{U3Pro16State, capacity_request, capture_config, requested_capture_policy};
+use super::{U3Pro16State, capture_config, requested_capture_policy};
 
 struct U3Pro16GraphSourceFactory {
     channels: Arc<[CaptureAnalysisChannel]>,
@@ -257,15 +257,11 @@ pub(super) fn feature(
     policy.effective.completion = signal_processing::CompletionPolicy::SamplesAfterOrigin(
         actual_samples.saturating_sub(effective_before).max(1),
     );
-    let mut capacity_request = capacity_request(&state)?;
-    capacity_request.capture_window_samples = Some(actual_samples);
-    let capacity = estimate_capture_capacity(capacity_request, &requested_policy)
-        .map_err(|error| error.to_string())?;
     let session_plan = CaptureSessionPlan {
         sample_rate_hz: config.sample_rate_hz,
         channel_count: channels.len(),
+        capture_window_samples: Some(actual_samples),
         policy,
-        capacity,
     };
     Ok(Some(Box::new(U3Pro16LiveCaptureFeature {
         channel_names: channel_names.into(),
@@ -374,6 +370,6 @@ mod tests {
             panic!("effective completion must be a finite sample count");
         };
         assert_eq!(before + after, 1_000_448);
-        assert_eq!(plan.capacity.finite_capture_bytes, Some(125_056));
+        assert_eq!(plan.capture_window_samples, Some(1_000_448));
     }
 }

@@ -80,12 +80,11 @@ pub use capture::{
     DslWaveformSegment, packed_bit,
 };
 pub use capture_policy::{
-    CaptureCapacityEstimate, CaptureCapacityRequest, CaptureFraction, CapturePolicy,
-    CapturePolicyCapabilities, CapturePolicyContext, CapturePolicyError, CaptureRetentionPin,
-    CaptureRetentionTracker, CaptureSessionPlan, CaptureStartMode, CompletionPolicy,
-    CompletionPolicyKind, EffectiveCapturePolicy, RecordingStart, RetentionPolicy,
-    RetentionPolicyKind, TriggerPlacement, TriggerPlacementCapability, TriggerTimeout,
-    TriggerTimeoutAction, estimate_capture_capacity,
+    CaptureFraction, CapturePolicy, CapturePolicyCapabilities, CapturePolicyContext,
+    CapturePolicyError, CaptureRetentionPin, CaptureRetentionTracker, CaptureSessionPlan,
+    CaptureStartMode, CompletionPolicy, CompletionPolicyKind, EffectiveCapturePolicy,
+    RecordingStart, RetentionPolicy, RetentionPolicyKind, TriggerPlacement,
+    TriggerPlacementCapability, TriggerTimeout, TriggerTimeoutAction,
 };
 pub use cooperative_manager::CooperativeManager;
 pub use derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};

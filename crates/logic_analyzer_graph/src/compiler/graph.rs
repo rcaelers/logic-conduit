@@ -632,11 +632,6 @@ fn discover_live_capture_feature_from(
                         || plan.sample_rate_hz as f64 != feature.sample_rate_hz()
                 }) {
                     Some("live capture session plan differs from its active channel/rate tuple")
-                } else if feature
-                    .session_plan()
-                    .is_some_and(|plan| plan.capacity.sustainable == Some(false))
-                {
-                    Some("live capture policy exceeds its storage capacity")
                 } else if feature.session_plan().is_some_and(|plan| {
                     plan.policy
                         .effective

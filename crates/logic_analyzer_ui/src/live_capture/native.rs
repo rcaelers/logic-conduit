@@ -230,7 +230,7 @@ impl CaptureEventPublisher for RecordingEventPublisher {
                 health: CaptureHealth {
                     input_bytes_per_second: Some(rate),
                     write_bytes_per_second: Some(rate),
-                    retained_samples: Some(snapshot.committed_samples),
+                    stored_samples: Some(snapshot.committed_samples),
                     summary_lag_samples: Some(captured.saturating_sub(indexed)),
                     ..CaptureHealth::default()
                 },
@@ -1736,11 +1736,11 @@ mod tests {
     };
     use node_graph::{NodeDef, NodeGraphWidget, NodeId};
     use signal_processing::{
-        CaptureCapacityEstimate, CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery,
-        CapturePolicy, CaptureProviderCapabilities, CaptureSessionPlan, CaptureSessionState,
-        CaptureSource, CaptureStartMode, CaptureStoreCursor, CompletionPolicy,
-        EffectiveCapturePolicy, ProcessNode, RecordingStart, RetentionPolicy,
-        SimpleTriggerCondition, TriggerTimeout, TriggerTimeoutAction,
+        CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery, CapturePolicy,
+        CaptureProviderCapabilities, CaptureSessionPlan, CaptureSessionState, CaptureSource,
+        CaptureStartMode, CaptureStoreCursor, CompletionPolicy, EffectiveCapturePolicy,
+        ProcessNode, RecordingStart, RetentionPolicy, SimpleTriggerCondition, TriggerTimeout,
+        TriggerTimeoutAction,
     };
 
     use super::{
@@ -1989,6 +1989,7 @@ mod tests {
                 session_plan: Some(CaptureSessionPlan {
                     sample_rate_hz: 1_000_000_000,
                     channel_count: 19,
+                    capture_window_samples: Some(total_samples),
                     policy: EffectiveCapturePolicy {
                         requested: CapturePolicy {
                             start: RecordingStart::Trigger,
@@ -2006,13 +2007,6 @@ mod tests {
                             completion: CompletionPolicy::UntilStopped,
                             trigger_timeout,
                         },
-                    },
-                    capacity: CaptureCapacityEstimate {
-                        worst_case_bytes_per_second: 2_375_000_000,
-                        finite_capture_bytes: Some((total_samples * 19_u64).div_ceil(8)),
-                        retained_duration: None,
-                        sustainable: None,
-                        warnings: Vec::new(),
                     },
                 }),
             }),
@@ -2086,16 +2080,10 @@ mod tests {
                 session_plan: Some(CaptureSessionPlan {
                     sample_rate_hz,
                     channel_count: 3,
+                    capture_window_samples: Some(21),
                     policy: EffectiveCapturePolicy {
                         requested: policy.clone(),
                         effective: policy,
-                    },
-                    capacity: CaptureCapacityEstimate {
-                        worst_case_bytes_per_second: 750_000,
-                        finite_capture_bytes: Some(8),
-                        retained_duration: None,
-                        sustainable: None,
-                        warnings: Vec::new(),
                     },
                 }),
             }),
@@ -2657,7 +2645,7 @@ mod tests {
 
         let health = coordinator.status().unwrap().health;
         assert!(health.write_bytes_per_second.is_some());
-        assert_eq!(health.retained_samples, Some(0));
+        assert_eq!(health.stored_samples, Some(0));
         assert_eq!(health.graph_lag_samples, Some(2));
 
         coordinator.request_abort().unwrap();

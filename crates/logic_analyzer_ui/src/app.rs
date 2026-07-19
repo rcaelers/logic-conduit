@@ -37,12 +37,10 @@ use self::font_platform::load_symbol_fonts;
 const SAMPLING_OVERLAY_EXTENSION: &str = "logic_analyzer_ui.sampling_overlay";
 
 fn planned_waveform_span_us(plan: &signal_processing::CaptureSessionPlan) -> Option<f64> {
-    let bytes = plan.capacity.finite_capture_bytes?;
-    let channels = u64::try_from(plan.channel_count).ok()?;
-    if channels == 0 || plan.sample_rate_hz == 0 {
+    let samples = plan.capture_window_samples?;
+    if plan.sample_rate_hz == 0 {
         return None;
     }
-    let samples = bytes.checked_mul(8)?.div_ceil(channels);
     Some(samples as f64 * 1_000_000.0 / plan.sample_rate_hz as f64)
 }
 
@@ -1088,39 +1086,22 @@ impl App {
                 ui.label(summary);
             }
 
-            if status.health != signal_processing::CaptureHealth::default()
-                || status.session_plan.is_some()
-            {
+            if status.health != signal_processing::CaptureHealth::default() {
                 ui.menu_button("Health", |ui| {
-                    if let Some(plan) = &status.session_plan {
-                        ui.label(format!(
-                            "Input estimate: {}/s",
-                            format_bytes(plan.capacity.worst_case_bytes_per_second)
-                        ));
-                        if let Some(bytes) = plan.capacity.finite_capture_bytes {
-                            ui.label(format!("Capture estimate: {}", format_bytes(bytes)));
-                        }
-                        for warning in &plan.capacity.warnings {
-                            ui.colored_label(egui::Color32::from_rgb(220, 170, 90), warning);
-                        }
-                    }
                     if let Some(rate) = status.health.input_bytes_per_second {
                         ui.label(format!("Input: {}/s", format_bytes(rate)));
                     }
                     if let Some(rate) = status.health.write_bytes_per_second {
                         ui.label(format!("Store: {}/s", format_bytes(rate)));
                     }
-                    if let Some(samples) = status.health.retained_samples {
-                        ui.label(format!("Retained: {samples} samples"));
+                    if let Some(samples) = status.health.stored_samples {
+                        ui.label(format!("Stored: {samples} samples"));
                     }
                     if let Some(samples) = status.health.summary_lag_samples {
                         ui.label(format!("Summary lag: {samples} samples"));
                     }
                     if let Some(samples) = status.health.graph_lag_samples {
                         ui.label(format!("Graph lag: {samples} samples"));
-                    }
-                    if let Some(bytes) = status.health.available_storage_bytes {
-                        ui.label(format!("Free storage: {}", format_bytes(bytes)));
                     }
                 });
             }

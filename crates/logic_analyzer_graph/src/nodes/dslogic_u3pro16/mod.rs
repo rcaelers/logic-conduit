@@ -14,8 +14,8 @@ use logic_analyzer_processing::{
     CaptureMode, ClockEdge, ClockSource, LogicCaptureConfig, LogicEncodingRequest, LogicTrigger,
 };
 use signal_processing::{
-    CaptureCapacityRequest, CaptureFraction, CapturePolicy, CompletionPolicy, RecordingStart,
-    RetentionPolicy, TriggerPlacement, TriggerTimeout, TriggerTimeoutAction,
+    CaptureFraction, CapturePolicy, CompletionPolicy, RecordingStart, RetentionPolicy,
+    TriggerPlacement, TriggerTimeout, TriggerTimeoutAction,
 };
 
 use crate::compiler::{LiveCaptureEdit, parse_state};
@@ -150,17 +150,6 @@ fn requested_capture_policy(state: &U3Pro16State) -> Result<CapturePolicy, Strin
             config.sample_limit.saturating_sub(before_samples).max(1),
         ),
         trigger_timeout,
-    })
-}
-
-fn capacity_request(state: &U3Pro16State) -> Result<CaptureCapacityRequest, String> {
-    let config = capture_config(state)?;
-    Ok(CaptureCapacityRequest {
-        sample_rate_hz: config.sample_rate_hz,
-        channel_count: config.input_mask.count_ones() as usize,
-        capture_window_samples: Some(config.sample_limit),
-        storage_budget_bytes: None,
-        available_storage_bytes: None,
     })
 }
 
