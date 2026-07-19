@@ -343,12 +343,6 @@ pub fn packed_bit(data: &[u8], bit_index: usize) -> bool {
         .is_some_and(|byte| (byte & (1 << bit_offset)) != 0)
 }
 
-pub type DslHeader = CaptureMetadata;
-pub type DslTransition = CaptureTransition;
-pub type DslSampledChannel = CaptureSampledChannel;
-pub type DslSampledWindow = CaptureSampledWindow;
-pub type DslWaveformSegment = CaptureWaveformSegment;
-
 #[cfg(test)]
 mod tests {
     use super::BlockData;

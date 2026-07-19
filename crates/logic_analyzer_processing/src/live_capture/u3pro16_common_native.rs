@@ -14,7 +14,11 @@ pub(super) struct CanonicalTransfer {
 }
 
 impl CanonicalTransfer {
-    pub fn limit_samples(self, maximum: u64, channel_count: usize) -> AcquisitionResult<Self> {
+    pub(super) fn limit_samples(
+        self,
+        maximum: u64,
+        channel_count: usize,
+    ) -> AcquisitionResult<Self> {
         if self.sample_count <= maximum {
             return Ok(self);
         }
@@ -42,7 +46,7 @@ pub(super) struct CanonicalTransferAssembler {
 }
 
 impl CanonicalTransferAssembler {
-    pub fn push(
+    pub(super) fn push(
         &mut self,
         chunk: &LogicChunk,
         channel_count: usize,
@@ -76,7 +80,7 @@ impl CanonicalTransferAssembler {
         Ok((transfer.0.sample_count != 0).then_some(transfer.0))
     }
 
-    pub fn finish(&self) -> AcquisitionResult<()> {
+    pub(super) fn finish(&self) -> AcquisitionResult<()> {
         if self.carry.is_empty() {
             Ok(())
         } else {

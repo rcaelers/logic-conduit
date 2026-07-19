@@ -77,8 +77,7 @@ pub use advanced_trigger::{
 pub use capture::{
     BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureIndex,
     CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,
-    CaptureWaveformSegment, DslHeader, DslSampledChannel, DslSampledWindow, DslTransition,
-    DslWaveformSegment, packed_bit,
+    CaptureWaveformSegment, packed_bit,
 };
 pub use capture_policy::{
     CaptureFraction, CapturePolicy, CapturePolicyCapabilities, CapturePolicyContext,
@@ -94,7 +93,7 @@ pub use derived_word_store::{
     LiveStoreConfig, PersistentStoreConfig, StoreStatus, WordPresenceBucket,
 };
 pub use edge_query::EdgeQuery;
-pub use errors::{ConnectionError, DslError, Error, PortError, Result, WorkError, WorkResult};
+pub use errors::{ConnectionError, Error, PortError, Result, WorkError, WorkResult};
 pub use events::{
     Annotation, MAX_ANNOTATION_NS, NumberSample, TextSample, Trigger, Word,
     instantaneous_word_end_ns,

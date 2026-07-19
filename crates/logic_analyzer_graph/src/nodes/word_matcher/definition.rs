@@ -10,17 +10,17 @@ use node_graph::{
 
 use crate::nodes::registry::{COLOR_LOGIC, Signal, Trigger, Words};
 
-pub const MATCH_OPS: &[&str] = &["==", "≠", "<", "≤", ">", "≥"];
+pub(super) const MATCH_OPS: &[&str] = &["==", "≠", "<", "≤", ">", "≥"];
 
-pub fn default_match_op() -> EnumValue {
+pub(crate) fn default_match_op() -> EnumValue {
     EnumValue::new(0, MATCH_OPS)
 }
 
-pub const TRIGGER_AT: &[&str] = &["Word start", "Word end"];
+pub(super) const TRIGGER_AT: &[&str] = &["Word start", "Word end"];
 
 /// Default is "Word end": a command logically takes effect once it has
 /// fully arrived (for instantaneous words the two coincide).
-pub fn default_trigger_at() -> EnumValue {
+pub(crate) fn default_trigger_at() -> EnumValue {
     EnumValue::new(1, TRIGGER_AT)
 }
 

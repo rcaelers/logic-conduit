@@ -239,7 +239,8 @@ impl IndexedAnnotationStore {
         }
     }
 
-    pub fn directory(&self) -> Vec<BlockDirectoryEntry> {
+    #[cfg(test)]
+    fn directory(&self) -> Vec<BlockDirectoryEntry> {
         self.shared.state.read().unwrap().directory.clone()
     }
 
@@ -247,12 +248,15 @@ impl IndexedAnnotationStore {
     /// cloning its decoded word vector. Intended for validation and export.
     pub fn visit_committed_blocks(
         &self,
-        mut visitor: impl FnMut(&DecodedWordBlock),
+        mut visitor: impl FnMut(CommittedAnnotationBlock<'_>),
     ) -> StoreResult<()> {
         let directory = self.shared.state.read().unwrap().directory.clone();
         for entry in directory {
             let block = self.read_cached_entry(entry)?;
-            visitor(&block);
+            visitor(CommittedAnnotationBlock {
+                restart_count: block.header.restart_count,
+                words: &block.words,
+            });
         }
         Ok(())
     }
@@ -263,7 +267,8 @@ impl IndexedAnnotationStore {
 
     /// Reads and validates one fully committed block. The directory lock is
     /// released before any file access or decoding occurs.
-    pub fn read_committed_block(&self, index: usize) -> StoreResult<DecodedWordBlock> {
+    #[cfg(test)]
+    fn read_committed_block(&self, index: usize) -> StoreResult<DecodedWordBlock> {
         let entry = {
             let state = self.shared.state.read().unwrap();
             state
@@ -387,6 +392,15 @@ impl IndexedAnnotationStore {
             .collect();
         (entries, Arc::clone(&state.hot_tail))
     }
+}
+
+/// Borrowed, format-independent view of one committed annotation block.
+#[derive(Clone, Copy, Debug)]
+pub struct CommittedAnnotationBlock<'a> {
+    /// Number of internal seek restart points in the block.
+    pub restart_count: u32,
+    /// Decoded annotations in timestamp order.
+    pub words: &'a [Word],
 }
 
 impl AnnotationQuery for IndexedAnnotationStore {

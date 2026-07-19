@@ -1,6 +1,6 @@
 use egui::{Color32, Pos2};
 pub(crate) use input_bindings::MenuShortcut as Shortcut;
-use input_bindings::{MENU_ICON_COLUMN_WIDTH, menu_item_layout_job};
+use widget_support::{MENU_ICON_COLUMN_WIDTH, menu_item_layout_job};
 
 // ── Shortcut ──────────────────────────────────────────────────────────────────
 
@@ -22,7 +22,7 @@ pub(crate) struct MenuEntry<T> {
 }
 
 impl<T> MenuEntry<T> {
-    pub fn action(label: impl Into<String>, action: T) -> Self {
+    pub(super) fn action(label: impl Into<String>, action: T) -> Self {
         Self {
             label: label.into(),
             icon: None,
@@ -33,7 +33,7 @@ impl<T> MenuEntry<T> {
     }
 
     /// Creates a submenu entry.  The `▶` arrow is added automatically by the renderer.
-    pub fn submenu(label: impl Into<String>, children: Vec<MenuEntry<T>>) -> Self {
+    pub(super) fn submenu(label: impl Into<String>, children: Vec<MenuEntry<T>>) -> Self {
         Self {
             label: label.into(),
             icon: None,
@@ -43,7 +43,7 @@ impl<T> MenuEntry<T> {
         }
     }
 
-    pub fn palette(items: Vec<(Color32, T)>) -> Self {
+    pub(super) fn palette(items: Vec<(Color32, T)>) -> Self {
         Self {
             label: String::new(),
             icon: None,
@@ -53,7 +53,7 @@ impl<T> MenuEntry<T> {
         }
     }
 
-    pub fn separator() -> Self {
+    pub(super) fn separator() -> Self {
         Self {
             label: String::new(),
             icon: None,
@@ -63,12 +63,12 @@ impl<T> MenuEntry<T> {
         }
     }
 
-    pub fn with_shortcut(mut self, sc: Shortcut) -> Self {
+    pub(super) fn with_shortcut(mut self, sc: Shortcut) -> Self {
         self.shortcut = Some(sc);
         self
     }
 
-    pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
+    pub(super) fn with_icon(mut self, icon: impl Into<String>) -> Self {
         self.icon = Some(icon.into());
         self
     }
@@ -76,7 +76,7 @@ impl<T> MenuEntry<T> {
     /// Reserves the menu icon column for a toggle state. A checked entry uses
     /// a painted tick rather than a font glyph, avoiding platform fallback
     /// boxes for checkmark characters.
-    pub fn with_checkmark(mut self, checked: bool) -> Self {
+    pub(super) fn with_checkmark(mut self, checked: bool) -> Self {
         self.checked = Some(checked);
         self
     }
@@ -148,7 +148,7 @@ impl<T: Clone> Menu<T> {
     const MIN_WIDTH: f32 = 180.0;
     const COLUMN_OVERLAP: f32 = 10.0;
 
-    pub fn new(area_id: egui::Id) -> Self {
+    pub(super) fn new(area_id: egui::Id) -> Self {
         Self {
             area_id,
             entries: Vec::new(),
@@ -161,17 +161,21 @@ impl<T: Clone> Menu<T> {
         }
     }
 
-    pub fn set_entries(&mut self, entries: Vec<MenuEntry<T>>) {
+    pub(super) fn set_entries(&mut self, entries: Vec<MenuEntry<T>>) {
         self.entries = entries;
         self.title = None;
     }
 
-    pub fn set_entries_with_title(&mut self, title: impl Into<String>, entries: Vec<MenuEntry<T>>) {
+    pub(super) fn set_entries_with_title(
+        &mut self,
+        title: impl Into<String>,
+        entries: Vec<MenuEntry<T>>,
+    ) {
         self.entries = entries;
         self.title = Some(title.into());
     }
 
-    pub fn open(&mut self, pos: Pos2) {
+    pub(super) fn open(&mut self, pos: Pos2) {
         self.visible = true;
         self.pos = pos;
         self.sel.clear();
@@ -179,7 +183,7 @@ impl<T: Clone> Menu<T> {
         self.pending_close = false;
     }
 
-    pub fn close(&mut self) {
+    pub(super) fn close(&mut self) {
         self.visible = false;
         self.sel.clear();
         self.pending_close = false;
@@ -194,7 +198,7 @@ impl<T: Clone> Menu<T> {
 
     /// `root_id` — context menus: `egui::Popup::default_response_id(response)`;
     ///             standalone popups: `self.area_id`.
-    pub fn handle_keys(&mut self, ui: &mut egui::Ui, root_id: egui::Id) -> Option<T> {
+    pub(super) fn handle_keys(&mut self, ui: &mut egui::Ui, root_id: egui::Id) -> Option<T> {
         // Claim keyboard focus while the menu is handling input.  This makes
         // `memory().focused()` return Some so the host widget's `no_focus`
         // guard naturally blocks global shortcuts like Shift+A.
@@ -316,7 +320,7 @@ impl<T: Clone> Menu<T> {
     // ── Rendering ─────────────────────────────────────────────────────────────
 
     /// Standalone `Area` popup.  Returns `(area_response, activated_action)`.
-    pub fn show_popup(&mut self, ui: &mut egui::Ui) -> (egui::Response, Option<T>) {
+    pub(super) fn show_popup(&mut self, ui: &mut egui::Ui) -> (egui::Response, Option<T>) {
         let entries = std::mem::take(&mut self.entries);
         let title = self.title.clone();
         let mut sel = self.sel.clone();
@@ -674,19 +678,19 @@ pub(crate) struct PopupMenu<T> {
 }
 
 impl<T: Clone> PopupMenu<T> {
-    pub fn new(popup_id: egui::Id) -> Self {
+    pub(super) fn new(popup_id: egui::Id) -> Self {
         Self {
             popup: Menu::new(popup_id),
         }
     }
 
     /// Open the standalone popup at screen position `pos` with the given entries.
-    pub fn open_popup(&mut self, pos: Pos2, entries: Vec<MenuEntry<T>>) {
+    pub(super) fn open_popup(&mut self, pos: Pos2, entries: Vec<MenuEntry<T>>) {
         self.popup.set_entries(entries);
         self.popup.open(pos);
     }
 
-    pub fn open_popup_with_title(
+    pub(super) fn open_popup_with_title(
         &mut self,
         pos: Pos2,
         title: impl Into<String>,
@@ -696,7 +700,7 @@ impl<T: Clone> PopupMenu<T> {
         self.popup.open(pos);
     }
 
-    pub fn is_open(&self) -> bool {
+    pub(super) fn is_open(&self) -> bool {
         self.popup.visible
     }
 
@@ -705,7 +709,11 @@ impl<T: Clone> PopupMenu<T> {
     /// global shortcuts while any menu is open.
     ///
     /// **Must be called before sampling `no_focus`.**
-    pub fn handle_keys(&mut self, ui: &mut egui::Ui, _response: &egui::Response) -> Option<T> {
+    pub(super) fn handle_keys(
+        &mut self,
+        ui: &mut egui::Ui,
+        _response: &egui::Response,
+    ) -> Option<T> {
         if self.popup.visible {
             let id = self.popup.area_id;
             let result = self.popup.handle_keys(ui, id);
@@ -719,7 +727,7 @@ impl<T: Clone> PopupMenu<T> {
     }
 
     /// Render whichever menu is active and return any mouse-activated action.
-    pub fn render(&mut self, ui: &mut egui::Ui, _response: &egui::Response) -> Option<T> {
+    pub(super) fn render(&mut self, ui: &mut egui::Ui, _response: &egui::Response) -> Option<T> {
         let mut result = None;
 
         // Standalone popup — we own its lifecycle entirely.

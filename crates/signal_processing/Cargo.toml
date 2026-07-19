@@ -13,7 +13,6 @@ name = "signal_processing"
 path = "src/lib.rs"
 
 [dependencies]
-zip = { workspace = true }
 thiserror = { workspace = true }
 crossbeam-channel = { workspace = true }
 tracing = { workspace = true }

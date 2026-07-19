@@ -10,8 +10,8 @@ const MINIMAP_MARGIN_FRACTION: f32 = 0.025;
 const MINIMAP_MIN_MARGIN: f32 = 6.0;
 const MINIMAP_MAX_MARGIN: f32 = 15.0;
 
-pub struct MinimapInfo {
-    pub mini_rect: Rect,
+pub(super) struct MinimapInfo {
+    pub(super) mini_rect: Rect,
     canvas_bounds: Rect,
     offset: Vec2,
     scale: f32,
@@ -32,14 +32,14 @@ impl MinimapInfo {
         }
     }
 
-    pub fn canvas_to_mini(&self, p: Pos2) -> Pos2 {
+    pub(super) fn canvas_to_mini(&self, p: Pos2) -> Pos2 {
         Pos2::new(
             self.offset.x + (p.x - self.canvas_bounds.min.x) * self.scale,
             self.offset.y + (p.y - self.canvas_bounds.min.y) * self.scale,
         )
     }
 
-    pub fn mini_to_canvas(&self, p: Pos2) -> Pos2 {
+    pub(super) fn mini_to_canvas(&self, p: Pos2) -> Pos2 {
         Pos2::new(
             (p.x - self.offset.x) / self.scale + self.canvas_bounds.min.x,
             (p.y - self.offset.y) / self.scale + self.canvas_bounds.min.y,
@@ -47,7 +47,7 @@ impl MinimapInfo {
     }
 }
 
-pub fn compute_minimap(
+pub(super) fn compute_minimap(
     node_rects: impl Iterator<Item = Rect>,
     canvas_rect: Rect,
 ) -> (MinimapInfo, Rect) {
@@ -89,7 +89,7 @@ fn minimap_rect(canvas_rect: Rect) -> Rect {
     )
 }
 
-pub fn draw_minimap(
+pub(super) fn draw_minimap(
     painter: &Painter,
     info: &MinimapInfo,
     graph: &GraphState,

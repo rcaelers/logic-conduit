@@ -2390,6 +2390,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "widget-support",
 ]
 
 [[package]]
@@ -2879,6 +2880,7 @@ dependencies = [
  "input-bindings",
  "serde",
  "serde_json",
+ "widget-support",
 ]
 
 [[package]]
@@ -3519,7 +3521,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "web-time",
- "zip",
 ]
 
 [[package]]
@@ -4637,6 +4638,13 @@ dependencies = [
  "log",
  "raw-window-handle",
  "web-sys",
+]
+
+[[package]]
+name = "widget-support"
+version = "0.1.0"
+dependencies = [
+ "egui",
 ]
 
 [[package]]

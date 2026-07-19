@@ -19,7 +19,7 @@ pub struct BinaryDecoderState {
     pub cs_polarity: EnumValue,
 }
 
-pub fn default_input_strategy() -> EnumValue {
+pub(crate) fn default_input_strategy() -> EnumValue {
     EnumValue::new(0, &["Auto", "Packed stream", "Indexed"])
 }
 

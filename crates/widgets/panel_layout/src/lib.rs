@@ -13,7 +13,8 @@ use egui::{
 };
 use serde::{Deserialize, Serialize};
 
-use input_bindings::{MenuShortcut, menu_item_layout_job};
+use input_bindings::MenuShortcut;
+use widget_support::menu_item_layout_job;
 
 #[derive(Debug, Clone, Copy)]
 pub struct PanelSpec<'a> {

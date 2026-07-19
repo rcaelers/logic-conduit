@@ -21,11 +21,6 @@ use signal_processing::ports::{PortDirection, PortSchema};
 use signal_processing::sample::{Sample, SampleBlock};
 use signal_processing::sample_kind::SampleKind;
 
-use super::dslogic_u3pro16::{DsLogicU3Pro16, RusbTransport};
-
-/// Convenient name for the production DSLogic source node.
-pub type DsLogicU3Pro16Source = LogicAnalyzerSource<DsLogicU3Pro16<RusbTransport>>;
-
 /// Static capabilities exposed by a logic-analyzer driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogicAnalyzerInfo {

@@ -30,11 +30,11 @@ const FADE_AFTER_S: f64 = 4.0;
 const FADE_RAMP_S: f64 = 1.0;
 
 #[derive(Default)]
-pub struct Toasts(Vec<Toast>);
+pub(crate) struct Toasts(Vec<Toast>);
 
 impl Toasts {
     /// Fades out on its own after ~4s.
-    pub fn info(&mut self, text: impl Into<String>) {
+    pub(crate) fn info(&mut self, text: impl Into<String>) {
         self.0.push(Toast {
             text: text.into(),
             severity: Severity::Info,
@@ -44,7 +44,7 @@ impl Toasts {
     }
 
     /// Persists until dismissed (✕) or the toast stack scrolls it away.
-    pub fn error(&mut self, text: impl Into<String>) {
+    pub(crate) fn error(&mut self, text: impl Into<String>) {
         self.0.push(Toast {
             text: text.into(),
             severity: Severity::Error,
@@ -54,7 +54,7 @@ impl Toasts {
     }
 
     /// Persists until dismissed, without presenting a successful operation as a failure.
-    pub fn warning(&mut self, text: impl Into<String>) {
+    pub(crate) fn warning(&mut self, text: impl Into<String>) {
         self.0.push(Toast {
             text: text.into(),
             severity: Severity::Warning,
@@ -65,7 +65,7 @@ impl Toasts {
 
     /// Draws the toast stack bottom-right and prunes expired/dismissed
     /// entries. Call once per frame; cheap no-op when nothing's pending.
-    pub fn show(&mut self, ctx: &Context) {
+    pub(crate) fn show(&mut self, ctx: &Context) {
         if self.0.is_empty() {
             return;
         }

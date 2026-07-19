@@ -12,6 +12,7 @@ pub use uart_demo_source::UartDemoSource;
 std::cfg_select! {
     target_arch = "wasm32" => {}
     _ => {
+        mod capture_archive;
         mod dsl_file;
         mod dslogic_u3pro16;
         mod logic_analyzer;
@@ -23,14 +24,15 @@ std::cfg_select! {
             open_dsl_chunked_capture_with_progress,
         };
         pub use dslogic_u3pro16::{
-            DsLogicCapturePlan, DsLogicTriggerHeader, DsLogicU3Pro16, LinkSpeed,
-            RusbTransport, UsbTransport, u3pro16_buffered_plan, u3pro16_streaming_plan,
+            DsLogicCapturePlan, DsLogicTriggerHeader, DsLogicU3Pro16, DsLogicU3Pro16Source,
+            LinkSpeed, RusbTransport, UsbError, UsbTransport, u3pro16_buffered_plan,
+            u3pro16_streaming_plan,
         };
         pub use logic_analyzer::{
-            CaptureMode, ClockEdge, ClockSource, DsLogicU3Pro16Source, LogicAnalyzer,
-            LogicAnalyzerError, LogicAnalyzerInfo, LogicAnalyzerResult, LogicAnalyzerSource,
-            LogicCaptureConfig, LogicChunk, LogicEncoding, LogicEncodingRequest, LogicTrigger,
-            LogicTriggerStage, TriggerCondition, TriggerLogic,
+            CaptureMode, ClockEdge, ClockSource, LogicAnalyzer, LogicAnalyzerError,
+            LogicAnalyzerInfo, LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig,
+            LogicChunk, LogicEncoding, LogicEncodingRequest, LogicTrigger, LogicTriggerStage,
+            TriggerCondition, TriggerLogic,
         };
         pub use sigrok_file::{
             SigrokCaptureReader, SigrokChunkedCaptureReader, SigrokFileCaptureDataSource,

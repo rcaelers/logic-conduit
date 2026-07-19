@@ -1,7 +1,7 @@
 use super::errors::{CodecError, CodecResult};
 
 /// Encodes an unsigned integer using canonical unsigned LEB128.
-pub fn encode_u64(mut value: u64, output: &mut Vec<u8>) {
+pub(super) fn encode_u64(mut value: u64, output: &mut Vec<u8>) {
     loop {
         let mut byte = (value & 0x7f) as u8;
         value >>= 7;
@@ -16,7 +16,7 @@ pub fn encode_u64(mut value: u64, output: &mut Vec<u8>) {
 }
 
 /// Decodes one unsigned LEB128 integer and advances `cursor`.
-pub fn decode_u64(input: &[u8], cursor: &mut usize) -> CodecResult<u64> {
+pub(super) fn decode_u64(input: &[u8], cursor: &mut usize) -> CodecResult<u64> {
     let mut value = 0u64;
     for byte_index in 0..10 {
         let byte = *input.get(*cursor).ok_or(CodecError::Truncated)?;
@@ -32,7 +32,7 @@ pub fn decode_u64(input: &[u8], cursor: &mut usize) -> CodecResult<u64> {
     Err(CodecError::VlqOverflow)
 }
 
-pub const fn encoded_len(value: u64) -> usize {
+pub(super) const fn encoded_len(value: u64) -> usize {
     let significant_bits = if value == 0 {
         1
     } else {

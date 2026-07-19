@@ -10,4 +10,6 @@ pub use super::super::persistent::{
 #[path = "../store.rs"]
 pub(crate) mod store;
 
-pub use store::{IndexedAnnotationStore, IndexedAnnotationWriter, StoreResult};
+pub use store::{
+    CommittedAnnotationBlock, IndexedAnnotationStore, IndexedAnnotationWriter, StoreResult,
+};

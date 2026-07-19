@@ -62,10 +62,11 @@ pub use registry::*;
 pub use spi_decoder::{SpiDecoder, SpiDecoderState};
 pub use sr_flip_flop::{SrFlipFlop, SrFlipFlopState};
 pub use tgck_recorder::TgckRecorder;
-pub use uart_decoder::{UartDecoder, UartDecoderState, selected_baud_rate};
+pub(crate) use uart_decoder::selected_baud_rate;
+pub use uart_decoder::{UartDecoder, UartDecoderState};
 pub use uart_demo_source::{UartDemoSource, UartDemoSourceState};
 pub use viewer::{Viewer, ViewerState};
-pub use word_matcher::{WordMatcher, WordMatcherState, default_match_op, default_trigger_at};
+pub use word_matcher::{WordMatcher, WordMatcherState};
 
 /// Finds an in-memory raw-capture preview supplied by a concrete source node.
 pub fn capture_preview(

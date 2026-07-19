@@ -5,7 +5,7 @@
 
 use logic_analyzer_viewer::ChannelSignal;
 
-pub fn channels() -> Vec<ChannelSignal> {
+pub(crate) fn channels() -> Vec<ChannelSignal> {
     let mut channels = vec![uart_signal(0, "serial.rx", b"HELLO\n")];
     for index in 1..10 {
         let period = match index {

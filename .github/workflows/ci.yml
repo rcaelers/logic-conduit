@@ -18,6 +18,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
+      - name: Check architectural visibility
+        env:
+          RUSTFLAGS: -D unreachable-pub
+        run: cargo check --workspace --all-targets
       - name: Test workspace
         run: cargo test --workspace
 
@@ -32,4 +36,6 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
       - name: Check wasm UI and dependencies
+        env:
+          RUSTFLAGS: -D unreachable-pub
         run: cargo check -p logic-analyzer-app-web --target wasm32-unknown-unknown

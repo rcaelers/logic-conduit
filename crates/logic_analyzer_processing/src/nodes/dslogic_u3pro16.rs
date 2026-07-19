@@ -80,7 +80,7 @@ pub enum LinkSpeed {
 
 /// Generic user-facing capture settings for this device.
 #[derive(Debug, Clone)]
-pub struct DsLogicCaptureSettings {
+pub(super) struct DsLogicCaptureSettings {
     pub mode: CaptureMode,
     pub sample_rate_hz: u64,
     /// Physical DSLogic input bits. The source exposes enabled inputs in increasing order.
@@ -96,7 +96,7 @@ pub struct DsLogicCaptureSettings {
 }
 
 impl DsLogicCaptureSettings {
-    pub fn finite(sample_rate_hz: u64, input_mask: u16, sample_limit: u64) -> Self {
+    pub(super) fn finite(sample_rate_hz: u64, input_mask: u16, sample_limit: u64) -> Self {
         Self {
             mode: CaptureMode::Finite,
             sample_rate_hz,
@@ -186,15 +186,24 @@ pub fn u3pro16_streaming_plan(
     build_plan(link_speed, &settings_from_config(config)?)
 }
 
+/// Failure reported by a [`UsbTransport`] operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsbError {
+    /// The operation did not complete before its deadline.
     Timeout,
+    /// The transport failed for a reason other than a timeout.
     Other,
 }
 
-/// USB operations required by the protocol. Implementations must preserve call order.
+/// USB operations required by the U3Pro16 protocol.
+///
+/// Implementations must preserve call order. The queued-read methods may use an
+/// asynchronous backend; transports without that capability can retain the
+/// default synchronous fallback.
 pub trait UsbTransport: Send + 'static {
+    /// Returns the negotiated USB link speed.
     fn link_speed(&self) -> LinkSpeed;
+    /// Performs one USB control write.
     fn control_write(
         &mut self,
         request_type: u8,
@@ -204,6 +213,7 @@ pub trait UsbTransport: Send + 'static {
         data: &[u8],
         timeout: Duration,
     ) -> Result<usize, UsbError>;
+    /// Performs one USB control read.
     fn control_read(
         &mut self,
         request_type: u8,
@@ -213,12 +223,14 @@ pub trait UsbTransport: Send + 'static {
         data: &mut [u8],
         timeout: Duration,
     ) -> Result<usize, UsbError>;
+    /// Writes one bulk transfer.
     fn bulk_write(
         &mut self,
         endpoint: u8,
         data: &[u8],
         timeout: Duration,
     ) -> Result<usize, UsbError>;
+    /// Reads one bulk transfer.
     fn bulk_read(
         &mut self,
         endpoint: u8,
@@ -245,9 +257,11 @@ pub trait UsbTransport: Send + 'static {
     ) -> Result<Option<Vec<u8>>, UsbError> {
         Ok(None)
     }
+    /// Cancels an outstanding queued bulk read, if present.
     fn cancel_queued_bulk_read(&mut self) -> Result<(), UsbError> {
         Ok(())
     }
+    /// Releases transport resources. Implementations must allow repeated calls.
     fn close(&mut self) -> Result<(), UsbError> {
         Ok(())
     }
@@ -590,6 +604,9 @@ pub struct DsLogicU3Pro16<T: UsbTransport = RusbTransport> {
     bytes_remaining: Option<usize>,
     bit_position: u64,
 }
+
+/// Production DSLogic source node using the `rusb` transport.
+pub type DsLogicU3Pro16Source = LogicAnalyzerSource<DsLogicU3Pro16<RusbTransport>>;
 
 /// Immutable, validated device-buffered acquisition plan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

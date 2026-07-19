@@ -6,9 +6,9 @@ use egui::{Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 use super::ViewState;
 use crate::model::{Connection, GraphState, SocketId};
 
-pub const SOCKET_RADIUS: f32 = 5.5;
+pub(crate) const SOCKET_RADIUS: f32 = 5.5;
 
-pub fn to_screen_rect(r: Rect, view: &ViewState, origin: Pos2) -> Rect {
+pub(crate) fn to_screen_rect(r: Rect, view: &ViewState, origin: Pos2) -> Rect {
     Rect::from_min_max(
         view.canvas_to_screen(origin, r.min),
         view.canvas_to_screen(origin, r.max),
@@ -36,7 +36,7 @@ fn bezier_wire_points(from: Pos2, to: Pos2, steps: usize) -> impl Iterator<Item 
     })
 }
 
-pub fn bezier_wire_distance(from: Pos2, to: Pos2, point: Pos2) -> f32 {
+pub(crate) fn bezier_wire_distance(from: Pos2, to: Pos2, point: Pos2) -> f32 {
     bezier_wire_points(from, to, 24)
         .map(|p| point.distance(p))
         .fold(f32::INFINITY, f32::min)
@@ -44,11 +44,11 @@ pub fn bezier_wire_distance(from: Pos2, to: Pos2, point: Pos2) -> f32 {
 
 /// Whether the wire passes through `rect`. Sampled densely enough that even
 /// a collapsed node can't fit between consecutive samples of a long wire.
-pub fn bezier_wire_intersects_rect(from: Pos2, to: Pos2, rect: Rect) -> bool {
+pub(crate) fn bezier_wire_intersects_rect(from: Pos2, to: Pos2, rect: Rect) -> bool {
     bezier_wire_points(from, to, 64).any(|p| rect.contains(p))
 }
 
-pub fn draw_grid(painter: &Painter, rect: Rect, view: &ViewState) {
+pub(crate) fn draw_grid(painter: &Painter, rect: Rect, view: &ViewState) {
     painter.rect_filled(rect, CornerRadius::ZERO, Color32::from_rgb(28, 28, 28));
 
     let spacing = 20.0_f32;
@@ -88,7 +88,7 @@ pub fn draw_grid(painter: &Painter, rect: Rect, view: &ViewState) {
     }
 }
 
-pub fn draw_frames(
+pub(crate) fn draw_frames(
     painter: &Painter,
     graph: &GraphState,
     frame_rects: &HashMap<crate::model::FrameId, Rect>,
@@ -149,7 +149,7 @@ pub fn draw_frames(
     }
 }
 
-pub fn draw_wire(painter: &Painter, from: Pos2, to: Pos2, color: Color32, width: f32) {
+pub(crate) fn draw_wire(painter: &Painter, from: Pos2, to: Pos2, color: Color32, width: f32) {
     let dx = (to.x - from.x).abs().max(50.0) * 0.5;
     let cp1 = from + Vec2::new(dx, 0.0);
     let cp2 = to - Vec2::new(dx, 0.0);
@@ -195,7 +195,7 @@ pub(crate) fn draw_wire_dashed(
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum WireEmphasis {
+pub(crate) enum WireEmphasis {
     Normal,
     /// Connected to a selected node, or a valid insert target for the
     /// dragged node: brighter and thicker.
@@ -218,7 +218,7 @@ fn mute_wire_color(base: Color32) -> Color32 {
     )
 }
 
-pub fn draw_connections(
+pub(crate) fn draw_connections(
     painter: &Painter,
     graph: &GraphState,
     registry: &crate::runtime::NodeTypeRegistry,
@@ -290,7 +290,7 @@ fn draw_connection(
     draw_wire(painter, from_p, to_p, color, width);
 }
 
-pub fn draw_box_select(painter: &Painter, start: Pos2, end: Pos2) {
+pub(crate) fn draw_box_select(painter: &Painter, start: Pos2, end: Pos2) {
     let rect = Rect::from_two_pos(start, end);
     painter.rect_filled(
         rect,
@@ -305,7 +305,7 @@ pub fn draw_box_select(painter: &Painter, start: Pos2, end: Pos2) {
     );
 }
 
-pub fn draw_knife_line(painter: &Painter, points: &[Pos2]) {
+pub(crate) fn draw_knife_line(painter: &Painter, points: &[Pos2]) {
     for w in points.windows(2) {
         painter.line_segment(
             [w[0], w[1]],
@@ -320,7 +320,12 @@ pub fn draw_knife_line(painter: &Painter, points: &[Pos2]) {
 
 /// Returns true if the cubic bezier wire from `fp` to `tp` crosses the knife segment.
 /// All coordinates are in canvas space.
-pub fn wire_intersects_knife(fp: Pos2, tp: Pos2, knife_start: Pos2, knife_end: Pos2) -> bool {
+pub(crate) fn wire_intersects_knife(
+    fp: Pos2,
+    tp: Pos2,
+    knife_start: Pos2,
+    knife_end: Pos2,
+) -> bool {
     let dx = (tp.x - fp.x).abs().max(50.0) * 0.5;
     let cp1 = fp + Vec2::new(dx, 0.0);
     let cp2 = tp - Vec2::new(dx, 0.0);

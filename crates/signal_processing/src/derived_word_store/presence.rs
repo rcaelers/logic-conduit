@@ -3,7 +3,7 @@ use super::WordPresenceBucket;
 const FAN_OUT: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WordSummaryRecord {
+pub(super) struct WordSummaryRecord {
     pub start_ns: u64,
     pub end_ns: u64,
     pub word_count: u64,
@@ -13,7 +13,7 @@ pub struct WordSummaryRecord {
 
 /// A 64-way append-only mipmap whose leaves summarize occupied word runs.
 #[derive(Debug, Clone)]
-pub struct WordPresenceIndex {
+pub(super) struct WordPresenceIndex {
     pub(super) levels: Vec<Vec<WordSummaryRecord>>,
     extent_end_ns: Option<u64>,
     pub(super) prefix_max_end_ns: Vec<u64>,
@@ -27,7 +27,7 @@ impl Default for WordPresenceIndex {
 }
 
 impl WordPresenceIndex {
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             levels: vec![Vec::new()],
             extent_end_ns: None,
@@ -36,11 +36,11 @@ impl WordPresenceIndex {
         }
     }
 
-    pub fn extent_end_ns(&self) -> Option<u64> {
+    pub(super) fn extent_end_ns(&self) -> Option<u64> {
         self.extent_end_ns
     }
 
-    pub fn push(&mut self, record: WordSummaryRecord) {
+    pub(super) fn push(&mut self, record: WordSummaryRecord) {
         debug_assert!(record.word_count > 0);
         debug_assert!(record.start_ns <= record.end_ns);
         self.extent_end_ns = Some(

@@ -295,7 +295,7 @@ mod macos_menu {
     /// fires every time the recent-files list changes during the session,
     /// not just at startup. A no-op if `install()` hasn't run yet or this
     /// somehow gets called off the main thread.
-    pub fn refresh_recent_files(paths: &[PathBuf]) {
+    pub(super) fn refresh_recent_files(paths: &[PathBuf]) {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
@@ -306,13 +306,13 @@ mod macos_menu {
         });
     }
 
-    pub fn disable_automatic_window_tabbing() {
+    pub(super) fn disable_automatic_window_tabbing() {
         let mtm =
             MainThreadMarker::new().expect("must configure window tabbing on the main thread");
         NSWindow::setAllowsAutomaticWindowTabbing(false, mtm);
     }
 
-    pub fn install(recent_files: &[PathBuf]) {
+    pub(super) fn install(recent_files: &[PathBuf]) {
         let mtm = MainThreadMarker::new().expect("must install the menu on the main thread");
         let app = NSApp(mtm);
         let Some(menu_bar) = app.mainMenu() else {
@@ -478,9 +478,9 @@ struct Args {
     file: Option<std::path::PathBuf>,
 }
 
-pub type MainResult = eframe::Result;
+pub(crate) type MainResult = eframe::Result;
 
-pub fn run() -> MainResult {
+pub(crate) fn run() -> MainResult {
     tracing_subscriber::fmt()
         .with_env_filter(application_env_filter())
         .init();

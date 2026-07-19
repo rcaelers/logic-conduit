@@ -45,7 +45,7 @@ std::cfg_select! {
             LogicCaptureConfig, LogicChunk, LogicEncoding, LogicEncodingRequest, LogicTrigger,
             LogicTriggerStage, RusbTransport, SigrokCaptureReader, SigrokChunkedCaptureReader,
             SigrokFileCaptureDataSource, SigrokFileSource, TriggerCondition, TriggerLogic,
-            UsbTransport, open_dsl_chunked_capture, open_dsl_chunked_capture_with_progress,
+            UsbError, UsbTransport, open_dsl_chunked_capture, open_dsl_chunked_capture_with_progress,
             open_sigrok_chunked_capture, u3pro16_buffered_plan, u3pro16_streaming_plan,
         };
         pub use nodes::sinks::{

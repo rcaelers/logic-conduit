@@ -620,8 +620,8 @@ std::cfg_select! {
         let mut restarts = 0u64;
         lane.store().visit_committed_blocks(|block| {
             blocks += 1;
-            restarts += u64::from(block.header.restart_count);
-            stats.extend_words(&block.words);
+            restarts += u64::from(block.restart_count);
+            stats.extend_words(block.words);
         })?;
         let validation = validation_started.elapsed();
         if stats.count != metadata.total_word_count {
@@ -868,7 +868,7 @@ std::cfg_select! {
         })
     }
 
-    pub fn main() -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
             .init();

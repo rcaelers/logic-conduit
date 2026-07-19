@@ -1,8 +1,8 @@
 use egui::{Pos2, Rect, Vec2};
 
-pub struct ViewState {
-    pub pan: Vec2,
-    pub zoom: f32,
+pub(crate) struct ViewState {
+    pub(crate) pan: Vec2,
+    pub(crate) zoom: f32,
 }
 
 impl Default for ViewState {
@@ -16,20 +16,20 @@ impl Default for ViewState {
 
 impl ViewState {
     // canvas → screen: screen = origin + canvas * zoom + pan
-    pub fn canvas_to_screen(&self, origin: Pos2, p: Pos2) -> Pos2 {
+    pub(crate) fn canvas_to_screen(&self, origin: Pos2, p: Pos2) -> Pos2 {
         origin + p.to_vec2() * self.zoom + self.pan
     }
 
     // screen → canvas: canvas = (screen - origin - pan) / zoom
-    pub fn screen_to_canvas(&self, origin: Pos2, p: Pos2) -> Pos2 {
+    pub(crate) fn screen_to_canvas(&self, origin: Pos2, p: Pos2) -> Pos2 {
         ((p - origin - self.pan) / self.zoom).to_pos2()
     }
 
-    pub fn scale(&self, v: f32) -> f32 {
+    pub(crate) fn scale(&self, v: f32) -> f32 {
         v * self.zoom
     }
 
-    pub fn zoom_around(&mut self, cursor_screen: Pos2, origin: Pos2, factor: f32) {
+    pub(crate) fn zoom_around(&mut self, cursor_screen: Pos2, origin: Pos2, factor: f32) {
         let canvas_cursor = self.screen_to_canvas(origin, cursor_screen);
         self.zoom = (self.zoom * factor).clamp(0.1, 5.0);
         self.pan = cursor_screen - origin - canvas_cursor.to_vec2() * self.zoom;
@@ -37,7 +37,13 @@ impl ViewState {
 
     /// Fits `canvas_bounds` into `viewport`, with the requested screen-space
     /// padding, and centers it without exceeding the default 1x graph zoom.
-    pub fn fit_to_rect(&mut self, canvas_bounds: Rect, viewport: Rect, origin: Pos2, padding: f32) {
+    pub(crate) fn fit_to_rect(
+        &mut self,
+        canvas_bounds: Rect,
+        viewport: Rect,
+        origin: Pos2,
+        padding: f32,
+    ) {
         let available =
             (viewport.size() - Vec2::splat(padding.max(0.0) * 2.0)).max(Vec2::splat(1.0));
         let size = canvas_bounds.size().max(Vec2::splat(1.0));

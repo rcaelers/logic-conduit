@@ -10,17 +10,8 @@ pub enum Error {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("ZIP error: {0}")]
-    Zip(#[from] zip::result::ZipError),
-
-    #[error("Header parsing error: {0}")]
-    ParseHeader(String),
-
     #[error("Parse error: {0}")]
     ParseError(String),
-
-    #[error("Missing required field: {0}")]
-    MissingField(String),
 
     #[error("Invalid probe number: {0}")]
     InvalidProbe(usize),
@@ -32,7 +23,6 @@ pub enum Error {
     OutOfBounds(u64),
 }
 
-pub type DslError = Error;
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Error type for port operations

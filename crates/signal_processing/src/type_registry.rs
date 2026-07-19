@@ -10,7 +10,7 @@ use super::sender::{ChannelMessage, OverflowPolicy, Sender, SharedSenders};
 
 /// Type-erased view of a [`SharedSenders<T>`] so the `PipelineManager` can
 /// own and rewire subscriber lists without knowing `T`.
-pub trait ErasedSharedSenders: Send + Sync {
+pub(crate) trait ErasedSharedSenders: Send + Sync {
     fn subscribe_with_label(
         &self,
         buffer: usize,

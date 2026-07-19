@@ -128,13 +128,13 @@ pub(super) struct HotkeyRegistry {
 }
 
 impl HotkeyRegistry {
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             bindings: Vec::new(),
         }
     }
 
-    pub fn graph_defaults() -> Self {
+    pub(super) fn graph_defaults() -> Self {
         let mut r = Self::new();
         r.bind("delete", GraphAction::Delete { target: None });
         // `M` now mutes (Blender: `M`); minimap relocated to Ctrl+M rather
@@ -156,13 +156,13 @@ impl HotkeyRegistry {
         r
     }
 
-    pub fn bind(&mut self, action_id: &'static str, action: GraphAction) {
+    pub(super) fn bind(&mut self, action_id: &'static str, action: GraphAction) {
         self.bindings.push((action_id, action));
     }
 
     /// Dispatch all matching bindings. Suppressed entirely when any widget holds
     /// keyboard focus, e.g. an open menu or inline text edit.
-    pub fn dispatch(
+    pub(super) fn dispatch(
         &self,
         ui: &mut egui::Ui,
         input_bindings: &input_bindings::InputBindings,

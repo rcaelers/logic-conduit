@@ -297,7 +297,7 @@ pub(crate) struct RegisteredNodeType {
 }
 
 impl RegisteredNodeType {
-    pub fn from_def<T: NodeDef>() -> Self {
+    pub(crate) fn from_def<T: NodeDef>() -> Self {
         Self {
             name: T::name().to_owned(),
             category: T::category().to_owned(),

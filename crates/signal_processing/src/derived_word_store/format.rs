@@ -1,25 +1,25 @@
 use super::errors::{CodecError, CodecResult};
 
-pub const FORMAT_VERSION: u32 = 1;
-pub const DATA_MAGIC: &[u8; 8] = b"DWRDDAT1";
-pub const BLOCK_MAGIC: &[u8; 4] = b"DWBL";
-pub const BLOCK_FLAG_HAS_DURATIONS: u16 = 1 << 0;
-pub const DATA_HEADER_SIZE: usize = 64;
-pub const BLOCK_HEADER_SIZE: usize = 72;
-pub const RESTART_ENTRY_SIZE: usize = 16;
-pub const BLOCK_CHECKSUM_OFFSET: usize = 64;
+pub(super) const FORMAT_VERSION: u32 = 1;
+pub(super) const DATA_MAGIC: &[u8; 8] = b"DWRDDAT1";
+pub(super) const BLOCK_MAGIC: &[u8; 4] = b"DWBL";
+pub(super) const BLOCK_FLAG_HAS_DURATIONS: u16 = 1 << 0;
+pub(super) const DATA_HEADER_SIZE: usize = 64;
+pub(super) const BLOCK_HEADER_SIZE: usize = 72;
+pub(super) const RESTART_ENTRY_SIZE: usize = 16;
+pub(super) const BLOCK_CHECKSUM_OFFSET: usize = 64;
 
-pub const DEFAULT_MAX_WORDS_PER_BLOCK: usize = 32_768;
+pub(super) const DEFAULT_MAX_WORDS_PER_BLOCK: usize = 32_768;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DataFileHeader {
+pub(super) struct DataFileHeader {
     pub cache_key_prefix: [u8; 16],
     pub created_unix_ns: u64,
     pub flags: u64,
 }
 
 impl DataFileHeader {
-    pub fn to_bytes(self) -> [u8; DATA_HEADER_SIZE] {
+    pub(super) fn to_bytes(self) -> [u8; DATA_HEADER_SIZE] {
         let mut bytes = [0u8; DATA_HEADER_SIZE];
         bytes[..8].copy_from_slice(DATA_MAGIC);
         put_u32(&mut bytes, 8, FORMAT_VERSION);
@@ -30,7 +30,7 @@ impl DataFileHeader {
         bytes
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> CodecResult<Self> {
+    pub(super) fn from_bytes(bytes: &[u8]) -> CodecResult<Self> {
         if bytes.len() < DATA_HEADER_SIZE {
             return Err(CodecError::Truncated);
         }
@@ -57,7 +57,7 @@ impl DataFileHeader {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WordBlockHeader {
+pub(super) struct WordBlockHeader {
     pub flags: u16,
     pub sequence: u64,
     pub first_timestamp_ns: u64,
@@ -94,7 +94,7 @@ impl WordBlockHeader {
         put_u32(bytes, BLOCK_CHECKSUM_OFFSET, self.crc32c);
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> CodecResult<Self> {
+    pub(super) fn from_bytes(bytes: &[u8]) -> CodecResult<Self> {
         if bytes.len() < BLOCK_HEADER_SIZE {
             return Err(CodecError::Truncated);
         }
@@ -128,7 +128,7 @@ impl WordBlockHeader {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RestartEntry {
+pub(super) struct RestartEntry {
     pub timestamp_ns: u64,
     /// Byte offset relative to the start of the record payload.
     pub payload_offset: u32,
@@ -137,7 +137,7 @@ pub struct RestartEntry {
 
 /// One fully written block published by the live store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BlockDirectoryEntry {
+pub(super) struct BlockDirectoryEntry {
     pub sequence: u64,
     pub first_timestamp_ns: u64,
     pub last_timestamp_ns: u64,

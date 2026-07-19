@@ -18,18 +18,23 @@ use std::thread::JoinHandle;
 use tracing::{debug, info, warn};
 use zip::ZipArchive;
 
+use signal_processing::capture::{
+    BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureMetadata,
+    CaptureSampledWindow, CaptureSource, CaptureTransition,
+};
+use signal_processing::edge_query::EdgeQuery;
+use signal_processing::errors::WorkResult;
 use signal_processing::events::TextSample;
-use signal_processing::errors::{WorkResult};
-use signal_processing::node::{ProcessNode};
+use signal_processing::node::ProcessNode;
 use signal_processing::ports::{InputPort, OutputPort};
+use signal_processing::protocol::ProtocolKind;
 use signal_processing::sample::{Sample, SampleBlock};
-use signal_processing::capture::{BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureSource, CaptureTransition, DslHeader, DslSampledWindow};
-use signal_processing::edge_query::{EdgeQuery};
-use signal_processing::protocol::{ProtocolKind};
-use signal_processing::sample_kind::{SampleKind};
-use signal_processing::sender::{Sender};
+use signal_processing::sample_kind::SampleKind;
+use signal_processing::sender::Sender;
 use signal_processing::waveform_index::{CaptureIndexProgress, IndexSampler};
 use signal_processing::{Error, Result};
+
+use super::capture_archive::zip_error;
 
 const DEFAULT_BLOCK_CACHE_WINDOWS: usize = 2;
 
@@ -91,7 +96,7 @@ impl BoundedBlockCache {
 pub struct DslCaptureReader {
     path: PathBuf,
     archive: ZipArchive<File>,
-    header: DslHeader,
+    header: CaptureMetadata,
     cache: HashMap<(usize, u64), BlockData>,
     cache_order: VecDeque<(usize, u64)>,
     max_cached_blocks: usize,
@@ -110,7 +115,7 @@ impl DslCaptureReader {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let file = File::open(&path)?;
-        let mut archive = ZipArchive::new(file)?;
+        let mut archive = ZipArchive::new(file).map_err(zip_error)?;
         let header = DslFileSource::parse_header(&mut archive)?;
 
         Ok(Self {
@@ -133,7 +138,7 @@ impl DslCaptureReader {
         &self.path
     }
 
-    pub fn header(&self) -> &DslHeader {
+    pub fn header(&self) -> &CaptureMetadata {
         &self.header
     }
 
@@ -147,7 +152,7 @@ impl DslCaptureReader {
         start_sample: u64,
         end_sample: u64,
         target_points: usize,
-    ) -> Result<DslSampledWindow> {
+    ) -> Result<CaptureSampledWindow> {
         CaptureSource::sampled_window(self, channels, start_sample, end_sample, target_points)
     }
 
@@ -215,7 +220,7 @@ impl DslCaptureReader {
 }
 
 impl CaptureSource for DslCaptureReader {
-    fn metadata(&self) -> &DslHeader {
+    fn metadata(&self) -> &CaptureMetadata {
         &self.header
     }
 
@@ -233,7 +238,7 @@ impl BlockCaptureSource for DslCaptureReader {
 #[derive(Debug, Clone)]
 pub struct DslFileCaptureDataSource {
     path: PathBuf,
-    header: DslHeader,
+    header: CaptureMetadata,
     source_len: u64,
     index_path: PathBuf,
 }
@@ -243,7 +248,7 @@ impl DslFileCaptureDataSource {
         let path = path.as_ref().to_path_buf();
         let source_len = fs::metadata(&path)?.len();
         let file = File::open(&path)?;
-        let mut archive = ZipArchive::new(file)?;
+        let mut archive = ZipArchive::new(file).map_err(zip_error)?;
         let header = DslFileSource::parse_header(&mut archive)?;
         let index_path = dsl_sidecar_path(&path);
 
@@ -267,7 +272,7 @@ impl CaptureDataSource for DslFileCaptureDataSource {
         DslCaptureReader::open(&self.path)
     }
 
-    fn metadata(&self) -> &DslHeader {
+    fn metadata(&self) -> &CaptureMetadata {
         &self.header
     }
 
@@ -425,7 +430,7 @@ pub struct DslFileSource {
     // File access (shared across all channel threads)
     path: PathBuf,
     archive: Arc<Mutex<ZipArchive<File>>>,
-    header: DslHeader,
+    header: CaptureMetadata,
     blocks: BlockCache,
 
     // Configuration
@@ -458,7 +463,7 @@ impl DslFileSource {
 
         let path = path.as_ref().to_path_buf();
         let file = File::open(&path)?;
-        let mut archive = ZipArchive::new(file)?;
+        let mut archive = ZipArchive::new(file).map_err(zip_error)?;
         let header = Self::parse_header(&mut archive)?;
 
         if header.total_probes < num_channels as usize {
@@ -512,10 +517,10 @@ impl DslFileSource {
         guard.clone()
     }
 
-    pub(crate) fn parse_header(archive: &mut ZipArchive<File>) -> Result<DslHeader> {
+    pub(crate) fn parse_header(archive: &mut ZipArchive<File>) -> Result<CaptureMetadata> {
         let mut header_file = archive
             .by_name("header")
-            .map_err(|e| Error::ParseHeader(format!("Cannot find header file: {}", e)))?;
+            .map_err(|e| Error::ParseError(format!("Cannot find header file: {}", e)))?;
 
         let mut header_content = String::new();
         header_file.read_to_string(&mut header_content)?;
@@ -553,16 +558,17 @@ impl DslFileSource {
             }
         }
 
-        let total_probes =
-            total_probes.ok_or_else(|| Error::MissingField("total probes".to_string()))?;
-        let samplerate = samplerate.ok_or_else(|| Error::MissingField("samplerate".to_string()))?;
-        let total_samples =
-            total_samples.ok_or_else(|| Error::MissingField("total samples".to_string()))?;
-        let total_blocks =
-            total_blocks.ok_or_else(|| Error::MissingField("total blocks".to_string()))?;
+        let total_probes = total_probes
+            .ok_or_else(|| Error::ParseError("missing required field: total probes".into()))?;
+        let samplerate = samplerate
+            .ok_or_else(|| Error::ParseError("missing required field: samplerate".into()))?;
+        let total_samples = total_samples
+            .ok_or_else(|| Error::ParseError("missing required field: total samples".into()))?;
+        let total_blocks = total_blocks
+            .ok_or_else(|| Error::ParseError("missing required field: total blocks".into()))?;
 
         let samplerate_hz = Self::parse_sample_rate(&samplerate)
-            .ok_or_else(|| Error::ParseHeader(format!("Invalid sample rate: {}", samplerate)))?;
+            .ok_or_else(|| Error::ParseError(format!("Invalid sample rate: {}", samplerate)))?;
         let sample_period = 1.0 / samplerate_hz;
 
         // ZIP metadata already contains the uncompressed byte count. Avoid
@@ -571,7 +577,7 @@ impl DslFileSource {
             let block_name = "L-0/0";
             let file = archive
                 .by_name(block_name)
-                .map_err(|_| Error::ParseHeader("Could not read first block".to_string()))?;
+                .map_err(|_| Error::ParseError("Could not read first block".to_string()))?;
             file.size() * 8
         };
 
@@ -589,7 +595,7 @@ impl DslFileSource {
             })
             .collect();
 
-        Ok(DslHeader {
+        Ok(CaptureMetadata {
             total_probes,
             samplerate,
             samplerate_hz,
@@ -603,7 +609,7 @@ impl DslFileSource {
     }
 
     /// Get the header information
-    pub fn header(&self) -> &DslHeader {
+    pub fn header(&self) -> &CaptureMetadata {
         &self.header
     }
 
@@ -1300,7 +1306,7 @@ struct ChannelReaderConfig {
     archive: Arc<Mutex<ZipArchive<File>>>,
     blocks: BlockCache,
     channel: usize,
-    header: DslHeader,
+    header: CaptureMetadata,
     sender: Sender<Sample>,
     destination: Option<String>,
     max_samples: Option<u64>,
@@ -1320,7 +1326,7 @@ struct BlockReaderGroupConfig {
     indexed_blocks: Option<Arc<Mutex<DslChunkedCaptureReader>>>,
     destinations: Vec<BlockDestination>,
     group_label: String,
-    header: DslHeader,
+    header: CaptureMetadata,
     max_samples: Option<u64>,
     shutdown: Arc<AtomicBool>,
     completed: Arc<AtomicUsize>,

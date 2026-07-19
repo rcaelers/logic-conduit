@@ -1,0 +1,12 @@
+[package]
+name = "widget-support"
+version.workspace = true
+edition = "2024"
+authors = ["Rob Caelers <rob.caelers@gmail.com>"]
+
+[lib]
+name = "widget_support"
+path = "src/lib.rs"
+
+[dependencies]
+egui = { workspace = true }

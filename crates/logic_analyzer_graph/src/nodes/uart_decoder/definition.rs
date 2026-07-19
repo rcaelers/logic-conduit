@@ -27,8 +27,9 @@ pub struct UartDecoderState {
     pub error_output: BoolValue,
 }
 
-pub const DISPLAY_FORMATS: &[&str] = &["Hex", "Binary", "Octal", "Decimal", "ASCII", "Hex + ASCII"];
-pub fn default_display_format() -> EnumValue {
+pub(super) const DISPLAY_FORMATS: &[&str] =
+    &["Hex", "Binary", "Octal", "Decimal", "ASCII", "Hex + ASCII"];
+pub(crate) fn default_display_format() -> EnumValue {
     EnumValue::new(0, DISPLAY_FORMATS)
 }
 
@@ -49,13 +50,13 @@ const BAUD_PRESETS: &[&str] = &[
     "Custom",
 ];
 
-pub fn default_baud_preset() -> EnumValue {
+pub(crate) fn default_baud_preset() -> EnumValue {
     // Old saved graphs have only `baud_rate`; selecting Custom preserves
     // that value when they are deserialized.
     EnumValue::new(13, BAUD_PRESETS)
 }
 
-pub fn selected_baud_rate(state: &UartDecoderState) -> i32 {
+pub(crate) fn selected_baud_rate(state: &UartDecoderState) -> i32 {
     match state.baud_preset.selected() {
         "300" => 300,
         "1,200" => 1_200,

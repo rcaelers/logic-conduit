@@ -10,20 +10,20 @@ const SCROLL_SPEED: f32 = 26.0;
 /// Width of one bit cell in the digital traces, in pixels.
 const BIT_WIDTH: f32 = 16.0;
 
-pub struct AboutWindow {
+pub(crate) struct AboutWindow {
     open: bool,
     suppress_outside_dismissal: bool,
 }
 
 impl AboutWindow {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             open: false,
             suppress_outside_dismissal: false,
         }
     }
 
-    pub fn open(&mut self) {
+    pub(crate) fn open(&mut self) {
         if !self.open {
             // The window is rendered later in the same frame as the button
             // that opens it. Do not treat that button click as a click outside
@@ -33,7 +33,7 @@ impl AboutWindow {
         self.open = true;
     }
 
-    pub fn show(&mut self, ctx: &egui::Context) {
+    pub(crate) fn show(&mut self, ctx: &egui::Context) {
         if !self.open {
             return;
         }

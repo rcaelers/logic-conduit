@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use super::codec::DecodedWordBlock;
 use super::format::RestartEntry;
 
-pub const DEFAULT_DECODED_BLOCK_CACHE_BYTES: usize = 64 * 1024 * 1024;
+pub(super) const DEFAULT_DECODED_BLOCK_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DecodedBlockCacheStats {

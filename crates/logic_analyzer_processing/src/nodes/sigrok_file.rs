@@ -14,21 +14,25 @@ use std::thread::JoinHandle;
 
 use zip::ZipArchive;
 
+use signal_processing::capture::{
+    BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureMetadata,
+    CaptureSource,
+};
 use signal_processing::errors::{WorkError, WorkResult};
-use signal_processing::node::{ProcessNode};
-use signal_processing::ports::{InputPort, OutputPort};
-use signal_processing::ports::{PortDirection, PortSchema};
+use signal_processing::node::ProcessNode;
+use signal_processing::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 use signal_processing::sample::Sample;
-use signal_processing::capture::{BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureSource};
-use signal_processing::sender::{Sender};
-use signal_processing::{DslHeader, Error, Result};
+use signal_processing::sender::Sender;
+use signal_processing::{Error, Result};
+
+use super::capture_archive::zip_error;
 
 /// A PulseView/sigrok v2 session source.  Sigrok stores complete sample words
 /// (unlike DSLogic's per-channel bit blocks), so this reader keeps the
 /// decompressed logic stream in memory and exposes edge streams.
 pub struct SigrokFileSource {
     name: String,
-    header: DslHeader,
+    header: CaptureMetadata,
     samples: Arc<[u8]>,
     unitsize: usize,
     num_channels: u8,
@@ -94,7 +98,7 @@ impl SigrokCaptureReader {
 }
 
 impl CaptureSource for SigrokCaptureReader {
-    fn metadata(&self) -> &DslHeader {
+    fn metadata(&self) -> &CaptureMetadata {
         &self.source.header
     }
 
@@ -134,7 +138,7 @@ impl BlockCaptureSource for SigrokCaptureReader {
 #[derive(Debug, Clone)]
 pub struct SigrokFileCaptureDataSource {
     path: PathBuf,
-    header: DslHeader,
+    header: CaptureMetadata,
     source_len: u64,
 }
 
@@ -157,7 +161,7 @@ impl CaptureDataSource for SigrokFileCaptureDataSource {
     fn open_reader(&self) -> Result<Self::Reader> {
         SigrokCaptureReader::open(&self.path)
     }
-    fn metadata(&self) -> &DslHeader {
+    fn metadata(&self) -> &CaptureMetadata {
         &self.header
     }
     fn fingerprint(&self) -> CaptureFingerprint {
@@ -203,10 +207,10 @@ impl SigrokFileSource {
             )));
         }
 
-        let mut archive = ZipArchive::new(File::open(path)?)?;
+        let mut archive = ZipArchive::new(File::open(path)?).map_err(zip_error)?;
         let version = read_zip_text(&mut archive, "version")?;
         if version.trim() != "2" {
-            return Err(Error::ParseHeader(format!(
+            return Err(Error::ParseError(format!(
                 "unsupported sigrok session version '{}' (expected 2)",
                 version.trim()
             )));
@@ -218,17 +222,19 @@ impl SigrokFileSource {
             .find(|(section, values)| {
                 section.starts_with("device ") && values.contains_key("capturefile")
             })
-            .ok_or_else(|| Error::MissingField("device X.capturefile".to_string()))?;
+            .ok_or_else(|| {
+                Error::ParseError("missing required field: device X.capturefile".into())
+            })?;
         let values = device.1;
         let capturefile = required(values, "capturefile")?;
         let total_probes: usize = required(values, "total probes")?
             .parse()
-            .map_err(|_| Error::ParseHeader("invalid device X.total probes".to_string()))?;
+            .map_err(|_| Error::ParseError("invalid device X.total probes".to_string()))?;
         let unitsize: usize = required(values, "unitsize")?
             .parse()
-            .map_err(|_| Error::ParseHeader("invalid device X.unitsize".to_string()))?;
+            .map_err(|_| Error::ParseError("invalid device X.unitsize".to_string()))?;
         if unitsize == 0 || total_probes == 0 || total_probes > unitsize * 8 {
-            return Err(Error::ParseHeader(format!(
+            return Err(Error::ParseError(format!(
                 "invalid sigrok logic layout: {total_probes} probes in {unitsize}-byte samples"
             )));
         }
@@ -240,12 +246,12 @@ impl SigrokFileSource {
 
         let samplerate = required(values, "samplerate")?.to_string();
         let samplerate_hz = parse_sample_rate(&samplerate)
-            .ok_or_else(|| Error::ParseHeader(format!("Invalid sample rate: {samplerate}")))?;
+            .ok_or_else(|| Error::ParseError(format!("Invalid sample rate: {samplerate}")))?;
         let trigger_sample = values
             .get("trigger sample")
             .map(|sample| {
                 sample.parse::<u64>().map_err(|_| {
-                    Error::ParseHeader("invalid device X.trigger sample".to_string())
+                    Error::ParseError("invalid device X.trigger sample".to_string())
                 })
             })
             .transpose()?;
@@ -266,25 +272,25 @@ impl SigrokFileSource {
                 .unwrap_or(0)
         });
         if logic_entries.is_empty() {
-            return Err(Error::ParseHeader(format!(
+            return Err(Error::ParseError(format!(
                 "no {capturefile} logic data found"
             )));
         }
 
         let mut samples = Vec::new();
         for entry in logic_entries {
-            let mut logic = archive.by_name(&entry)?;
+            let mut logic = archive.by_name(&entry).map_err(zip_error)?;
             logic.read_to_end(&mut samples)?;
         }
         if samples.len() % unitsize != 0 {
-            return Err(Error::ParseHeader(format!(
+            return Err(Error::ParseError(format!(
                 "logic data size {} is not divisible by unitsize {unitsize}",
                 samples.len()
             )));
         }
         let total_samples = (samples.len() / unitsize) as u64;
         if total_samples == 0 {
-            return Err(Error::ParseHeader(
+            return Err(Error::ParseError(
                 "logic data contains no samples".to_string(),
             ));
         }
@@ -297,7 +303,7 @@ impl SigrokFileSource {
                     .unwrap_or_else(|| format!("Probe {probe}"))
             })
             .collect();
-        let header = DslHeader {
+        let header = CaptureMetadata {
             total_probes,
             samplerate,
             samplerate_hz,
@@ -328,7 +334,7 @@ impl SigrokFileSource {
         self
     }
 
-    pub fn header(&self) -> &DslHeader {
+    pub fn header(&self) -> &CaptureMetadata {
         &self.header
     }
 
@@ -419,7 +425,7 @@ impl Drop for SigrokFileSource {
 fn read_zip_text(archive: &mut ZipArchive<File>, name: &str) -> Result<String> {
     let mut file = archive
         .by_name(name)
-        .map_err(|_| Error::MissingField(name.to_string()))?;
+        .map_err(|_| Error::ParseError(format!("missing required field: {name}")))?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
     Ok(contents)
@@ -451,7 +457,7 @@ fn required<'a>(values: &'a BTreeMap<String, String>, key: &str) -> Result<&'a s
     values
         .get(key)
         .map(String::as_str)
-        .ok_or_else(|| Error::MissingField(format!("device X.{key}")))
+        .ok_or_else(|| Error::ParseError(format!("missing required field: device X.{key}")))
 }
 
 fn parse_sample_rate(rate: &str) -> Option<f64> {

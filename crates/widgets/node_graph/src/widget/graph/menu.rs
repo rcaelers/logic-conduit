@@ -689,7 +689,7 @@ pub(super) struct MenuController {
 }
 
 impl MenuController {
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             popup: PopupMenu::new(egui::Id::new("dsl_add_node_popup")),
             add_search: AddSearchPopup::new(),
@@ -700,12 +700,12 @@ impl MenuController {
     }
 
     /// Open the standalone add-node popup (e.g. Shift+A).
-    pub fn open_popup(&mut self, screen_pos: Pos2, entries: Vec<MenuEntry<GraphAction>>) {
+    pub(super) fn open_popup(&mut self, screen_pos: Pos2, entries: Vec<MenuEntry<GraphAction>>) {
         self.add_search.close();
         self.popup.open_popup(screen_pos, entries);
     }
 
-    pub fn open_add_popup(
+    pub(super) fn open_add_popup(
         &mut self,
         screen_pos: Pos2,
         registry: &NodeTypeRegistry,
@@ -724,7 +724,7 @@ impl MenuController {
     /// Opens the search box directly (skipping the intermediate "Add" popup)
     /// filtered to node types compatible with `from` — the link-drag-search
     /// gesture triggered by releasing a dragged wire over empty canvas.
-    pub fn open_link_drag_search(
+    pub(super) fn open_link_drag_search(
         &mut self,
         screen_pos: Pos2,
         registry: &NodeTypeRegistry,
@@ -736,7 +736,7 @@ impl MenuController {
         self.add_search.open(screen_pos, items);
     }
 
-    pub fn context_trigger_pos(
+    pub(super) fn context_trigger_pos(
         &mut self,
         ui: &egui::Ui,
         pointer: Option<Pos2>,
@@ -772,13 +772,13 @@ impl MenuController {
         (press.distance(release) <= TABLET_CONTEXT_DRIFT_THRESHOLD).then_some(press)
     }
 
-    pub fn blocks_canvas_scroll(&self, ui: &egui::Ui) -> bool {
+    pub(super) fn blocks_canvas_scroll(&self, ui: &egui::Ui) -> bool {
         self.add_search.blocks_canvas_scroll(ui)
     }
 
     /// Drive for one frame: tablet gesture detection, keyboard nav, rendering.
     /// `allow`: false while wire-cutting is active.
-    pub fn update(
+    pub(super) fn update(
         &mut self,
         ui: &mut egui::Ui,
         response: &egui::Response,
