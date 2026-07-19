@@ -74,6 +74,8 @@ pub struct LogicAnalyzerViewer {
     pub(crate) viewer_lanes: ViewerLaneRegistry,
     pub(crate) indexed_annotation_cache: HashMap<String, IndexedAnnotationCacheEntry>,
     pub(crate) sampling_overlay: Option<SamplingOverlay>,
+    pub(crate) sampling_overlay_channels: Option<Vec<LogicChannel>>,
+    pub(crate) sampling_overlay_key: Option<(u64, u64, u64)>,
     pub(crate) growing_capture: Option<GrowingCaptureView>,
     pub(crate) simple_trigger_lanes: HashMap<usize, SimpleTriggerLane>,
     pub(crate) simple_trigger_popup: Option<SimpleTriggerPopup>,
@@ -127,6 +129,8 @@ impl LogicAnalyzerViewer {
             viewer_lanes: ViewerLaneRegistry::new(),
             indexed_annotation_cache: HashMap::new(),
             sampling_overlay: None,
+            sampling_overlay_channels: None,
+            sampling_overlay_key: None,
             growing_capture: None,
             simple_trigger_lanes: HashMap::new(),
             simple_trigger_popup: None,
@@ -184,6 +188,8 @@ impl LogicAnalyzerViewer {
     /// relationship.
     pub fn set_sampling_overlay(&mut self, overlay: Option<SamplingOverlay>) {
         self.sampling_overlay = overlay;
+        self.sampling_overlay_channels = None;
+        self.sampling_overlay_key = None;
     }
 
     pub fn set_simple_trigger_lanes(&mut self, lanes: Vec<SimpleTriggerLane>) {
@@ -242,6 +248,8 @@ impl LogicAnalyzerViewer {
         self.row_rename = None;
         self.sampler = None;
         self.sampled_key = None;
+        self.sampling_overlay_channels = None;
+        self.sampling_overlay_key = None;
         self.worker_responses = None;
         self.index_progress = None;
         self.cursors.clear();
@@ -287,6 +295,8 @@ impl LogicAnalyzerViewer {
                 self.row_rename = None;
                 self.sampler = None;
                 self.sampled_key = None;
+                self.sampling_overlay_channels = None;
+                self.sampling_overlay_key = None;
                 self.index_progress = None;
                 self.worker_responses = None;
                 self.cursors.clear();
@@ -305,6 +315,8 @@ impl LogicAnalyzerViewer {
         self.row_rename = None;
         self.sampler = None;
         self.sampled_key = None;
+        self.sampling_overlay_channels = None;
+        self.sampling_overlay_key = None;
         self.index_progress = None;
         self.fit_to_capture = true;
         self.cursors.clear();
@@ -327,6 +339,8 @@ impl LogicAnalyzerViewer {
         self.row_rename = None;
         self.sampler = None;
         self.sampled_key = None;
+        self.sampling_overlay_channels = None;
+        self.sampling_overlay_key = None;
         self.worker_responses = None;
         self.index_progress = None;
         self.cursors.clear();
@@ -364,6 +378,8 @@ impl LogicAnalyzerViewer {
         self.row_rename = None;
         self.sampler = Some(sampler);
         self.sampled_key = None;
+        self.sampling_overlay_channels = None;
+        self.sampling_overlay_key = None;
         self.worker_responses = None;
         self.index_progress = None;
         self.cursors.clear();
@@ -566,6 +582,7 @@ impl LogicAnalyzerViewer {
                 && !row_dragging,
         );
         self.sample_visible_window(layout);
+        self.sample_sampling_overlay();
         layout = self.layout(ui, rect);
         self.sample_indexed_annotations(layout);
         let hover_pointer = if cursor_input.blocks_pan {
@@ -776,6 +793,7 @@ mod tests {
     };
 
     use super::{ChannelSignal, LogicAnalyzerViewer};
+    use crate::{SamplingEdge, SamplingOverlay};
 
     struct GrowingTestIndex {
         header: CaptureMetadata,
@@ -973,5 +991,35 @@ mod tests {
 
         assert_eq!(viewer.visible_span_us, 1_000_000.0);
         assert_eq!(viewer.visible_start_us, 0.0);
+    }
+
+    #[test]
+    fn sampling_overlay_uses_an_exact_cached_window_up_to_one_hundred_ms() {
+        let total_samples = Arc::new(AtomicU64::new(200_000));
+        let generation = Arc::new(AtomicU64::new(1));
+        let mut viewer = LogicAnalyzerViewer::new();
+        viewer.set_growing_capture(Box::new(growing_test_index(
+            Arc::clone(&total_samples),
+            Arc::clone(&generation),
+        )));
+        viewer.set_sampling_overlay(Some(SamplingOverlay {
+            clock_channel: 0,
+            sampled_channels: vec![0],
+            edge: SamplingEdge::Rising,
+            qualifiers: Vec::new(),
+            activities: Vec::new(),
+        }));
+        viewer.visible_start_us = 0.0;
+        viewer.visible_span_us = 100_000.0;
+
+        viewer.sample_sampling_overlay();
+
+        assert!(viewer.sampling_overlay_channels.is_some());
+        assert_eq!(viewer.sampling_overlay_key, Some((0, 100_000, 1)));
+
+        viewer.visible_span_us = 100_001.0;
+        viewer.sample_sampling_overlay();
+        assert!(viewer.sampling_overlay_channels.is_none());
+        assert!(viewer.sampling_overlay_key.is_none());
     }
 }

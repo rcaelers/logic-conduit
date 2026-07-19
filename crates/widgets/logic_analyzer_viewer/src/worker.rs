@@ -81,6 +81,8 @@ impl LogicAnalyzerViewer {
                     self.ensure_row_order();
                     self.sampler = None;
                     self.sampled_key = None;
+                    self.sampling_overlay_channels = None;
+                    self.sampling_overlay_key = None;
                     self.index_progress = None;
                 }
                 WorkerResponse::Status { path, message } => {
@@ -107,6 +109,8 @@ impl LogicAnalyzerViewer {
                     self.index_progress = None;
                     self.sampler = Some(sampler);
                     self.sampled_key = None;
+                    self.sampling_overlay_channels = None;
+                    self.sampling_overlay_key = None;
                     if self.fit_to_capture {
                         self.fit_capture();
                     }

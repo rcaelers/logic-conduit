@@ -8,6 +8,8 @@ use crate::types::{
 };
 use crate::viewer::LogicAnalyzerViewer;
 
+const MAX_EXACT_SAMPLING_OVERLAY_SPAN_US: f64 = 100_000.0;
+
 impl LogicAnalyzerViewer {
     /// Samples the visible window from the index synchronously, so the drawn
     /// waveform always matches the current view exactly. Skipped when neither
@@ -67,6 +69,71 @@ impl LogicAnalyzerViewer {
         }
         // Recorded even on failure so a persistent error does not retry every frame.
         self.sampled_key = Some(key);
+    }
+
+    /// Samples the channels needed by the selected sampling overlay exactly,
+    /// independently of the summarized waveform used to draw the main rows.
+    /// The result is cached for the current view and capture generation; the
+    /// drawing pass subsequently reduces dense edges to screen-space markers.
+    pub(crate) fn sample_sampling_overlay(&mut self) {
+        if self.sampling_overlay.is_none()
+            || self.sampler.is_none()
+            || self.visible_span_us > MAX_EXACT_SAMPLING_OVERLAY_SPAN_US
+        {
+            self.sampling_overlay_channels = None;
+            self.sampling_overlay_key = None;
+            return;
+        }
+
+        let Some(overlay) = self.sampling_overlay.as_ref() else {
+            return;
+        };
+        let Some(capture) = self.capture_info.as_ref() else {
+            self.sampling_overlay_channels = None;
+            self.sampling_overlay_key = None;
+            return;
+        };
+        if capture.header.total_samples == 0 {
+            self.sampling_overlay_channels = None;
+            return;
+        }
+        let samplerate_hz = capture.header.samplerate_hz;
+        let (start_sample, end_sample) =
+            visible_sample_range(capture, self.visible_start_us, self.visible_span_us);
+        let generation = self
+            .sampler
+            .as_ref()
+            .expect("sampler was checked above")
+            .generation();
+        let key = (start_sample, end_sample, generation);
+        if self.sampling_overlay_key == Some(key) {
+            return;
+        }
+
+        let mut channels =
+            Vec::with_capacity(1 + overlay.sampled_channels.len() + overlay.qualifiers.len());
+        channels.push(overlay.clock_channel);
+        channels.extend(overlay.sampled_channels.iter().copied());
+        channels.extend(overlay.qualifiers.iter().map(|qualifier| qualifier.channel));
+        channels.sort_unstable();
+        channels.dedup();
+
+        let exact_points = usize::try_from(end_sample - start_sample).unwrap_or(usize::MAX);
+        let result = self
+            .sampler
+            .as_mut()
+            .expect("sampler was checked above")
+            .sampled_window(&channels, start_sample, end_sample, exact_points);
+        match result {
+            Ok(window) => {
+                self.sampling_overlay_channels = Some(channels_from_window(&window, samplerate_hz));
+            }
+            Err(error) => {
+                self.sampling_overlay_channels = None;
+                self.status = format!("Could not read exact sampling points: {error}");
+            }
+        }
+        self.sampling_overlay_key = Some(key);
     }
 
     /// Refreshes the pulse measurement for the current hover position.

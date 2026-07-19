@@ -5,15 +5,22 @@ use crate::sampling_overlay::{SamplingEdge, SamplingOverlay};
 use crate::types::{AnalyzerLayout, RowKey, WaveformSegmentKind};
 use crate::viewer::LogicAnalyzerViewer;
 
-const MARKER_SPACING: f32 = 6.0;
+const MARKER_SPACING_PX: f64 = 6.0;
 
 impl LogicAnalyzerViewer {
     pub(super) fn draw_sampling_overlay(&self, painter: &Painter, layout: AnalyzerLayout) {
         let Some(overlay) = &self.sampling_overlay else {
             return;
         };
-        let Some(clock) = self
-            .channels
+        let channels = if self.has_index_sampler() {
+            let Some(channels) = self.sampling_overlay_channels.as_deref() else {
+                return;
+            };
+            channels
+        } else {
+            &self.channels
+        };
+        let Some(clock) = channels
             .iter()
             .find(|channel| channel.index == overlay.clock_channel)
         else {
@@ -30,17 +37,16 @@ impl LogicAnalyzerViewer {
         let visible_end_us = self.visible_start_us + self.visible_span_us;
         let mut edges =
             visible_sampling_edges(clock, overlay.edge, self.visible_start_us, visible_end_us);
-        if edges.is_empty()
-            || !sampling_edges_are_legible(
-                &edges,
-                self.visible_start_us,
-                visible_end_us,
-                layout.wave_rect.width(),
-            )
-        {
+        if edges.is_empty() {
             return;
         }
-        edges.retain(|(time_us, _)| sampling_is_active(&self.channels, overlay, *time_us));
+        edges.retain(|(time_us, _)| sampling_is_active(channels, overlay, *time_us));
+        thin_sampling_edges(
+            &mut edges,
+            self.visible_start_us,
+            visible_end_us,
+            layout.wave_rect.width(),
+        );
         if edges.is_empty() {
             return;
         }
@@ -54,8 +60,7 @@ impl LogicAnalyzerViewer {
         }
 
         for &channel_index in &overlay.sampled_channels {
-            let Some(channel) = self
-                .channels
+            let Some(channel) = channels
                 .iter()
                 .find(|channel| channel.index == channel_index)
             else {
@@ -86,20 +91,27 @@ impl LogicAnalyzerViewer {
     }
 }
 
-fn sampling_edges_are_legible(
-    edges: &[(f64, bool)],
+fn thin_sampling_edges(
+    edges: &mut Vec<(f64, bool)>,
     visible_start_us: f64,
     visible_end_us: f64,
     width: f32,
-) -> bool {
+) {
     let visible_span_us = visible_end_us - visible_start_us;
     if width <= 0.0 || visible_span_us <= 0.0 {
-        return false;
+        edges.clear();
+        return;
     }
     let pixels_per_us = f64::from(width) / visible_span_us;
-    edges
-        .windows(2)
-        .all(|pair| (pair[1].0 - pair[0].0) * pixels_per_us >= f64::from(MARKER_SPACING))
+    let mut last_x = f64::NEG_INFINITY;
+    edges.retain(|(time_us, _)| {
+        let x = (*time_us - visible_start_us) * pixels_per_us;
+        if x - last_x < MARKER_SPACING_PX {
+            return false;
+        }
+        last_x = x;
+        true
+    });
 }
 
 fn sampling_is_active(channels: &[LogicChannel], overlay: &SamplingOverlay, time_us: f64) -> bool {
@@ -323,19 +335,15 @@ mod tests {
     }
 
     #[test]
-    fn clock_density_hides_sparse_gated_markers_when_zoomed_out() {
-        let locally_dense_edges = vec![(10.0, true), (11.0, true), (12.0, true)];
-        assert!(!sampling_edges_are_legible(
-            &locally_dense_edges,
-            0.0,
-            1_000.0,
-            600.0,
-        ));
-        assert!(sampling_edges_are_legible(
-            &locally_dense_edges,
-            0.0,
-            100.0,
-            600.0,
-        ));
+    fn dense_sampling_edges_are_thinned_to_six_screen_pixels() {
+        let mut edges = vec![
+            (0.0, true),
+            (1.0, true),
+            (2.0, true),
+            (6.0, true),
+            (12.0, true),
+        ];
+        thin_sampling_edges(&mut edges, 0.0, 100.0, 100.0);
+        assert_eq!(edges, vec![(0.0, true), (6.0, true), (12.0, true)]);
     }
 }
