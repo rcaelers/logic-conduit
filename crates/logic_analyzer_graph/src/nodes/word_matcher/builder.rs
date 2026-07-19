@@ -8,9 +8,8 @@ use logic_analyzer_processing::{MatchOp, TriggerAt, WordMatcher};
 use node_graph::Socket;
 use signal_processing::{ConfigValue, NodeConfig, ProcessNode, Sample, Trigger, Word};
 
-use crate::compiler::{
-    CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_hex, parse_state,
-};
+use super::definition::parse_hex;
+use crate::compiler::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 use crate::nodes;
 
 pub(crate) struct WordMatcherBuilder;

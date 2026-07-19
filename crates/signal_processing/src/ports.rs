@@ -10,7 +10,7 @@ use super::receiver::Receiver;
 use super::sample_kind::SampleKind;
 use super::sender::Sender;
 pub use super::type_registry::register_type;
-pub use super::watchdog::{Watchdog, WatchdogHandle};
+use super::watchdog::{Watchdog, WatchdogHandle};
 
 /// Direction of a port
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

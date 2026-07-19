@@ -690,15 +690,6 @@ pub(crate) fn parse_state<T: serde::de::DeserializeOwned>(state: &Value) -> Resu
     serde_json::from_value(state.clone()).map_err(|e| format!("invalid node state: {e}"))
 }
 
-pub(crate) fn parse_hex(text: &str) -> Result<u64, String> {
-    let trimmed = text.trim();
-    let digits = trimmed
-        .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-        .unwrap_or(trimmed);
-    u64::from_str_radix(digits, 16).map_err(|_| format!("'{text}' is not a hex value"))
-}
-
 // ── IR ───────────────────────────────────────────────────────────────────────
 
 /// Pure description — no threads, no channels. Cheap to rebuild on every

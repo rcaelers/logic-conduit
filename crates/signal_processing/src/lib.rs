@@ -47,6 +47,7 @@ std::cfg_select! {
     }
     _ => {
         mod archive_capture_store;
+        mod crc32c;
         #[path = "idle_native.rs"]
         mod idle;
         pub mod waveform_index;

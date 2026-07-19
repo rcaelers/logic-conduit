@@ -1407,7 +1407,7 @@ fn commit_record_prefix(record: CommitRecord) -> [u8; 42] {
 
 fn commit_record_checksum(record: CommitRecord, data: &[u8]) -> u32 {
     let prefix = commit_record_prefix(record);
-    crate::derived_word_store::crc32c::checksum_parts(&[&prefix, data])
+    crate::crc32c::checksum_parts(&[&prefix, data])
 }
 
 fn validate_record_checksum(

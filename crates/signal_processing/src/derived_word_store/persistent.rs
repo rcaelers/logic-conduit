@@ -346,7 +346,7 @@ fn encode_index(
         put_u64(&mut bytes, offset + 24, summary.first_block);
         put_u32(&mut bytes, offset + 32, summary.block_count);
     }
-    let checksum = super::crc32c::block_checksum(&bytes, 88);
+    let checksum = crate::crc32c::block_checksum(&bytes, 88);
     put_u32(&mut bytes, 88, checksum);
     Ok(bytes)
 }
@@ -366,7 +366,7 @@ fn decode_index(bytes: &[u8], cache_key: [u8; 32]) -> StoreResult<PersistentInde
         return Err(StoreError::Persistent("index cache key mismatch".into()));
     }
     let expected_checksum = get_u32(bytes, 88)?;
-    if super::crc32c::block_checksum(bytes, 88) != expected_checksum {
+    if crate::crc32c::block_checksum(bytes, 88) != expected_checksum {
         return Err(StoreError::Persistent(
             "persistent index checksum mismatch".into(),
         ));
@@ -505,7 +505,7 @@ fn encode_manifest(manifest: Manifest) -> [u8; MANIFEST_SIZE] {
     put_u64(&mut bytes, 64, manifest.word_count);
     put_u64(&mut bytes, 72, manifest.created_unix_ns);
     put_u64(&mut bytes, 80, manifest.accessed_unix_ns);
-    let checksum = super::crc32c::block_checksum(&bytes, 88);
+    let checksum = crate::crc32c::block_checksum(&bytes, 88);
     put_u32(&mut bytes, 88, checksum);
     bytes
 }
@@ -520,7 +520,7 @@ fn decode_manifest(bytes: &[u8]) -> StoreResult<Manifest> {
         ));
     }
     let expected_checksum = get_u32(bytes, 88)?;
-    if super::crc32c::block_checksum(bytes, 88) != expected_checksum {
+    if crate::crc32c::block_checksum(bytes, 88) != expected_checksum {
         return Err(StoreError::Persistent(
             "persistent manifest checksum mismatch".into(),
         ));

@@ -1,3 +1,5 @@
+//! Shared CRC-32C integrity checks for persistent binary formats.
+
 const POLYNOMIAL: u32 = 0x82f6_3b78;
 
 const fn tables() -> [[u32; 256]; 8] {
@@ -61,13 +63,8 @@ pub(crate) fn checksum_parts(parts: &[&[u8]]) -> u32 {
     !crc
 }
 
-#[cfg(test)]
-pub(super) fn checksum(bytes: &[u8]) -> u32 {
-    checksum_parts(&[bytes])
-}
-
 /// Computes a block checksum while treating its stored checksum field as zero.
-pub(super) fn block_checksum(bytes: &[u8], checksum_offset: usize) -> u32 {
+pub(crate) fn block_checksum(bytes: &[u8], checksum_offset: usize) -> u32 {
     let mut crc = update(!0, &bytes[..checksum_offset]);
     crc = update(crc, &[0; size_of::<u32>()]);
     crc = update(crc, &bytes[checksum_offset + size_of::<u32>()..]);
@@ -77,6 +74,10 @@ pub(super) fn block_checksum(bytes: &[u8], checksum_offset: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn checksum(bytes: &[u8]) -> u32 {
+        checksum_parts(&[bytes])
+    }
 
     fn bytewise_checksum(bytes: &[u8]) -> u32 {
         let mut crc = !0u32;
@@ -89,6 +90,14 @@ mod tests {
     #[test]
     fn crc32c_matches_the_standard_check_value() {
         assert_eq!(checksum(b"123456789"), 0xe306_9283);
+    }
+
+    #[test]
+    fn checksum_parts_matches_the_concatenated_input() {
+        assert_eq!(
+            checksum_parts(&[b"123", b"456", b"789"]),
+            checksum(b"123456789")
+        );
     }
 
     #[test]

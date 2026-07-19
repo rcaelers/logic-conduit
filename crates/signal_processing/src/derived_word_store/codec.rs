@@ -1,11 +1,11 @@
 use super::config::BlockCodecConfig;
-use super::crc32c::block_checksum;
 use super::format::{
     BLOCK_CHECKSUM_OFFSET, BLOCK_FLAG_HAS_DURATIONS, BLOCK_HEADER_SIZE,
     DEFAULT_MAX_WORDS_PER_BLOCK, RESTART_ENTRY_SIZE, RestartEntry, WordBlockHeader,
 };
 use super::vlq::{decode_u64, encode_u64, encoded_len};
 use super::errors::{CodecError, CodecResult};
+use crate::crc32c::block_checksum;
 use crate::events::Word;
 
 #[cfg(test)]
