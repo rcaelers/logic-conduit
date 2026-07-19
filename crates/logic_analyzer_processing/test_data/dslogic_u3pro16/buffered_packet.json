@@ -7,7 +7,7 @@
   "remaining_samples": 0,
   "expected": {
     "mode": 9,
-    "divider": 2,
+    "divider": 1,
     "divider_high": 1024,
     "capture_units": 128,
     "trigger_position": 1024,

@@ -192,11 +192,6 @@ impl<T: UsbTransport> PreparedStreamingAcquisition<T> {
             if chunk.bit_len == 0 {
                 continue;
             }
-            if !header_seen {
-                return Err(AcquisitionError::Protocol(
-                    "U3Pro16 streaming data arrived before its trigger header".into(),
-                ));
-            }
             let Some(transfer) = canonicalizer.push(&chunk, channels.len())? else {
                 continue;
             };
@@ -225,11 +220,6 @@ impl<T: UsbTransport> PreparedStreamingAcquisition<T> {
         }
 
         analyzer.stop_capture().map_err(map_analyzer_error)?;
-        if !stopped && !header_seen {
-            return Err(AcquisitionError::Protocol(
-                "U3Pro16 stream ended without a trigger header".into(),
-            ));
-        }
         context.finish_writer()?;
         context.publish_status(
             CaptureSessionState::Stopping,

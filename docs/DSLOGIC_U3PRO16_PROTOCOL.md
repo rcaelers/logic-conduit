@@ -30,7 +30,7 @@ out of scope.
 | Bulk OUT endpoint | `0x02` |
 | Bulk IN endpoint | `0x86` |
 | Runtime firmware version | major version must be `2` |
-| FPGA logic version | register `0x04` must be `0x0e` |
+| FPGA logic version | byte `0x04` of command-15's five-byte status block must be `0x0e` |
 
 Open the device, select configuration 1 if needed, and claim interface 0.
 Runtime identification requires both string prefixes above. A device that
@@ -80,11 +80,12 @@ The FPGA image is sent verbatim. Let `N` be its byte length; require
 
 1. Write command 3, data `fb` (program pin low).
 2. Write command 5, data `fc` (both LEDs off).
-3. Write command 3, data `04` (program pin high).
+3. Wait for status bit 5 to clear, then write command 3, data `04` (program pin high).
 4. Poll command 2 until status bit 5 is set.
 5. Write command 6, data `7f` (input-ready low).
 6. Write command 10 with the three-byte little-endian value of `N`.
-7. Bulk-write the complete `.bin` image to endpoint `0x02`.
+7. Bulk-write the complete `.bin` image to endpoint `0x02`, then allow 20 ms
+   for the device-side GPIF/FIFO to drain.
 8. Write command 6, data `80` (input-ready high).
 9. Poll command 2 until status bit 7 is set.
 10. Write command 6, data `7f`.
@@ -93,6 +94,9 @@ The FPGA image is sent verbatim. Let `N` be its byte length; require
 13. Write command 7, data `01`.
 
 Use a finite deadline for every poll. A five-second deadline is reasonable.
+Do not retry a failed configuration on the same device handle: status `0xab`
+does not recover through another program/upload sequence. Reopen after a USB
+power cycle instead.
 
 ## 4. Runtime control transport
 
@@ -161,11 +165,16 @@ Command 14 writes one register: `offset=address`, `length=1`, followed by the
 value. Command 15 reads a register using the two-phase read: `offset=address`,
 `length=1`.
 
+When status bit 6 reports an already-configured FPGA, first write register
+`0x70 = 0x00` to deassert acquisition clear, then read command 15 from offset
+zero with length five and validate byte four as the HDL version. Retry an
+all-zero status block briefly before treating the image as incompatible.
+
 Registers required for logic acquisition:
 
 | Address | Function |
 | ---: | --- |
-| `0x04` | FPGA logic version |
+| `0x04` | FPGA logic version; read command 15 from offset `0` with length `5` and use byte `0x04` |
 | `0x05` | hardware status mirror |
 | `0x70` | acquisition control: `00` clear, `02` force ready, `04` force stop |
 | `0x78` | input-threshold DAC code |
@@ -209,12 +218,13 @@ Only these discrete rates may be selected:
 1 GHz
 ```
 
-Intersect that list with the selected mode's range. The selected mode's
-maximum hardware rate is `M`; its pre-divider is always `P=5`.
+Intersect that list with the selected mode's range. The FPGA divider clock is
+always `M=500 MHz`; a mode's lower maximum is a USB/data-path limit rather
+than the divider clock. Its pre-divider is always `P=5`.
 
 ```text
 d0 = ceil(M / requested_rate)
-div_high = ((P - 1) << 8) if d0 >= P, otherwise 0
+div_high = ((min(d0, P) - 1) << 8)
 d = ceil(d0 / P)
 div_low = d & 0xffff
 div_high |= d >> 16

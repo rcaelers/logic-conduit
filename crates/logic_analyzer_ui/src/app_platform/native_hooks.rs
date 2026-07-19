@@ -127,12 +127,14 @@ impl App {
         match nodes::capture_file_source(self.node_graph.graph()) {
             Some(nodes::CaptureFileSource::Dsl(file)) => {
                 self.platform.preview_source = None;
+                self.platform.live_channel_layout = None;
                 self.logic_analyzer.set_capture_path(file, |path| {
                     DslFileCaptureDataSource::open(path).map_err(|e| e.to_string())
                 })
             }
             Some(nodes::CaptureFileSource::Sigrok(file)) => {
                 self.platform.preview_source = None;
+                self.platform.live_channel_layout = None;
                 self.logic_analyzer.set_capture_path(file, |path| {
                     SigrokFileCaptureDataSource::open(path).map_err(|e| e.to_string())
                 })
@@ -140,12 +142,41 @@ impl App {
             None => match nodes::capture_preview(self.node_graph.graph()) {
                 Some((source, signals)) if self.platform.preview_source != Some(source) => {
                     self.platform.preview_source = Some(source);
+                    self.platform.live_channel_layout = None;
                     self.set_capture_preview(signals);
                 }
                 Some(_) => {}
                 None => {
                     self.platform.preview_source = None;
-                    self.logic_analyzer.clear_capture();
+                    let live_channels = self.trigger_configuration.as_ref().map(|configuration| {
+                        configuration
+                            .feature
+                            .channels()
+                            .iter()
+                            .map(|channel| (channel.viewer_channel, channel.name.clone()))
+                            .collect::<Vec<_>>()
+                    });
+                    match live_channels {
+                        Some(layout) if self.platform.live_channel_layout.as_ref() != Some(&layout) => {
+                            self.logic_analyzer.set_channels(
+                                layout
+                                    .iter()
+                                    .map(|(index, name)| logic_analyzer_viewer::ChannelSignal {
+                                        index: *index,
+                                        name: name.clone(),
+                                        initial: false,
+                                        transitions: Vec::new(),
+                                    })
+                                    .collect(),
+                            );
+                            self.platform.live_channel_layout = Some(layout);
+                        }
+                        Some(_) => {}
+                        None => {
+                            self.platform.live_channel_layout = None;
+                            self.logic_analyzer.clear_capture();
+                        }
+                    }
                 }
             },
         }
@@ -153,6 +184,7 @@ impl App {
 
     pub(super) fn platform_restore_graph_capture(&mut self) {
         self.platform.preview_source = None;
+        self.platform.live_channel_layout = None;
     }
 
     pub(super) fn platform_before_graph(&mut self) {

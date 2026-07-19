@@ -4,6 +4,8 @@
 //! `RusbTransport` is deliberately small so a libsigrok-backed transport can be
 //! added without changing capture packet construction or graph integration.
 
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -25,6 +27,11 @@ const BULK_IN: u8 = 0x86;
 const CONTROL_TIMEOUT: Duration = Duration::from_millis(3_000);
 const BULK_TIMEOUT: Duration = Duration::from_millis(1_000);
 const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
+const FPGA_DONE_TIMEOUT: Duration = Duration::from_secs(5);
+const FPGA_UPLOAD_SETTLE: Duration = Duration::from_millis(20);
+const STREAMING_DATA_RECEIVE_DEPTH: u8 = 4;
+const FPGA_DIVIDER_CLOCK_HZ: u64 = 500_000_000;
+const FPGA_PRE_DIVIDER: u64 = 5;
 const RUNTIME_MANUFACTURER: &str = "DreamSourceLab";
 const RUNTIME_PRODUCT: &str = "USB-based DSL Instrument v2";
 const RATES: &[u64] = &[
@@ -208,6 +215,29 @@ pub trait UsbTransport: Send + 'static {
         data: &mut [u8],
         timeout: Duration,
     ) -> Result<usize, UsbError>;
+    /// Queues one bulk receive before a device command that produces its
+    /// response. Implementations without asynchronous USB support return
+    /// `Ok(false)` and callers fall back to a synchronous receive.
+    fn queue_bulk_read(
+        &mut self,
+        _endpoint: u8,
+        _byte_len: usize,
+        _timeout: Duration,
+    ) -> Result<bool, UsbError> {
+        Ok(false)
+    }
+    /// Takes the queued receive, waiting up to `timeout` for completion.
+    /// `Ok(None)` means no receive was queued.
+    fn take_queued_bulk_read(
+        &mut self,
+        _byte_len: usize,
+        _timeout: Duration,
+    ) -> Result<Option<Vec<u8>>, UsbError> {
+        Ok(None)
+    }
+    fn cancel_queued_bulk_read(&mut self) -> Result<(), UsbError> {
+        Ok(())
+    }
     fn close(&mut self) -> Result<(), UsbError> {
         Ok(())
     }
@@ -215,9 +245,30 @@ pub trait UsbTransport: Send + 'static {
 
 /// Production `rusb` transport. It claims interface 0 during discovery.
 pub struct RusbTransport {
+    context: Context,
     handle: DeviceHandle<Context>,
     speed: LinkSpeed,
     claimed: bool,
+    queued_bulk_reads: VecDeque<QueuedBulkRead>,
+}
+
+struct QueuedBulkRead {
+    transfer: *mut rusb::ffi::libusb_transfer,
+    buffer: Box<[u8]>,
+    complete: Box<AtomicBool>,
+}
+
+// The transfer, its buffer, and completion flag are all owned by one
+// `RusbTransport` and accessed serially by the capture worker.
+unsafe impl Send for QueuedBulkRead {}
+
+extern "system" fn mark_bulk_read_complete(transfer: *mut rusb::ffi::libusb_transfer) {
+    // SAFETY: `user_data` points to `QueuedBulkRead::complete`, which remains
+    // allocated until this completed transfer is freed.
+    unsafe {
+        let complete = (*transfer).user_data.cast::<AtomicBool>();
+        (*complete).store(true, Ordering::Release);
+    }
 }
 
 impl RusbTransport {
@@ -254,9 +305,11 @@ impl RusbTransport {
             }
             handle.claim_interface(0).map_err(rusb_error)?;
             return Ok(Self {
+                context,
                 handle,
                 speed,
                 claimed: true,
+                queued_bulk_reads: VecDeque::new(),
             });
         }
         Err(LogicAnalyzerError::Transport(
@@ -289,9 +342,11 @@ impl RusbTransport {
             }
             handle.claim_interface(0).map_err(rusb_error)?;
             return Ok(Self {
+                context,
                 handle,
                 speed,
                 claimed: true,
+                queued_bulk_reads: VecDeque::new(),
             });
         }
         Err(LogicAnalyzerError::Transport(
@@ -350,12 +405,146 @@ impl UsbTransport for RusbTransport {
             .read_bulk(endpoint, data, timeout)
             .map_err(map_usb_error)
     }
+    fn queue_bulk_read(
+        &mut self,
+        endpoint: u8,
+        byte_len: usize,
+        _timeout: Duration,
+    ) -> Result<bool, UsbError> {
+        if self.queued_bulk_reads.len() == 8 {
+            return Err(UsbError::Other);
+        }
+        let mut buffer = vec![0; byte_len].into_boxed_slice();
+        let complete = Box::new(AtomicBool::new(false));
+        // SAFETY: the transfer is initialized below and all referenced memory
+        // stays owned by `QueuedBulkRead` until the transfer is completed and
+        // freed in `take_queued_bulk_read` or `cancel_queued_bulk_read`.
+        let transfer = unsafe { rusb::ffi::libusb_alloc_transfer(0) };
+        if transfer.is_null() {
+            return Err(UsbError::Other);
+        }
+        unsafe {
+            rusb::ffi::libusb_fill_bulk_transfer(
+                transfer,
+                self.handle.as_raw(),
+                endpoint,
+                buffer.as_mut_ptr(),
+                i32::try_from(byte_len).map_err(|_| UsbError::Other)?,
+                mark_bulk_read_complete,
+                (&raw const *complete).cast_mut().cast(),
+                // The header may not arrive until a trigger occurs. Keep the
+                // submitted USB request alive and let `take_queued_bulk_read`
+                // perform bounded completion polls instead.
+                0,
+            );
+            if rusb::ffi::libusb_submit_transfer(transfer) != 0 {
+                rusb::ffi::libusb_free_transfer(transfer);
+                return Err(UsbError::Other);
+            }
+        }
+        self.queued_bulk_reads.push_back(QueuedBulkRead {
+            transfer,
+            buffer,
+            complete,
+        });
+        tracing::debug!(endpoint, byte_len, "queued U3Pro16 bulk receive");
+        Ok(true)
+    }
+    fn take_queued_bulk_read(
+        &mut self,
+        byte_len: usize,
+        timeout: Duration,
+    ) -> Result<Option<Vec<u8>>, UsbError> {
+        if !self
+            .queued_bulk_reads
+            .iter()
+            .any(|queued| queued.buffer.len() == byte_len)
+        {
+            tracing::debug!("no queued U3Pro16 bulk receive was available");
+            return Ok(None);
+        }
+        let deadline = Instant::now() + timeout;
+        let queued_index = loop {
+            if let Some(index) = self.queued_bulk_reads.iter().position(|queued| {
+                queued.buffer.len() == byte_len && queued.complete.load(Ordering::Acquire)
+            }) {
+                break index;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(UsbError::Timeout);
+            }
+            self.context
+                .handle_events(Some(remaining))
+                .map_err(map_usb_error)?;
+        };
+        let queued = self
+            .queued_bulk_reads
+            .remove(queued_index)
+            .expect("queued read exists");
+        // SAFETY: completion was observed, so libusb no longer accesses the
+        // transfer or its buffer.
+        let (status, actual_length) = unsafe {
+            ((*queued.transfer).status, (*queued.transfer).actual_length)
+        };
+        unsafe { rusb::ffi::libusb_free_transfer(queued.transfer) };
+        if status != rusb::constants::LIBUSB_TRANSFER_COMPLETED || actual_length < 0 {
+            return Err(if status == rusb::constants::LIBUSB_TRANSFER_TIMED_OUT {
+                UsbError::Timeout
+            } else {
+                UsbError::Other
+            });
+        }
+        let actual_length = usize::try_from(actual_length).map_err(|_| UsbError::Other)?;
+        if actual_length > queued.buffer.len() {
+            return Err(UsbError::Other);
+        }
+        let mut buffer = queued.buffer.into_vec();
+        buffer.truncate(actual_length);
+        Ok(Some(buffer))
+    }
+    fn cancel_queued_bulk_read(&mut self) -> Result<(), UsbError> {
+        while let Some(queued) = self.queued_bulk_reads.pop_front() {
+            if !queued.complete.load(Ordering::Acquire) {
+                // SAFETY: this is the only owner of the active transfer.
+                if unsafe { rusb::ffi::libusb_cancel_transfer(queued.transfer) } != 0 {
+                    // libusb may still access `queued`, so it must outlive this
+                    // transport after a failed cancellation.
+                    std::mem::forget(queued);
+                    return Err(UsbError::Other);
+                }
+                let deadline = Instant::now() + BULK_TIMEOUT;
+                while !queued.complete.load(Ordering::Acquire) {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        // The transfer is still owned by libusb. Leaking its small
+                        // allocation is safer than freeing memory libusb may use.
+                        std::mem::forget(queued);
+                        return Err(UsbError::Timeout);
+                    }
+                    if self.context.handle_events(Some(remaining)).is_err() {
+                        std::mem::forget(queued);
+                        return Err(UsbError::Other);
+                    }
+                }
+            }
+            unsafe { rusb::ffi::libusb_free_transfer(queued.transfer) };
+        }
+        Ok(())
+    }
     fn close(&mut self) -> Result<(), UsbError> {
+        self.cancel_queued_bulk_read()?;
         if self.claimed {
             self.handle.release_interface(0).map_err(map_usb_error)?;
             self.claimed = false;
         }
         Ok(())
+    }
+}
+
+impl Drop for RusbTransport {
+    fn drop(&mut self) {
+        let _ = self.cancel_queued_bulk_read();
     }
 }
 
@@ -385,6 +574,9 @@ pub struct DsLogicU3Pro16<T: UsbTransport = RusbTransport> {
     prepared: bool,
     active: bool,
     header_pending: bool,
+    header_receive_queued: bool,
+    queued_data_receives: u8,
+    queued_data_receive_bytes: usize,
     bytes_remaining: Option<usize>,
     bit_position: u64,
 }
@@ -473,6 +665,9 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
             prepared: false,
             active: false,
             header_pending: false,
+            header_receive_queued: false,
+            queued_data_receives: 0,
+            queued_data_receive_bytes: 0,
             bytes_remaining: None,
             bit_position: 0,
         })
@@ -485,9 +680,14 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
                 "FPGA image must be 1..=0x00ffffff bytes".into(),
             ));
         }
+        self.configure_fpga_once(image)
+    }
+
+    fn configure_fpga_once(&mut self, image: &[u8]) -> LogicAnalyzerResult<()> {
         tracing::debug!(image_bytes = image.len(), "starting FPGA configuration");
         self.command_write(3, 0, &[0xfb])?;
         self.command_write(5, 0, &[0xfc])?;
+        self.poll_status_clear(0x20)?;
         self.command_write(3, 0, &[0x04])?;
         self.poll_status(0x20)?;
         self.command_write(6, 0, &[0x7f])?;
@@ -502,28 +702,43 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         )?;
         self.bulk_write_exact(image, BULK_TIMEOUT)?;
         tracing::debug!(image_bytes = image.len(), "FPGA bitstream uploaded");
+        // A completed host-side bulk transfer can precede the device-side
+        // GPIF/FIFO drain. Raising INTRDY immediately is intermittent on the
+        // U3Pro16 and can terminate configuration before the FPGA consumes
+        // the end of the bitstream, leaving status at 0xab until power-cycle.
+        thread::sleep(FPGA_UPLOAD_SETTLE);
         self.command_write(6, 0, &[0x80])?;
         self.poll_status(0x80)?;
         self.command_write(6, 0, &[0x7f])?;
         // Some U3Pro16 firmware revisions leave the configured-status bit
         // clear after a successful upload. The logic-version register is the
         // authoritative compatibility check in that case.
-        if let Err(status_error) = self.poll_status_for(0x40, STATUS_TIMEOUT) {
-            let logic_version = self.command_read_byte(15, 0x04)?;
+        let configuration_error = if let Err(status_error) = self.poll_status_for(0x40, FPGA_DONE_TIMEOUT) {
+            let logic_version = self.logic_version()?;
             if logic_version != 0x0e {
                 tracing::debug!(
                     logic_version = format_args!("{logic_version:#04x}"),
                     %status_error,
                     "FPGA configuration did not complete"
                 );
-                return Err(LogicAnalyzerError::Protocol(format!(
+                Some(LogicAnalyzerError::Protocol(format!(
                     "FPGA did not configure (logic version {logic_version:#04x}): {status_error}"
-                )));
+                )))
+            } else {
+                tracing::warn!(%status_error, "FPGA configured despite a clear configured-status bit");
+                None
             }
-            tracing::warn!(%status_error, "FPGA configured despite a clear configured-status bit");
+        } else {
+            None
+        };
+        // Restore the GPIF data path even when configuration failed. The
+        // reference driver does this before returning, and without it a
+        // subsequent configuration attempt can remain stuck at status 0xab.
+        self.command_write(7, 0, &[1])?;
+        if let Some(error) = configuration_error {
+            return Err(error);
         }
         self.command_write(5, 0, &[0x01])?;
-        self.command_write(7, 0, &[0x01])?;
         Ok(())
     }
 
@@ -667,9 +882,59 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
     fn command_read_byte(&mut self, command: u8, offset: u16) -> LogicAnalyzerResult<u8> {
         Ok(self.command_read(command, offset, 1)?[0])
     }
+    /// The runtime exposes FPGA registers through the command-15 status
+    /// block. The HDL version is byte four of a read beginning at offset zero;
+    /// it is not addressable as an independent one-byte read.
+    fn logic_version(&mut self) -> LogicAnalyzerResult<u8> {
+        Ok(self.command_read(15, 0, 5)?[4])
+    }
+
+    fn ready_logic_version(&mut self) -> LogicAnalyzerResult<u8> {
+        // The reference driver deasserts the FPGA acquisition clear before
+        // reading the HDL status block. Without this write a configured
+        // U3Pro16 can transiently return an all-zero block, which must not be
+        // mistaken for an incompatible image and trigger a destructive reload.
+        self.command_write(14, 0x70, &[0])?;
+        let mut version = 0;
+        for attempt in 1..=3 {
+            version = self.logic_version()?;
+            if version != 0 {
+                break;
+            }
+            tracing::debug!(attempt, "U3Pro16 HDL version read returned zero; retrying");
+            thread::sleep(Duration::from_millis(20));
+        }
+        Ok(version)
+    }
+
     fn poll_status(&mut self, required: u8) -> LogicAnalyzerResult<u8> {
         self.poll_status_for(required, STATUS_TIMEOUT)
     }
+
+    fn poll_status_clear(&mut self, forbidden: u8) -> LogicAnalyzerResult<u8> {
+        let until = Instant::now() + STATUS_TIMEOUT;
+        let mut status = 0;
+        while Instant::now() < until {
+            status = self.command_read_byte(2, 0)?;
+            if status & forbidden == 0 {
+                tracing::debug!(
+                    cleared_status_bits = format_args!("{forbidden:#04x}"),
+                    status = format_args!("{status:#04x}"),
+                    "device status cleared expected state"
+                );
+                return Ok(status);
+            }
+        }
+        tracing::debug!(
+            uncleared_status_bits = format_args!("{forbidden:#04x}"),
+            final_status = format_args!("{status:#04x}"),
+            "device status clear timed out"
+        );
+        Err(LogicAnalyzerError::Timeout(format!(
+            "status bit(s) {forbidden:#04x} to clear; final status {status:#04x}"
+        )))
+    }
+
     fn poll_status_for(&mut self, required: u8, timeout: Duration) -> LogicAnalyzerResult<u8> {
         let until = Instant::now() + timeout;
         let mut status = 0;
@@ -683,7 +948,6 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
                 );
                 return Ok(status);
             }
-            thread::sleep(Duration::from_millis(10));
         }
         tracing::debug!(
             required_status_bits = format_args!("{required:#04x}"),
@@ -733,11 +997,14 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
     /// well-known local locations.
     fn ensure_fpga_configured(&mut self) -> LogicAnalyzerResult<()> {
         let status = self.command_read_byte(2, 0)?;
+        let firmware = self.command_read(0, 0, 2)?;
         if status & 0x40 != 0 {
-            let logic_version = self.command_read_byte(15, 0x04)?;
+            let logic_version = self.ready_logic_version()?;
             tracing::debug!(
                 status = format_args!("{status:#04x}"),
                 logic_version = format_args!("{logic_version:#04x}"),
+                firmware_major = firmware[0],
+                firmware_minor = firmware[1],
                 "checked FPGA state"
             );
             if logic_version == 0x0e {
@@ -746,6 +1013,8 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         } else {
             tracing::debug!(
                 status = format_args!("{status:#04x}"),
+                firmware_major = firmware[0],
+                firmware_minor = firmware[1],
                 "checked FPGA state"
             );
         }
@@ -804,7 +1073,7 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         plan: DsLogicCapturePlan,
     ) -> LogicAnalyzerResult<()> {
         self.ensure_fpga_configured()?;
-        if self.command_read_byte(15, 0x04)? != 0x0e {
+        if self.ready_logic_version()? != 0x0e {
             return Err(LogicAnalyzerError::Protocol(
                 "unexpected FPGA logic version".into(),
             ));
@@ -878,11 +1147,51 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
         if !self.prepared {
             self.configure_device_capture(plan)?;
         }
-        self.command_write(8, 0, &[])?;
+        let header_receive_queued = self
+            .transport
+            .queue_bulk_read(BULK_IN, 1024, BULK_TIMEOUT)
+            .map_err(|_| LogicAnalyzerError::Transport("queue trigger header read".into()))?;
+        let initial_data_receive_bytes = match self.settings.mode {
+            CaptureMode::Finite => plan.actual_bytes.min(1_048_576),
+            CaptureMode::Streaming => plan.stream_buffer,
+        };
+        let requested_data_receives = match self.settings.mode {
+            CaptureMode::Finite => 1,
+            CaptureMode::Streaming => STREAMING_DATA_RECEIVE_DEPTH,
+        };
+        let mut queued_data_receives = 0;
+        for _ in 0..requested_data_receives {
+            match self
+                .transport
+                .queue_bulk_read(BULK_IN, initial_data_receive_bytes, BULK_TIMEOUT)
+            {
+                Ok(true) => queued_data_receives += 1,
+                Ok(false) => break,
+                Err(_) => {
+                    let _ = self.transport.cancel_queued_bulk_read();
+                    return Err(LogicAnalyzerError::Transport(
+                        "queue initial logic data read".into(),
+                    ));
+                }
+            }
+        }
+        tracing::debug!(header_receive_queued, "prepared U3Pro16 trigger header receive");
+        tracing::debug!(
+            queued_data_receives,
+            initial_data_receive_bytes,
+            "prepared U3Pro16 initial logic data receive"
+        );
+        if let Err(error) = self.command_write(8, 0, &[]) {
+            let _ = self.transport.cancel_queued_bulk_read();
+            return Err(error);
+        }
         self.plan = Some(plan);
         self.active = true;
         self.prepared = false;
         self.header_pending = true;
+        self.header_receive_queued = header_receive_queued;
+        self.queued_data_receives = queued_data_receives;
+        self.queued_data_receive_bytes = initial_data_receive_bytes;
         self.bytes_remaining = None;
         self.bit_position = 0;
         self.trigger_header = None;
@@ -893,22 +1202,62 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
             return Err(LogicAnalyzerError::NotCapturing);
         }
         let plan = self.plan.ok_or(LogicAnalyzerError::NotCapturing)?;
-        if self.header_pending {
-            let mut header = [0u8; 1024];
-            let read = match self.transport.bulk_read(BULK_IN, &mut header, BULK_TIMEOUT) {
-                Ok(read) => read,
-                Err(UsbError::Timeout) => return Ok(Some(self.empty_chunk(plan))),
-                Err(UsbError::Other) => {
-                    return Err(LogicAnalyzerError::Transport(
-                        "trigger header read".into(),
-                    ));
+        if self.header_pending
+            && (self.settings.mode == CaptureMode::Finite || !self.header_receive_queued)
+        {
+            let header = if self.header_receive_queued {
+                match self.transport.take_queued_bulk_read(1024, BULK_TIMEOUT) {
+                    Ok(Some(header)) => header,
+                    Ok(None) => {
+                        tracing::debug!(
+                            "queued trigger header was unavailable; falling back to a synchronous receive"
+                        );
+                        self.header_receive_queued = false;
+                        let mut header = vec![0; 1024];
+                        let read = match self.transport.bulk_read(BULK_IN, &mut header, BULK_TIMEOUT) {
+                            Ok(read) => read,
+                            Err(UsbError::Timeout) => return Ok(Some(self.empty_chunk(plan))),
+                            Err(UsbError::Other) => {
+                                return Err(LogicAnalyzerError::Transport(
+                                    "trigger header read".into(),
+                                ));
+                            }
+                        };
+                        header.truncate(read);
+                        header
+                    }
+                    Err(UsbError::Timeout) => return Ok(Some(self.empty_chunk(plan))),
+                    Err(UsbError::Other) => {
+                        return Err(LogicAnalyzerError::Transport(
+                            "queued trigger header read".into(),
+                        ));
+                    }
                 }
+            } else {
+                let mut header = vec![0; 1024];
+                let read = match self.transport.bulk_read(BULK_IN, &mut header, BULK_TIMEOUT) {
+                    Ok(read) => read,
+                    Err(UsbError::Timeout) => return Ok(Some(self.empty_chunk(plan))),
+                    Err(UsbError::Other) => {
+                        return Err(LogicAnalyzerError::Transport(
+                            "trigger header read".into(),
+                        ));
+                    }
+                };
+                header.truncate(read);
+                header
             };
-            if read != header.len() {
+            self.header_receive_queued = false;
+            if header.len() != 1024 {
                 return Err(LogicAnalyzerError::Protocol(format!(
-                    "short trigger header: {read}/1024 bytes"
+                    "short trigger header: {}/1024 bytes",
+                    header.len()
                 )));
             }
+            tracing::debug!(
+                prefix = ?&header[..16],
+                "received U3Pro16 trigger header"
+            );
             let translated = translate_trigger_header(&header, self.settings.mode, plan)?;
             if self.settings.mode == CaptureMode::Finite {
                 let delivered_bytes = translated
@@ -939,31 +1288,80 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
             Some(left) => left.min(1_048_576),
             None => plan.stream_buffer,
         };
-        let mut data = vec![0; buffer_len];
         let timeout = if self.settings.mode == CaptureMode::Finite {
             Duration::from_millis(20)
         } else {
             Duration::from_millis(125)
         };
-        let read = match self.transport.bulk_read(BULK_IN, &mut data, timeout) {
-            Ok(read) => read,
-            Err(UsbError::Timeout) if self.settings.mode == CaptureMode::Streaming => {
-                self.check_streaming_integrity()?;
-                return Ok(Some(self.empty_chunk(plan)));
+        let mut consumed_queued_data = false;
+        let mut data = if self.queued_data_receives > 0 {
+            match self.transport.take_queued_bulk_read(
+                self.queued_data_receive_bytes,
+                timeout,
+            ) {
+                Ok(Some(data)) => {
+                    self.queued_data_receives -= 1;
+                    consumed_queued_data = true;
+                    data
+                }
+                Ok(None) => {
+                    self.queued_data_receives = 0;
+                    Vec::new()
+                }
+                Err(UsbError::Timeout) if self.settings.mode == CaptureMode::Streaming => {
+                    self.check_streaming_integrity()?;
+                    return Ok(Some(self.empty_chunk(plan)));
+                }
+                Err(error) => {
+                    return Err(match error {
+                        UsbError::Timeout => LogicAnalyzerError::Timeout("logic data read".into()),
+                        UsbError::Other => {
+                            LogicAnalyzerError::Transport("queued logic data read".into())
+                        }
+                    });
+                }
             }
-            Err(error) => {
-                return Err(match error {
-                    UsbError::Timeout => LogicAnalyzerError::Timeout("logic data read".into()),
-                    UsbError::Other => LogicAnalyzerError::Transport("logic data read".into()),
-                });
-            }
+        } else {
+            Vec::new()
         };
+        if data.is_empty() {
+            data.resize(buffer_len, 0);
+            let read = match self.transport.bulk_read(BULK_IN, &mut data, timeout) {
+                Ok(read) => read,
+                Err(UsbError::Timeout) if self.settings.mode == CaptureMode::Streaming => {
+                    self.check_streaming_integrity()?;
+                    return Ok(Some(self.empty_chunk(plan)));
+                }
+                Err(error) => {
+                    return Err(match error {
+                        UsbError::Timeout => LogicAnalyzerError::Timeout("logic data read".into()),
+                        UsbError::Other => LogicAnalyzerError::Transport("logic data read".into()),
+                    });
+                }
+            };
+            data.truncate(read);
+        }
+        let read = data.len();
         if read == 0 {
             if self.settings.mode == CaptureMode::Streaming {
                 self.check_streaming_integrity()?;
                 return Ok(Some(self.empty_chunk(plan)));
             }
             return Ok(None);
+        }
+        if consumed_queued_data && self.settings.mode == CaptureMode::Streaming {
+            match self
+                .transport
+                .queue_bulk_read(BULK_IN, plan.stream_buffer, BULK_TIMEOUT)
+            {
+                Ok(true) => self.queued_data_receives += 1,
+                Ok(false) => {}
+                Err(_) => {
+                    return Err(LogicAnalyzerError::Transport(
+                        "queue replacement logic data read".into(),
+                    ));
+                }
+            }
         }
         data.truncate(read);
         if let Some(left) = self.bytes_remaining.as_mut() {
@@ -993,6 +1391,12 @@ impl<T: UsbTransport> LogicAnalyzer for DsLogicU3Pro16<T> {
             self.command_write(9, 0, &[])?;
             self.active = false;
         }
+        self.transport
+            .cancel_queued_bulk_read()
+            .map_err(|_| LogicAnalyzerError::Transport("cancel trigger header read".into()))?;
+        self.header_receive_queued = false;
+        self.queued_data_receives = 0;
+        self.queued_data_receive_bytes = 0;
         Ok(())
     }
 }
@@ -1185,15 +1589,17 @@ fn round_up_usize(value: usize, multiple: usize) -> usize {
 }
 
 fn build_settings_packet(
-    speed: LinkSpeed,
+    _speed: LinkSpeed,
     settings: &DsLogicCaptureSettings,
     plan: DsLogicCapturePlan,
 ) -> LogicAnalyzerResult<[u8; 672]> {
-    let width = 16 - settings.input_mask.leading_zeros() as u8;
-    let max_rate = mode_max_rate(speed, settings.mode, width).unwrap();
-    let d0 = div_ceil(max_rate, settings.sample_rate_hz)?;
-    let mut divider_high = if d0 >= 5 { 4 << 8 } else { 0 };
-    let d = div_ceil(d0, 5)?;
+    // The selectable maximum of a channel mode is its USB/data-path limit,
+    // not the clock that feeds the FPGA divider. Every U3Pro16 logic mode
+    // divides the fixed 500 MHz hardware clock; the 500 MHz and 1 GHz mode
+    // flags below select their dedicated high-rate paths.
+    let d0 = div_ceil(FPGA_DIVIDER_CLOCK_HZ, settings.sample_rate_hz)?;
+    let mut divider_high = ((d0.min(FPGA_PRE_DIVIDER) - 1) << 8) as u16;
+    let d = div_ceil(d0, FPGA_PRE_DIVIDER)?;
     divider_high |= (d >> 16) as u16;
     let per_input_depth = (2u64 * 1024 * 1024 * 1024 / u64::from(plan.channels)) & !1023;
     let fraction = if settings.mode == CaptureMode::Streaming {
@@ -1470,8 +1876,9 @@ mod tests {
         fn control_reads() -> VecDeque<Vec<u8>> {
             VecDeque::from([
                 vec![0x40],
-                vec![0x0e],
-                vec![0x0e],
+                vec![2, 0],
+                vec![0, 0, 0, 0, 0x0e],
+                vec![0, 0, 0, 0, 0x0e],
                 vec![2, 0],
                 vec![0x08],
                 vec![0x80],
@@ -1599,6 +2006,110 @@ mod tests {
             }
             data[..response.len()].copy_from_slice(&response);
             Ok(response.len())
+        }
+    }
+
+    struct PrequeuedHeaderTransport {
+        inner: FixtureTransport,
+        header: Option<Vec<u8>>,
+        header_queued: bool,
+    }
+
+    impl PrequeuedHeaderTransport {
+        fn new(header: Vec<u8>, data: Vec<u8>) -> Self {
+            let (mut inner, _) = FixtureTransport::new(header, data);
+            let header = inner.bulk_reads.pop_front();
+            Self {
+                inner,
+                header,
+                header_queued: false,
+            }
+        }
+    }
+
+    impl UsbTransport for PrequeuedHeaderTransport {
+        fn link_speed(&self) -> LinkSpeed {
+            self.inner.link_speed()
+        }
+
+        fn control_write(
+            &mut self,
+            request_type: u8,
+            request: u8,
+            value: u16,
+            index: u16,
+            data: &[u8],
+            timeout: Duration,
+        ) -> Result<usize, UsbError> {
+            if data.first() == Some(&8) && !self.header_queued {
+                return Err(UsbError::Other);
+            }
+            self.inner
+                .control_write(request_type, request, value, index, data, timeout)
+        }
+
+        fn control_read(
+            &mut self,
+            request_type: u8,
+            request: u8,
+            value: u16,
+            index: u16,
+            data: &mut [u8],
+            timeout: Duration,
+        ) -> Result<usize, UsbError> {
+            self.inner
+                .control_read(request_type, request, value, index, data, timeout)
+        }
+
+        fn bulk_write(
+            &mut self,
+            endpoint: u8,
+            data: &[u8],
+            timeout: Duration,
+        ) -> Result<usize, UsbError> {
+            self.inner.bulk_write(endpoint, data, timeout)
+        }
+
+        fn bulk_read(
+            &mut self,
+            endpoint: u8,
+            data: &mut [u8],
+            timeout: Duration,
+        ) -> Result<usize, UsbError> {
+            self.inner.bulk_read(endpoint, data, timeout)
+        }
+
+        fn queue_bulk_read(
+            &mut self,
+            endpoint: u8,
+            byte_len: usize,
+            _timeout: Duration,
+        ) -> Result<bool, UsbError> {
+            if self.header_queued {
+                return Ok(false);
+            }
+            if endpoint != BULK_IN || byte_len != 1024 || self.header.is_none() {
+                return Err(UsbError::Other);
+            }
+            self.header_queued = true;
+            Ok(true)
+        }
+
+        fn take_queued_bulk_read(
+            &mut self,
+            _byte_len: usize,
+            _timeout: Duration,
+        ) -> Result<Option<Vec<u8>>, UsbError> {
+            if !self.header_queued {
+                return Ok(None);
+            }
+            self.header_queued = false;
+            Ok(self.header.take())
+        }
+
+        fn cancel_queued_bulk_read(&mut self) -> Result<(), UsbError> {
+            self.header_queued = false;
+            Ok(())
         }
     }
 
@@ -1762,7 +2273,7 @@ mod tests {
     #[test]
     fn fpga_configuration_rejects_a_short_bitstream_upload() {
         let transport = FixtureTransport {
-            control_reads: VecDeque::from([vec![0x20]]),
+            control_reads: VecDeque::from([vec![0x00], vec![0x20]]),
             bulk_reads: VecDeque::new(),
             bulk_writes: Arc::new(Mutex::new(Vec::new())),
             idle_stream: false,
@@ -1777,6 +2288,91 @@ mod tests {
             LogicAnalyzerError::Protocol(message)
                 if message == "short FPGA bulk write: 1/2 bytes"
         ));
+    }
+
+    #[test]
+    fn fpga_configuration_allows_delayed_done_after_gpif_completion() {
+        let mut control_reads = VecDeque::from([
+            vec![0x00],
+            vec![0x20],
+            vec![0x80],
+        ]);
+        control_reads.extend((0..55).map(|_| vec![0xab]));
+        control_reads.push_back(vec![0xeb]);
+        let transport = FixtureTransport {
+            control_reads,
+            bulk_reads: VecDeque::new(),
+            bulk_writes: Arc::new(Mutex::new(Vec::new())),
+            idle_stream: false,
+            short_bulk_write: false,
+        };
+        let mut analyzer = DsLogicU3Pro16::new(transport).unwrap();
+
+        analyzer.configure_fpga(&[0xaa, 0x55]).unwrap();
+    }
+
+    #[test]
+    fn configured_fpga_retries_a_transient_zero_hdl_version_without_reloading() {
+        let bulk_writes = Arc::new(Mutex::new(Vec::new()));
+        let transport = FixtureTransport {
+            control_reads: VecDeque::from([
+                vec![0x40],
+                vec![2, 1],
+                vec![0, 0, 0, 0, 0],
+                vec![0, 0, 0, 0, 0],
+                vec![0, 0, 0, 0, 0x0e],
+            ]),
+            bulk_reads: VecDeque::new(),
+            bulk_writes: Arc::clone(&bulk_writes),
+            idle_stream: false,
+            short_bulk_write: false,
+        };
+        let mut analyzer = DsLogicU3Pro16::new(transport).unwrap();
+
+        analyzer.ensure_fpga_configured().unwrap();
+
+        assert!(bulk_writes.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires DSLOGIC_U3PRO16_FPGA_IMAGE and a connected DSLogic U3Pro16"]
+    fn hardware_fpga_configuration_reaches_the_expected_logic_version() {
+        let image_path = std::env::var_os("DSLOGIC_U3PRO16_FPGA_IMAGE")
+            .expect("DSLOGIC_U3PRO16_FPGA_IMAGE must identify the exact U3Pro16 image");
+        let image = std::fs::read(&image_path).unwrap();
+        let mut analyzer = DsLogicU3Pro16::open_first().unwrap();
+
+        analyzer.configure_fpga(&image).unwrap();
+        assert_eq!(analyzer.logic_version().unwrap(), 0x0e);
+    }
+
+    #[test]
+    #[ignore = "requires a connected DSLogic U3Pro16; captures 1,024 samples from inputs 0 and 1"]
+    fn hardware_capture_receives_the_trigger_header_before_logic_data() {
+        let config = LogicCaptureConfig::finite(1_000_000, 0b11, 1_024);
+        let mut analyzer = DsLogicU3Pro16::open_first().unwrap();
+
+        analyzer.configure_capture(&config).unwrap();
+        analyzer.start_capture().unwrap();
+        analyzer.next_chunk().unwrap();
+
+        assert!(analyzer.take_trigger_header().is_some());
+        analyzer.stop_capture().unwrap();
+    }
+
+    #[test]
+    fn queues_the_trigger_header_receive_before_starting_capture() {
+        let fixture = packet_fixture();
+        let config = fixture_config(&fixture);
+        let data = (0..768).map(|index| (index * 37) as u8).collect::<Vec<_>>();
+        let transport = PrequeuedHeaderTransport::new(fixture_header(&fixture), data);
+        let mut analyzer = DsLogicU3Pro16::new(transport).unwrap();
+
+        analyzer.configure_capture(&config).unwrap();
+        analyzer.start_capture().unwrap();
+        analyzer.next_chunk().unwrap();
+
+        assert!(analyzer.take_trigger_header().is_some());
     }
 
     #[test]
@@ -2059,6 +2655,19 @@ mod tests {
         config.input_mask = 1;
         assert!(u3pro16_streaming_plan(&config, LinkSpeed::High).is_ok());
         assert!(u3pro16_streaming_plan(&config, LinkSpeed::Super).is_err());
+    }
+
+    #[test]
+    fn wide_superspeed_stream_divides_the_fpga_clock_not_the_usb_mode_limit() {
+        let settings = DsLogicCaptureSettings {
+            mode: CaptureMode::Streaming,
+            ..DsLogicCaptureSettings::finite(125_000_000, 0xffff, 125_000_000)
+        };
+        let plan = build_plan(LinkSpeed::Super, &settings).unwrap();
+        let packet = build_settings_packet(LinkSpeed::Super, &settings, plan).unwrap();
+
+        assert_eq!(get16(&packet, 10), 1);
+        assert_eq!(get16(&packet, 12), 3 << 8);
     }
 
     #[test]
