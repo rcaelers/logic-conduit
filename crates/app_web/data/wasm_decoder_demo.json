@@ -266,7 +266,63 @@
     }
   ],
   "extensions": {
-    "logic_analyzer_ui.sampling_overlay": 1
+    "logic_analyzer_ui.sampling_overlay": 1,
+    "logic_analyzer_ui.viewer_lane_order": [
+      {
+        "Channel": 0
+      },
+      {
+        "Channel": 1
+      },
+      {
+        "Channel": 2
+      },
+      {
+        "Channel": 3
+      },
+      {
+        "Channel": 4
+      },
+      {
+        "Channel": 5
+      },
+      {
+        "Channel": 6
+      },
+      {
+        "Channel": 7
+      },
+      {
+        "Channel": 8
+      },
+      {
+        "Channel": 10
+      },
+      {
+        "Derived": "n4294967295_auto_view:node:1:miso"
+      },
+      {
+        "Derived": "n4294967295_auto_view:node:1:mosi"
+      },
+      {
+        "Derived": "n4294967295_auto_view:lane:4"
+      },
+      {
+        "Derived": "n4294967295_auto_view:lane:5"
+      },
+      {
+        "Derived": "n4294967295_auto_view:lane:6"
+      },
+      {
+        "Derived": "n4294967295_auto_view:lane:7"
+      },
+      {
+        "Derived": "n4294967295_auto_view:lane:8"
+      },
+      {
+        "Derived": "n4294967295_auto_view:lane:9"
+      }
+    ]
   },
   "frames": [],
   "next_frame_id": 0,
@@ -378,7 +434,7 @@
         "x": 360.0,
         "y": 80.0
       },
-      "selected": true,
+      "selected": false,
       "state": {
         "bit_order": {
           "value": "MSB first",
