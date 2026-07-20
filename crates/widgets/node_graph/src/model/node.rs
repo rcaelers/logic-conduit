@@ -174,6 +174,7 @@ impl Node {
             visible: true,
             hidden: false,
             has_control: false,
+            view_selectable: false,
             show_in_view: false,
         };
         let output = input.clone();

@@ -34,7 +34,7 @@ impl NodeDef for SigrokFileSource {
     }
     fn outputs() -> Vec<OutputDef<Self::State>> {
         (0..32)
-            .map(|channel| OutputDef::new::<Signal>(format!("Ch {channel}")))
+            .map(|channel| OutputDef::new::<Signal>(format!("Ch {channel}")).view_selectable(false))
             .collect()
     }
     fn state() -> Self::State {

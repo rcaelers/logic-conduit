@@ -961,8 +961,9 @@ fn member_index(node: &Node, socket_index: usize) -> usize {
 }
 
 /// Fixed id for the compiler-synthesized `Viewer` sink that gathers every
-/// output checked in the graph widget's generic View panel
-/// (`Socket::show_in_view`, `docs/APP_DESIGN.md`) without an explicit wire.
+/// selectable output checked in the graph widget's generic View panel
+/// (`Socket::view_selectable`, `Socket::show_in_view`, `docs/APP_DESIGN.md`)
+/// without an explicit wire.
 /// Kept constant (rather than derived from the graph's own ids) so
 /// live-diffing sees the same node across `lower()` calls while the watched
 /// set is unchanged, regardless of how many real nodes come and go.
@@ -983,7 +984,9 @@ fn with_auto_view_sink(graph: &GraphState) -> GraphState {
             node.outputs
                 .iter()
                 .enumerate()
-                .filter(|(_, output)| output.visible && output.show_in_view)
+                .filter(|(_, output)| {
+                    output.visible && output.view_selectable && output.show_in_view
+                })
                 .map(move |(index, output)| {
                     (
                         SocketId {
@@ -1028,6 +1031,7 @@ fn with_auto_view_sink(graph: &GraphState) -> GraphState {
             visible: true,
             hidden: false,
             has_control: false,
+            view_selectable: false,
             show_in_view: false,
         })
         .collect();
@@ -3103,8 +3107,8 @@ mod tests {
         assert!(reused.is_active_at(150));
     }
 
-    /// A lone source node, no explicit sink — the graph the "no wiring
-    /// needed" View-panel feature exists to make compilable.
+    /// A lone source node with no explicit sink, used to verify that source
+    /// presentation remains independent of selectable derived viewer lanes.
     fn source_only_widget() -> NodeGraphWidget {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         widget
@@ -3119,6 +3123,26 @@ mod tests {
         id
     }
 
+    fn selectable_output_widget() -> NodeGraphWidget {
+        let mut widget = NodeGraphWidget::new(nodes::build_registry());
+        nodes::test_graphs_tests::build_live_binary_test(&mut widget);
+        widget
+    }
+
+    fn first_watched_selectable_output(widget: &NodeGraphWidget) -> (NodeId, usize) {
+        widget
+            .graph()
+            .nodes
+            .values()
+            .find_map(|node| {
+                node.outputs
+                    .iter()
+                    .position(|output| output.view_selectable && output.show_in_view)
+                    .map(|index| (node.id, index))
+            })
+            .expect("test graph has a watched selectable output")
+    }
+
     #[test]
     fn unwatched_source_has_no_sink() {
         let widget = source_only_widget();
@@ -3127,23 +3151,12 @@ mod tests {
     }
 
     #[test]
-    fn watched_output_compiles_without_an_explicit_viewer_node() {
+    fn non_selectable_source_output_ignores_a_legacy_view_flag() {
         let mut widget = source_only_widget();
-        let source_id = watch_first_output(&mut widget);
-        let source_title = widget.graph().nodes[&source_id].title.clone();
+        watch_first_output(&mut widget);
 
-        let compiled = lower(widget.graph(), &BuilderRegistry::standard())
-            .unwrap_or_else(|errors| panic!("lower failed: {errors:?}"));
-
-        assert_eq!(compiled.nodes.len(), 2);
-        let auto_view = compiled
-            .nodes
-            .iter()
-            .find(|n| n.builder == "Viewer")
-            .expect("a synthetic Viewer sink is added");
-        let lanes = auto_view.resolved.members(0);
-        assert_eq!(lanes.len(), 1);
-        assert_eq!(lanes[0].1.source, format!("{source_title}.RX"));
+        let errors = lower(widget.graph(), &BuilderRegistry::standard()).unwrap_err();
+        assert!(errors.iter().any(|error| error.message.contains("no sink")));
     }
 
     #[test]
@@ -3202,26 +3215,20 @@ mod tests {
 
     #[test]
     fn unwatching_the_only_output_drops_the_synthetic_viewer() {
-        let mut widget = source_only_widget();
-        let source_id = watch_first_output(&mut widget);
+        let mut widget = selectable_output_widget();
+        let (node_id, output_index) = first_watched_selectable_output(&widget);
         let registry = BuilderRegistry::standard();
         assert!(lower(widget.graph(), &registry).is_ok());
 
-        widget
-            .graph_mut()
-            .nodes
-            .get_mut(&source_id)
-            .unwrap()
-            .outputs[0]
-            .show_in_view = false;
+        widget.graph_mut().nodes.get_mut(&node_id).unwrap().outputs[output_index].show_in_view =
+            false;
         let errors = lower(widget.graph(), &registry).unwrap_err();
         assert!(errors.iter().any(|e| e.message.contains("no sink")));
     }
 
     #[test]
     fn synthetic_viewer_id_is_stable_across_relowers() {
-        let mut widget = source_only_widget();
-        watch_first_output(&mut widget);
+        let widget = selectable_output_widget();
         let registry = BuilderRegistry::standard();
 
         let first = lower(widget.graph(), &registry).unwrap();
@@ -3905,6 +3912,7 @@ mod tests {
             visible: true,
             hidden: false,
             has_control: true,
+            view_selectable: false,
             show_in_view: false,
         };
         assert_eq!(
@@ -4291,25 +4299,16 @@ mod tests {
     }
 
     #[test]
-    fn diff_rejects_new_source_connections() {
+    fn diff_ignores_a_legacy_source_view_flag() {
         let registry = BuilderRegistry::standard();
         let mut widget = startup_widget();
         let old = lower(widget.graph(), &registry).unwrap();
 
-        // New viewer lane fed straight from a source channel: the source's
-        // worker threads snapshot destinations at start, so this cannot
-        // join live.
         let source = node_by_def(&widget, "DSL File Source");
-        // Ch 9 (TGCK) is otherwise unused. Watching it adds a new edge from
-        // the already-running source to the synthetic viewer.
         widget.graph_mut().nodes.get_mut(&source).unwrap().outputs[9].show_in_view = true;
 
         let new = lower(widget.graph(), &registry).unwrap();
-        let error = diff(&old, &new, &registry).unwrap_err();
-        assert!(
-            error.contains("source") || error.contains("block"),
-            "{error}"
-        );
+        assert!(diff(&old, &new, &registry).unwrap().is_empty());
     }
 
     fn repo_path(relative: &str) -> PathBuf {

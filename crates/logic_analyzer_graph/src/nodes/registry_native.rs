@@ -36,15 +36,33 @@ pub(crate) fn register_builders(builders: &mut HashMap<String, Box<dyn RuntimeBu
 #[cfg(test)]
 mod tests {
     use egui::Pos2;
-    use node_graph::{NodeDef, NodeGraphWidget};
+    use node_graph::{NodeDef, NodeGraphWidget, SocketDirection, SocketId};
     use signal_processing::{CaptureChannelId, CaptureDataDelivery, SimpleTriggerCondition};
 
     use super::*;
-    use crate::nodes::{U3Pro16State, build_registry, test_graphs_tests};
+    use crate::nodes::{U3Pro16State, Viewer, build_registry, test_graphs_tests};
     use crate::{
         BuilderRegistry, LiveCaptureEdit, apply_live_capture_edit, discover_live_capture_feature,
         lower,
     };
+
+    fn attach_viewer_sink(widget: &mut NodeGraphWidget, source: node_graph::NodeId) {
+        let viewer = widget
+            .add_node_at(Viewer::name(), Pos2::new(320.0, 0.0))
+            .expect("viewer should be registered");
+        widget.graph_mut().add_connection(
+            SocketId {
+                node: source,
+                index: 0,
+                direction: SocketDirection::Output,
+            },
+            SocketId {
+                node: viewer,
+                index: 0,
+                direction: SocketDirection::Input,
+            },
+        );
+    }
 
     #[test]
     fn native_hardware_source_registers_and_lowers() {
@@ -52,7 +70,7 @@ mod tests {
         let source = widget
             .add_node_at(DsLogicU3Pro16::name(), Pos2::ZERO)
             .expect("native hardware source should be registered");
-        widget.graph_mut().nodes.get_mut(&source).unwrap().outputs[0].show_in_view = true;
+        attach_viewer_sink(&mut widget, source);
 
         let compiled = lower(widget.graph(), &BuilderRegistry::standard()).unwrap();
         assert!(
@@ -131,7 +149,7 @@ mod tests {
     }
 
     #[test]
-    fn buffered_hardware_discovery_rejects_an_unsupported_active_tuple() {
+    fn buffered_hardware_discovery_rejects_too_many_channels_for_the_rate() {
         let mut widget = NodeGraphWidget::new(build_registry());
         let source = widget
             .add_node_at(DsLogicU3Pro16::name(), Pos2::ZERO)
@@ -144,16 +162,21 @@ mod tests {
         state.channels.enabled.fill(true);
         widget.graph_mut().nodes.get_mut(&source).unwrap().state =
             serde_json::to_value(state).unwrap();
-
         let error = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
             .err()
             .expect("wide 1 GHz buffered capture must be rejected before opening hardware");
 
-        assert!(error.message.contains("outside this mode"));
+        assert!(
+            error
+                .message
+                .contains("Too many channels for 1 GHz in Buffer mode"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]
-    fn streaming_hardware_discovery_rejects_a_tuple_unsupported_on_every_link() {
+    fn streaming_hardware_discovery_rejects_too_many_channels_for_the_rate() {
         let mut widget = NodeGraphWidget::new(build_registry());
         let source = widget
             .add_node_at(DsLogicU3Pro16::name(), Pos2::ZERO)
@@ -168,13 +191,17 @@ mod tests {
         state.channels.enabled[3] = true;
         widget.graph_mut().nodes.get_mut(&source).unwrap().state =
             serde_json::to_value(state).unwrap();
-
         let error = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
             .err()
             .expect("four-input 1 GHz stream must be rejected before opening hardware");
 
-        assert!(error.message.contains("High Speed"));
-        assert!(error.message.contains("SuperSpeed"));
+        assert!(
+            error
+                .message
+                .contains("Too many channels for 1 GHz in Stream mode"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

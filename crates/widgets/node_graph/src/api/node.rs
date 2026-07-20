@@ -108,6 +108,7 @@ pub struct OutputDef<S> {
     pub(crate) shape: SocketShape,
     pub(crate) identity: SocketTypeIdentity,
     pub(crate) control: Option<Box<dyn ControlBinding<S>>>,
+    pub(crate) view_selectable: bool,
 }
 
 impl<S: 'static> OutputDef<S> {
@@ -119,6 +120,7 @@ impl<S: 'static> OutputDef<S> {
             shape: T::shape(),
             identity: SocketTypeIdentity::of::<T>(),
             control: None,
+            view_selectable: true,
         }
     }
 
@@ -134,7 +136,16 @@ impl<S: 'static> OutputDef<S> {
             shape: T::shape(),
             identity: SocketTypeIdentity::of::<T>(),
             control: Some(Box::new(ControlBindingRenderer { label, accessor })),
+            view_selectable: true,
         }
+    }
+
+    /// Controls whether this output appears in the generic View panel's lane
+    /// selector. Disable this when the host presents the output automatically
+    /// through another explicit contract.
+    pub fn view_selectable(mut self, selectable: bool) -> Self {
+        self.view_selectable = selectable;
+        self
     }
 }
 

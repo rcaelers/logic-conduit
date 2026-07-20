@@ -453,6 +453,7 @@ mod tests {
             visible: true,
             hidden: false,
             has_control: false,
+            view_selectable: true,
             show_in_view: false,
         }
     }

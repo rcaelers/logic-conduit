@@ -146,7 +146,12 @@ impl NodeGraphWidget {
             .graph
             .nodes
             .get(&node_id)
-            .map(|node| node.outputs.iter().filter(|output| output.visible).count())
+            .map(|node| {
+                node.outputs
+                    .iter()
+                    .filter(|output| output.visible && output.view_selectable)
+                    .count()
+            })
             .unwrap_or(0);
         if watchable_outputs > 0 {
             height += COLLAPSING_HEADER_HEIGHT
@@ -463,7 +468,7 @@ impl NodeGraphWidget {
                                 .outputs
                                 .iter()
                                 .enumerate()
-                                .filter(|(_, output)| output.visible)
+                                .filter(|(_, output)| output.visible && output.view_selectable)
                                 .map(|(index, _)| index)
                                 .collect();
                             if !watchable.is_empty() {

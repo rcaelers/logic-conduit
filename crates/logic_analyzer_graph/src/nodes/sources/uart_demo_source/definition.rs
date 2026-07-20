@@ -35,7 +35,7 @@ impl NodeDef for UartDemoSource {
     }
 
     fn outputs() -> Vec<OutputDef<Self::State>> {
-        vec![OutputDef::new::<Signal>("RX")]
+        vec![OutputDef::new::<Signal>("RX").view_selectable(false)]
     }
 
     fn state() -> Self::State {

@@ -29,6 +29,7 @@ fn input_socket<S>(def_index: usize, input: &InputDef<S>) -> Socket {
         visible: true,
         hidden: false,
         has_control: input.control.is_some() && input.variadic_max.is_none(),
+        view_selectable: false,
         show_in_view: false,
     }
 }
@@ -46,6 +47,7 @@ fn output_socket<S>(def_index: usize, output: &OutputDef<S>) -> Socket {
         visible: true,
         hidden: false,
         has_control: output.control.is_some(),
+        view_selectable: output.view_selectable,
         show_in_view: false,
     }
 }
@@ -653,11 +655,25 @@ mod tests {
             vec![]
         }
         fn outputs() -> Vec<OutputDef<IntSourceState>> {
-            vec![OutputDef::new::<IntSocket>("Out")]
+            vec![OutputDef::new::<IntSocket>("Out").view_selectable(false)]
         }
         fn state() -> IntSourceState {
             IntSourceState
         }
+    }
+
+    #[test]
+    fn output_view_selectability_is_definition_owned_across_restore() {
+        let runtime = create_node::<IntSourceNode>(NodeId(0), Pos2::ZERO);
+        let mut node = runtime.node;
+        assert!(!node.outputs[0].view_selectable);
+
+        node.outputs[0].view_selectable = true;
+        node.outputs[0].show_in_view = true;
+        restore_node::<IntSourceNode>(&mut node);
+
+        assert!(!node.outputs[0].view_selectable);
+        assert!(node.outputs[0].show_in_view);
     }
 
     fn test_registry() -> NodeTypeRegistry {
@@ -685,6 +701,7 @@ mod tests {
             visible: true,
             hidden: false,
             has_control: false,
+            view_selectable: true,
             show_in_view: false,
         };
         let matches = registry.connectable_types(&float_output, SocketDirection::Output);
@@ -707,6 +724,7 @@ mod tests {
             visible: true,
             hidden: false,
             has_control: false,
+            view_selectable: true,
             show_in_view: false,
         };
         let matches = registry.connectable_types(&any_output, SocketDirection::Output);

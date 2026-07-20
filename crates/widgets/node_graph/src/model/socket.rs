@@ -63,6 +63,9 @@ pub struct Socket {
     pub hidden: bool,
     #[serde(default, skip_serializing)]
     pub has_control: bool,
+    /// Definition-owned eligibility for the generic View-panel lane selector.
+    #[serde(default = "default_true", skip_serializing)]
+    pub view_selectable: bool,
     /// User-toggled from the graph widget's generic View panel (outputs
     /// only): show this output as a logic analyzer lane without an explicit
     /// wire to a `Viewer` node. The compiler synthesizes the connection.
@@ -155,6 +158,7 @@ mod tests {
             visible: true,
             hidden: false,
             has_control: false,
+            view_selectable: true,
             show_in_view: false,
         }
     }
@@ -222,12 +226,14 @@ mod tests {
         assert!(!object.contains_key("visible"));
         assert!(!object.contains_key("hidden"));
         assert!(!object.contains_key("has_control"));
+        assert!(!object.contains_key("view_selectable"));
         assert!(!object.contains_key("show_in_view"));
 
         object.insert("name".to_owned(), serde_json::json!("Input"));
         object.insert("type_name".to_owned(), serde_json::json!("Float"));
         object.insert("color".to_owned(), serde_json::json!([1, 2, 3, 255]));
         object.insert("shape".to_owned(), serde_json::json!("Diamond"));
+        object.insert("view_selectable".to_owned(), serde_json::json!(false));
         object.insert(
             "variadic".to_owned(),
             serde_json::json!({"base":"Input","max":4,"placeholder":true}),
@@ -237,6 +243,7 @@ mod tests {
         assert_eq!(restored.type_name, "Float");
         assert_eq!(restored.color, Color32::from_rgb(1, 2, 3));
         assert_eq!(restored.shape, SocketShape::Diamond);
+        assert!(!restored.view_selectable);
         assert!(restored.is_variadic_placeholder());
     }
 }

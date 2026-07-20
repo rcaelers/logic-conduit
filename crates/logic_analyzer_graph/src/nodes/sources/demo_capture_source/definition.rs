@@ -179,7 +179,7 @@ impl NodeDef for DemoCaptureSource {
 
     fn outputs() -> Vec<OutputDef<Self::State>> {
         (0..DEMO_CAPTURE_CHANNELS)
-            .map(|channel| OutputDef::new::<Signal>(format!("Ch {channel}")))
+            .map(|channel| OutputDef::new::<Signal>(format!("Ch {channel}")).view_selectable(false))
             .collect()
     }
 

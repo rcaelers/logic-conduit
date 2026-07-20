@@ -737,7 +737,7 @@ impl NodeDef for DsLogicU3Pro16 {
 
     fn outputs() -> Vec<OutputDef<Self::State>> {
         (0..16_usize)
-            .map(|i| OutputDef::new::<Signal>(format!("Ch {i}")))
+            .map(|i| OutputDef::new::<Signal>(format!("Ch {i}")).view_selectable(false))
             .collect()
     }
 

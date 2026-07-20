@@ -132,6 +132,7 @@ impl NodeDef for Counter {
 | `.idle_style(color, shape)` | Override the unconnected look (resolved look always comes from the connected type) |
 | `.variadic(max)` | Growing group: members "{label} 1…N" plus a trailing placeholder; connecting the placeholder adds a member. No inline controls |
 | `OutputDef::new::<T>(label)` / `::control::<T>(…)` | Same for outputs (outputs never resolve; they keep their concrete type) |
+| `OutputDef::view_selectable(false)` | Omits an output from the generic View-panel lane selector when the host already presents it through another explicit contract |
 
 ### Props and the panel
 

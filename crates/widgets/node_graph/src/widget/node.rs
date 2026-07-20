@@ -389,7 +389,7 @@ impl NodeWidget {
                     graph,
                     node_id,
                     i,
-                    sock.show_in_view,
+                    sock.view_selectable && sock.show_in_view,
                     socket_pos,
                     view.zoom,
                 );
@@ -438,7 +438,7 @@ impl NodeWidget {
                 graph,
                 node_id,
                 i,
-                sock.show_in_view,
+                sock.view_selectable && sock.show_in_view,
                 sp,
                 view.zoom,
             );

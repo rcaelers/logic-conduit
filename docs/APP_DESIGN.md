@@ -106,7 +106,8 @@ for correction, shown as node errors, and rejected at runtime; the grid supports
 Shift-click ranges and click-drag state painting; capture duration uses human-scale presets and a
 configuration-derived maximum:
 `2^34` samples for streaming, or the channel-dependent device depth for buffered capture), UART
-Demo Source. Decoders: SPI, UART, Binary (parallel bus, SDR/DDR), and
+Demo Source. Capture-source outputs opt out of the View-panel lane selector because the capture
+presentation already shows those channels. Decoders: SPI, UART, Binary (parallel bus, SDR/DDR), and
 an I2C placeholder (a `NodeDef` with no builder: editable, not runnable).
 Logic: Word Matcher, SR Flip-Flop, Logic Gate (op enum retitles the node; NOT caps the
 variadic group at one), Buffer, Counter, String Formatter. Sinks: File Writer (inline save

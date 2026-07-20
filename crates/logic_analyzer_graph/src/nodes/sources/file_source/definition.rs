@@ -38,7 +38,7 @@ impl NodeDef for DslFileSource {
 
     fn outputs() -> Vec<OutputDef<Self::State>> {
         (0..32_usize)
-            .map(|i| OutputDef::new::<Signal>(format!("Ch {i}")))
+            .map(|i| OutputDef::new::<Signal>(format!("Ch {i}")).view_selectable(false))
             .collect()
     }
 
