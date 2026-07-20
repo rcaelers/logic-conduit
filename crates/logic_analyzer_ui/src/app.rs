@@ -1407,7 +1407,7 @@ impl App {
         boundary_interaction: Option<BoundaryInteraction>,
         over_panel_title: bool,
         viewer_context: Option<&str>,
-        over_graph: bool,
+        graph_context: Option<&str>,
         modifiers: egui::Modifiers,
     ) -> Vec<StatusAction> {
         let contexts = if boundary_interaction == Some(BoundaryInteraction::Dragging) {
@@ -1418,8 +1418,8 @@ impl App {
             vec!["panel_boundary", "global"]
         } else if over_panel_title {
             vec!["panel_title", "global"]
-        } else if over_graph {
-            vec!["node_graph", "global"]
+        } else if let Some(graph_context) = graph_context {
+            vec![graph_context, "global"]
         } else if let Some(viewer_context) = viewer_context {
             vec![viewer_context, "logic_analyzer", "global"]
         } else {
@@ -1753,10 +1753,11 @@ impl eframe::App for App {
         let pointer_pos = ui.input(|i| i.pointer.hover_pos());
         let modifiers = ui.input(|i| i.modifiers);
         let over_panel_title = pointer_pos.is_some_and(|pos| {
-            layout_response
-                .panels
-                .iter()
-                .any(|panel| panel.title_rect.contains(pos))
+            layout_response.panels.iter().any(|panel| {
+                panel
+                    .title_interaction_rect
+                    .is_some_and(|rect| rect.contains(pos))
+            })
         });
         let status_actions = self.status_actions(
             layout_response.boundary_interaction,
@@ -1764,7 +1765,9 @@ impl eframe::App for App {
             viewer
                 .filter(|viewer| pointer_pos.is_some_and(|pos| viewer.body_rect.contains(pos)))
                 .map(|_| self.logic_analyzer.hovered_input_context()),
-            graph.is_some_and(|graph| pointer_pos.is_some_and(|pos| graph.body_rect.contains(pos))),
+            graph
+                .filter(|graph| pointer_pos.is_some_and(|pos| graph.body_rect.contains(pos)))
+                .and_then(|_| self.node_graph.hovered_input_context()),
             modifiers,
         );
         let mut status_ui = ui.new_child(

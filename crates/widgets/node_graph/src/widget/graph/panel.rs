@@ -173,16 +173,10 @@ impl NodeGraphWidget {
         height
     }
 
-    /// Allocates the panel's interaction surfaces. Must run after graph hit
-    /// targets and before `handle_input` so the panel background owns the
-    /// overlapping interaction z-order.
+    /// Allocates the panel splitter. The body itself deliberately has no
+    /// parent interaction response: its scroll area and child widgets own
+    /// their pointer input, while `graph_pointer` keeps canvas gestures out.
     pub(crate) fn update_panel_interaction(&mut self, ui: &mut Ui, panel_rect: Rect) {
-        let _background = ui.interact(
-            panel_rect,
-            ui.id().with("props-panel-bg"),
-            Sense::click_and_drag(),
-        );
-
         let splitter_rect = Rect::from_min_max(
             Pos2::new(panel_rect.left() - 3.0, panel_rect.top()),
             Pos2::new(panel_rect.left() + 3.0, panel_rect.bottom()),
@@ -204,11 +198,6 @@ impl NodeGraphWidget {
     }
 
     pub(crate) fn update_panel_tab_bar_interaction(&mut self, ui: &mut Ui, tab_bar_rect: Rect) {
-        let _background = ui.interact(
-            tab_bar_rect,
-            ui.id().with("props-panel-tabbar-bg"),
-            Sense::click_and_drag(),
-        );
         for tab in [PanelTab::Node, PanelTab::View] {
             let response = ui.interact(
                 self.panel_tab_rect(tab_bar_rect, tab),

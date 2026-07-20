@@ -22,6 +22,10 @@ pub struct NodeGraphWidget {
     pub(crate) runtime: HashMap<NodeId, Box<dyn NodeInstance>>,
     pub(crate) view: ViewState,
     pub(crate) interaction_state: InteractionState,
+    /// Hover context from the most recent frame. Floating panel tabs and
+    /// content deliberately leave this empty so hosts do not advertise or
+    /// route canvas mouse actions over ordinary widgets.
+    pub(crate) hovered_input_context: Option<&'static str>,
     pub(crate) registry: NodeTypeRegistry,
     pub(crate) minimap_visible: bool,
     pub(crate) top_node: Option<NodeId>,
@@ -159,6 +163,7 @@ impl NodeGraphWidget {
             runtime: HashMap::new(),
             view: ViewState::default(),
             interaction_state: InteractionState::default(),
+            hovered_input_context: None,
             registry,
             minimap_visible: true,
             top_node: None,
@@ -552,6 +557,7 @@ impl NodeGraphWidget {
         self.update_panel_tab_bar_interaction(ui, tab_bar_rect);
 
         let graph_pointer = graph_pointer(pointer, panel_rect, tab_bar_rect);
+        self.hovered_input_context = graph_pointer.map(|_| "node_graph");
         let hovered_socket = graph_pointer.and_then(|_| self.hovered_socket(&responses));
         self.handle_input(ui, &responses, graph_pointer, origin, &layout, content_rect);
 
@@ -614,6 +620,12 @@ impl NodeGraphWidget {
             InteractionState::DraggingWire { .. } => Some("node_graph.drag_wire"),
             _ => None,
         }
+    }
+
+    /// Input-binding context under the pointer in the most recently rendered
+    /// frame. Panel tabs and panel content are widget-owned and return `None`.
+    pub fn hovered_input_context(&self) -> Option<&'static str> {
+        self.hovered_input_context
     }
 
     /// Current zoom level as a whole-number percentage, for a status bar.
@@ -682,6 +694,33 @@ mod tests {
             graph_pointer(Some(Pos2::new(300.0, 200.0)), Some(panel), tabs),
             Some(Pos2::new(300.0, 200.0))
         );
+    }
+
+    #[test]
+    fn floating_panel_widgets_do_not_report_the_canvas_input_context() {
+        fn context_at(pointer: Pos2) -> Option<&'static str> {
+            let context = egui::Context::default();
+            let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(1_000.0, 600.0));
+            context.begin_pass(egui::RawInput {
+                screen_rect: Some(rect),
+                events: vec![egui::Event::PointerMoved(pointer)],
+                ..Default::default()
+            });
+            let mut ui = egui::Ui::new(
+                context.clone(),
+                egui::Id::new("graph-hover-context-test"),
+                egui::UiBuilder::new().max_rect(rect),
+            );
+            let mut widget = NodeGraphWidget::new(NodeTypeRegistry::new());
+            widget.show(&mut ui);
+            let hovered = widget.hovered_input_context();
+            let _ = context.end_pass();
+            hovered
+        }
+
+        assert_eq!(context_at(Pos2::new(200.0, 200.0)), Some("node_graph"));
+        assert_eq!(context_at(Pos2::new(750.0, 20.0)), None);
+        assert_eq!(context_at(Pos2::new(990.0, 20.0)), None);
     }
 
     #[test]

@@ -249,6 +249,9 @@ pub struct PanelGeometry {
     pub panel_id: String,
     pub content_id: String,
     pub title_rect: Rect,
+    /// Empty title-bar area that accepts area-level mouse gestures. Content
+    /// selectors, host-provided text/buttons, and panel controls are excluded.
+    pub title_interaction_rect: Option<Rect>,
     pub body_rect: Rect,
     pub panel_rect: Rect,
     pub allocated_rect: Rect,
@@ -551,8 +554,11 @@ impl PanelLayout {
             actions.push(action);
         }
 
-        for geometry in &geometries {
-            if let Some(action) = self.show_title_bar(ui, specs, geometry, &mut add_widget) {
+        for geometry in &mut geometries {
+            let (action, interaction_rect) =
+                self.show_title_bar(ui, specs, geometry, &mut add_widget);
+            geometry.title_interaction_rect = interaction_rect;
+            if let Some(action) = action {
                 actions.push(action);
             }
             let mut body_ui = ui.new_child(
@@ -882,12 +888,7 @@ impl PanelLayout {
         specs: &[PanelSpec<'_>],
         geometry: &PanelGeometry,
         add_widget: &mut impl FnMut(PanelSlot<'_>, &mut Ui),
-    ) -> Option<LayoutAction> {
-        let response = ui.interact(
-            geometry.title_rect,
-            ui.id().with(("panel-title", geometry.panel_id.as_str())),
-            Sense::click(),
-        );
+    ) -> (Option<LayoutAction>, Option<Rect>) {
         let rounding = match geometry.title_bar_position {
             TitleBarPosition::Top => CornerRadius {
                 nw: self.style.corner_radius,
@@ -902,15 +903,8 @@ impl PanelLayout {
                 se: self.style.corner_radius,
             },
         };
-        ui.painter().rect_filled(
-            geometry.title_rect,
-            rounding,
-            if response.hovered() {
-                self.style.title_hover_fill
-            } else {
-                self.style.title_fill
-            },
-        );
+        ui.painter()
+            .rect_filled(geometry.title_rect, rounding, self.style.title_fill);
         let divider = match geometry.title_bar_position {
             TitleBarPosition::Top => [
                 geometry.title_rect.left_bottom(),
@@ -924,20 +918,7 @@ impl PanelLayout {
         ui.painter()
             .line_segment(divider, Stroke::new(1.0, self.style.border_color));
 
-        let mut action = response.double_clicked().then_some(if geometry.maximized {
-            LayoutAction::Panel {
-                panel_id: geometry.panel_id.clone(),
-                action: PanelAction::RestoreMaximized,
-            }
-        } else {
-            LayoutAction::Panel {
-                panel_id: geometry.panel_id.clone(),
-                action: PanelAction::Maximize,
-            }
-        });
-        response.context_menu(|ui| {
-            self.show_area_menu(ui, geometry, &mut action);
-        });
+        let mut action = None;
         let mut title_ui = ui.new_child(
             UiBuilder::new()
                 .id_salt(("panel-title-content", geometry.panel_id.as_str()))
@@ -995,18 +976,49 @@ impl PanelLayout {
             },
             &mut title_ui,
         );
-        title_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let maximize_icon = if geometry.maximized {
-                PanelControlIcon::RestoreLayout
-            } else {
-                PanelControlIcon::Maximize
-            };
-            let maximize_tooltip = if geometry.maximized {
-                "Restore panel layout"
-            } else {
-                "Maximize panel"
-            };
-            if panel_control_button(ui, maximize_icon, maximize_tooltip).clicked() {
+        let interaction_left = title_ui.available_rect_before_wrap().left();
+        let maximize_response = title_ui
+            .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let maximize_icon = if geometry.maximized {
+                    PanelControlIcon::RestoreLayout
+                } else {
+                    PanelControlIcon::Maximize
+                };
+                let maximize_tooltip = if geometry.maximized {
+                    "Restore panel layout"
+                } else {
+                    "Maximize panel"
+                };
+                let response = panel_control_button(ui, maximize_icon, maximize_tooltip);
+                if response.clicked() {
+                    action = Some(LayoutAction::Panel {
+                        panel_id: geometry.panel_id.clone(),
+                        action: if geometry.maximized {
+                            PanelAction::RestoreMaximized
+                        } else {
+                            PanelAction::Maximize
+                        },
+                    });
+                }
+                response
+            })
+            .inner;
+        let interaction_rect = title_interaction_rect(
+            geometry.title_rect,
+            interaction_left,
+            maximize_response.rect.left(),
+        );
+        if let Some(interaction_rect) = interaction_rect {
+            let response = ui.interact(
+                interaction_rect,
+                ui.id().with(("panel-title", geometry.panel_id.as_str())),
+                Sense::click(),
+            );
+            if response.hovered() {
+                ui.painter()
+                    .rect_filled(interaction_rect, 0.0, self.style.title_hover_fill);
+            }
+            if response.double_clicked() {
                 action = Some(LayoutAction::Panel {
                     panel_id: geometry.panel_id.clone(),
                     action: if geometry.maximized {
@@ -1016,8 +1028,13 @@ impl PanelLayout {
                     },
                 });
             }
-        });
-        action
+            response.context_menu(|ui| {
+                self.show_area_menu(ui, geometry, &mut action);
+            });
+        }
+        ui.painter()
+            .line_segment(divider, Stroke::new(1.0, self.style.border_color));
+        (action, interaction_rect)
     }
 
     fn show_area_menu(
@@ -1584,12 +1601,28 @@ fn push_panel_geometry(
         panel_id: panel.id.clone(),
         content_id: panel.content.clone(),
         title_rect,
+        title_interaction_rect: None,
         body_rect: Rect::from_min_size(body_min, egui::vec2(allocated_rect.width(), body_height)),
         panel_rect: allocated_rect,
         allocated_rect,
         title_bar_position: panel.title_bar_position,
         maximized,
     });
+}
+
+fn title_interaction_rect(
+    title_rect: Rect,
+    content_right: f32,
+    controls_left: f32,
+) -> Option<Rect> {
+    let left = content_right.clamp(title_rect.left(), title_rect.right());
+    let right = controls_left.clamp(title_rect.left(), title_rect.right());
+    (right > left).then(|| {
+        Rect::from_min_max(
+            egui::pos2(left, title_rect.top()),
+            egui::pos2(right, title_rect.bottom()),
+        )
+    })
 }
 
 fn panel_at_pointer(panels: &[PanelGeometry], pointer: egui::Pos2) -> Option<&PanelGeometry> {
@@ -2043,6 +2076,49 @@ mod tests {
                 .icon,
             PanelIcon::Waveform
         );
+    }
+
+    #[test]
+    fn title_interaction_excludes_content_and_control_columns() {
+        let title = Rect::from_min_max(egui::pos2(0.0, 10.0), egui::pos2(400.0, 42.0));
+        let interaction = title_interaction_rect(title, 135.0, 370.0).unwrap();
+
+        assert_eq!(interaction.left(), 135.0);
+        assert_eq!(interaction.right(), 370.0);
+        assert!(!interaction.contains(egui::pos2(100.0, 20.0)));
+        assert!(!interaction.contains(egui::pos2(390.0, 20.0)));
+        assert!(interaction.contains(egui::pos2(250.0, 20.0)));
+        assert!(title_interaction_rect(title, 380.0, 370.0).is_none());
+    }
+
+    #[test]
+    fn rendered_title_interaction_avoids_host_widgets_and_panel_controls() {
+        let context = egui::Context::default();
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 300.0));
+        context.begin_pass(egui::RawInput {
+            screen_rect: Some(rect),
+            ..Default::default()
+        });
+        let mut ui = egui::Ui::new(
+            context.clone(),
+            egui::Id::new("title-interaction-test"),
+            UiBuilder::new().max_rect(rect),
+        );
+        let mut layout = PanelLayout::new([("viewer", 1.0)]);
+
+        let response = layout.show(&mut ui, rect, 0.0, &specs(), |slot, ui| {
+            if matches!(slot, PanelSlot::TitleBar { .. }) {
+                ui.label("Capture status");
+                let _ = ui.small_button("Stop");
+            }
+        });
+        let _ = context.end_pass();
+        let panel = response.panel("viewer").unwrap();
+        let interaction = panel.title_interaction_rect.unwrap();
+
+        assert!(interaction.left() > panel.title_rect.left() + 44.0);
+        assert!(interaction.right() < panel.title_rect.right());
+        assert!(interaction.width() > 0.0);
     }
 
     #[test]
