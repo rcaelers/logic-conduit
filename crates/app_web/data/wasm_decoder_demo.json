@@ -265,10 +265,10 @@
       }
     }
   ],
-  "frames": [],
   "extensions": {
     "logic_analyzer_ui.sampling_overlay": 1
   },
+  "frames": [],
   "next_frame_id": 0,
   "next_id": 9,
   "nodes": {
@@ -322,7 +322,10 @@
         "y": 300.0
       },
       "selected": false,
-      "state": {},
+      "state": {
+        "schema_version": 2,
+        "trigger_program": null
+      },
       "title": "Demo",
       "type_name": "Demo Capture Source"
     },
@@ -350,11 +353,24 @@
       "kind": "Regular",
       "muted": false,
       "outputs": [
+        {},
         {
+          "def_index": 1
+        },
+        {
+          "def_index": 2,
           "show_in_view": true
         },
         {
-          "def_index": 1,
+          "def_index": 3,
+          "show_in_view": true
+        },
+        {
+          "def_index": 4,
+          "show_in_view": true
+        },
+        {
+          "def_index": 5,
           "show_in_view": true
         }
       ],
@@ -393,9 +409,21 @@
             "Disabled"
           ]
         },
+        "display_format": {
+          "value": "Hex",
+          "variants": [
+            "Hex",
+            "Binary",
+            "Octal",
+            "Decimal",
+            "ASCII",
+            "Hex + ASCII"
+          ]
+        },
         "has_miso": {
           "value": true
         },
+        "schema_version": 1,
         "word_size": {
           "max": 64,
           "min": 1,
