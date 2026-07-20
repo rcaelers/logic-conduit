@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::{
-    CaptureReclamationReport, CaptureRecoveryReport, CaptureSessionId, CaptureSessionOutcome,
-    CaptureStoreError, CaptureStoreResult, NativeFinalizedCapture,
+    CaptureReclamationReport, CaptureRecoveryReport, CaptureSessionOutcome, CaptureStoreError,
+    CaptureStoreResult, NativeFinalizedCapture,
 };
-use crate::CaptureRetentionTracker;
+use crate::{CaptureRetentionTracker, CaptureSessionId};
 
 #[derive(Clone, Debug)]
 pub struct NativeCaptureSessionRepositoryConfig {
@@ -112,10 +112,7 @@ impl NativeCaptureSessionRepository {
         Ok(self.pin_unchecked(session_id, directory))
     }
 
-    pub fn pin(
-        &self,
-        session_id: CaptureSessionId,
-    ) -> CaptureStoreResult<NativeCaptureSessionPin> {
+    pub fn pin(&self, session_id: CaptureSessionId) -> CaptureStoreResult<NativeCaptureSessionPin> {
         let directory = self.session_directory(session_id);
         if !directory.is_dir() {
             return Err(CaptureStoreError::SessionNotFound(session_id));
@@ -303,8 +300,11 @@ impl NativeCaptureSessionRepository {
             .iter()
             .filter_map(|summary| {
                 let id = summary.session_id?;
-                (!summary.kept && !self.is_pinned(id))
-                    .then_some((summary.accessed_unix_ns, id, summary.bytes))
+                (!summary.kept && !self.is_pinned(id)).then_some((
+                    summary.accessed_unix_ns,
+                    id,
+                    summary.bytes,
+                ))
             })
             .collect::<Vec<_>>();
         candidates.sort_by_key(|candidate| candidate.0);
@@ -383,7 +383,6 @@ fn directory_size(directory: &Path) -> u64 {
             })
         })
         .fold(0_u64, u64::saturating_add)
-
 }
 
 #[cfg(test)]
@@ -393,15 +392,12 @@ mod tests {
 
     use tempfile::tempdir;
 
+    use super::{NativeCaptureSessionRepository, NativeCaptureSessionRepositoryConfig};
     use crate::{
         CaptureChannelId, CaptureChunk, CaptureChunkWriter, CaptureCursorItem, CapturePolicy,
         CaptureSessionId, CaptureSessionOutcome, CaptureSessionPlan, CaptureStoreCursor,
         CaptureStoreDescriptor, CompletionPolicy, EffectiveCapturePolicy, NativeCaptureStore,
         NativeCaptureStoreConfig, RecordingStart, RetentionPolicy,
-    };
-
-    use super::{
-        NativeCaptureSessionRepository, NativeCaptureSessionRepositoryConfig,
     };
 
     fn finalized_session(
@@ -410,16 +406,12 @@ mod tests {
     ) -> CaptureSessionId {
         let id = CaptureSessionId::new(id);
         let pin = repository.reserve(id).unwrap();
-        let descriptor = CaptureStoreDescriptor::new(
-            id,
-            vec![CaptureChannelId::new(format!("bank:{id}"))],
-        )
-        .unwrap();
-        let (store, mut writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
-            pin.directory(),
-            descriptor,
-        ))
-        .unwrap();
+        let descriptor =
+            CaptureStoreDescriptor::new(id, vec![CaptureChannelId::new(format!("bank:{id}"))])
+                .unwrap();
+        let (store, mut writer) =
+            NativeCaptureStore::create(NativeCaptureStoreConfig::new(pin.directory(), descriptor))
+                .unwrap();
         crate::CaptureChunkWriter::finish(&mut writer).unwrap();
         drop(writer);
         store
@@ -452,10 +444,9 @@ mod tests {
     fn reserve_recreates_a_cache_root_removed_after_initialization() {
         let temporary = tempdir().unwrap();
         let root = temporary.path().join("captures");
-        let repository = NativeCaptureSessionRepository::new(
-            NativeCaptureSessionRepositoryConfig::new(&root),
-        )
-        .unwrap();
+        let repository =
+            NativeCaptureSessionRepository::new(NativeCaptureSessionRepositoryConfig::new(&root))
+                .unwrap();
         fs::remove_dir(&root).unwrap();
 
         let session = CaptureSessionId::new(42);
@@ -496,16 +487,11 @@ mod tests {
         .unwrap();
         let id = CaptureSessionId::new(4);
         let pin = repository.reserve(id).unwrap();
-        let descriptor = CaptureStoreDescriptor::new(
-            id,
-            vec![CaptureChannelId::new("physical:7")],
-        )
-        .unwrap();
-        let (_store, writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
-            pin.directory(),
-            descriptor,
-        ))
-        .unwrap();
+        let descriptor =
+            CaptureStoreDescriptor::new(id, vec![CaptureChannelId::new("physical:7")]).unwrap();
+        let (_store, writer) =
+            NativeCaptureStore::create(NativeCaptureStoreConfig::new(pin.directory(), descriptor))
+                .unwrap();
         std::mem::forget(writer);
         drop(pin);
 

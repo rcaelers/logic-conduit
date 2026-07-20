@@ -12,14 +12,10 @@ use std::thread::JoinHandle;
 
 use thiserror::Error;
 
-use signal_processing::TriggerCountMode;
-use signal_processing::sender::Sender;
-use signal_processing::errors::{WorkError, WorkResult};
-use signal_processing::node::{ProcessNode};
-use signal_processing::ports::{InputPort, OutputPort};
-use signal_processing::ports::{PortDirection, PortSchema};
-use signal_processing::sample::{Sample, SampleBlock};
-use signal_processing::sample_kind::SampleKind;
+use signal_processing::{
+    InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, Sample, SampleBlock, SampleKind,
+    Sender, TriggerCountMode, WorkError, WorkResult,
+};
 
 /// Static capabilities exposed by a logic-analyzer driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,7 +229,7 @@ pub struct LogicAnalyzerSource<A: LogicAnalyzer> {
 
 impl<A: LogicAnalyzer> LogicAnalyzerSource<A> {
     pub fn new(analyzer: A, config: LogicCaptureConfig) -> LogicAnalyzerResult<Self> {
-        signal_processing::ports::register_type::<LogicChunk>();
+        signal_processing::register_type::<LogicChunk>();
         let channels = config.input_mask.count_ones() as u8;
         if channels == 0
             || channels > analyzer.info().channels
@@ -547,8 +543,7 @@ impl fmt::Display for LogicChunk {
 #[cfg(test)]
 mod tests {
     use crossbeam_channel::bounded;
-
-    use signal_processing::sender::ChannelMessage;
+    use signal_processing::ChannelMessage;
 
     use super::*;
 

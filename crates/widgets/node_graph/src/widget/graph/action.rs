@@ -25,7 +25,7 @@ struct ClipboardPayload {
 }
 
 #[derive(PartialEq, Eq)]
-pub(super) enum ActionEffect {
+pub(crate) enum ActionEffect {
     None,
     ResetInteraction,
     /// Enter `InteractionState::PlacingNodes` anchored at the pointer, if a
@@ -36,7 +36,7 @@ pub(super) enum ActionEffect {
 }
 
 #[derive(Clone)]
-pub(super) enum GraphAction {
+pub(crate) enum GraphAction {
     Undo,
     Redo,
     OpenAddSearch,
@@ -123,18 +123,18 @@ impl GraphAction {
     }
 }
 
-pub(super) struct HotkeyRegistry {
+pub(crate) struct HotkeyRegistry {
     bindings: Vec<(&'static str, GraphAction)>,
 }
 
 impl HotkeyRegistry {
-    pub(super) fn new() -> Self {
+    fn new() -> Self {
         Self {
             bindings: Vec::new(),
         }
     }
 
-    pub(super) fn graph_defaults() -> Self {
+    pub(crate) fn graph_defaults() -> Self {
         let mut r = Self::new();
         r.bind("delete", GraphAction::Delete { target: None });
         // `M` now mutes (Blender: `M`); minimap relocated to Ctrl+M rather
@@ -156,13 +156,13 @@ impl HotkeyRegistry {
         r
     }
 
-    pub(super) fn bind(&mut self, action_id: &'static str, action: GraphAction) {
+    fn bind(&mut self, action_id: &'static str, action: GraphAction) {
         self.bindings.push((action_id, action));
     }
 
     /// Dispatch all matching bindings. Suppressed entirely when any widget holds
     /// keyboard focus, e.g. an open menu or inline text edit.
-    pub(super) fn dispatch(
+    pub(crate) fn dispatch(
         &self,
         ui: &mut egui::Ui,
         input_bindings: &input_bindings::InputBindings,
@@ -190,7 +190,7 @@ impl NodeGraphWidget {
     /// (Phase 1.2) so the nodes follow the pointer until confirmed; without a
     /// pointer (e.g. a touch-driven menu) they fall back to their previous
     /// fixed-position behavior.
-    pub(super) fn execute_action(
+    pub(crate) fn execute_action(
         &mut self,
         action: GraphAction,
         egui_ctx: &egui::Context,
@@ -360,9 +360,9 @@ impl NodeGraphWidget {
         }
     }
 
-    /// `pub(super)`: also called from `interaction.rs` to cancel a placement
+    /// `pub(crate)`: also called from `interaction.rs` to cancel a placement
     /// gesture (Phase 1.2) by reverting the snapshot taken when it started.
-    pub(super) fn undo(&mut self) {
+    pub(crate) fn undo(&mut self) {
         let Some(previous) = self.undo_stack.pop() else {
             return;
         };
@@ -374,7 +374,7 @@ impl NodeGraphWidget {
 
     /// Restores the snapshot for a cancelled interaction without turning the
     /// partially completed interaction into a redo step.
-    pub(super) fn cancel_undo_snapshot(&mut self) {
+    pub(crate) fn cancel_undo_snapshot(&mut self) {
         let Some(previous) = self.undo_stack.pop() else {
             return;
         };
@@ -598,7 +598,7 @@ impl NodeGraphWidget {
         false
     }
 
-    pub(super) fn can_paste_nodes(&self) -> bool {
+    pub(crate) fn can_paste_nodes(&self) -> bool {
         self.clipboard_cache
             .as_deref()
             .and_then(|text| serde_json::from_str::<ClipboardPayload>(text).ok())
@@ -707,7 +707,7 @@ impl NodeGraphWidget {
 
     /// Opens the inline rename overlay for `target` (Phase 2, F2) — same
     /// mechanism as `start_renaming_frame`, writing to `node.title` instead.
-    pub(super) fn start_renaming_node(&mut self, target: NodeId, screen_pos: Pos2) {
+    pub(crate) fn start_renaming_node(&mut self, target: NodeId, screen_pos: Pos2) {
         let Some(node) = self.graph.nodes.get(&target) else {
             return;
         };
@@ -838,7 +838,7 @@ impl NodeGraphWidget {
         }
     }
 
-    pub(super) fn toggle_collapsed_for_node(&mut self, node_id: NodeId) {
+    pub(crate) fn toggle_collapsed_for_node(&mut self, node_id: NodeId) {
         if let Some(node) = self.graph.nodes.get_mut(&node_id)
             && node.kind != crate::model::NodeKind::Reroute
         {

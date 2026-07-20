@@ -3,7 +3,7 @@ use super::WordPresenceBucket;
 const FAN_OUT: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct WordSummaryRecord {
+pub(crate) struct WordSummaryRecord {
     pub start_ns: u64,
     pub end_ns: u64,
     pub word_count: u64,
@@ -13,10 +13,10 @@ pub(super) struct WordSummaryRecord {
 
 /// A 64-way append-only mipmap whose leaves summarize occupied word runs.
 #[derive(Debug, Clone)]
-pub(super) struct WordPresenceIndex {
-    pub(super) levels: Vec<Vec<WordSummaryRecord>>,
+pub(crate) struct WordPresenceIndex {
+    levels: Vec<Vec<WordSummaryRecord>>,
     extent_end_ns: Option<u64>,
-    pub(super) prefix_max_end_ns: Vec<u64>,
+    prefix_max_end_ns: Vec<u64>,
     prefix_word_counts: Vec<u64>,
 }
 
@@ -27,7 +27,7 @@ impl Default for WordPresenceIndex {
 }
 
 impl WordPresenceIndex {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             levels: vec![Vec::new()],
             extent_end_ns: None,
@@ -36,11 +36,21 @@ impl WordPresenceIndex {
         }
     }
 
-    pub(super) fn extent_end_ns(&self) -> Option<u64> {
+    pub(crate) fn extent_end_ns(&self) -> Option<u64> {
         self.extent_end_ns
     }
 
-    pub(super) fn push(&mut self, record: WordSummaryRecord) {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn leaves(&self) -> &[WordSummaryRecord] {
+        &self.levels[0]
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn prefix_max_end_ns(&self) -> &[u64] {
+        &self.prefix_max_end_ns
+    }
+
+    pub(crate) fn push(&mut self, record: WordSummaryRecord) {
         debug_assert!(record.word_count > 0);
         debug_assert!(record.start_ns <= record.end_ns);
         self.extent_end_ns = Some(
@@ -74,7 +84,7 @@ impl WordPresenceIndex {
         }
     }
 
-    pub(super) fn presence_window_all(
+    pub(crate) fn presence_window_all(
         &self,
         start_ns: u64,
         end_ns: u64,

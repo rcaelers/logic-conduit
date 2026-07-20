@@ -15,7 +15,7 @@ use crossbeam_channel::Receiver as CrossbeamReceiver;
 
 use super::errors::{WorkError, WorkResult};
 use super::sender::ChannelMessage;
-use super::watchdog::{OperationGuard, WatchdogHandle};
+use crate::{OperationGuard, WatchdogHandle};
 
 // ────────────────────────────────────────────────────────────────────────────
 // Receiver — single-channel wrapper

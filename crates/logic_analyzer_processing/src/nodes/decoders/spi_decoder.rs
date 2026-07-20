@@ -22,16 +22,11 @@ use std::sync::Arc;
 
 use tracing::{debug, trace};
 
-use signal_processing::SamplingActivity;
 use signal_processing::capture::CaptureTransition;
-use signal_processing::edge_query::EdgeQuery;
-use signal_processing::errors::{WorkError, WorkResult};
-use signal_processing::events::Word;
-use signal_processing::node::ProcessNode;
-use signal_processing::ports::{InputPort, OutputPort};
-use signal_processing::protocol::ProtocolKind;
-use signal_processing::receiver::Receiver;
-use signal_processing::sample::Sample;
+use signal_processing::{
+    EdgeQuery, InputPort, OutputPort, ProcessNode, ProtocolKind, Receiver, Sample,
+    SamplingActivity, Word, WorkError, WorkResult,
+};
 
 use super::types::{BitOrder, CsPolarity, SpiMode};
 
@@ -267,8 +262,8 @@ impl ProcessNode for SpiDecoder {
         3 * (usize::from(self.has_mosi) + usize::from(self.has_miso))
     }
 
-    fn input_schema(&self) -> Vec<signal_processing::ports::PortSchema> {
-        use signal_processing::ports::{PortDirection, PortSchema};
+    fn input_schema(&self) -> Vec<signal_processing::PortSchema> {
+        use signal_processing::{PortDirection, PortSchema};
 
         // Every input this decoder has is a raw binary channel: prefer
         // skip-ahead queries over streaming every dead-time edge, fall back
@@ -296,8 +291,8 @@ impl ProcessNode for SpiDecoder {
         schemas
     }
 
-    fn output_schema(&self) -> Vec<signal_processing::ports::PortSchema> {
-        use signal_processing::ports::{PortDirection, PortSchema};
+    fn output_schema(&self) -> Vec<signal_processing::PortSchema> {
+        use signal_processing::{PortDirection, PortSchema};
 
         // Each configured direction retains its legacy word stream and adds
         // the bit-detail/data pair used by the compound viewer lane.
@@ -1120,7 +1115,7 @@ mod tests {
     }
 
     fn query_input(
-        watchdog: &signal_processing::watchdog::Watchdog,
+        watchdog: &signal_processing::Watchdog,
         bits: Vec<bool>,
         calls: Arc<QueryCalls>,
         port: &str,
@@ -1161,8 +1156,7 @@ mod tests {
     #[test]
     fn work_indexed_batches_clock_edges_and_data_values() {
         use crossbeam_channel::bounded;
-        use signal_processing::sender::{ChannelMessage, Sender};
-        use signal_processing::watchdog::Watchdog;
+        use signal_processing::{ChannelMessage, Sender, Watchdog};
 
         let samples = 100usize;
         let cs_bits = (0..samples)
@@ -1256,8 +1250,7 @@ mod tests {
     #[test]
     fn work_streamed_emits_independent_mosi_and_miso_word_streams() {
         use crossbeam_channel::bounded;
-        use signal_processing::sender::{ChannelMessage, Sender};
-        use signal_processing::watchdog::Watchdog;
+        use signal_processing::{ChannelMessage, Sender, Watchdog};
 
         let wd = Watchdog::new();
 
@@ -1372,8 +1365,7 @@ mod tests {
     #[test]
     fn work_streamed_flushes_final_active_cs_window_at_capture_end() {
         use crossbeam_channel::bounded;
-        use signal_processing::sender::{ChannelMessage, Sender};
-        use signal_processing::watchdog::Watchdog;
+        use signal_processing::{ChannelMessage, Sender, Watchdog};
 
         let watchdog = Watchdog::new();
         let make_input = |samples: &[Sample], port: &str| {

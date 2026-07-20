@@ -14,33 +14,33 @@
 #[cfg(test)]
 mod architecture_tests;
 
-pub mod advanced_trigger;
+mod advanced_trigger;
 mod app_manager;
 pub mod capture;
 mod capture_policy;
 mod cooperative_manager;
 mod derived_index;
 pub mod derived_word_store;
-pub mod edge_query;
-pub mod errors;
-pub mod events;
+mod edge_query;
+mod errors;
+mod events;
 mod graph;
 pub mod live_capture;
 pub mod live_capture_store;
 mod manager;
-pub mod node;
-pub mod pipeline;
-pub mod ports;
-pub mod protocol;
-pub mod receiver;
-pub mod sample;
-pub mod sample_kind;
+mod node;
+mod pipeline;
+mod ports;
+mod protocol;
+mod receiver;
+mod sample;
+mod sample_kind;
 mod sampling_activity;
-pub mod scheduler;
-pub mod sender;
+mod scheduler;
+mod sender;
 mod type_registry;
 mod viewer_sink;
-pub mod watchdog;
+mod watchdog;
 
 std::cfg_select! {
     target_arch = "wasm32" => {
@@ -54,7 +54,7 @@ std::cfg_select! {
         #[path = "idle_native.rs"]
         mod idle;
         pub mod waveform_index;
-        pub mod worker_pool;
+        mod worker_pool;
 
         pub use derived_word_store::{
             DecodedBlockCacheStats, cleanup_cache, clear_cache, clear_cache_entry,
@@ -64,6 +64,7 @@ std::cfg_select! {
             CaptureIndexProgress, IndexSampler, NativeGrowingCaptureIndex,
             NativeGrowingCaptureIndexWorker, exact_window_sample_limit,
         };
+        pub use worker_pool::{WorkerPool, WorkerPoolStopped, shared_worker_pool};
     }
 }
 
@@ -101,7 +102,7 @@ pub use events::{
     instantaneous_word_end_ns,
 };
 pub use graph::{Connection, GraphBuilder, NodeId};
-pub(crate) use idle::idle_backoff;
+use idle::idle_backoff;
 pub use live_capture::{
     CAPTURE_CHUNK_FORMAT_VERSION, CaptureAcquisitionPhase, CaptureBufferLease, CaptureBufferPool,
     CaptureBufferPoolError, CaptureBufferPoolMetrics, CaptureBytes, CaptureChannelId, CaptureChunk,
@@ -126,6 +127,7 @@ pub use protocol::ProtocolKind;
 pub use receiver::{Receiver, ReceiverSelector};
 pub use sample::{Sample, SampleBlock};
 pub use sample_kind::SampleKind;
+pub(crate) use sample_kind::negotiate as negotiate_sample_kind;
 pub use sampling_activity::SamplingActivity;
 pub use scheduler::{Scheduler, StopHandle};
 pub use sender::{ChannelMessage, OverflowPolicy, Sender, SharedSenders};
@@ -135,4 +137,5 @@ pub use viewer_sink::{
     ViewerRetention, ViewerSink, ViewerSinkMetrics, ViewerSinkMetricsSnapshot, ViewerValue,
     ViewerValueKind, ViewerValueLane,
 };
-pub use watchdog::Watchdog;
+pub(crate) use watchdog::OperationGuard;
+pub use watchdog::{Watchdog, WatchdogHandle};

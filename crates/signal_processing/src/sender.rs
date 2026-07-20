@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use crossbeam_channel::{SendError, Sender as CrossbeamSender, TrySendError, bounded};
 
-use super::watchdog::{OperationGuard, WatchdogHandle};
+use crate::{OperationGuard, WatchdogHandle};
 
 /// Channel message wrapper for end-of-stream signaling
 ///

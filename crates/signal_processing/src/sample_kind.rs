@@ -55,7 +55,7 @@ impl SampleKind {
 /// `from_type`/`to_type` (today's behavior, unchanged); otherwise
 /// intersects the two kind sets, producer preference order winning ties.
 /// Returns `None` if there's no common kind.
-pub fn negotiate(
+pub(crate) fn negotiate(
     offered: &[SampleKind],
     from_type: TypeId,
     accepted: &[SampleKind],

@@ -29,7 +29,7 @@ const U3_RATES: &[(&str, u64)] = &[
     ("1 GHz", 1_000_000_000),
 ];
 const U3PRO16_STATE_VERSION: u16 = 3;
-pub(super) const U3PRO16_CHANNELS: usize = 16;
+pub(crate) const U3PRO16_CHANNELS: usize = 16;
 
 fn u3_rate_names() -> Vec<&'static str> {
     U3_RATES.iter().map(|(name, _)| *name).collect()
@@ -132,7 +132,8 @@ impl InlineControl for ChannelGridValue {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct U3Pro16State {
-    schema_version: u16,
+    #[serde(flatten)]
+    pub metadata: U3Pro16Metadata,
     pub mode: EnumValue,
     pub sample_rate: EnumValue,
     pub duration_ms: IntValue,
@@ -150,10 +151,15 @@ pub struct U3Pro16State {
     pub clock_edge: EnumValue,
     pub channels: ChannelGridValue,
     pub summary: LabelValue,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct U3Pro16Metadata {
+    schema_version: u16,
     trigger_program: Option<TriggerProgram>,
     /// Explanation of an auto-clamped rate, surfaced as a node badge.
     #[serde(skip)]
-    pub clamp_note: Option<String>,
+    clamp_note: Option<String>,
     #[serde(skip)]
     compatibility_warning: Option<String>,
 }
@@ -161,22 +167,19 @@ pub struct U3Pro16State {
 impl Default for U3Pro16State {
     fn default() -> Self {
         Self {
-            schema_version: U3PRO16_STATE_VERSION,
+            metadata: U3Pro16Metadata {
+                schema_version: U3PRO16_STATE_VERSION,
+                ..Default::default()
+            },
             mode: EnumValue::new(0, &["Stream", "Buffer"]),
             sample_rate: EnumValue::new(9, &u3_rate_names()),
             duration_ms: IntValue::new(1000, 1, 60_000),
             recording_start: EnumValue::new(0, &["Immediate", "Trigger"]),
             trigger_position_percent: IntValue::new(50, 0, 100),
-            retention: EnumValue::new(
-                0,
-                &["Everything", "Recent duration", "Recent bytes"],
-            ),
+            retention: EnumValue::new(0, &["Everything", "Recent duration", "Recent bytes"]),
             retention_duration_ms: IntValue::new(10_000, 1, i32::MAX),
             retention_megabytes: IntValue::new(1024, 1, i32::MAX),
-            trigger_timeout_action: EnumValue::new(
-                0,
-                &["Disabled", "Continue waiting", "Stop"],
-            ),
+            trigger_timeout_action: EnumValue::new(0, &["Disabled", "Continue waiting", "Stop"]),
             trigger_timeout_ms: IntValue::new(10_000, 1, i32::MAX),
             rle: BoolValue::new(false),
             threshold: FloatValue::new(1.0, 0.0, 5.0, 0.05),
@@ -185,23 +188,20 @@ impl Default for U3Pro16State {
             clock_edge: EnumValue::new(0, &["Rising", "Falling"]),
             channels: ChannelGridValue::new(U3PRO16_CHANNELS, U3PRO16_CHANNELS),
             summary: LabelValue::default(),
-            trigger_program: None,
-            clamp_note: None,
-            compatibility_warning: None,
         }
     }
 }
 
 impl U3Pro16State {
     pub fn trigger_program(&self) -> Option<&TriggerProgram> {
-        self.trigger_program.as_ref()
+        self.metadata.trigger_program.as_ref()
     }
 
     pub fn set_trigger_program(&mut self, program: Option<TriggerProgram>) -> Result<(), String> {
         super::trigger::validate_program(self, program.as_ref())?;
-        self.trigger_program = program;
+        self.metadata.trigger_program = program;
         self.sync_recording_start_to_trigger_program();
-        self.compatibility_warning = None;
+        self.metadata.compatibility_warning = None;
         Ok(())
     }
 
@@ -210,14 +210,15 @@ impl U3Pro16State {
         physical_channel: usize,
         condition: SimpleTriggerCondition,
     ) -> Result<(), String> {
-        self.trigger_program = super::trigger::set_condition(self, physical_channel, condition)?;
+        self.metadata.trigger_program =
+            super::trigger::set_condition(self, physical_channel, condition)?;
         self.sync_recording_start_to_trigger_program();
-        self.compatibility_warning = None;
+        self.metadata.compatibility_warning = None;
         Ok(())
     }
 
     fn sync_recording_start_to_trigger_program(&mut self) {
-        if self.trigger_program.is_some() {
+        if self.metadata.trigger_program.is_some() {
             self.recording_start.select("Trigger");
         } else {
             self.recording_start.select("Immediate");
@@ -225,10 +226,10 @@ impl U3Pro16State {
     }
 
     fn retain_enabled_trigger_conditions(&mut self) {
-        let had_trigger = self.trigger_program.is_some();
+        let had_trigger = self.metadata.trigger_program.is_some();
         if let Ok(program) = super::trigger::retain_enabled_conditions(self) {
-            self.trigger_program = program;
-            if had_trigger && self.trigger_program.is_none() {
+            self.metadata.trigger_program = program;
+            if had_trigger && self.metadata.trigger_program.is_none() {
                 self.recording_start.select("Immediate");
             }
         }
@@ -303,7 +304,10 @@ impl<'de> Deserialize<'de> for U3Pro16State {
             warnings.push(format!("normalized channel count to {U3PRO16_CHANNELS}"));
         }
         let mut state = Self {
-            schema_version: U3PRO16_STATE_VERSION,
+            metadata: U3Pro16Metadata {
+                schema_version: U3PRO16_STATE_VERSION,
+                ..Default::default()
+            },
             mode: saved.mode,
             sample_rate: saved.sample_rate,
             duration_ms: saved.duration_ms,
@@ -322,9 +326,9 @@ impl<'de> Deserialize<'de> for U3Pro16State {
             retention_megabytes: saved
                 .retention_megabytes
                 .unwrap_or_else(|| IntValue::new(1024, 1, i32::MAX)),
-            trigger_timeout_action: saved.trigger_timeout_action.unwrap_or_else(|| {
-                EnumValue::new(0, &["Disabled", "Continue waiting", "Stop"])
-            }),
+            trigger_timeout_action: saved
+                .trigger_timeout_action
+                .unwrap_or_else(|| EnumValue::new(0, &["Disabled", "Continue waiting", "Stop"])),
             trigger_timeout_ms: saved
                 .trigger_timeout_ms
                 .unwrap_or_else(|| IntValue::new(10_000, 1, i32::MAX)),
@@ -335,12 +339,9 @@ impl<'de> Deserialize<'de> for U3Pro16State {
             clock_edge: saved.clock_edge,
             channels,
             summary: saved.summary,
-            trigger_program: None,
-            clamp_note: None,
-            compatibility_warning: None,
         };
         let mut reset_trigger_program = false;
-        state.trigger_program = if has_saved_trigger_program {
+        state.metadata.trigger_program = if has_saved_trigger_program {
             match saved.trigger_program {
                 None => None,
                 Some(value) => match serde_json::from_value::<TriggerProgram>(value) {
@@ -364,18 +365,15 @@ impl<'de> Deserialize<'de> for U3Pro16State {
                 },
             }
         } else {
-            super::trigger::program_from_conditions(
-                &trigger_conditions,
-                &state.channels.enabled,
-            )
-            .map_err(serde::de::Error::custom)?
+            super::trigger::program_from_conditions(&trigger_conditions, &state.channels.enabled)
+                .map_err(serde::de::Error::custom)?
         };
         if recording_start_was_missing || reset_trigger_program {
             state.sync_recording_start_to_trigger_program();
         }
         warnings.sort();
         warnings.dedup();
-        state.compatibility_warning = (!warnings.is_empty()).then(|| warnings.join("; "));
+        state.metadata.compatibility_warning = (!warnings.is_empty()).then(|| warnings.join("; "));
         Ok(state)
     }
 }
@@ -425,22 +423,16 @@ impl NodeDef for DsLogicU3Pro16 {
                     PropDef::control("recording_start", "Recording start", |state| {
                         &mut state.recording_start
                     }),
-                    PropDef::control(
-                        "trigger_position_percent",
-                        "Pre-trigger (%)",
-                        |state| &mut state.trigger_position_percent,
-                    ),
+                    PropDef::control("trigger_position_percent", "Pre-trigger (%)", |state| {
+                        &mut state.trigger_position_percent
+                    }),
                     PropDef::control("retention", "Retention", |state| &mut state.retention),
-                    PropDef::control(
-                        "retention_duration_ms",
-                        "Retain duration (ms)",
-                        |state| &mut state.retention_duration_ms,
-                    ),
-                    PropDef::control(
-                        "retention_megabytes",
-                        "Retain size (MiB)",
-                        |state| &mut state.retention_megabytes,
-                    ),
+                    PropDef::control("retention_duration_ms", "Retain duration (ms)", |state| {
+                        &mut state.retention_duration_ms
+                    }),
+                    PropDef::control("retention_megabytes", "Retain size (MiB)", |state| {
+                        &mut state.retention_megabytes
+                    }),
                     PropDef::control("trigger_timeout_action", "Trigger timeout", |state| {
                         &mut state.trigger_timeout_action
                     }),
@@ -477,7 +469,7 @@ impl NodeDef for DsLogicU3Pro16 {
 
         // Channel-count ↔ rate constraint (stream mode only): clamp the rate
         // down and explain why via the badge.
-        state.clamp_note = None;
+        state.metadata.clamp_note = None;
         if state.mode.index == 0 && enabled > 0 {
             let input_width = state
                 .channels
@@ -495,7 +487,7 @@ impl NodeDef for DsLogicU3Pro16 {
                     .rposition(|(_, hz)| *hz <= max_hz)
                     .unwrap_or(0);
                 state.sample_rate.index = clamped;
-                state.clamp_note = Some(format!(
+                state.metadata.clamp_note = Some(format!(
                     "Rate limited to {} for this input selection (stream mode)",
                     U3_RATES[clamped].0
                 ));
@@ -518,9 +510,10 @@ impl NodeDef for DsLogicU3Pro16 {
             return Some(NodeBadge::warning("No channels enabled"));
         }
         state
+            .metadata
             .compatibility_warning
             .as_ref()
-            .or(state.clamp_note.as_ref())
+            .or(state.metadata.clamp_note.as_ref())
             .map(NodeBadge::warning)
     }
 }

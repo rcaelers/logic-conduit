@@ -5,12 +5,10 @@ use std::sync::Arc;
 
 use tracing::{debug, warn};
 
-use signal_processing::edge_query::EdgeQuery;
-use signal_processing::errors::{WorkError, WorkResult};
-use signal_processing::node::ProcessNode;
-use signal_processing::ports::{InputPort, OutputPort, PortDirection, PortSchema};
-use signal_processing::protocol::ProtocolKind;
-use signal_processing::sample::Sample;
+use signal_processing::{
+    EdgeQuery, InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, ProtocolKind, Sample,
+    WorkError, WorkResult,
+};
 
 /// Boolean operation of a [`LogicGate`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -255,8 +253,7 @@ impl ProcessNode for LogicGate {
 #[cfg(test)]
 mod tests {
     use crossbeam_channel::bounded;
-    use signal_processing::sender::{ChannelMessage, Sender};
-    use signal_processing::watchdog::Watchdog;
+    use signal_processing::{ChannelMessage, Sender, Watchdog};
 
     use super::*;
 
@@ -453,7 +450,7 @@ mod tests {
         total: u64,
     }
 
-    impl signal_processing::edge_query::EdgeQuery for FakeChannel {
+    impl signal_processing::EdgeQuery for FakeChannel {
         fn sample_period(&self) -> f64 {
             1e-9
         }
@@ -498,7 +495,7 @@ mod tests {
     #[test]
     fn query_backed_input_matches_streamed_input() {
         let wd = Watchdog::new();
-        let in0_query: Arc<dyn signal_processing::edge_query::EdgeQuery> = Arc::new(FakeChannel {
+        let in0_query: Arc<dyn signal_processing::EdgeQuery> = Arc::new(FakeChannel {
             initial: false,
             edges: vec![(100, true), (200, false), (300, true), (400, false)],
             total: 1_000,
@@ -582,7 +579,7 @@ mod tests {
     #[test]
     fn query_backed_input_initial_high_level_is_seen() {
         let wd = Watchdog::new();
-        let query: Arc<dyn signal_processing::edge_query::EdgeQuery> = Arc::new(FakeChannel {
+        let query: Arc<dyn signal_processing::EdgeQuery> = Arc::new(FakeChannel {
             initial: true,
             edges: vec![(500, false)],
             total: 1_000,

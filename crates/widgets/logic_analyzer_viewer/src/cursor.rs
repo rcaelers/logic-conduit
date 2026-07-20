@@ -120,12 +120,7 @@ impl LogicAnalyzerViewer {
     }
 
     /// Flag and close-box rects for every cursor, in `cursors` order.
-    pub(crate) fn cursor_flag_layout(
-        &self,
-        ui: &Ui,
-        wave_rect: Rect,
-        ruler_rect: Rect,
-    ) -> Vec<(Rect, Rect)> {
+    fn cursor_flag_layout(&self, ui: &Ui, wave_rect: Rect, ruler_rect: Rect) -> Vec<(Rect, Rect)> {
         self.cursors
             .iter()
             .map(|cursor| {
@@ -143,7 +138,7 @@ impl LogicAnalyzerViewer {
     }
 
     /// The cursor whose flag or vertical line is under the pointer, if any.
-    pub(crate) fn cursor_at_pointer(
+    fn cursor_at_pointer(
         &self,
         wave_rect: Rect,
         ruler_rect: Rect,
@@ -181,7 +176,7 @@ impl LogicAnalyzerViewer {
     /// Snaps `time_us` to the nearest boundary of the row under the pointer:
     /// signal/event toggles or annotation word starts and ends. Over the
     /// ruler or an empty row the time stays free.
-    pub(crate) fn snap_cursor_time(&mut self, wave_rect: Rect, pointer: Pos2, time_us: f64) -> f64 {
+    fn snap_cursor_time(&mut self, wave_rect: Rect, pointer: Pos2, time_us: f64) -> f64 {
         const SNAP_DISTANCE_PX: f32 = 8.0;
         if pointer.y < wave_rect.top() || pointer.y > wave_rect.bottom() {
             return time_us;
@@ -229,7 +224,7 @@ impl LogicAnalyzerViewer {
                                     }
                                     DerivedLaneData::IndexedAnnotations(indexed) => {
                                         Some(AnnotationBoundarySource::Indexed(Arc::clone(
-                                            &indexed.query,
+                                            indexed.query(),
                                         )))
                                     }
                                     _ => None,
@@ -335,7 +330,7 @@ pub(crate) fn cursor_flag_label(cursor: &TimeCursor) -> String {
 
 /// Smallest positive number not used by an existing cursor, so numbers (and
 /// their colors) are stable while cursors come and go.
-pub(crate) fn next_cursor_number(cursors: &[TimeCursor]) -> usize {
+fn next_cursor_number(cursors: &[TimeCursor]) -> usize {
     let mut used: Vec<usize> = cursors.iter().map(|cursor| cursor.number).collect();
     used.sort_unstable();
     let mut number = 1;
@@ -349,7 +344,7 @@ pub(crate) fn next_cursor_number(cursors: &[TimeCursor]) -> usize {
     number
 }
 
-pub(crate) fn nearest_transition_time(transitions: &[Transition], time_us: f64) -> Option<f64> {
+fn nearest_transition_time(transitions: &[Transition], time_us: f64) -> Option<f64> {
     let index = transitions.partition_point(|transition| transition.time_us < time_us);
     let after = transitions.get(index).map(|transition| transition.time_us);
     let before = index
@@ -366,10 +361,7 @@ pub(crate) fn nearest_transition_time(transitions: &[Transition], time_us: f64) 
     }
 }
 
-pub(crate) fn nearest_annotation_boundary_time(
-    annotations: &[Annotation],
-    time_us: f64,
-) -> Option<f64> {
+fn nearest_annotation_boundary_time(annotations: &[Annotation], time_us: f64) -> Option<f64> {
     let time_ns = time_us * 1_000.0;
     let index = annotations.partition_point(|annotation| annotation.start_ns as f64 <= time_ns);
     let first = index.saturating_sub(2);
@@ -411,7 +403,7 @@ pub(crate) fn cursor_color(index: usize) -> Color32 {
 
 /// Cursor flags show more precision than the ruler ticks, since a snapped
 /// cursor marks an exact edge.
-pub(crate) fn format_cursor_time(us: f64) -> String {
+fn format_cursor_time(us: f64) -> String {
     let abs = us.abs();
     if abs >= 1_000_000.0 {
         format!("+{:.6}s", us / 1_000_000.0)

@@ -1,15 +1,17 @@
 use std::path::PathBuf;
 
+use logic_analyzer_graph::{self as compiler, nodes};
 use logic_analyzer_processing::{DslFileCaptureDataSource, SigrokFileCaptureDataSource};
+use node_graph::NodeId;
 
-use super::*;
+use crate::app::App;
 use crate::app_platform::{FileCommand, GuardedAction, derived_cache_directory};
 #[cfg(target_os = "macos")]
 use crate::app_platform::{NativeMenuCommand, notify_recent_files_changed};
-use crate::live_capture::CaptureRawExportFormat;
+use crate::live_capture::{CaptureCoordinatorContract, CaptureRawExportFormat};
 
 impl App {
-    pub(super) fn platform_clear_capture_caches(
+    pub(crate) fn platform_clear_capture_caches(
         &mut self,
         configs: &[signal_processing::PersistentStoreConfig],
     ) -> Result<(), String> {
@@ -29,25 +31,25 @@ impl App {
         }
     }
 
-    pub(super) fn platform_load_startup_file(&mut self, file: Option<&std::path::Path>) {
+    pub(crate) fn platform_load_startup_file(&mut self, file: Option<&std::path::Path>) {
         if let Some(file) = file {
             self.load_file(file.to_owned());
         }
     }
 
-    pub(super) fn platform_prepare_run(&mut self, ctx: &mut compiler::CompileCtx) {
+    pub(crate) fn platform_prepare_run(&mut self, ctx: &mut compiler::CompileCtx) {
         self.refresh_derived_cache_nodes();
-        ctx.persistent_cache_directory = Some(derived_cache_directory());
+        ctx.set_persistent_cache_directory(derived_cache_directory());
     }
 
-    pub(super) fn platform_raw_input_hook(
+    pub(crate) fn platform_raw_input_hook(
         &mut self,
         _ctx: &egui::Context,
         _raw_input: &mut egui::RawInput,
     ) {
     }
 
-    pub(super) fn platform_logic(&mut self, ctx: &egui::Context) {
+    pub(crate) fn platform_logic(&mut self, ctx: &egui::Context) {
         #[cfg(target_os = "macos")]
         while let Ok(command) = self.platform.native_menu_commands.try_recv() {
             let command = match command {
@@ -110,7 +112,7 @@ impl App {
         }
     }
 
-    pub(super) fn platform_save(&mut self, storage: &mut dyn eframe::Storage) {
+    pub(crate) fn platform_save(&mut self, storage: &mut dyn eframe::Storage) {
         let analyzer_split = self
             .panel_layout
             .split_fraction("logic_analyzer", "node_graph")
@@ -123,12 +125,12 @@ impl App {
         );
     }
 
-    pub(super) fn platform_before_ui(&mut self, _ui: &mut egui::Ui) {
+    pub(crate) fn platform_before_ui(&mut self, _ui: &mut egui::Ui) {
         #[cfg(not(target_os = "macos"))]
         self.show_menu_bar(_ui);
     }
 
-    pub(super) fn platform_sync_capture(&mut self) {
+    pub(crate) fn platform_sync_capture(&mut self) {
         if self.logic_analyzer.has_growing_capture() {
             return;
         }
@@ -192,28 +194,28 @@ impl App {
         }
     }
 
-    pub(super) fn platform_restore_graph_capture(&mut self) {
+    pub(crate) fn platform_restore_graph_capture(&mut self) {
         self.platform.preview_source = None;
         self.platform.live_channel_layout = None;
     }
 
-    pub(super) fn platform_before_graph(&mut self) {
+    pub(crate) fn platform_before_graph(&mut self) {
         self.node_graph
             .set_derived_cache_nodes(self.platform.derived_cache_nodes.iter().copied());
     }
 
-    pub(super) fn platform_after_graph(&mut self) {
+    pub(crate) fn platform_after_graph(&mut self) {
         if let Some(node_id) = self.node_graph.take_clear_derived_cache_request() {
             self.clear_node_derived_cache(node_id);
         }
     }
 
-    pub(super) fn platform_after_ui(&mut self, ctx: &egui::Context) {
+    pub(crate) fn platform_after_ui(&mut self, ctx: &egui::Context) {
         self.show_guarded_action_dialog(ctx);
         self.show_clear_recent_dialog(ctx);
         self.show_clear_derived_caches_dialog(ctx);
     }
-    pub(super) fn load_file(&mut self, path: PathBuf) {
+    fn load_file(&mut self, path: PathBuf) {
         if !self.can_replace_graph() {
             return;
         }
@@ -238,7 +240,7 @@ impl App {
 
     /// Inserts `path` at the front of the MRU list, deduping and capping at
     /// `MAX_RECENT_FILES` (Phase 5.1).
-    pub(super) fn push_recent_file(&mut self, path: PathBuf) {
+    fn push_recent_file(&mut self, path: PathBuf) {
         self.platform.push_recent_file(path);
         #[cfg(target_os = "macos")]
         notify_recent_files_changed(&self.platform.recent_files);
@@ -246,7 +248,7 @@ impl App {
 
     /// Resets to a fresh, empty graph — File → New (Phase 5.1). Assumes the
     /// unsaved-changes guard has already been resolved by the caller.
-    pub(super) fn do_new(&mut self) {
+    fn do_new(&mut self) {
         if !self.can_replace_graph() {
             return;
         }
@@ -266,7 +268,7 @@ impl App {
 
     /// Requests File → New, guarding on unsaved changes the same way
     /// `request_quit` does.
-    pub(super) fn request_new(&mut self) {
+    fn request_new(&mut self) {
         if self.has_unsaved_changes() {
             self.platform.pending_guarded_action = Some(GuardedAction::New);
         } else {
@@ -276,7 +278,7 @@ impl App {
 
     /// Requests loading `path` (e.g. from Open Recent), guarding on unsaved
     /// changes the same way `request_quit` does.
-    pub(super) fn request_load_path(&mut self, path: PathBuf) {
+    fn request_load_path(&mut self, path: PathBuf) {
         if self.has_unsaved_changes() {
             self.platform.pending_guarded_action = Some(GuardedAction::LoadPath(path));
         } else {
@@ -284,7 +286,7 @@ impl App {
         }
     }
 
-    pub(super) fn choose_and_load_file(&mut self) {
+    fn choose_and_load_file(&mut self) {
         let mut dialog = rfd::FileDialog::new()
             .set_title("Load graph")
             .add_filter("Graph JSON", &["json"]);
@@ -301,14 +303,14 @@ impl App {
         }
     }
 
-    pub(super) fn save_file(&mut self) -> bool {
+    fn save_file(&mut self) -> bool {
         let Some(path) = self.platform.current_file.clone() else {
             return self.save_file_as();
         };
         self.save_to_file(path)
     }
 
-    pub(super) fn save_file_as(&mut self) -> bool {
+    fn save_file_as(&mut self) -> bool {
         let mut dialog = rfd::FileDialog::new()
             .set_title("Save graph as")
             .set_file_name("pipeline.json")
@@ -328,7 +330,7 @@ impl App {
         self.save_to_file(path)
     }
 
-    pub(super) fn save_to_file(&mut self, path: PathBuf) -> bool {
+    fn save_to_file(&mut self, path: PathBuf) -> bool {
         match self.node_graph.save_to_path(&path) {
             Ok(()) => {
                 self.platform.current_file = Some(path.clone());
@@ -370,20 +372,20 @@ impl App {
         }
     }
 
-    pub(super) fn mark_graph_saved(&mut self) {
+    fn mark_graph_saved(&mut self) {
         match self.node_graph.snapshot_value() {
             Ok(graph) => self.platform.saved_graph = graph,
             Err(error) => self.toasts.error(error),
         }
     }
 
-    pub(super) fn has_unsaved_changes(&mut self) -> bool {
+    fn has_unsaved_changes(&mut self) -> bool {
         self.node_graph
             .snapshot_value()
             .map_or(true, |graph| graph != self.platform.saved_graph)
     }
 
-    pub(super) fn request_quit(&mut self, ctx: &egui::Context) {
+    fn request_quit(&mut self, ctx: &egui::Context) {
         if self.has_unsaved_changes() {
             self.platform.pending_guarded_action = Some(GuardedAction::Quit);
         } else {
@@ -392,7 +394,7 @@ impl App {
         }
     }
 
-    pub(super) fn execute_file_command(&mut self, command: FileCommand, ctx: &egui::Context) {
+    fn execute_file_command(&mut self, command: FileCommand, ctx: &egui::Context) {
         match command {
             FileCommand::New => self.request_new(),
             FileCommand::Load => self.choose_and_load_file(),
@@ -412,7 +414,7 @@ impl App {
     /// Resolves whatever `pending_guarded_action` (quit/new/load-over-dirty)
     /// is outstanding — Save/Don't Save/Cancel, same dialog for all three
     /// (Phase 5.1).
-    pub(super) fn show_guarded_action_dialog(&mut self, ctx: &egui::Context) {
+    fn show_guarded_action_dialog(&mut self, ctx: &egui::Context) {
         if self.platform.pending_guarded_action.is_none() {
             return;
         }
@@ -455,7 +457,7 @@ impl App {
         }
     }
 
-    pub(super) fn complete_guarded_action(&mut self, ctx: &egui::Context) {
+    fn complete_guarded_action(&mut self, ctx: &egui::Context) {
         let Some(action) = self.platform.pending_guarded_action.take() else {
             return;
         };
@@ -471,7 +473,7 @@ impl App {
 
     /// Resolves the "Clear the recent files list?" confirmation triggered
     /// by either the egui or native "Clear Recent" menu item.
-    pub(super) fn show_clear_recent_dialog(&mut self, ctx: &egui::Context) {
+    fn show_clear_recent_dialog(&mut self, ctx: &egui::Context) {
         if !self.platform.confirm_clear_recent {
             return;
         }
@@ -510,7 +512,7 @@ impl App {
         }
     }
 
-    pub(super) fn show_clear_derived_caches_dialog(&mut self, ctx: &egui::Context) {
+    fn show_clear_derived_caches_dialog(&mut self, ctx: &egui::Context) {
         if !self.platform.confirm_clear_derived_caches {
             return;
         }
@@ -542,7 +544,7 @@ impl App {
     }
 
     #[cfg(not(target_os = "macos"))]
-    pub(super) fn show_menu_bar(&mut self, ui: &mut egui::Ui) {
+    fn show_menu_bar(&mut self, ui: &mut egui::Ui) {
         let shortcut = |action| {
             self.input_bindings
                 .shortcut(&["global"], action)
@@ -742,7 +744,7 @@ impl App {
         }
     }
 
-    pub(super) fn can_clear_derived_caches(&mut self) -> bool {
+    fn can_clear_derived_caches(&mut self) -> bool {
         if self.is_running() {
             self.toasts
                 .error("Stop the pipeline before clearing derived data caches");
@@ -752,29 +754,28 @@ impl App {
         }
     }
 
-    pub(super) fn release_derived_data_handles(&mut self) {
+    fn release_derived_data_handles(&mut self) {
         self.run = None;
         self.logic_analyzer
             .set_derived_lanes(signal_processing::DerivedLanes::new());
     }
 
-    pub(super) fn refresh_derived_cache_nodes(&mut self) {
-        self.platform.derived_cache_nodes =
-            compiler::derived_cache_configs_by_node(
-                self.node_graph.graph(),
-                &self.builders,
-                &derived_cache_directory(),
-            )
-                .map(|inventory| {
-                    inventory
-                        .into_keys()
-                        .filter(|id| self.node_graph.graph().nodes.contains_key(id))
-                        .collect()
-                })
-                .unwrap_or_default();
+    fn refresh_derived_cache_nodes(&mut self) {
+        self.platform.derived_cache_nodes = compiler::derived_cache_configs_by_node(
+            self.node_graph.graph(),
+            &self.builders,
+            &derived_cache_directory(),
+        )
+        .map(|inventory| {
+            inventory
+                .into_keys()
+                .filter(|id| self.node_graph.graph().nodes.contains_key(id))
+                .collect()
+        })
+        .unwrap_or_default();
     }
 
-    pub(super) fn clear_node_derived_cache(&mut self, node_id: NodeId) {
+    fn clear_node_derived_cache(&mut self, node_id: NodeId) {
         if !self.can_clear_derived_caches() {
             return;
         }
@@ -833,13 +834,13 @@ impl App {
         }
     }
 
-    pub(super) fn request_clear_all_derived_caches(&mut self) {
+    fn request_clear_all_derived_caches(&mut self) {
         if self.can_clear_derived_caches() {
             self.platform.confirm_clear_derived_caches = true;
         }
     }
 
-    pub(super) fn clear_all_derived_caches(&mut self) {
+    fn clear_all_derived_caches(&mut self) {
         if !self.can_clear_derived_caches() {
             return;
         }

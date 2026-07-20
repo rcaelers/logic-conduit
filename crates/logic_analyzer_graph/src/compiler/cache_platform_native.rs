@@ -7,19 +7,15 @@ use serde_json::Value;
 
 use logic_analyzer_processing::DslFileCaptureDataSource;
 use node_graph::{GraphState, NodeId};
-use signal_processing::{
-    CaptureDataSource, IndexedAnnotationStore, PersistentStoreConfig, Word,
-};
+use signal_processing::{CaptureDataSource, IndexedAnnotationStore, PersistentStoreConfig, Word};
 
 use super::errors::CompileError;
-use super::graph::{
-    BuilderRegistry, CompiledEdge, CompiledGraph, RuntimeBuilder, compiled_node,
-};
+use super::graph::{BuilderRegistry, CompiledEdge, CompiledGraph, RuntimeBuilder, compiled_node};
 use super::port_kind::PortKind;
 
 const DERIVED_CACHE_ABI_VERSION: u32 = 2;
 
-pub(super) fn assign_viewer_caches(compiled: &mut CompiledGraph) {
+pub(crate) fn assign_viewer_caches(compiled: &mut CompiledGraph) {
     let viewer_ids: Vec<_> = compiled
         .nodes
         .iter()
@@ -55,7 +51,7 @@ pub(super) fn assign_viewer_caches(compiled: &mut CompiledGraph) {
     }
 }
 
-pub(super) fn configure_directory(compiled: &mut CompiledGraph, directory: Option<&Path>) {
+pub(crate) fn configure_directory(compiled: &mut CompiledGraph, directory: Option<&Path>) {
     for node in &mut compiled.nodes {
         for slot in &mut node.viewer_word_caches {
             match (slot.as_mut(), directory) {
@@ -67,7 +63,7 @@ pub(super) fn configure_directory(compiled: &mut CompiledGraph, directory: Optio
     }
 }
 
-pub(super) fn prepare_execution(
+pub(crate) fn prepare_execution(
     compiled: &CompiledGraph,
     registry: &BuilderRegistry,
 ) -> (CompiledGraph, bool) {
@@ -137,7 +133,7 @@ fn prepare_cache(compiled: &CompiledGraph) {
     let _ = signal_processing::cleanup_cache(&first.directory, first.max_cache_bytes, &pinned);
 }
 
-pub(super) fn cache_configs_by_node(
+pub(crate) fn cache_configs_by_node(
     graph: &GraphState,
     registry: &BuilderRegistry,
     directory: &Path,
@@ -189,7 +185,7 @@ pub(super) fn cache_configs_by_node(
     Ok(result)
 }
 
-pub(super) fn persistent_lane_key(
+pub(crate) fn persistent_lane_key(
     compiled: &CompiledGraph,
     viewer_id: NodeId,
     member: usize,
@@ -270,7 +266,7 @@ fn hash_capture_source(hasher: &mut blake3::Hasher, state: &Value) -> Option<()>
     Some(())
 }
 
-pub(super) fn hash_capture_file_identity(hasher: &mut blake3::Hasher, path: &Path) -> Option<()> {
+pub(crate) fn hash_capture_file_identity(hasher: &mut blake3::Hasher, path: &Path) -> Option<()> {
     let file_metadata = std::fs::metadata(path).ok()?;
     let modified_ns = file_metadata
         .modified()

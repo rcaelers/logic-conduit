@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Copy)]
-pub(super) struct IndexHeader {
+pub(crate) struct IndexHeader {
     pub source_revision: u64,
     pub total_samples: u64,
     pub total_blocks: u64,
@@ -12,7 +12,7 @@ pub(super) struct IndexHeader {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct RootDirEntry {
+pub(crate) struct RootDirEntry {
     pub offset: u64,
     pub len: u64,
     pub toggle: bool,
@@ -23,7 +23,7 @@ pub(super) struct RootDirEntry {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct BlockIndex {
+pub(crate) struct BlockIndex {
     pub valid_samples: u32,
     pub first: bool,
     pub last: bool,
@@ -32,7 +32,7 @@ pub(super) struct BlockIndex {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct BlockLevels {
+pub(crate) struct BlockLevels {
     pub l1_toggle: [u64; L1_WORDS],
     pub l1_last: [u64; L1_WORDS],
     pub l2_toggle: [u64; L2_WORDS],
@@ -42,7 +42,7 @@ pub(super) struct BlockLevels {
 }
 
 impl BlockLevels {
-    pub(super) fn zeroed() -> Box<Self> {
+    pub(crate) fn zeroed() -> Box<Self> {
         // SAFETY: BlockLevels consists entirely of u64 / [u64; N] fields;
         // the all-zero bit pattern is valid for all of them.
         unsafe { Box::new_zeroed().assume_init() }
@@ -66,26 +66,26 @@ impl CaptureIndexProgress {
 }
 
 /// Bits used to index within one level group: each group covers 2^LEVEL_POWER children.
-pub(super) const LEVEL_POWER: usize = 6;
+const LEVEL_POWER: usize = 6;
 /// Number of mipmap levels stored in the index (L1, L2, L3).
 /// L0 is the raw sample data kept in the capture source, not duplicated here.
 #[allow(dead_code)]
-pub(super) const LEVEL_COUNT: usize = 3;
+const LEVEL_COUNT: usize = 3;
 
-pub(super) const SAMPLES_PER_L1_BIT: u64 = (1_usize << LEVEL_POWER) as u64; // 64
-pub(super) const SAMPLES_PER_L2_BIT: u64 = (1_usize << (LEVEL_POWER * 2)) as u64; // 4 096
-pub(super) const SAMPLES_PER_L3_BIT: u64 = (1_usize << (LEVEL_POWER * 3)) as u64; // 262 144
-pub(super) const L1_WORDS: usize = 1 << (LEVEL_POWER * 2); // 64^3 bits / 64 bits-per-word = 4 096
-pub(super) const L2_WORDS: usize = 1 << LEVEL_POWER; // 64^2 bits / 64 bits-per-word = 64
-pub(super) const MAGIC: &[u8; 8] = b"CAPIDX06";
-pub(super) const HEADER_SIZE: u64 = 96;
-pub(super) const DIR_ENTRY_SIZE: u64 = 40;
+pub(crate) const SAMPLES_PER_L1_BIT: u64 = (1_usize << LEVEL_POWER) as u64; // 64
+pub(crate) const SAMPLES_PER_L2_BIT: u64 = (1_usize << (LEVEL_POWER * 2)) as u64; // 4 096
+pub(crate) const SAMPLES_PER_L3_BIT: u64 = (1_usize << (LEVEL_POWER * 3)) as u64; // 262 144
+pub(crate) const L1_WORDS: usize = 1 << (LEVEL_POWER * 2); // 64^3 bits / 64 bits-per-word = 4 096
+pub(crate) const L2_WORDS: usize = 1 << LEVEL_POWER; // 64^2 bits / 64 bits-per-word = 64
+pub(crate) const MAGIC: &[u8; 8] = b"CAPIDX06";
+pub(crate) const HEADER_SIZE: u64 = 96;
+pub(crate) const DIR_ENTRY_SIZE: u64 = 40;
 
-pub(super) fn bit(word: u64, index: usize) -> bool {
+pub(crate) fn bit(word: u64, index: usize) -> bool {
     index < 64 && ((word >> index) & 1) != 0
 }
 
-pub(super) fn set_bit(word: &mut u64, index: usize) {
+pub(crate) fn set_bit(word: &mut u64, index: usize) {
     if index < 64 {
         *word |= 1_u64 << index;
     }

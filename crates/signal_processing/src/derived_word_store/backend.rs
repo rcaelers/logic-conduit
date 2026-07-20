@@ -1,9 +1,9 @@
 //! Platform-neutral contracts implemented by the native file-backed store and
 //! the wasm in-memory store.
 
+use super::StoreResult;
 use super::query::AnnotationQuery;
 use super::state::LiveStoreSnapshot;
-use super::store::StoreResult;
 use crate::events::Word;
 
 pub(crate) trait AnnotationStoreBackend:

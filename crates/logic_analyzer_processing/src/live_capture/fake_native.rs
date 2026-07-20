@@ -4,8 +4,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
 use signal_processing::{
-    CaptureAcquisitionPhase, CaptureBufferPool, CaptureChannelId, CaptureChunk, CaptureProgress,
-    CaptureCompletion, CaptureSessionId, CaptureSessionState, SimpleTriggerCondition,
+    CaptureAcquisitionPhase, CaptureBufferPool, CaptureChannelId, CaptureChunk, CaptureCompletion,
+    CaptureProgress, CaptureSessionId, CaptureSessionState, SimpleTriggerCondition,
 };
 
 use super::{
@@ -61,7 +61,12 @@ struct DeterministicTriggerEvaluator {
 }
 
 impl DeterministicTriggerEvaluator {
-    fn observe(&mut self, trigger: &DeterministicTrigger, config: &DeterministicFakeConfig, sample: u64) -> bool {
+    fn observe(
+        &mut self,
+        trigger: &DeterministicTrigger,
+        config: &DeterministicFakeConfig,
+        sample: u64,
+    ) -> bool {
         let Some(stage) = trigger.stages.get(self.stage) else {
             return true;
         };
@@ -69,16 +74,19 @@ impl DeterministicTriggerEvaluator {
             let previous = sample
                 .checked_sub(1)
                 .map(|previous| config.level_at(previous, predicate.channel));
-            predicate.condition.matches(
-                previous,
-                config.level_at(sample, predicate.channel),
-            )
+            predicate
+                .condition
+                .matches(previous, config.level_at(sample, predicate.channel))
         });
-        let first = matches.next().expect("validated trigger stage is non-empty");
+        let first = matches
+            .next()
+            .expect("validated trigger stage is non-empty");
         let matched = match stage.logic {
             DeterministicTriggerLogic::And => matches.all(|matched| matched) && first,
             DeterministicTriggerLogic::Or => matches.any(|matched| matched) || first,
-            DeterministicTriggerLogic::Xor => matches.fold(first, |parity, matched| parity ^ matched),
+            DeterministicTriggerLogic::Xor => {
+                matches.fold(first, |parity, matched| parity ^ matched)
+            }
             DeterministicTriggerLogic::Nand => !(matches.all(|matched| matched) && first),
             DeterministicTriggerLogic::Nor => !(matches.any(|matched| matched) || first),
         } ^ stage.inverted;
@@ -455,9 +463,7 @@ impl DeterministicFakeProvider {
         }
     }
 
-    pub fn manually_paced(
-        config: DeterministicFakeConfig,
-    ) -> (Self, DeterministicFakeController) {
+    pub fn manually_paced(config: DeterministicFakeConfig) -> (Self, DeterministicFakeController) {
         let control = Arc::new(FakeControl::new(true));
         let initial_capacity = config
             .maximum_chunk_bytes()
@@ -641,7 +647,9 @@ impl PreparedFakeAcquisition {
 
     fn join_worker(&mut self) -> AcquisitionResult<AcquisitionOutcome> {
         let handle = self.handle.take().ok_or(AcquisitionError::NotStarted)?;
-        handle.join().map_err(|_| AcquisitionError::WorkerPanicked)?
+        handle
+            .join()
+            .map_err(|_| AcquisitionError::WorkerPanicked)?
     }
 }
 
@@ -654,7 +662,10 @@ impl PreparedAcquisition for PreparedFakeAcquisition {
         if self.started {
             return Err(AcquisitionError::AlreadyStarted);
         }
-        let context = self.context.take().ok_or(AcquisitionError::AlreadyStarted)?;
+        let context = self
+            .context
+            .take()
+            .ok_or(AcquisitionError::AlreadyStarted)?;
         let config = self.config.clone();
         let control = Arc::clone(&self.control);
         let buffer_pool = self.buffer_pool.clone();
@@ -769,10 +780,7 @@ mod tests {
 
         assert_eq!(acquisition.session_id(), session_id);
         acquisition.start().unwrap();
-        assert_eq!(
-            acquisition.start(),
-            Err(AcquisitionError::AlreadyStarted)
-        );
+        assert_eq!(acquisition.start(), Err(AcquisitionError::AlreadyStarted));
         let mut received = 0_usize;
         loop {
             match chunks.recv_timeout(TIMEOUT) {
@@ -797,7 +805,10 @@ mod tests {
         let outcome = acquisition.join().unwrap();
 
         assert_eq!(outcome.captured_samples, config.total_samples());
-        assert_eq!(outcome.chunk_count as usize, config.chunk_sample_counts().len());
+        assert_eq!(
+            outcome.chunk_count as usize,
+            config.chunk_sample_counts().len()
+        );
         assert!(!outcome.stopped);
         assert!(chunks.max_observed_queued_chunks() <= chunks.capacity());
         assert_eq!(received, config.chunk_sample_counts().len());
@@ -868,8 +879,8 @@ mod tests {
         let config = config();
         let session_id = CaptureSessionId::new(0x9abc);
         let temporary = tempdir().unwrap();
-        let descriptor = CaptureStoreDescriptor::new(session_id, config.channels().to_vec())
-            .unwrap();
+        let descriptor =
+            CaptureStoreDescriptor::new(session_id, config.channels().to_vec()).unwrap();
         let store_config = NativeCaptureStoreConfig::new(temporary.path(), descriptor)
             .with_commit_batch_chunks(2)
             .unwrap();
@@ -918,21 +929,15 @@ mod tests {
     fn portable_conditions_publish_the_exact_deterministic_trigger_sample() {
         use signal_processing::SimpleTriggerCondition::{Either, Falling, High, Low, Rising};
 
-        for (condition, expected) in [
-            (Low, 2),
-            (High, 0),
-            (Rising, 3),
-            (Falling, 2),
-            (Either, 2),
-        ] {
+        for (condition, expected) in [(Low, 2), (High, 0), (Rising, 3), (Falling, 2), (Either, 2)] {
             let config = config()
                 .with_simple_trigger(vec![Some(condition), None, None])
                 .unwrap();
             assert_eq!(config.first_trigger_sample(), Some(expected));
             let session_id = CaptureSessionId::new(0x7000 + condition as u128);
             let temporary = tempdir().unwrap();
-            let descriptor = CaptureStoreDescriptor::new(session_id, config.channels().to_vec())
-                .unwrap();
+            let descriptor =
+                CaptureStoreDescriptor::new(session_id, config.channels().to_vec()).unwrap();
             let (store, writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
                 temporary.path(),
                 descriptor,
@@ -968,10 +973,11 @@ mod tests {
                 states == [CaptureSessionState::Armed, CaptureSessionState::Triggered]
             }));
             assert!(states.windows(2).any(|states| {
-                states == [
-                    CaptureSessionState::Triggered,
-                    CaptureSessionState::Recording,
-                ]
+                states
+                    == [
+                        CaptureSessionState::Triggered,
+                        CaptureSessionState::Recording,
+                    ]
             }));
         }
     }
@@ -993,7 +999,11 @@ mod tests {
                     stages: vec![stage(logic, predicates.clone())],
                 }))
                 .unwrap();
-            assert_eq!(configured.first_trigger_sample(), Some(expected), "{logic:?}");
+            assert_eq!(
+                configured.first_trigger_sample(),
+                Some(expected),
+                "{logic:?}"
+            );
         }
 
         let mut inverted = stage(DeterministicTriggerLogic::Or, predicates);
@@ -1010,10 +1020,7 @@ mod tests {
     fn staged_trigger_counts_and_stage_progress_cross_chunk_boundaries() {
         use signal_processing::SimpleTriggerCondition::{Falling, High, Rising};
 
-        let mut occurrences = stage(
-            DeterministicTriggerLogic::And,
-            vec![predicate(0, High)],
-        );
+        let mut occurrences = stage(DeterministicTriggerLogic::And, vec![predicate(0, High)]);
         occurrences.count = Some(DeterministicTriggerCount {
             mode: DeterministicTriggerCountMode::Occurrences,
             value: 2,
@@ -1026,10 +1033,7 @@ mod tests {
         assert_eq!(configured.chunk_sample_counts()[0], 3);
         assert_eq!(configured.first_trigger_sample(), Some(3));
 
-        let mut consecutive = stage(
-            DeterministicTriggerLogic::And,
-            vec![predicate(0, High)],
-        );
+        let mut consecutive = stage(DeterministicTriggerLogic::And, vec![predicate(0, High)]);
         consecutive.count = Some(DeterministicTriggerCount {
             mode: DeterministicTriggerCountMode::Consecutive,
             value: 2,
@@ -1044,14 +1048,8 @@ mod tests {
         let configured = config()
             .with_trigger(Some(DeterministicTrigger {
                 stages: vec![
-                    stage(
-                        DeterministicTriggerLogic::And,
-                        vec![predicate(0, Falling)],
-                    ),
-                    stage(
-                        DeterministicTriggerLogic::And,
-                        vec![predicate(0, Rising)],
-                    ),
+                    stage(DeterministicTriggerLogic::And, vec![predicate(0, Falling)]),
+                    stage(DeterministicTriggerLogic::And, vec![predicate(0, Rising)]),
                 ],
             }))
             .unwrap();

@@ -9,14 +9,14 @@ pub struct CompileError {
 }
 
 impl CompileError {
-    pub(super) fn on(node: NodeId, message: impl Into<String>) -> Self {
+    pub(crate) fn on(node: NodeId, message: impl Into<String>) -> Self {
         Self {
             node: Some(node),
             message: message.into(),
         }
     }
 
-    pub(super) fn global(message: impl Into<String>) -> Self {
+    pub(crate) fn global(message: impl Into<String>) -> Self {
         Self {
             node: None,
             message: message.into(),

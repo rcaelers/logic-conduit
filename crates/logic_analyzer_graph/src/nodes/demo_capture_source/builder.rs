@@ -6,7 +6,7 @@ use logic_analyzer_processing::DemoCaptureSource;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock};
 
-use crate::compiler::{
+use crate::{
     CompileCtx, LiveCaptureEdit, LiveCaptureFeature, PortKind, ResolvedInputs, RuntimeBuilder,
     TriggerConfigurationFeature,
 };

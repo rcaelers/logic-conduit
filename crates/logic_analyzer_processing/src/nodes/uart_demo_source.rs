@@ -1,7 +1,6 @@
-use signal_processing::errors::{WorkError, WorkResult};
-use signal_processing::node::ProcessNode;
-use signal_processing::ports::{InputPort, OutputPort, PortDirection, PortSchema};
-use signal_processing::sample::Sample;
+use signal_processing::{
+    InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, Sample, WorkError, WorkResult,
+};
 
 /// In-memory UART source for demos and tests.
 ///

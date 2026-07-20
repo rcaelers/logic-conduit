@@ -1,13 +1,13 @@
 use crate::{CaptureSampledChannel, CaptureWaveformSegment, Result};
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct GroupSummary {
+pub(crate) struct GroupSummary {
     pub first: bool,
     pub toggle: bool,
     pub last: bool,
 }
 
-pub(super) fn sample_summary_channel(
+pub(crate) fn sample_summary_channel(
     channel: usize,
     name: String,
     initial: bool,

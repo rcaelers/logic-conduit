@@ -205,7 +205,7 @@ pub(crate) fn spawn_capture_worker(
         .expect("capture indexer thread should start");
 }
 
-pub(crate) fn capture_status(capture: &CaptureInfo) -> String {
+fn capture_status(capture: &CaptureInfo) -> String {
     format!(
         "{} · {} · {:.1} MHz · {} samples",
         capture.display_name,

@@ -329,9 +329,9 @@ pub enum LayoutNode {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PanelLayoutState {
     #[serde(default)]
-    pub root: Option<LayoutNode>,
+    root: Option<LayoutNode>,
     #[serde(default)]
-    pub maximized: Option<String>,
+    maximized: Option<String>,
     #[serde(default = "default_next_id")]
     next_id: u64,
 }

@@ -178,13 +178,13 @@ impl Default for Watchdog {
 /// RAII guard for tracking an operation - near-zero cost (just atomic stores)
 ///
 /// Uses a reference to avoid Arc cloning overhead (no reference count manipulation).
-pub struct OperationGuard<'a> {
+pub(crate) struct OperationGuard<'a> {
     handle: &'a WatchdogHandle,
 }
 
 impl<'a> OperationGuard<'a> {
     #[inline(always)]
-    pub fn new(handle: &'a WatchdogHandle) -> Self {
+    pub(crate) fn new(handle: &'a WatchdogHandle) -> Self {
         handle.start_operation();
         Self { handle }
     }

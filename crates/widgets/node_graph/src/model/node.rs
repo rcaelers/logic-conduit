@@ -73,12 +73,24 @@ pub struct Node {
     pub muted: bool,
     #[serde(default)]
     pub state: Value,
-    #[serde(skip)]
-    pub(crate) property_count: usize,
+    #[serde(flatten)]
+    pub metadata: NodeMetadata,
     /// Def-driven status message, recomputed on every state update.
     #[serde(skip)]
     pub badge: Option<NodeBadge>,
     pub selected: bool,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct NodeMetadata {
+    #[serde(skip)]
+    property_count: usize,
+}
+
+impl NodeMetadata {
+    pub(crate) fn with_property_count(property_count: usize) -> Self {
+        Self { property_count }
+    }
 }
 
 impl Clone for Node {
@@ -95,7 +107,7 @@ impl Clone for Node {
             collapsed: self.collapsed,
             muted: self.muted,
             state: self.state.clone(),
-            property_count: self.property_count,
+            metadata: self.metadata.clone(),
             badge: self.badge.clone(),
             selected: self.selected,
         }
@@ -103,6 +115,14 @@ impl Clone for Node {
 }
 
 impl Node {
+    pub(crate) fn property_count(&self) -> usize {
+        self.metadata.property_count
+    }
+
+    pub(crate) fn set_property_count(&mut self, property_count: usize) {
+        self.metadata.property_count = property_count;
+    }
+
     /// The registered node-type name this node was created from.
     pub fn def_name(&self) -> &str {
         if self.type_name.is_empty() {
@@ -168,7 +188,7 @@ impl Node {
             collapsed: false,
             muted: false,
             state: Value::Null,
-            property_count: 0,
+            metadata: NodeMetadata::default(),
             badge: None,
             selected: false,
         }
@@ -192,7 +212,7 @@ impl Node {
             collapsed: false,
             muted: false,
             state: Value::Null,
-            property_count: 0,
+            metadata: NodeMetadata::default(),
             badge: None,
             selected: false,
         }

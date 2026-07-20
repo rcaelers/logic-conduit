@@ -143,7 +143,7 @@ fn compute_node_layout(node: &Node) -> NodeLayout {
     let vis_outputs = vis_row;
     let output_h = vis_outputs as f32 * SOCKET_ROW_HEIGHT;
 
-    let prop_count = node.property_count;
+    let prop_count = node.property_count();
     let prop_start_y = body_top + output_h;
     let prop_h = prop_count as f32 * PROP_ROW_HEIGHT;
     let prop_rects: Vec<Rect> = (0..prop_count)
@@ -563,7 +563,7 @@ impl NodeWidget {
             }
         }
 
-        for pi in 0..node.property_count {
+        for pi in 0..node.property_count() {
             let Some(pr) = l.prop_rects.get(pi).copied() else {
                 continue;
             };

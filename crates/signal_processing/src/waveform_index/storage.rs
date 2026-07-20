@@ -85,7 +85,7 @@ compile_error!("the waveform index mmap path assumes a little-endian target");
 /// chunk's offset — then [`IndexWriter::finish`] to flush and atomically
 /// rename the temp file into place. Dropping the writer without finishing
 /// removes the temp file.
-pub(super) struct IndexWriter {
+pub(crate) struct IndexWriter {
     temp_path: PathBuf,
     final_path: PathBuf,
     file: File,
@@ -96,7 +96,7 @@ pub(super) struct IndexWriter {
 
 impl IndexWriter {
     /// Create a new index file at `path` (written via a `.idx.tmp` sibling until [`finish`]).
-    pub(super) fn create(
+    pub(crate) fn create(
         path: &Path,
         capture_header: &CaptureMetadata,
         source_revision: u64,
@@ -135,7 +135,7 @@ impl IndexWriter {
     }
 
     /// Serialize `leaf` and append its chunk to the payload; record the directory entry.
-    pub(super) fn write_block(
+    pub(crate) fn write_block(
         &mut self,
         channel: usize,
         block: usize,
@@ -157,7 +157,7 @@ impl IndexWriter {
     }
 
     /// Write the header and directory, sync, and atomically rename into place.
-    pub(super) fn finish(mut self) -> Result<()> {
+    pub(crate) fn finish(mut self) -> Result<()> {
         self.file.seek(SeekFrom::Start(0))?;
         Self::write_header(&mut self.file, &self.index_header)?;
         self.file
@@ -220,15 +220,15 @@ impl Drop for IndexWriter {
 // ---------------------------------------------------------------------------
 
 /// Zero-copy view of one leaf chunk inside the mapped index file.
-pub(super) struct LeafView<'a> {
+pub(crate) struct LeafView<'a> {
     #[allow(dead_code)]
-    pub valid_samples: u32,
-    pub first: bool,
-    pub last: bool,
-    pub levels: Option<LevelsView<'a>>,
+    pub(crate) valid_samples: u32,
+    pub(crate) first: bool,
+    pub(crate) last: bool,
+    pub(crate) levels: Option<LevelsView<'a>>,
 }
 
-pub(super) struct LevelsView<'a> {
+pub(crate) struct LevelsView<'a> {
     pub l1_toggle: &'a [u64],
     pub l1_last: &'a [u64],
     pub l2_toggle: &'a [u64],
@@ -239,7 +239,7 @@ pub(super) struct LevelsView<'a> {
     pub l3_last: u64,
 }
 
-pub(super) struct IndexReader {
+pub(crate) struct IndexReader {
     path: PathBuf,
     header: CaptureMetadata,
     /// Memory-mapped index file; leaf chunks are read directly out of the
@@ -250,7 +250,7 @@ pub(super) struct IndexReader {
 }
 
 impl IndexReader {
-    pub(super) fn is_valid(
+    pub(crate) fn is_valid(
         path: &Path,
         header: &CaptureMetadata,
         source_revision: u64,
@@ -264,7 +264,7 @@ impl IndexReader {
         Ok(Self::validate_header(&index_header, header, source_revision).is_ok())
     }
 
-    pub(super) fn open(
+    pub(crate) fn open(
         path: PathBuf,
         header: CaptureMetadata,
         source_revision: u64,
@@ -292,15 +292,15 @@ impl IndexReader {
         })
     }
 
-    pub(super) fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.path
     }
 
-    pub(super) fn header(&self) -> &CaptureMetadata {
+    pub(crate) fn header(&self) -> &CaptureMetadata {
         &self.header
     }
 
-    pub(super) fn load_leaf(&self, channel: usize, block: usize) -> Result<LeafView<'_>> {
+    pub(crate) fn load_leaf(&self, channel: usize, block: usize) -> Result<LeafView<'_>> {
         let entry = self
             .directory
             .get(channel)
@@ -315,7 +315,7 @@ impl IndexReader {
         leaf_view(data)
     }
 
-    pub(super) fn load_root_summary(&self, channel: usize, block: usize) -> Result<RootDirEntry> {
+    pub(crate) fn load_root_summary(&self, channel: usize, block: usize) -> Result<RootDirEntry> {
         self.directory
             .get(channel)
             .and_then(|blocks| blocks.get(block))

@@ -9,7 +9,7 @@ pub(crate) fn load() -> ApplicationConfig {
     path().map_or_else(super::embedded_defaults, |path| load_path(&path))
 }
 
-pub(crate) fn path() -> Option<PathBuf> {
+fn path() -> Option<PathBuf> {
     dirs::config_dir().map(|directory| directory.join("dsl").join(CONFIG_FILE))
 }
 

@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
-use signal_processing::events::MAX_ANNOTATION_NS;
 use signal_processing::{
-    Annotation, AnnotationFold, ChunkedMipmap, Sample, ViewerValue, WordPresenceBucket,
+    Annotation, AnnotationFold, ChunkedMipmap, MAX_ANNOTATION_NS, Sample, ViewerValue,
+    WordPresenceBucket,
 };
 
 use crate::lanes::AnnotationVisual;
@@ -13,7 +13,7 @@ use crate::viewer::LogicAnalyzerViewer;
 const MIN_ANNOTATION_WIDTH_PX: f32 = 8.0;
 
 #[derive(Clone, Copy)]
-pub(super) struct DerivedRowGeometry {
+pub(crate) struct DerivedRowGeometry {
     pub top: f32,
     pub height: f32,
 }
@@ -184,7 +184,7 @@ impl LogicAnalyzerViewer {
         }
     }
 
-    pub(super) fn draw_derived_annotations(
+    pub(crate) fn draw_derived_annotations(
         &self,
         painter: &Painter,
         wave_rect: Rect,
@@ -273,7 +273,7 @@ impl LogicAnalyzerViewer {
         }
     }
 
-    pub(super) fn draw_indexed_annotation_exact(
+    pub(crate) fn draw_indexed_annotation_exact(
         &self,
         painter: &Painter,
         wave_rect: Rect,
@@ -466,7 +466,7 @@ impl LogicAnalyzerViewer {
     }
 }
 
-pub(super) fn default_annotation_visual(
+pub(crate) fn default_annotation_visual(
     value: u64,
     display_format: Option<&str>,
 ) -> AnnotationVisual {
@@ -582,7 +582,7 @@ fn annotation_label_position(rect: Rect, wave_rect: Rect, label_width: f32) -> O
 /// Annotation starts are ordered and instantaneous parallel words are closed
 /// at the next word's start, so at most the immediately preceding annotation
 /// can overlap the left edge of the visible window.
-pub(super) fn visible_annotation_range(
+pub(crate) fn visible_annotation_range(
     annotations: &[Annotation],
     start_ns: u64,
     end_ns: u64,

@@ -16,8 +16,7 @@ use signal_processing::{
     ViewerSink, Word,
 };
 
-use crate::compiler::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
-use crate::nodes;
+use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, nodes, parse_state};
 
 pub(crate) struct ViewerBuilder;
 
@@ -71,9 +70,9 @@ impl RuntimeBuilder for ViewerBuilder {
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: nodes::ViewerState = parse_state(state)?;
         let prefix = state.label.value.trim().to_owned();
-        let mut sink = ViewerSink::new(ctx.derived_lanes.clone())
+        let mut sink = ViewerSink::new(ctx.derived_lanes().clone())
             .with_name(name)
-            .with_retention(ctx.viewer_retention);
+            .with_retention(ctx.viewer_retention());
         // `DerivedLanes` uses a lane name as its stable identity. Nodes of
         // the same type share the default title (e.g. two UART Decoders),
         // so make only colliding labels distinct instead of silently merging
@@ -97,7 +96,7 @@ impl RuntimeBuilder for ViewerBuilder {
             sink = if input.kind == PortKind::of::<Sample>() {
                 sink.with_lane(ViewerLaneKind::Signal, lane_name.clone())
             } else if input.kind == PortKind::of::<Word>() {
-                if let Some(Some(persistent)) = ctx.viewer_word_caches.get(member) {
+                if let Some(persistent) = ctx.viewer_word_cache(member) {
                     sink = sink.with_word_store_config(LiveStoreConfig {
                         directory: persistent.directory.clone(),
                         persistence: Some(persistent.clone()),
@@ -157,7 +156,7 @@ impl RuntimeBuilder for ViewerBuilder {
                 } else {
                     ViewerLaneBadge::new("T", Color32::from_rgb(230, 190, 80))
                 };
-                ctx.viewer_lanes.register(ViewerLaneGroup::singleton(
+                ctx.viewer_lanes().register(ViewerLaneGroup::singleton(
                     ViewerLaneGroupId::new(format!("{name}:lane:{member}")),
                     lane_name,
                     badge,
@@ -167,7 +166,7 @@ impl RuntimeBuilder for ViewerBuilder {
         }
         for mut pending in pending_groups {
             pending.tracks.sort_by_key(|(order, _)| *order);
-            ctx.viewer_lanes.register(ViewerLaneGroup {
+            ctx.viewer_lanes().register(ViewerLaneGroup {
                 id: ViewerLaneGroupId::new(format!(
                     "{name}:node:{}:{}",
                     pending.source_node.0, pending.key

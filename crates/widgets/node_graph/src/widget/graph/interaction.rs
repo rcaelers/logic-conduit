@@ -18,13 +18,13 @@ const WIRE_SNAP_DISTANCE: f32 = 18.0;
 const GRID_SNAP: f32 = 10.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DragAxis {
+enum DragAxis {
     X,
     Y,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct DragConstraint {
+pub(crate) struct DragConstraint {
     axis: DragAxis,
     locked_coordinate: f32,
 }
@@ -83,7 +83,7 @@ fn rebase_drag_offset(pointer: Pos2, node_position: Pos2) -> Vec2 {
 }
 
 #[derive(Default)]
-pub(super) enum InteractionState {
+pub(crate) enum InteractionState {
     #[default]
     Idle,
     DraggingNode {
@@ -140,11 +140,11 @@ pub(super) enum InteractionState {
 }
 
 impl InteractionState {
-    pub(super) fn is_active(&self) -> bool {
+    fn is_active(&self) -> bool {
         !matches!(self, Self::Idle)
     }
 
-    pub(super) fn use_fast_rendering(&self) -> bool {
+    pub(crate) fn use_fast_rendering(&self) -> bool {
         matches!(
             self,
             Self::Panning { .. }
@@ -155,23 +155,23 @@ impl InteractionState {
     }
 }
 
-pub(super) struct NodeResponses {
-    pub body: egui::Response,
-    pub header: egui::Response,
+pub(crate) struct NodeResponses {
+    pub(crate) body: egui::Response,
+    pub(crate) header: egui::Response,
 }
 
-pub(super) struct MinimapResponse {
-    pub response: egui::Response,
-    pub info: minimap::MinimapInfo,
+pub(crate) struct MinimapResponse {
+    pub(crate) response: egui::Response,
+    pub(crate) info: minimap::MinimapInfo,
 }
 
-pub(super) struct GraphResponses {
-    pub canvas: egui::Response,
-    pub frames: HashMap<FrameId, egui::Response>,
-    pub nodes: HashMap<NodeId, NodeResponses>,
-    pub collapse_toggles: HashMap<NodeId, egui::Response>,
-    pub sockets: HashMap<SocketId, egui::Response>,
-    pub minimap: Option<MinimapResponse>,
+pub(crate) struct GraphResponses {
+    pub(crate) canvas: egui::Response,
+    pub(crate) frames: HashMap<FrameId, egui::Response>,
+    pub(crate) nodes: HashMap<NodeId, NodeResponses>,
+    pub(crate) collapse_toggles: HashMap<NodeId, egui::Response>,
+    pub(crate) sockets: HashMap<SocketId, egui::Response>,
+    pub(crate) minimap: Option<MinimapResponse>,
 }
 
 enum ContextClickTarget {
@@ -181,7 +181,7 @@ enum ContextClickTarget {
 }
 
 impl GraphResponses {
-    pub(super) fn canvas_only(canvas: egui::Response) -> Self {
+    pub(crate) fn canvas_only(canvas: egui::Response) -> Self {
         Self {
             canvas,
             frames: HashMap::new(),
@@ -269,7 +269,7 @@ impl NodeGraphWidget {
         cancel
     }
 
-    pub(super) fn compatible_wire_target(&self, from: SocketId, to: SocketId) -> bool {
+    fn compatible_wire_target(&self, from: SocketId, to: SocketId) -> bool {
         if from == to {
             return false;
         }
@@ -299,7 +299,7 @@ impl NodeGraphWidget {
     /// Every node with at least one visible socket compatible with `from` —
     /// cached once into `InteractionState::DraggingWire::connectable` when a
     /// wire drag starts (Phase 4.3).
-    pub(super) fn connectable_nodes(&self, from: SocketId) -> HashSet<NodeId> {
+    fn connectable_nodes(&self, from: SocketId) -> HashSet<NodeId> {
         self.graph
             .nodes
             .values()
@@ -343,7 +343,7 @@ impl NodeGraphWidget {
 
     /// First visible socket on `node_id` compatible with `from` — used to
     /// auto-wire a freshly added node (link-drag search, Phase 1.1).
-    pub(super) fn first_compatible_socket(
+    pub(crate) fn first_compatible_socket(
         &self,
         from: SocketId,
         node_id: NodeId,
@@ -374,7 +374,7 @@ impl NodeGraphWidget {
             .find(|&candidate| self.compatible_wire_target(from, candidate))
     }
 
-    pub(super) fn snapped_wire_target(
+    pub(crate) fn snapped_wire_target(
         &self,
         from: SocketId,
         pointer_canvas: Pos2,
@@ -446,7 +446,7 @@ impl NodeGraphWidget {
         }
     }
 
-    pub(super) fn allocate_responses(
+    pub(crate) fn allocate_responses(
         &self,
         ui: &mut egui::Ui,
         canvas_response: egui::Response,
@@ -1364,7 +1364,7 @@ impl NodeGraphWidget {
         }
     }
 
-    pub(super) fn handle_input(
+    pub(crate) fn handle_input(
         &mut self,
         ui: &mut egui::Ui,
         responses: &GraphResponses,
@@ -1743,7 +1743,7 @@ impl NodeGraphWidget {
     }
 
     /// Wire the dragged node is hovering, and whether it can be spliced in.
-    pub(super) fn compute_insert_candidate_wire(
+    pub(crate) fn compute_insert_candidate_wire(
         &self,
         node_id: NodeId,
         pointer_canvas: Option<Pos2>,
@@ -1766,7 +1766,7 @@ impl NodeGraphWidget {
     /// while dragging: a node not yet in any frame doesn't affect any
     /// frame's live bounds, so there's no self-referential loop to guard
     /// against here.
-    pub(super) fn compute_drop_target_frame(
+    pub(crate) fn compute_drop_target_frame(
         &self,
         node_id: NodeId,
         layout: &GraphWidgetLayout,
@@ -1855,7 +1855,7 @@ impl NodeGraphWidget {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn update_interaction(
+    fn update_interaction(
         &mut self,
         ui: &mut egui::Ui,
         responses: &GraphResponses,

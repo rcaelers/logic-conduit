@@ -22,10 +22,10 @@ use std::path::PathBuf;
 
 use tracing::{debug, info, warn};
 
-use signal_processing::errors::{WorkError, WorkResult};
-use signal_processing::events::TextSample;
-use signal_processing::node::ProcessNode;
-use signal_processing::ports::{InputPort, OutputPort, PortDirection, PortSchema};
+use signal_processing::{
+    InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, TextSample, WorkError,
+    WorkResult,
+};
 
 /// Sink appending [`TextSample`] lines to files named by another
 /// [`TextSample`] level.
@@ -227,8 +227,7 @@ impl ProcessNode for TextFileWriter {
 #[cfg(test)]
 mod tests {
     use crossbeam_channel::bounded;
-    use signal_processing::sender::ChannelMessage;
-    use signal_processing::watchdog::Watchdog;
+    use signal_processing::{ChannelMessage, Watchdog};
 
     use super::*;
 

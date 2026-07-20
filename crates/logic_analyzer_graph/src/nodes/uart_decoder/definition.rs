@@ -27,8 +27,7 @@ pub struct UartDecoderState {
     pub error_output: BoolValue,
 }
 
-pub(super) const DISPLAY_FORMATS: &[&str] =
-    &["Hex", "Binary", "Octal", "Decimal", "ASCII", "Hex + ASCII"];
+const DISPLAY_FORMATS: &[&str] = &["Hex", "Binary", "Octal", "Decimal", "ASCII", "Hex + ASCII"];
 pub(crate) fn default_display_format() -> EnumValue {
     EnumValue::new(0, DISPLAY_FORMATS)
 }

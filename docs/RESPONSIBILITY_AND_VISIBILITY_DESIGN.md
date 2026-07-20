@@ -54,6 +54,72 @@ Public traits expose a complete implementable contract. Every type in their requ
 signatures is publicly nameable from a stable path. Conversely, implementation seams that are
 not supported extension points remain private, including their generic parameters and errors.
 
+## Module layout
+
+The workspace uses an owner-facade module layout.
+
+### Source structure
+
+- Module declarations occur only in `lib.rs`, `main.rs`, and `mod.rs` files.
+- Test modules are the only exception. They may be declared in any Rust file, but every test
+  module name contains `tests`.
+- Modules are private by default. An owning `mod.rs` or crate `lib.rs` selectively re-exports the
+  symbols that form its internal or external contract.
+- A public module is an intentional API namespace, not a way to make its implementation easier
+  to import. Public modules are limited to the allowlist below.
+- Every public module is directory-backed and has a `mod.rs`; public file modules such as
+  `pub mod capture;` backed by `capture.rs` are not permitted.
+- A `mod.rs` contains module documentation, attributes on module declarations or re-exports,
+  module declarations, and re-exports only. Structs, enums, traits, implementations, functions,
+  constants, type aliases, executable macro bodies, and other implementation code live in leaf
+  files.
+- Target selection uses attributes on complete module declarations and re-exports in an allowed
+  root file. It does not require inline implementation modules or executable selection macros in
+  a `mod.rs`.
+
+### Visibility through facades
+
+Leaf symbols used only in their defining module are private. A symbol re-exported for another
+module in the same crate is `pub(crate)` at its definition and at the owning facade. A supported
+cross-crate or plugin contract is `pub` at its definition and is publicly re-exported from an
+allowlisted public module or the crate root.
+
+The layout does not use `pub(super)` or `pub(in ...)`. The facade path communicates the
+owner and intended dependency direction, while `pub(crate)` provides the visibility required to
+form an internal re-export. `pub` never means merely "used by another file"; it always denotes a
+supported external contract.
+
+Struct fields are private by default. Behavioral and invariant-owning structs expose methods.
+Plain record types intended for construction or pattern matching may expose their data fields,
+but those fields use one consistent visibility matching the record contract. A struct does not
+mix private, `pub(crate)`, and `pub` data fields; read-only access uses methods instead.
+
+### Public-module allowlist
+
+All modules absent from this table are private and expose supported symbols through their
+nearest owning facade. The allowlist names canonical public namespaces.
+
+| Crate | Public modules | Rationale |
+| --- | --- | --- |
+| `signal_processing` | `capture`, `live_capture`, `live_capture_store`, `derived_word_store`; native-only `waveform_index` | These are substantial, independent generic capture and storage domains. Runtime plumbing such as ports, senders, receivers, scheduling, workers, errors, and pipeline implementation remains private behind root re-exports. |
+| `logic_analyzer_processing` | `live_capture`, `nodes`, `nodes::decoders`, `nodes::logic`, `nodes::sinks` | Acquisition and the three concrete node families are useful API namespaces. Individual decoder, logic-node, sink, device, source, transport, and format implementation modules remain private and are re-exported by their family facade. |
+| `logic_analyzer_graph` | `nodes` | Concrete graph-node types benefit from a catalog namespace. `compiler`, builder, definition, lowering, migration, registry, platform, and presentation modules remain private; supported compiler and plugin contracts are re-exported at the crate root. |
+| `node_graph` | none | The reusable widget exposes one curated crate-root API; model, runtime, support, API, and widget implementation modules remain private. |
+| `logic_analyzer_viewer` | none | The reusable viewer exposes one curated crate-root API; drawing, sampling, input, cursor, lane, worker, and indexing modules remain private. |
+| `logic_analyzer_ui` | none | The application-composition crate exposes only its host-facing crate-root facade. |
+| `input_bindings`, `panel_layout`, `trigger_editor`, `widget_support` | none | Each crate already represents one cohesive public component and does not need a second namespace level. |
+| Native/web application crates and example plugins | none | Binary integration and plugin registration are crate-root entry points; implementation modules remain private. |
+
+Changing this allowlist is an API-design decision. A new public module requires a documented
+domain boundary, more than import convenience, and review of its native and wasm surface.
+
+### Enforcement
+
+The source-structure check in CI rejects module declarations outside the
+allowed root files, non-test exceptions, test module names without `tests`, public file modules,
+implementation items in `mod.rs`, public modules outside the allowlist, and occurrences of
+`pub(super)` or `pub(in ...)`. The existing `-D unreachable-pub` check remains enabled.
+
 ## Error boundaries
 
 Generic errors describe failures at the abstraction boundary, such as I/O, invalid generic

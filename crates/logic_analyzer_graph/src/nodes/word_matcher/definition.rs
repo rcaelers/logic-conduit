@@ -10,13 +10,13 @@ use node_graph::{
 
 use crate::nodes::registry::{COLOR_LOGIC, Signal, Trigger, Words};
 
-pub(super) const MATCH_OPS: &[&str] = &["==", "≠", "<", "≤", ">", "≥"];
+const MATCH_OPS: &[&str] = &["==", "≠", "<", "≤", ">", "≥"];
 
 pub(crate) fn default_match_op() -> EnumValue {
     EnumValue::new(0, MATCH_OPS)
 }
 
-pub(super) const TRIGGER_AT: &[&str] = &["Word start", "Word end"];
+const TRIGGER_AT: &[&str] = &["Word start", "Word end"];
 
 /// Default is "Word end": a command logically takes effect once it has
 /// fully arrived (for instantaneous words the two coincide).
@@ -24,7 +24,7 @@ pub(crate) fn default_trigger_at() -> EnumValue {
     EnumValue::new(1, TRIGGER_AT)
 }
 
-pub(super) fn parse_hex(text: &str) -> Result<u64, String> {
+pub(crate) fn parse_hex(text: &str) -> Result<u64, String> {
     let trimmed = text.trim();
     let digits = trimmed
         .strip_prefix("0x")

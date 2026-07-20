@@ -7,9 +7,7 @@ use logic_analyzer_processing::{CsvValueFormat, CsvWordWriter};
 use node_graph::Socket;
 use signal_processing::{ProcessNode, TextSample, Word};
 
-use crate::compiler::{CompileCtx, ResolvedInputs, RuntimeBuilder, parse_state};
-use crate::compiler::PortKind;
-use crate::nodes;
+use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, nodes, parse_state};
 
 pub(crate) struct CsvWriterBuilder;
 

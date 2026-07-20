@@ -11,10 +11,8 @@ use egui::Color32;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use logic_analyzer_graph::compiler::{
-    CompileCtx, PortKind, PortValue, ResolvedInputs, RuntimeBuilder,
-};
 use logic_analyzer_graph::nodes::Signal;
+use logic_analyzer_graph::{CompileCtx, PortKind, PortValue, ResolvedInputs, RuntimeBuilder};
 use node_graph::{InputDef, NodeDef, OutputDef, Socket, SocketDef, SocketShape};
 use signal_processing::{
     InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, Sample, WorkError, WorkResult,
@@ -32,7 +30,7 @@ pub struct PulseWidth {
 
 /// Open compiler-layer identity for `PulseWidth` — the plugin-authored
 /// equivalent of the built-in `impl PortValue for Sample` etc. in
-/// `logic_analyzer_graph::compiler::port_kind`. No edits to that file were needed.
+/// `logic_analyzer_graph::port_kind`. No edits to that file were needed.
 impl PortValue for PulseWidth {
     fn kind_name() -> &'static str {
         "Pulse"
@@ -192,8 +190,8 @@ mod tests {
     #[test]
     fn register_populates_both_registries() {
         let mut nodes = node_graph::NodeTypeRegistry::new();
-        let mut builders = logic_analyzer_graph::compiler::BuilderRegistry::standard();
-        let mut ctx = logic_analyzer_graph::compiler::PluginContext::new(&mut nodes, &mut builders);
+        let mut builders = logic_analyzer_graph::BuilderRegistry::standard();
+        let mut ctx = logic_analyzer_graph::PluginContext::new(&mut nodes, &mut builders);
         crate::register(&mut ctx);
         assert_eq!(nodes.category_of("Pulse Measure"), Some("Plugin"));
     }

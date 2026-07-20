@@ -5,9 +5,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use signal_processing::{
-    CaptureAcquisitionPhase, CaptureBufferPool, CaptureChannelId, CaptureChunk,
-    CaptureCompletion, CaptureDataDelivery, CaptureProgress, CaptureProviderCapabilities,
-    CaptureSessionId, CaptureSessionState, CaptureSettingCombination, SimpleTriggerCondition,
+    CaptureAcquisitionPhase, CaptureBufferPool, CaptureChannelId, CaptureChunk, CaptureCompletion,
+    CaptureDataDelivery, CaptureProgress, CaptureProviderCapabilities, CaptureSessionId,
+    CaptureSessionState, CaptureSettingCombination, SimpleTriggerCondition,
 };
 
 use super::{
@@ -46,11 +46,8 @@ impl BufferedFakeConfig {
             ));
         }
         let mut setting_matrix = vec![
-            CaptureSettingCombination::new(
-                Arc::clone(&channels),
-                Arc::from([sample_rate_hz]),
-            )
-            .map_err(AcquisitionError::InvalidRequest)?,
+            CaptureSettingCombination::new(Arc::clone(&channels), Arc::from([sample_rate_hz]))
+                .map_err(AcquisitionError::InvalidRequest)?,
         ];
         if channels.len() > 1 {
             let bank_subset = channels.iter().step_by(2).cloned().collect::<Vec<_>>();
@@ -477,7 +474,9 @@ impl PreparedBufferedFakeAcquisition {
 
     fn join_worker(&mut self) -> AcquisitionResult<AcquisitionOutcome> {
         let handle = self.handle.take().ok_or(AcquisitionError::NotStarted)?;
-        handle.join().map_err(|_| AcquisitionError::WorkerPanicked)?
+        handle
+            .join()
+            .map_err(|_| AcquisitionError::WorkerPanicked)?
     }
 }
 
@@ -490,7 +489,10 @@ impl PreparedAcquisition for PreparedBufferedFakeAcquisition {
         if self.started {
             return Err(AcquisitionError::AlreadyStarted);
         }
-        let context = self.context.take().ok_or(AcquisitionError::AlreadyStarted)?;
+        let context = self
+            .context
+            .take()
+            .ok_or(AcquisitionError::AlreadyStarted)?;
         let config = self.config.clone();
         let control = Arc::clone(&self.control);
         let buffer_pool = self.buffer_pool.clone();

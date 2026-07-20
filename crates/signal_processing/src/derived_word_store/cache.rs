@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use super::codec::DecodedWordBlock;
 use super::format::RestartEntry;
 
-pub(super) const DEFAULT_DECODED_BLOCK_CACHE_BYTES: usize = 64 * 1024 * 1024;
+const DEFAULT_DECODED_BLOCK_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DecodedBlockCacheStats {
@@ -117,14 +117,14 @@ fn shared_cache() -> &'static Mutex<DecodedBlockCache> {
     CACHE.get_or_init(|| Mutex::new(DecodedBlockCache::new()))
 }
 
-pub(super) fn cached_block(store_id: u64, sequence: u64) -> Option<Arc<DecodedWordBlock>> {
+pub(crate) fn cached_block(store_id: u64, sequence: u64) -> Option<Arc<DecodedWordBlock>> {
     shared_cache()
         .lock()
         .unwrap()
         .get(CacheKey { store_id, sequence })
 }
 
-pub(super) fn cache_block(store_id: u64, block: Arc<DecodedWordBlock>) {
+pub(crate) fn cache_block(store_id: u64, block: Arc<DecodedWordBlock>) {
     let sequence = block.header.sequence;
     shared_cache()
         .lock()
@@ -149,7 +149,7 @@ pub fn reset_decoded_block_cache_stats() {
 }
 
 #[cfg(test)]
-pub(super) fn cache_contains(store_id: u64, sequence: u64) -> bool {
+pub(crate) fn cache_contains(store_id: u64, sequence: u64) -> bool {
     shared_cache()
         .lock()
         .unwrap()
@@ -160,8 +160,8 @@ pub(super) fn cache_contains(store_id: u64, sequence: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::Word;
     use crate::derived_word_store::format::WordBlockHeader;
+    use crate::events::Word;
 
     fn block(sequence: u64, words: usize) -> Arc<DecodedWordBlock> {
         Arc::new(DecodedWordBlock {

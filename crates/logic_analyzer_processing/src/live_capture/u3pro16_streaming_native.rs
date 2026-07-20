@@ -5,19 +5,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
 use signal_processing::{
-    CaptureAcquisitionPhase, CaptureChannelId, CaptureChunk, CaptureProgress,
-    CaptureCompletion, CaptureSessionId, CaptureSessionState,
-};
-
-use crate::nodes::{
-    DsLogicCapturePlan, DsLogicU3Pro16, LogicAnalyzer, LogicCaptureConfig,
-    RusbTransport, UsbTransport,
+    CaptureAcquisitionPhase, CaptureChannelId, CaptureChunk, CaptureCompletion, CaptureProgress,
+    CaptureSessionId, CaptureSessionState,
 };
 
 use super::u3pro16_common_native::{CanonicalTransferAssembler, map_analyzer_error};
 use super::{
     AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult,
     PreparedAcquisition,
+};
+use crate::nodes::{
+    DsLogicCapturePlan, DsLogicU3Pro16, LogicAnalyzer, LogicCaptureConfig, RusbTransport,
+    UsbTransport,
 };
 
 pub struct DsLogicU3Pro16StreamingProvider<T: UsbTransport = RusbTransport> {
@@ -167,9 +166,7 @@ impl<T: UsbTransport> PreparedStreamingAcquisition<T> {
                 }
                 Err(error) => return Err(map_analyzer_error(error)),
             };
-            if !header_seen
-                && let Some(header) = analyzer.take_trigger_header()
-            {
+            if !header_seen && let Some(header) = analyzer.take_trigger_header() {
                 header_seen = true;
                 if let Some(trigger_sample) = header.trigger_sample() {
                     context.publish_triggered(trigger_sample)?;
@@ -246,7 +243,9 @@ impl<T: UsbTransport> PreparedStreamingAcquisition<T> {
 
     fn join_worker(&mut self) -> AcquisitionResult<AcquisitionOutcome> {
         let handle = self.handle.take().ok_or(AcquisitionError::NotStarted)?;
-        handle.join().map_err(|_| AcquisitionError::WorkerPanicked)?
+        handle
+            .join()
+            .map_err(|_| AcquisitionError::WorkerPanicked)?
     }
 }
 
@@ -259,8 +258,14 @@ impl<T: UsbTransport> PreparedAcquisition for PreparedStreamingAcquisition<T> {
         if self.started {
             return Err(AcquisitionError::AlreadyStarted);
         }
-        let context = self.context.take().ok_or(AcquisitionError::AlreadyStarted)?;
-        let analyzer = self.analyzer.take().ok_or(AcquisitionError::AlreadyStarted)?;
+        let context = self
+            .context
+            .take()
+            .ok_or(AcquisitionError::AlreadyStarted)?;
+        let analyzer = self
+            .analyzer
+            .take()
+            .ok_or(AcquisitionError::AlreadyStarted)?;
         let config = self.config.clone();
         let channels = Arc::clone(&self.channels);
         let plan = self.plan;
@@ -268,9 +273,7 @@ impl<T: UsbTransport> PreparedAcquisition for PreparedStreamingAcquisition<T> {
         self.handle = Some(
             std::thread::Builder::new()
                 .name("u3pro16-streaming-capture".into())
-                .spawn(move || {
-                    Self::run(context, analyzer, config, channels, plan, stop_requested)
-                })
+                .spawn(move || Self::run(context, analyzer, config, channels, plan, stop_requested))
                 .map_err(|error| AcquisitionError::WorkerStart(error.to_string()))?,
         );
         self.started = true;

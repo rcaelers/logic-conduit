@@ -18,44 +18,44 @@ use crate::support::ViewState;
 // ── Main widget ───────────────────────────────────────────────────────────────
 
 pub struct NodeGraphWidget {
-    pub(super) graph: GraphState,
-    pub(super) runtime: HashMap<NodeId, Box<dyn NodeInstance>>,
-    pub(super) view: ViewState,
-    pub(super) interaction_state: InteractionState,
-    pub(super) registry: NodeTypeRegistry,
-    pub(super) minimap_visible: bool,
-    pub(super) top_node: Option<NodeId>,
-    pub(super) menu: MenuController,
+    pub(crate) graph: GraphState,
+    pub(crate) runtime: HashMap<NodeId, Box<dyn NodeInstance>>,
+    pub(crate) view: ViewState,
+    pub(crate) interaction_state: InteractionState,
+    pub(crate) registry: NodeTypeRegistry,
+    pub(crate) minimap_visible: bool,
+    pub(crate) top_node: Option<NodeId>,
+    pub(crate) menu: MenuController,
     /// Pending copy/paste confirmation ("Copied 3 node(s)"), taken and
     /// cleared by the host app's `take_io_status` — the host's own toast
     /// system (Phase 4.2) owns display and timing, not the widget.
-    pub(super) io_status: Option<String>,
-    pub(super) hotkeys: HotkeyRegistry,
-    pub(super) input_bindings: Arc<InputBindings>,
-    pub(super) clipboard_cache: Option<String>,
-    pub(super) undo_stack: Vec<GraphState>,
-    pub(super) redo_stack: Vec<GraphState>,
-    pub(super) frame_rename: Option<FrameRenameState>,
-    pub(super) node_rename: Option<NodeRenameState>,
+    pub(crate) io_status: Option<String>,
+    pub(crate) hotkeys: HotkeyRegistry,
+    pub(crate) input_bindings: Arc<InputBindings>,
+    pub(crate) clipboard_cache: Option<String>,
+    pub(crate) undo_stack: Vec<GraphState>,
+    pub(crate) redo_stack: Vec<GraphState>,
+    pub(crate) frame_rename: Option<FrameRenameState>,
+    pub(crate) node_rename: Option<NodeRenameState>,
     /// Most recently clicked/added node; the properties panel shows it.
-    pub(super) active_node: Option<NodeId>,
-    pub(super) panel: PanelState,
+    pub(crate) active_node: Option<NodeId>,
+    pub(crate) panel: PanelState,
     /// Badges set from outside the graph (compiler errors, runtime status);
     /// they take precedence over def-driven badges.
-    pub(super) external_badges: HashMap<NodeId, NodeBadge>,
+    pub(crate) external_badges: HashMap<NodeId, NodeBadge>,
     /// Short live-status texts (e.g. items-produced counters) drawn small
     /// in the node header.
-    pub(super) node_statuses: HashMap<NodeId, String>,
+    pub(crate) node_statuses: HashMap<NodeId, String>,
     /// Nodes whose host-owned derived data can be cleared from the context
     /// menu. The widget only queues a request; the host performs the I/O.
-    pub(super) derived_cache_nodes: HashSet<NodeId>,
-    pub(super) clear_derived_cache_request: Option<NodeId>,
+    pub(crate) derived_cache_nodes: HashSet<NodeId>,
+    pub(crate) clear_derived_cache_request: Option<NodeId>,
     /// Host-provided, application-neutral node context actions.
-    pub(super) node_context_actions: HashMap<NodeId, Vec<NodeContextAction>>,
-    pub(super) node_context_action_request: Option<(NodeId, String)>,
+    pub(crate) node_context_actions: HashMap<NodeId, Vec<NodeContextAction>>,
+    pub(crate) node_context_action_request: Option<(NodeId, String)>,
     /// Host-controlled edit gate. View navigation, selection, inspection,
     /// and copy remain available while graph mutations are disabled.
-    pub(super) editing_enabled: bool,
+    pub(crate) editing_enabled: bool,
 }
 
 /// A context-menu action contributed by the host application. Both the ID
@@ -89,16 +89,16 @@ impl NodeContextAction {
     }
 }
 
-pub(super) struct FrameRenameState {
-    pub(super) frame_id: FrameId,
-    pub(super) text: String,
-    pub(super) screen_pos: Pos2,
+pub(crate) struct FrameRenameState {
+    pub(crate) frame_id: FrameId,
+    pub(crate) text: String,
+    pub(crate) screen_pos: Pos2,
 }
 
-pub(super) struct NodeRenameState {
-    pub(super) node_id: NodeId,
-    pub(super) text: String,
-    pub(super) screen_pos: Pos2,
+pub(crate) struct NodeRenameState {
+    pub(crate) node_id: NodeId,
+    pub(crate) text: String,
+    pub(crate) screen_pos: Pos2,
 }
 
 /// Public mirror of the internal `PanelTab` — kept separate so the widget's
@@ -303,7 +303,7 @@ impl NodeGraphWidget {
         }
     }
 
-    pub(super) fn set_active_node(&mut self, id: NodeId) {
+    pub(crate) fn set_active_node(&mut self, id: NodeId) {
         self.active_node = Some(id);
     }
 
@@ -376,7 +376,7 @@ impl NodeGraphWidget {
         self.node_statuses.clear();
     }
 
-    pub(super) fn fit_graph_to_viewport(
+    pub(crate) fn fit_graph_to_viewport(
         &mut self,
         layout: &layout::GraphWidgetLayout,
         viewport: egui::Rect,
@@ -398,7 +398,7 @@ impl NodeGraphWidget {
     /// Zooms to fit the current selection (Phase 2, Blender's numpad-`.`) —
     /// falls back to fitting the whole graph, matching `Home`, when nothing
     /// is selected.
-    pub(super) fn fit_selection_to_viewport(
+    pub(crate) fn fit_selection_to_viewport(
         &mut self,
         layout: &layout::GraphWidgetLayout,
         viewport: egui::Rect,
@@ -476,7 +476,7 @@ impl NodeGraphWidget {
         Ok(())
     }
 
-    pub(super) fn run_update(&mut self, id: NodeId) {
+    pub(crate) fn run_update(&mut self, id: NodeId) {
         if let (Some(instance), Some(node)) =
             (self.runtime.get_mut(&id), self.graph.nodes.get_mut(&id))
         {
@@ -486,7 +486,7 @@ impl NodeGraphWidget {
         }
     }
 
-    pub(super) fn sync_all_node_state(&mut self) {
+    pub(crate) fn sync_all_node_state(&mut self) {
         for id in self.graph.sorted_node_ids() {
             if let (Some(instance), Some(node)) =
                 (self.runtime.get(&id), self.graph.nodes.get_mut(&id))
@@ -496,21 +496,21 @@ impl NodeGraphWidget {
         }
     }
 
-    pub(super) fn push_undo_snapshot(&mut self) {
+    pub(crate) fn push_undo_snapshot(&mut self) {
         self.sync_all_node_state();
         self.undo_stack.push(self.graph.clone());
         self.redo_stack.clear();
     }
 
-    pub(super) fn can_undo(&self) -> bool {
+    pub(crate) fn can_undo(&self) -> bool {
         !self.undo_stack.is_empty()
     }
 
-    pub(super) fn can_redo(&self) -> bool {
+    pub(crate) fn can_redo(&self) -> bool {
         !self.redo_stack.is_empty()
     }
 
-    pub(super) fn restore_runtime(&mut self) {
+    pub(crate) fn restore_runtime(&mut self) {
         self.runtime.clear();
         for node in self.graph.nodes.values_mut() {
             if let Some(instance) = self.registry.restore_node(node) {

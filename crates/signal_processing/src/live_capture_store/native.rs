@@ -8,16 +8,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    CaptureChunk, CaptureChunkPayload, CaptureChunkWriter, CaptureSampledChannel,
-    CaptureSampledWindow, CaptureSessionId, CaptureSessionPlan, CaptureTransition,
-    CaptureWriteError, Error,
-};
-
 use super::{
     CaptureCursorItem, CaptureReclamationReport, CaptureRecoveryReport, CaptureSessionMetadata,
     CaptureSessionOutcome, CaptureStoreCursor, CaptureStoreDescriptor, CaptureStoreError,
     CaptureStoreManifest, CaptureStoreResult, CaptureStoreSnapshot, CaptureTimelineMetadata,
+};
+use crate::{
+    CaptureChunk, CaptureChunkPayload, CaptureChunkWriter, CaptureSampledChannel,
+    CaptureSampledWindow, CaptureSessionId, CaptureSessionPlan, CaptureTransition,
+    CaptureWriteError, Error,
 };
 
 const DATA_FILE_NAME: &str = "capture.data";
@@ -488,9 +487,7 @@ impl NativeFinalizedCapture {
         }
 
         let mut metadata = read_session_metadata(&directory)?.ok_or_else(|| {
-            CaptureStoreError::Corrupt(
-                "interrupted capture has no durable session metadata".into(),
-            )
+            CaptureStoreError::Corrupt("interrupted capture has no durable session metadata".into())
         })?;
         let mut commit_file = OpenOptions::new()
             .read(true)
@@ -537,11 +534,7 @@ impl NativeFinalizedCapture {
         let mut expected_sample = 0_u64;
         let mut expected_data_offset = 0_u64;
         for sequence in 0..complete_records {
-            let record = read_commit_record_at(
-                &mut commit_file,
-                sequence,
-                commit_format_version,
-            )?;
+            let record = read_commit_record_at(&mut commit_file, sequence, commit_format_version)?;
             if record.start_sample != expected_sample || record.data_offset != expected_data_offset
             {
                 return Err(CaptureStoreError::Corrupt(format!(
@@ -630,7 +623,7 @@ impl NativeFinalizedCapture {
         ))
     }
 
-    pub(super) fn reclaim_directory_before(
+    pub(crate) fn reclaim_directory_before(
         directory: &Path,
         safe_sample: u64,
     ) -> CaptureStoreResult<(Self, CaptureReclamationReport)> {
@@ -693,11 +686,8 @@ impl NativeFinalizedCapture {
         let mut output_data_offset = 0_u64;
         for input_sequence in first_retained_sequence..manifest.committed_chunks {
             let output_sequence = input_sequence - first_retained_sequence;
-            let record = read_commit_record_at(
-                &mut commit_file,
-                input_sequence,
-                commit_format_version,
-            )?;
+            let record =
+                read_commit_record_at(&mut commit_file, input_sequence, commit_format_version)?;
             let data_len = usize::try_from(record.data_len)
                 .map_err(|_| CaptureStoreError::Corrupt("chunk data is too large".into()))?;
             let mut data = vec![0_u8; data_len];
@@ -1028,10 +1018,7 @@ pub struct NativeCaptureCursor {
 }
 
 impl NativeCaptureCursor {
-    fn open(
-        shared: Arc<SharedStore>,
-        visibility: CursorVisibility,
-    ) -> CaptureStoreResult<Self> {
+    fn open(shared: Arc<SharedStore>, visibility: CursorVisibility) -> CaptureStoreResult<Self> {
         let data_file = File::open(shared.directory.join(DATA_FILE_NAME))?;
         let finalized = shared
             .state
@@ -1180,10 +1167,7 @@ pub struct NativeCaptureRandomReader {
 }
 
 impl NativeCaptureRandomReader {
-    fn open(
-        shared: Arc<SharedStore>,
-        visibility: CursorVisibility,
-    ) -> CaptureStoreResult<Self> {
+    fn open(shared: Arc<SharedStore>, visibility: CursorVisibility) -> CaptureStoreResult<Self> {
         let data_file = File::open(shared.directory.join(DATA_FILE_NAME))?;
         let finalized = shared
             .state
@@ -1245,12 +1229,9 @@ impl NativeCaptureRandomReader {
             .map_err(store_as_capture_error)?;
 
         for sequence in first_sequence..snapshot.committed_chunks {
-            let record = read_commit_record_at(
-                &mut self.commit_file,
-                sequence,
-                self.commit_format_version,
-            )
-                .map_err(store_as_capture_error)?;
+            let record =
+                read_commit_record_at(&mut self.commit_file, sequence, self.commit_format_version)
+                    .map_err(store_as_capture_error)?;
             if record.start_sample >= end_sample {
                 break;
             }
@@ -1260,7 +1241,7 @@ impl NativeCaptureRandomReader {
                 self.commit_format_version,
                 record,
             )
-                .map_err(store_as_capture_error)?;
+            .map_err(store_as_capture_error)?;
             let chunk_start = start_sample.max(chunk.start_sample());
             let chunk_end = end_sample.min(chunk.end_sample());
             for sample in chunk_start..chunk_end {
@@ -1303,11 +1284,8 @@ impl NativeCaptureRandomReader {
         let mut hi = committed_chunks;
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            let record = read_commit_record_at(
-                &mut self.commit_file,
-                mid,
-                self.commit_format_version,
-            )?;
+            let record =
+                read_commit_record_at(&mut self.commit_file, mid, self.commit_format_version)?;
             if record.start_sample.saturating_add(record.sample_count) <= sample {
                 lo = mid + 1;
             } else {
@@ -1319,11 +1297,7 @@ impl NativeCaptureRandomReader {
                 "no committed chunk contains sample {sample}"
             )));
         }
-        let record = read_commit_record_at(
-            &mut self.commit_file,
-            lo,
-            self.commit_format_version,
-        )?;
+        let record = read_commit_record_at(&mut self.commit_file, lo, self.commit_format_version)?;
         if sample < record.start_sample
             || sample >= record.start_sample.saturating_add(record.sample_count)
         {
@@ -1600,13 +1574,14 @@ impl PersistedSessionMetadata {
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
-            timeline: metadata.timeline.as_ref().map(|timeline| {
-                PersistedCaptureTimelineMetadata {
+            timeline: metadata
+                .timeline
+                .as_ref()
+                .map(|timeline| PersistedCaptureTimelineMetadata {
                     sample_rate_hz: timeline.sample_rate_hz(),
                     channel_names: timeline.channel_names().to_vec(),
                     trigger_sample: timeline.trigger_sample(),
-                }
-            }),
+                }),
             outcome: metadata.outcome,
             created_unix_ns: metadata.created_unix_ns,
             accessed_unix_ns: metadata.accessed_unix_ns,
@@ -1636,10 +1611,8 @@ impl PersistedSessionMetadata {
         let timeline = self
             .timeline
             .map(|timeline| {
-                let mut decoded = CaptureTimelineMetadata::new(
-                    timeline.sample_rate_hz,
-                    timeline.channel_names,
-                )?;
+                let mut decoded =
+                    CaptureTimelineMetadata::new(timeline.sample_rate_hz, timeline.channel_names)?;
                 if decoded.channel_names().len() != descriptor.channels().len() {
                     return Err(CaptureStoreError::Corrupt(format!(
                         "capture timeline has {} channel names for {} channels",
@@ -1670,10 +1643,10 @@ fn write_session_metadata(
 ) -> CaptureStoreResult<()> {
     let mut bytes = serde_json::to_vec_pretty(&PersistedSessionMetadata::from_metadata(metadata))
         .map_err(|error| {
-            CaptureStoreError::InvalidConfig(format!(
-                "capture session metadata cannot be encoded: {error}"
-            ))
-        })?;
+        CaptureStoreError::InvalidConfig(format!(
+            "capture session metadata cannot be encoded: {error}"
+        ))
+    })?;
     bytes.push(b'\n');
     let temp_path = directory.join(SESSION_TEMP_FILE_NAME);
     let final_path = directory.join(SESSION_FILE_NAME);
@@ -1941,7 +1914,9 @@ fn validate_finalized_files(
             "commit file length differs from the manifest".into(),
         ));
     }
-    let data_len = File::open(directory.join(DATA_FILE_NAME))?.metadata()?.len();
+    let data_len = File::open(directory.join(DATA_FILE_NAME))?
+        .metadata()?
+        .len();
     if data_len != manifest.committed_data_bytes {
         return Err(CaptureStoreError::Corrupt(
             "data file length differs from the manifest".into(),
@@ -1952,7 +1927,9 @@ fn validate_finalized_files(
 
 fn get_u16(bytes: &[u8], offset: usize) -> CaptureStoreResult<u16> {
     let value = get_bytes(bytes, offset, 2, "u16")?;
-    Ok(u16::from_le_bytes(value.try_into().expect("slice is two bytes")))
+    Ok(u16::from_le_bytes(
+        value.try_into().expect("slice is two bytes"),
+    ))
 }
 
 fn get_u32(bytes: &[u8], offset: usize) -> CaptureStoreResult<u32> {
@@ -1999,18 +1976,17 @@ mod tests {
 
     use tempfile::tempdir;
 
+    use super::{
+        COMMIT_FILE_NAME, COMMIT_HEADER_SIZE, COMMIT_RECORD_SIZE, CaptureCursorItem,
+        CaptureStoreDescriptor, CaptureStoreError, DATA_FILE_NAME, LEGACY_COMMIT_FORMAT_VERSION,
+        NativeCaptureStore, NativeCaptureStoreConfig, NativeFinalizedCapture, PLAN_FILE_NAME,
+        PLAN_TEMP_FILE_NAME, ReclamationDurableStep,
+    };
     use crate::{
         CaptureChannelId, CaptureChunk, CaptureChunkWriter, CaptureFraction, CapturePolicy,
         CaptureSessionId, CaptureSessionOutcome, CaptureSessionPlan, CaptureStoreCursor,
         CaptureTimelineMetadata, CompletionPolicy, EffectiveCapturePolicy, RecordingStart,
         RetentionPolicy, TriggerPlacement,
-    };
-
-    use super::{
-        CaptureCursorItem, CaptureStoreDescriptor, CaptureStoreError, NativeCaptureStore,
-        NativeCaptureStoreConfig, NativeFinalizedCapture, COMMIT_FILE_NAME, COMMIT_HEADER_SIZE,
-        COMMIT_RECORD_SIZE, DATA_FILE_NAME, LEGACY_COMMIT_FORMAT_VERSION, PLAN_FILE_NAME,
-        PLAN_TEMP_FILE_NAME, ReclamationDurableStep,
     };
 
     fn descriptor() -> CaptureStoreDescriptor {
@@ -2102,12 +2078,7 @@ mod tests {
             let CaptureCursorItem::Chunk(actual) = cursor.next().unwrap() else {
                 panic!("missing chunk {sequence}");
             };
-            let expected = chunk(
-                &descriptor,
-                sequence as u64,
-                actual.start_sample(),
-                samples,
-            );
+            let expected = chunk(&descriptor, sequence as u64, actual.start_sample(), samples);
             assert_eq!(actual, expected);
         }
         assert_eq!(cursor.next().unwrap(), CaptureCursorItem::End);
@@ -2132,7 +2103,10 @@ mod tests {
         bytes[8..10].copy_from_slice(&LEGACY_COMMIT_FORMAT_VERSION.to_le_bytes());
         let checksum = usize::from(COMMIT_HEADER_SIZE) + 42;
         bytes[checksum..checksum + 4].fill(0);
-        assert_eq!(bytes.len(), usize::from(COMMIT_HEADER_SIZE + COMMIT_RECORD_SIZE));
+        assert_eq!(
+            bytes.len(),
+            usize::from(COMMIT_HEADER_SIZE + COMMIT_RECORD_SIZE)
+        );
         std::fs::write(commit_path, bytes).unwrap();
 
         let reopened = NativeFinalizedCapture::open(finalized.directory()).unwrap();
@@ -2144,11 +2118,9 @@ mod tests {
     fn finalized_store_reopens_atomic_session_plan() {
         let temporary = tempdir().unwrap();
         let descriptor = descriptor();
-        let (store, mut writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
-            temporary.path(),
-            descriptor,
-        ))
-        .unwrap();
+        let (store, mut writer) =
+            NativeCaptureStore::create(NativeCaptureStoreConfig::new(temporary.path(), descriptor))
+                .unwrap();
         writer.finish().unwrap();
         drop(writer);
 
@@ -2166,11 +2138,9 @@ mod tests {
     fn malformed_session_plan_rejects_reopen() {
         let temporary = tempdir().unwrap();
         let descriptor = descriptor();
-        let (store, mut writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
-            temporary.path(),
-            descriptor,
-        ))
-        .unwrap();
+        let (store, mut writer) =
+            NativeCaptureStore::create(NativeCaptureStoreConfig::new(temporary.path(), descriptor))
+                .unwrap();
         writer.finish().unwrap();
         drop(writer);
         let finalized = store.finalize().unwrap();
@@ -2376,10 +2346,8 @@ mod tests {
         .unwrap();
         drop(writer);
         let path = temporary.path().join(super::SESSION_FILE_NAME);
-        let mut persisted = serde_json::from_slice::<serde_json::Value>(
-            &std::fs::read(&path).unwrap(),
-        )
-        .unwrap();
+        let mut persisted =
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap();
         persisted["format_version"] = serde_json::json!(1);
         persisted.as_object_mut().unwrap().remove("timeline");
         std::fs::write(&path, serde_json::to_vec_pretty(&persisted).unwrap()).unwrap();
@@ -2431,16 +2399,19 @@ mod tests {
                 7,
                 |step| {
                     if step == interrupted_after {
-                        Err(std::io::Error::other(format!(
-                            "injected interruption after {step:?}"
-                        ))
-                        .into())
+                        Err(
+                            std::io::Error::other(format!("injected interruption after {step:?}"))
+                                .into(),
+                        )
                     } else {
                         Ok(())
                     }
                 },
             );
-            assert!(result.is_err(), "missing interruption at {interrupted_after:?}");
+            assert!(
+                result.is_err(),
+                "missing interruption at {interrupted_after:?}"
+            );
 
             let (recovered, _) = NativeFinalizedCapture::recover(temporary.path()).unwrap();
             assert_eq!(recovered.manifest().committed_chunks, 2);
@@ -2465,11 +2436,9 @@ mod tests {
     fn finalized_outcome_and_recording_origin_are_durable() {
         let temporary = tempdir().unwrap();
         let descriptor = descriptor();
-        let (store, mut writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
-            temporary.path(),
-            descriptor,
-        ))
-        .unwrap();
+        let (store, mut writer) =
+            NativeCaptureStore::create(NativeCaptureStoreConfig::new(temporary.path(), descriptor))
+                .unwrap();
         writer.finish().unwrap();
         drop(writer);
         let finalized = store
@@ -2508,7 +2477,10 @@ mod tests {
         assert_eq!(snapshot.committed_samples, 2_048);
         assert_eq!(snapshot.resident_commit_records, 0);
         assert_eq!(cursor.next_sequence(), 0);
-        assert!(matches!(cursor.next().unwrap(), CaptureCursorItem::Chunk(_)));
+        assert!(matches!(
+            cursor.next().unwrap(),
+            CaptureCursorItem::Chunk(_)
+        ));
         assert_eq!(cursor.next_sequence(), 1);
     }
 
@@ -2532,7 +2504,10 @@ mod tests {
         ));
         writer.finish().unwrap();
         assert_eq!(store.snapshot().committed_chunks, 1);
-        assert!(matches!(cursor.next().unwrap(), CaptureCursorItem::Chunk(_)));
+        assert!(matches!(
+            cursor.next().unwrap(),
+            CaptureCursorItem::Chunk(_)
+        ));
         drop(writer);
         assert_eq!(cursor.next().unwrap(), CaptureCursorItem::End);
     }

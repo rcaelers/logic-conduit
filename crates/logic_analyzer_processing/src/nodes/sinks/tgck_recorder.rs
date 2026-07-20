@@ -22,10 +22,10 @@ use std::path::PathBuf;
 
 use tracing::{debug, warn};
 
-use signal_processing::errors::{WorkError, WorkResult};
-use signal_processing::events::{TextSample, Word};
-use signal_processing::node::ProcessNode;
-use signal_processing::ports::{InputPort, OutputPort, PortDirection, PortSchema};
+use signal_processing::{
+    InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, TextSample, Word, WorkError,
+    WorkResult,
+};
 
 /// One complete TGCK cycle, positioned within the current capture window.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,7 +141,7 @@ pub struct TgckRecorder {
     /// when end-of-stream force-closes the final window.
     last_position: u64,
     words_buffer: VecDeque<Word>,
-    tgck_buffer: VecDeque<signal_processing::sample::Sample>,
+    tgck_buffer: VecDeque<signal_processing::Sample>,
     name_buffer: VecDeque<TextSample>,
 }
 
@@ -211,7 +211,7 @@ impl ProcessNode for TgckRecorder {
     fn input_schema(&self) -> Vec<PortSchema> {
         vec![
             PortSchema::new::<Word>("words", 0, PortDirection::Input),
-            PortSchema::new::<signal_processing::sample::Sample>("tgck", 1, PortDirection::Input),
+            PortSchema::new::<signal_processing::Sample>("tgck", 1, PortDirection::Input),
             PortSchema::new::<TextSample>("filename", 2, PortDirection::Input),
         ]
     }
@@ -284,9 +284,7 @@ impl ProcessNode for TgckRecorder {
         if !self.tgck_closed {
             let mut tgck = inputs
                 .get(1)
-                .and_then(|port| {
-                    port.get::<signal_processing::sample::Sample>(&mut self.tgck_buffer)
-                })
+                .and_then(|port| port.get::<signal_processing::Sample>(&mut self.tgck_buffer))
                 .ok_or_else(|| WorkError::NodeError("Missing tgck input".to_string()))?;
             loop {
                 match tgck.peek() {
@@ -342,9 +340,7 @@ impl ProcessNode for TgckRecorder {
 #[cfg(test)]
 mod tests {
     use crossbeam_channel::bounded;
-    use signal_processing::sample::Sample;
-    use signal_processing::sender::ChannelMessage;
-    use signal_processing::watchdog::Watchdog;
+    use signal_processing::{ChannelMessage, Sample, Watchdog};
 
     use super::*;
 
@@ -398,13 +394,13 @@ mod tests {
             ],
             outputs: vec![
                 OutputPort::new_with_watchdog(
-                    signal_processing::sender::Sender::new(vec![rows_tx]),
+                    signal_processing::Sender::new(vec![rows_tx]),
                     &wd,
                     "tgck",
                     "rows",
                 ),
                 OutputPort::new_with_watchdog(
-                    signal_processing::sender::Sender::new(vec![filename_tx]),
+                    signal_processing::Sender::new(vec![filename_tx]),
                     &wd,
                     "tgck",
                     "filename",
@@ -479,13 +475,13 @@ mod tests {
         ];
         let outputs = vec![
             OutputPort::new_with_watchdog(
-                signal_processing::sender::Sender::new(vec![rows_tx]),
+                signal_processing::Sender::new(vec![rows_tx]),
                 &wd,
                 "tgck",
                 "rows",
             ),
             OutputPort::new_with_watchdog(
-                signal_processing::sender::Sender::new(vec![filename_tx]),
+                signal_processing::Sender::new(vec![filename_tx]),
                 &wd,
                 "tgck",
                 "filename",

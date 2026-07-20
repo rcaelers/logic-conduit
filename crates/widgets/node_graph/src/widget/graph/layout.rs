@@ -11,7 +11,7 @@ const SOCKET_HIT_PADDING: f32 = 5.0;
 const FRAME_PADDING: f32 = 20.0;
 const FRAME_TITLE_PADDING: f32 = 44.0;
 
-pub(super) struct GraphWidgetLayout {
+pub(crate) struct GraphWidgetLayout {
     pub nodes: HashMap<NodeId, NodeWidget>,
     pub node_rects: HashMap<NodeId, Rect>,
     pub frame_rects: HashMap<FrameId, Rect>,
@@ -24,7 +24,7 @@ pub(super) struct GraphWidgetLayout {
 }
 
 impl NodeGraphWidget {
-    pub(super) fn build_layout(&self, origin: Pos2) -> GraphWidgetLayout {
+    pub(crate) fn build_layout(&self, origin: Pos2) -> GraphWidgetLayout {
         let nodes: HashMap<NodeId, NodeWidget> = self
             .graph
             .nodes

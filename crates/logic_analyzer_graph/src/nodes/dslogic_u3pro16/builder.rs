@@ -6,11 +6,11 @@ use logic_analyzer_processing::DsLogicU3Pro16;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock, ViewerRetention};
 
-use crate::compiler::{
+use crate::nodes::U3Pro16State;
+use crate::{
     CompileCtx, LiveCaptureEdit, LiveCaptureFeature, PortKind, ResolvedInputs, RuntimeBuilder,
     TriggerConfigurationFeature, parse_state,
 };
-use crate::nodes::U3Pro16State;
 
 pub(crate) struct DsLogicU3Pro16Builder;
 

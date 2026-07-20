@@ -11,7 +11,7 @@ use crate::support::{
 };
 use crate::widget::node::{NodeControlContext, NodeDrawContext};
 
-pub(super) struct GraphRenderContext<'a> {
+pub(crate) struct GraphRenderContext<'a> {
     pub rect: Rect,
     pub origin: Pos2,
     pub pointer: Option<Pos2>,
@@ -20,7 +20,7 @@ pub(super) struct GraphRenderContext<'a> {
 }
 
 impl NodeGraphWidget {
-    pub(super) fn draw_graph(
+    pub(crate) fn draw_graph(
         &mut self,
         ui: &mut egui::Ui,
         painter: &Painter,
@@ -320,7 +320,7 @@ impl NodeGraphWidget {
         ui.set_clip_rect(previous_clip);
     }
 
-    pub(super) fn hovered_socket(&self, responses: &GraphResponses) -> Option<SocketId> {
+    pub(crate) fn hovered_socket(&self, responses: &GraphResponses) -> Option<SocketId> {
         responses
             .sockets
             .iter()
@@ -338,7 +338,7 @@ impl NodeGraphWidget {
             .map(|(&socket_id, _)| socket_id)
     }
 
-    pub(super) fn show_socket_tooltip(
+    pub(crate) fn show_socket_tooltip(
         &self,
         responses: &GraphResponses,
         socket_id: Option<SocketId>,
@@ -478,7 +478,7 @@ impl NodeGraphWidget {
             .unwrap_or(Color32::from_rgb(160, 160, 160))
     }
 
-    pub(super) fn show_frame_rename(&mut self, ctx: &egui::Context) {
+    pub(crate) fn show_frame_rename(&mut self, ctx: &egui::Context) {
         let Some(state) = &mut self.frame_rename else {
             return;
         };
@@ -544,7 +544,7 @@ impl NodeGraphWidget {
 
     /// Inline rename overlay for a node (Phase 2, F2) — same mechanism as
     /// `show_frame_rename`, writing to `node.title` instead.
-    pub(super) fn show_node_rename(&mut self, ctx: &egui::Context) {
+    pub(crate) fn show_node_rename(&mut self, ctx: &egui::Context) {
         let Some(state) = &mut self.node_rename else {
             return;
         };

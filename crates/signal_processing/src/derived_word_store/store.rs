@@ -39,9 +39,9 @@ fn intersecting_block_indices(
     if start_ns > end_ns {
         return Vec::new();
     }
-    let leaves = &presence.levels[0];
+    let leaves = presence.leaves();
     let first = presence
-        .prefix_max_end_ns
+        .prefix_max_end_ns()
         .partition_point(|&prefix_end_ns| prefix_end_ns < start_ns);
     let end = leaves.partition_point(|record| record.start_ns <= end_ns);
     let mut blocks: Vec<_> = (first.min(end)..end)
@@ -1848,7 +1848,7 @@ mod tests {
 
         assert_eq!(store.snapshot().metadata.committed_block_count, 1);
         assert_eq!(
-            store.shared.state.read().unwrap().presence.levels[0].len(),
+            store.shared.state.read().unwrap().presence.leaves().len(),
             2
         );
         assert!(!cache_contains(store.shared.store_id, 0));
@@ -1909,7 +1909,14 @@ mod tests {
             .expect("published cache");
         assert_eq!(reopened.snapshot().metadata.committed_block_count, 1);
         assert_eq!(
-            reopened.shared.state.read().unwrap().presence.levels[0].len(),
+            reopened
+                .shared
+                .state
+                .read()
+                .unwrap()
+                .presence
+                .leaves()
+                .len(),
             2
         );
         let buckets = reopened.presence_window(0, 149_990, 100).unwrap();

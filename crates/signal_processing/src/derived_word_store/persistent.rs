@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::config::PersistentStoreConfig;
 use super::format::{BlockDirectoryEntry, DATA_HEADER_SIZE, DataFileHeader, FORMAT_VERSION};
 use super::presence::{WordPresenceIndex, WordSummaryRecord};
-use super::store::{StoreError, StoreResult};
+use super::{StoreError, StoreResult};
 
 const INDEX_MAGIC: &[u8; 8] = b"DWRIDX1\0";
 const MANIFEST_MAGIC: &[u8; 8] = b"DWRMAN1\0";
@@ -17,21 +17,21 @@ const INDEX_RECORD_SIZE: usize = 64;
 const SUMMARY_RECORD_SIZE: usize = 40;
 const MANIFEST_SIZE: usize = 96;
 
-pub(super) const DATA_FILE_NAME: &str = "words.dwd";
-pub(super) const INDEX_FILE_NAME: &str = "words.dwi";
-pub(super) const MANIFEST_FILE_NAME: &str = "manifest.dwm";
+const DATA_FILE_NAME: &str = "words.dwd";
+pub(crate) const INDEX_FILE_NAME: &str = "words.dwi";
+pub(crate) const MANIFEST_FILE_NAME: &str = "manifest.dwm";
 
 #[derive(Debug)]
-pub(super) struct PersistentIndex {
-    pub directory: Vec<BlockDirectoryEntry>,
-    pub presence: WordPresenceIndex,
-    pub committed_word_count: u64,
-    pub committed_data_len: u64,
-    pub first_timestamp_ns: Option<u64>,
-    pub last_timestamp_ns: Option<u64>,
+pub(crate) struct PersistentIndex {
+    pub(crate) directory: Vec<BlockDirectoryEntry>,
+    pub(crate) presence: WordPresenceIndex,
+    pub(crate) committed_word_count: u64,
+    pub(crate) committed_data_len: u64,
+    pub(crate) first_timestamp_ns: Option<u64>,
+    pub(crate) last_timestamp_ns: Option<u64>,
 }
 
-pub(super) struct Publication<'a> {
+pub(crate) struct Publication<'a> {
     pub directory: &'a [BlockDirectoryEntry],
     pub presence: &'a WordPresenceIndex,
     pub committed_word_count: u64,
@@ -149,15 +149,15 @@ pub fn clear_cache_entry(config: &PersistentStoreConfig) -> StoreResult<Persiste
     })
 }
 
-pub(super) fn cache_directory(config: &PersistentStoreConfig) -> PathBuf {
+pub(crate) fn cache_directory(config: &PersistentStoreConfig) -> PathBuf {
     config.directory.join(hex_key(&config.cache_key))
 }
 
-pub(super) fn data_path(config: &PersistentStoreConfig) -> PathBuf {
+pub(crate) fn data_path(config: &PersistentStoreConfig) -> PathBuf {
     cache_directory(config).join(DATA_FILE_NAME)
 }
 
-pub(super) fn publish_index_and_manifest(
+pub(crate) fn publish_index_and_manifest(
     config: &PersistentStoreConfig,
     publication: Publication<'_>,
 ) -> StoreResult<(PathBuf, PathBuf)> {
@@ -168,7 +168,7 @@ pub(super) fn publish_index_and_manifest(
     let index_bytes = encode_index(
         config.cache_key,
         publication.directory,
-        &publication.presence.levels[0],
+        publication.presence.leaves(),
         publication.committed_word_count,
         publication.committed_data_len,
         publication.first_timestamp_ns,
@@ -191,7 +191,7 @@ pub(super) fn publish_index_and_manifest(
     Ok((index_tmp, manifest_tmp))
 }
 
-pub(super) fn finish_publication(
+pub(crate) fn finish_publication(
     config: &PersistentStoreConfig,
     data_tmp: &Path,
     index_tmp: &Path,
@@ -211,7 +211,7 @@ pub(super) fn finish_publication(
     Ok(())
 }
 
-pub(super) fn open(config: &PersistentStoreConfig) -> StoreResult<Option<PersistentIndex>> {
+pub(crate) fn open(config: &PersistentStoreConfig) -> StoreResult<Option<PersistentIndex>> {
     let cache_dir = cache_directory(config);
     let manifest_path = cache_dir.join(MANIFEST_FILE_NAME);
     if !manifest_path.is_file() {

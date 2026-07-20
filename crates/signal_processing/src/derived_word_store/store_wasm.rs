@@ -126,15 +126,18 @@ impl AnnotationQuery for IndexedAnnotationStore {
             let annotation_end = if word.duration_ns > 0 {
                 word.timestamp_ns.saturating_add(word.duration_ns)
             } else {
-                state.words.get(index + 1).map_or(word.timestamp_ns, |next| {
-                    instantaneous_word_end_ns(
-                        index
-                            .checked_sub(1)
-                            .map(|previous| state.words[previous].timestamp_ns),
-                        word.timestamp_ns,
-                        next.timestamp_ns,
-                    )
-                })
+                state
+                    .words
+                    .get(index + 1)
+                    .map_or(word.timestamp_ns, |next| {
+                        instantaneous_word_end_ns(
+                            index
+                                .checked_sub(1)
+                                .map(|previous| state.words[previous].timestamp_ns),
+                            word.timestamp_ns,
+                            next.timestamp_ns,
+                        )
+                    })
             };
             if word.timestamp_ns <= end_ns && annotation_end >= start_ns {
                 if annotations.len() == max_words {
@@ -172,15 +175,18 @@ impl AnnotationQuery for IndexedAnnotationStore {
                 let end_ns = if word.duration_ns > 0 {
                     word.timestamp_ns.saturating_add(word.duration_ns)
                 } else {
-                    state.words.get(index + 1).map_or(word.timestamp_ns, |next| {
-                        instantaneous_word_end_ns(
-                            index
-                                .checked_sub(1)
-                                .map(|previous| state.words[previous].timestamp_ns),
-                            word.timestamp_ns,
-                            next.timestamp_ns,
-                        )
-                    })
+                    state
+                        .words
+                        .get(index + 1)
+                        .map_or(word.timestamp_ns, |next| {
+                            instantaneous_word_end_ns(
+                                index
+                                    .checked_sub(1)
+                                    .map(|previous| state.words[previous].timestamp_ns),
+                                word.timestamp_ns,
+                                next.timestamp_ns,
+                            )
+                        })
                 };
                 [word.timestamp_ns, end_ns]
             })

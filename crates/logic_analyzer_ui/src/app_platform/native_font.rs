@@ -1,4 +1,4 @@
-pub(super) fn load_symbol_fonts() -> Vec<egui::FontData> {
+pub(crate) fn load_symbol_fonts() -> Vec<egui::FontData> {
     symbol_font_paths()
         .iter()
         .filter_map(|path| std::fs::read(path).ok())

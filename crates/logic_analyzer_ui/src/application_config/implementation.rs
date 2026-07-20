@@ -2,19 +2,6 @@ use serde::Deserialize;
 
 use logic_analyzer_viewer::ColorProfile;
 
-std::cfg_select! {
-    target_arch = "wasm32" => {
-        #[path = "application_config/wasm.rs"]
-        mod imp;
-    }
-    _ => {
-        #[path = "application_config/native.rs"]
-        mod imp;
-    }
-}
-
-pub(crate) use imp::{load, path};
-
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct ApplicationConfig {
@@ -68,7 +55,7 @@ impl From<ConfiguredColorProfile> for ColorProfile {
     }
 }
 
-fn embedded_defaults() -> ApplicationConfig {
-    serde_json::from_str(include_str!("../config/application.json"))
+pub(crate) fn embedded_defaults() -> ApplicationConfig {
+    serde_json::from_str(include_str!("../../config/application.json"))
         .expect("embedded application configuration must be valid")
 }

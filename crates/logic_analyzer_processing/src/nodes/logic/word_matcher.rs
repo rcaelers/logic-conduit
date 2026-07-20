@@ -5,14 +5,11 @@ use std::sync::{Arc, Mutex};
 
 use tracing::debug;
 
-use signal_processing::errors::{WorkError, WorkResult};
-use signal_processing::events::{Trigger, Word};
-use signal_processing::node::{
-    ConfigOutcome, ConfigValue, ConfigurationBoundary, ConfigurationScheduler, NodeConfig,
-    ProcessNode,
+use signal_processing::{
+    ConfigOutcome, ConfigValue, ConfigurationBoundary, ConfigurationScheduler, InputPort,
+    NodeConfig, OutputPort, PortDirection, PortSchema, ProcessNode, Sample, Trigger, Word,
+    WorkError, WorkResult,
 };
-use signal_processing::ports::{InputPort, OutputPort, PortDirection, PortSchema};
-use signal_processing::sample::Sample;
 
 /// Comparison applied between the masked word and the masked pattern.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -324,8 +321,7 @@ impl ProcessNode for WordMatcher {
 #[cfg(test)]
 mod tests {
     use crossbeam_channel::bounded;
-    use signal_processing::sender::{ChannelMessage, Sender};
-    use signal_processing::watchdog::Watchdog;
+    use signal_processing::{ChannelMessage, Sender, Watchdog};
 
     use super::*;
 

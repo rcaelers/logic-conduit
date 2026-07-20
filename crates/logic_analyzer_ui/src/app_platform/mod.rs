@@ -1,24 +1,35 @@
 //! Platform-specific application/document state.
 
-std::cfg_select! {
-    target_arch = "wasm32" => {
-        #[path = "wasm.rs"]
-        mod imp;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "native.rs"]
+mod implementation;
+#[cfg(target_arch = "wasm32")]
+#[path = "wasm.rs"]
+mod implementation;
 
-        pub(crate) use imp::PlatformState;
-    }
-    _ => {
-        #[path = "native.rs"]
-        mod imp;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "native_font.rs"]
+mod font;
+#[cfg(target_arch = "wasm32")]
+#[path = "wasm_font.rs"]
+mod font;
 
-        pub(crate) use imp::{
-            FileCommand, GuardedAction, PlatformState, capture_session_directory,
-            derived_cache_directory,
-        };
-    }
-}
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "native_hooks.rs"]
+mod hooks;
+#[cfg(target_arch = "wasm32")]
+#[path = "wasm_hooks.rs"]
+mod hooks;
 
+pub(crate) use font::load_symbol_fonts;
+pub(crate) use implementation::PlatformState;
 #[cfg(target_os = "macos")]
-pub(crate) use imp::notify_recent_files_changed;
+pub(crate) use implementation::notify_recent_files_changed;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use implementation::{
+    FileCommand, GuardedAction, capture_session_directory, derived_cache_directory,
+};
 #[cfg(target_os = "macos")]
-pub use imp::{NativeMenuCommand, dispatch_native_menu_command, set_recent_files_listener};
+pub use implementation::{
+    NativeMenuCommand, dispatch_native_menu_command, set_recent_files_listener,
+};

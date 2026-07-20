@@ -35,10 +35,10 @@ use super::node::{
 };
 use super::ports::{InputPort, OutputPort, PortSchema};
 use super::protocol::ProtocolKind;
-use super::sample_kind::{self, SampleKind};
 use super::sender::OverflowPolicy;
 use super::type_registry::{ErasedSharedSenders, TYPE_REGISTRY};
 use super::watchdog::Watchdog;
+use crate::SampleKind;
 use crate::errors::WorkError;
 
 /// One input wire of a node being added: which producer list to join.
@@ -186,7 +186,7 @@ fn select_node_input_protocols(
 
 /// Negotiates one connection's payload type (`output`'s declared
 /// alternatives against the consumer's `accepted` list — see
-/// [`sample_kind::negotiate`]) and returns the matching subscriber list.
+/// [`crate::negotiate_sample_kind`]) and returns the matching subscriber list.
 /// `None` means no common `SampleKind`/type — a real type mismatch.
 fn negotiate_sample_kind_list<'a>(
     output: &'a OutputList,
@@ -194,7 +194,7 @@ fn negotiate_sample_kind_list<'a>(
     to_type: TypeId,
 ) -> Option<&'a Arc<dyn ErasedSharedSenders>> {
     let negotiated_type =
-        sample_kind::negotiate(&output.sample_kinds, output.type_id, accepted, to_type)?;
+        crate::negotiate_sample_kind(&output.sample_kinds, output.type_id, accepted, to_type)?;
     Some(
         &output
             .lists
@@ -232,7 +232,7 @@ pub struct DisconnectEvent {
 
 struct OutputList {
     /// This port's own declared type (before any `SampleKind`
-    /// negotiation) — `sample_kind::negotiate`'s fallback when
+    /// negotiation) — [`crate::negotiate_sample_kind`]'s fallback when
     /// `sample_kinds` is empty (every ordinary, non-polymorphic port).
     type_id: TypeId,
     /// This port's declared payload alternatives

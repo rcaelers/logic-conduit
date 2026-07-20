@@ -17,7 +17,7 @@ use crate::nodes::registry::COLOR_LOGIC;
 /// Which built-in payload kind flows through a given `Buffer` instance —
 /// order matches the dropdown and the sibling builder's
 /// `selected_kind()`.
-pub(super) const KIND_LABELS: &[&str] = &["Signal", "Block", "Word", "Number", "Text", "Trigger"];
+const KIND_LABELS: &[&str] = &["Signal", "Block", "Word", "Number", "Text", "Trigger"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BufferState {

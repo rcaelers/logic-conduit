@@ -17,8 +17,8 @@ use signal_processing::{
     TriggerPlacementCapability, TriggerPredicate, TriggerProgram, TriggerTimeoutAction,
 };
 
-use crate::compiler::{CaptureGraphSourceFactory, LiveCaptureFeature, SimpleTriggerChannel};
 use crate::nodes::DemoCaptureSourceState;
+use crate::{CaptureGraphSourceFactory, LiveCaptureFeature, SimpleTriggerChannel};
 
 const CHUNK_SAMPLES: u64 = 4_096;
 const CHUNK_COUNT: usize = 64;
@@ -29,10 +29,7 @@ struct DemoCaptureGraphSourceFactory {
 }
 
 impl CaptureGraphSourceFactory for DemoCaptureGraphSourceFactory {
-    fn create(
-        &self,
-        cursor: Box<dyn CaptureStoreCursor>,
-    ) -> Result<Box<dyn ProcessNode>, String> {
+    fn create(&self, cursor: Box<dyn CaptureStoreCursor>) -> Result<Box<dyn ProcessNode>, String> {
         let channels = self
             .channels
             .iter()
@@ -119,7 +116,10 @@ impl DemoLiveCaptureFeature {
         mode: CaptureStartMode,
     ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
         let (config, plan) = if mode == CaptureStartMode::CaptureNow {
-            (self.config.without_trigger(), self.session_plan.capture_now())
+            (
+                self.config.without_trigger(),
+                self.session_plan.capture_now(),
+            )
         } else {
             (self.config, self.session_plan)
         };
@@ -141,7 +141,9 @@ fn lower_trigger(program: Option<&TriggerProgram>) -> Result<Option<Deterministi
                         .iter()
                         .map(|predicate| {
                             let TriggerPredicate::Digital { channel, condition } = predicate else {
-                                unreachable!("validated demo schemas contain only digital predicates");
+                                unreachable!(
+                                    "validated demo schemas contain only digital predicates"
+                                );
                             };
                             let channel = channel
                                 .as_str()
@@ -185,9 +187,7 @@ fn lower_trigger(program: Option<&TriggerProgram>) -> Result<Option<Deterministi
         .transpose()
 }
 
-pub(super) fn feature(
-    state: &Value,
-) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
+pub(crate) fn feature(state: &Value) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
     let state = serde_json::from_value::<DemoCaptureSourceState>(state.clone())
         .map_err(|error| format!("invalid demo capture state: {error}"))?;
     let channels: Arc<[CaptureChannelId]> = super::super::trigger::channel_ids().into();
@@ -356,9 +356,7 @@ mod tests {
     #[test]
     fn advanced_program_lowers_and_executes_identically_after_state_json_reload() {
         let mut state = DemoCaptureSourceState::default();
-        state
-            .set_trigger_program(Some(advanced_program()))
-            .unwrap();
+        state.set_trigger_program(Some(advanced_program())).unwrap();
         let trigger = lower_trigger(state.trigger_program()).unwrap();
         let before = DeterministicFakeConfig::new(
             super::super::super::trigger::channel_ids(),

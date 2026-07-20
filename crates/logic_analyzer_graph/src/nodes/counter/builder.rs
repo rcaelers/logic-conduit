@@ -6,8 +6,7 @@ use logic_analyzer_processing::TriggerCounter;
 use node_graph::Socket;
 use signal_processing::{NumberSample, ProcessNode, Trigger};
 
-use crate::compiler::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
-use crate::nodes;
+use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, nodes, parse_state};
 
 pub(crate) struct CounterBuilder;
 

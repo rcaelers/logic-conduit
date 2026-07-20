@@ -12,7 +12,6 @@ use super::node::{InputProtocolCandidate, ProcessNode};
 use super::ports::{InputPort, OutputPort, PortSchema};
 use super::protocol::ProtocolKind;
 use super::sample::SampleBlock;
-use super::sample_kind;
 use super::scheduler::Scheduler;
 use super::type_registry::{LabeledSenderBox, TYPE_REGISTRY};
 
@@ -40,13 +39,13 @@ pub struct Pipeline {
     default_buffer_size: usize,
 }
 
-pub(crate) struct PendingConnection {
-    pub(crate) from_node: usize,
-    pub(crate) from_port: usize,
-    pub(crate) to_node: usize,
-    pub(crate) to_port: usize,
-    pub(crate) type_id: TypeId,
-    pub(crate) buffer_size: usize,
+struct PendingConnection {
+    from_node: usize,
+    from_port: usize,
+    to_node: usize,
+    to_port: usize,
+    type_id: TypeId,
+    buffer_size: usize,
 }
 
 impl Pipeline {
@@ -173,7 +172,7 @@ impl Pipeline {
         // type_id match if neither side declared a SampleKind list (every
         // node except a handful of raw-channel sources), otherwise the
         // producer-preferred kind both sides agree on.
-        let negotiated_type = sample_kind::negotiate(
+        let negotiated_type = crate::negotiate_sample_kind(
             &from_schema.sample_kinds,
             from_schema.type_id,
             &to_schema.sample_kinds,
@@ -566,10 +565,10 @@ impl Default for Pipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SampleKind;
     use crate::node::ProcessNode;
     use crate::ports::PortSchema;
     use crate::sample::Sample;
-    use crate::sample_kind::SampleKind;
 
     // Minimal test node implementations
     struct TestSource;

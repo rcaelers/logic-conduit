@@ -11,7 +11,7 @@ use crate::nodes::registry::{COLOR_OUTPUT, TextSavePath, Words};
 
 /// Empty save-dialog picker, shown inline on the `Filename` socket while it
 /// is unconnected; a connected filename stream always wins.
-pub(super) fn default_writer_filename() -> FileValue {
+fn default_writer_filename() -> FileValue {
     FileValue::new_save("", "Save capture as")
 }
 

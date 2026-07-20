@@ -10,8 +10,8 @@ pub use api::{
     SocketDef, SocketTypeIdentity, SocketWithControlDef, StrSocket, StringValue,
 };
 pub use model::{
-    BadgeSeverity, Connection, Frame, FrameId, GraphState, Node, NodeBadge, NodeId, NodeKind,
-    Socket, SocketDirection, SocketId, SocketShape, VariadicInfo,
+    BadgeSeverity, Connection, Frame, FrameId, GraphMetadata, GraphState, Node, NodeBadge, NodeId,
+    NodeKind, NodeMetadata, Socket, SocketDirection, SocketId, SocketShape, VariadicInfo,
 };
 pub use runtime::{NodeTypeRegistry, SocketTypeStyle};
 pub use widget::{GraphPanelTab, GraphUiPrefs, NodeContextAction, NodeGraphWidget};

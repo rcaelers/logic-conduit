@@ -21,10 +21,6 @@ impl BlockBacking for MappedBlockBacking {
 impl BlockData {
     pub(crate) fn mapped(map: Arc<memmap2::Mmap>, offset: usize, len: usize) -> Self {
         debug_assert!(offset.saturating_add(len) <= map.len());
-        Self {
-            backing: Arc::new(MappedBlockBacking(map)),
-            offset,
-            len,
-        }
+        Self::from_backing(Arc::new(MappedBlockBacking(map)), offset, len)
     }
 }

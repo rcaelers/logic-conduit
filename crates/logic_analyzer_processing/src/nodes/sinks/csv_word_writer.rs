@@ -20,10 +20,10 @@ use std::path::PathBuf;
 
 use tracing::{debug, info, warn};
 
-use signal_processing::errors::{WorkError, WorkResult};
-use signal_processing::events::{TextSample, Word};
-use signal_processing::node::ProcessNode;
-use signal_processing::ports::{InputPort, OutputPort, PortDirection, PortSchema};
+use signal_processing::{
+    InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, TextSample, Word, WorkError,
+    WorkResult,
+};
 
 /// How a word's value is rendered in the CSV `value` column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -344,8 +344,7 @@ impl ProcessNode for CsvWordWriter {
 #[cfg(test)]
 mod tests {
     use crossbeam_channel::bounded;
-    use signal_processing::sender::ChannelMessage;
-    use signal_processing::watchdog::Watchdog;
+    use signal_processing::{ChannelMessage, Watchdog};
 
     use super::*;
 

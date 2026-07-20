@@ -1,21 +1,18 @@
 use std::collections::BTreeMap;
 
-use logic_analyzer_processing::{
-    LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic,
-};
+use logic_analyzer_processing::{LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic};
 use signal_processing::{
     CaptureChannelId, SimpleTriggerCondition, TriggerCountCapabilities, TriggerCountMode,
     TriggerEditorSchema, TriggerIdentifier, TriggerLogicOperator, TriggerPredicate, TriggerProgram,
 };
 
-use crate::compiler::{SimpleTriggerChannel, TriggerConfigurationFeature};
-
-use super::definition::U3PRO16_CHANNELS;
 use super::U3Pro16State;
+use super::definition::U3PRO16_CHANNELS;
+use crate::{SimpleTriggerChannel, TriggerConfigurationFeature};
 
 const SCHEMA_ID: &str = "dsl.dslogic-u3pro16.trigger";
 
-pub(super) fn schema() -> TriggerEditorSchema {
+pub(crate) fn schema() -> TriggerEditorSchema {
     TriggerEditorSchema::new(
         TriggerIdentifier::new(SCHEMA_ID).expect("static trigger schema ID is valid"),
         1,
@@ -35,10 +32,7 @@ pub(super) fn schema() -> TriggerEditorSchema {
     .with_stage_inversion(true)
     .with_count(
         TriggerCountCapabilities::new(
-            vec![
-                TriggerCountMode::Occurrences,
-                TriggerCountMode::Consecutive,
-            ],
+            vec![TriggerCountMode::Occurrences, TriggerCountMode::Consecutive],
             1,
             i32::MAX as u64,
             1,
@@ -47,11 +41,11 @@ pub(super) fn schema() -> TriggerEditorSchema {
     )
 }
 
-pub(super) fn physical_channel_id(channel: usize) -> CaptureChannelId {
+pub(crate) fn physical_channel_id(channel: usize) -> CaptureChannelId {
     CaptureChannelId::new(format!("u3pro16:input:{channel}"))
 }
 
-pub(super) fn enabled_channel_ids(state: &U3Pro16State) -> Vec<CaptureChannelId> {
+fn enabled_channel_ids(state: &U3Pro16State) -> Vec<CaptureChannelId> {
     state
         .channels
         .enabled
@@ -63,7 +57,7 @@ pub(super) fn enabled_channel_ids(state: &U3Pro16State) -> Vec<CaptureChannelId>
         .collect()
 }
 
-pub(super) fn program_from_conditions(
+pub(crate) fn program_from_conditions(
     conditions: &[SimpleTriggerCondition],
     enabled: &[bool],
 ) -> Result<Option<TriggerProgram>, String> {
@@ -77,9 +71,7 @@ pub(super) fn program_from_conditions(
     )
 }
 
-pub(super) fn conditions(
-    state: &U3Pro16State,
-) -> Result<Vec<SimpleTriggerCondition>, String> {
+pub(crate) fn conditions(state: &U3Pro16State) -> Result<Vec<SimpleTriggerCondition>, String> {
     validate_program(state, state.trigger_program())?;
     let mut conditions = BTreeMap::new();
     if let Some(stage) = state
@@ -103,7 +95,7 @@ pub(super) fn conditions(
         .collect())
 }
 
-pub(super) fn validate_program(
+pub(crate) fn validate_program(
     state: &U3Pro16State,
     program: Option<&TriggerProgram>,
 ) -> Result<(), String> {
@@ -115,7 +107,7 @@ pub(super) fn validate_program(
     Ok(())
 }
 
-pub(super) fn set_condition(
+pub(crate) fn set_condition(
     state: &U3Pro16State,
     physical_channel: usize,
     condition: SimpleTriggerCondition,
@@ -140,7 +132,7 @@ pub(super) fn set_condition(
         .map_err(|error| error.to_string())
 }
 
-pub(super) fn retain_enabled_conditions(
+pub(crate) fn retain_enabled_conditions(
     state: &U3Pro16State,
 ) -> Result<Option<TriggerProgram>, String> {
     let all_channels: Vec<_> = (0..U3PRO16_CHANNELS).map(physical_channel_id).collect();
@@ -164,9 +156,7 @@ pub(super) fn retain_enabled_conditions(
                 .unwrap_or(false)
         });
     }
-    program
-        .stages
-        .retain(|stage| !stage.predicates.is_empty());
+    program.stages.retain(|stage| !stage.predicates.is_empty());
     if program.stages.is_empty() {
         return Ok(None);
     }
@@ -174,7 +164,7 @@ pub(super) fn retain_enabled_conditions(
     Ok(Some(program))
 }
 
-pub(super) fn lower_program(state: &U3Pro16State) -> Result<LogicTrigger, String> {
+pub(crate) fn lower_program(state: &U3Pro16State) -> Result<LogicTrigger, String> {
     validate_program(state, state.trigger_program())?;
     let Some(program) = state.trigger_program() else {
         return Ok(LogicTrigger::default());
@@ -222,9 +212,7 @@ pub(super) fn lower_program(state: &U3Pro16State) -> Result<LogicTrigger, String
     })
 }
 
-pub(super) fn configuration(
-    state: &U3Pro16State,
-) -> Result<TriggerConfigurationFeature, String> {
+pub(crate) fn configuration(state: &U3Pro16State) -> Result<TriggerConfigurationFeature, String> {
     let conditions = conditions(state)?;
     let channels = state
         .channels
@@ -319,19 +307,18 @@ mod tests {
         assert_eq!(lowered.stages[0].plane0[7], TriggerCondition::High);
         assert_eq!(lowered.stages[0].logic, TriggerLogic::And);
         assert!(lowered.stages[0].inverted);
-        assert_eq!(
-            lowered.stages[0].count_mode,
-            TriggerCountMode::Occurrences
-        );
+        assert_eq!(lowered.stages[0].count_mode, TriggerCountMode::Occurrences);
         assert_eq!(lowered.stages[0].count, 3);
         assert_eq!(lowered.stages[1].plane0[1], TriggerCondition::Falling);
         assert_eq!(lowered.stages[1].logic, TriggerLogic::Or);
         assert_eq!(lowered.stages[1].count_mode, TriggerCountMode::Consecutive);
         assert_eq!(lowered.stages[1].count, 5);
-        assert!(lowered
-            .stages
-            .iter()
-            .all(|stage| stage.plane1 == [TriggerCondition::Ignore; U3PRO16_CHANNELS]));
+        assert!(
+            lowered
+                .stages
+                .iter()
+                .all(|stage| stage.plane1 == [TriggerCondition::Ignore; U3PRO16_CHANNELS])
+        );
     }
 
     #[test]
@@ -346,9 +333,7 @@ mod tests {
                 .contains("more than once")
         );
 
-        state
-            .set_trigger_program(Some(advanced_program()))
-            .unwrap();
+        state.set_trigger_program(Some(advanced_program())).unwrap();
         state.channels.enabled[3] = false;
         let retained = retain_enabled_conditions(&state).unwrap().unwrap();
         assert_eq!(retained.stages.len(), 2);

@@ -5,6 +5,8 @@ std::cfg_select! {
         fn main() {}
     }
     _ => {
+        #[cfg(target_os = "macos")]
+        mod macos_menu;
         mod native;
 
         fn main() -> native::MainResult {

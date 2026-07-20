@@ -23,12 +23,12 @@ const COLLAPSING_HEADER_HEIGHT: f32 = 26.0;
 const PANEL_SECTION_GAP: f32 = 4.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) enum PanelTab {
+pub(crate) enum PanelTab {
     Node,
     View,
 }
 
-pub(super) struct PanelState {
+pub(crate) struct PanelState {
     pub active_tab: Option<PanelTab>,
     pub width: f32,
 }
@@ -43,7 +43,7 @@ impl Default for PanelState {
 }
 
 impl NodeGraphWidget {
-    pub(super) fn toggle_panel(&mut self) {
+    pub(crate) fn toggle_panel(&mut self) {
         self.toggle_panel_tab(PanelTab::Node);
     }
 
@@ -80,7 +80,7 @@ impl NodeGraphWidget {
     }
 
     /// Screen rect occupied by the always-visible right-side tab strip.
-    pub(super) fn panel_tab_bar_rect(&self, canvas_rect: Rect) -> Rect {
+    pub(crate) fn panel_tab_bar_rect(&self, canvas_rect: Rect) -> Rect {
         Rect::from_min_max(
             Pos2::new(canvas_rect.max.x - TAB_BAR_WIDTH, canvas_rect.min.y),
             canvas_rect.max,
@@ -88,7 +88,7 @@ impl NodeGraphWidget {
     }
 
     /// Screen rect the panel occupies this frame, `None` while hidden.
-    pub(super) fn panel_rect(&self, canvas_rect: Rect) -> Option<Rect> {
+    pub(crate) fn panel_rect(&self, canvas_rect: Rect) -> Option<Rect> {
         self.panel.active_tab?;
         let width = self.panel.width.clamp(
             PANEL_MIN_WIDTH,
@@ -150,7 +150,7 @@ impl NodeGraphWidget {
     /// Allocates the panel's interaction surfaces. Must run after graph hit
     /// targets and before `handle_input` so the panel background owns the
     /// overlapping interaction z-order.
-    pub(super) fn update_panel_interaction(&mut self, ui: &mut Ui, panel_rect: Rect) {
+    pub(crate) fn update_panel_interaction(&mut self, ui: &mut Ui, panel_rect: Rect) {
         let _background = ui.interact(
             panel_rect,
             ui.id().with("props-panel-bg"),
@@ -177,7 +177,7 @@ impl NodeGraphWidget {
         }
     }
 
-    pub(super) fn update_panel_tab_bar_interaction(&mut self, ui: &mut Ui, tab_bar_rect: Rect) {
+    pub(crate) fn update_panel_tab_bar_interaction(&mut self, ui: &mut Ui, tab_bar_rect: Rect) {
         let _background = ui.interact(
             tab_bar_rect,
             ui.id().with("props-panel-tabbar-bg"),
@@ -195,7 +195,7 @@ impl NodeGraphWidget {
         }
     }
 
-    pub(super) fn show_panel_tab_bar(&self, ui: &mut Ui, tab_bar_rect: Rect) {
+    pub(crate) fn show_panel_tab_bar(&self, ui: &mut Ui, tab_bar_rect: Rect) {
         let painter = ui.painter_at(tab_bar_rect);
         painter.rect_filled(tab_bar_rect, 0.0, Color32::from_rgb(31, 31, 31));
         painter.line_segment(
@@ -255,7 +255,7 @@ impl NodeGraphWidget {
         )
     }
 
-    pub(super) fn show_active_panel(&mut self, ui: &mut Ui, panel_rect: Rect) {
+    pub(crate) fn show_active_panel(&mut self, ui: &mut Ui, panel_rect: Rect) {
         match self.panel.active_tab {
             Some(PanelTab::Node) => self.show_properties_panel(ui, panel_rect),
             Some(PanelTab::View) => self.show_view_panel(ui, panel_rect),

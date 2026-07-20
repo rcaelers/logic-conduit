@@ -1,0 +1,130 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Enforces docs/RESPONSIBILITY_AND_VISIBILITY_DESIGN.md. This deliberately
+# checks source structure rather than formatting; rustc remains authoritative
+# for name resolution and `unreachable_pub`.
+
+ROOT = File.expand_path("..", __dir__)
+SOURCE_GLOBS = ["crates/**/*.rs", "plugins/**/*.rs"].freeze
+ROOT_FILES = %w[lib.rs main.rs mod.rs].freeze
+
+PUBLIC_MODULES = {
+  "crates/signal_processing/src/lib.rs" => %w[capture derived_word_store live_capture live_capture_store waveform_index],
+  "crates/logic_analyzer_processing/src/lib.rs" => %w[live_capture nodes],
+  "crates/logic_analyzer_processing/src/nodes/mod.rs" => %w[decoders logic sinks],
+  "crates/logic_analyzer_graph/src/lib.rs" => %w[nodes]
+}.freeze
+
+errors = []
+
+def relative(path)
+  path.delete_prefix("#{ROOT}/")
+end
+
+def line_number(source, offset)
+  source[0...offset].count("\n") + 1
+end
+
+files = SOURCE_GLOBS.flat_map { |glob| Dir.glob(File.join(ROOT, glob)) }.sort
+
+files.each do |path|
+  rel = relative(path)
+  source = File.read(path)
+
+  source.to_enum(:scan, /\bpub\s*\((?:super|in\s+[^)]*)\)/).each do
+    errors << "#{rel}:#{line_number(source, Regexp.last_match.begin(0))}: pub(super) and pub(in ...) are forbidden"
+  end
+
+  declaration = /^\s*(?<visibility>pub(?:\([^)]*\))?\s+)?mod\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:;|\{)/
+  source.to_enum(:scan, declaration).each do
+    match = Regexp.last_match
+    name = match[:name]
+    line = line_number(source, match.begin(0))
+
+    unless ROOT_FILES.include?(File.basename(path))
+      preceding = source[[match.begin(0) - 200, 0].max...match.begin(0)]
+      test_module = name.include?("tests") && preceding.match?(/#\s*\[\s*cfg\s*\([^\]]*\btest\b/)
+      unless test_module
+        errors << "#{rel}:#{line}: module declarations belong only in lib.rs, main.rs, or mod.rs"
+      end
+    end
+
+    next unless match[:visibility]&.strip == "pub"
+
+    allowed = PUBLIC_MODULES.fetch(rel, [])
+    unless allowed.include?(name)
+      errors << "#{rel}:#{line}: public module #{name.inspect} is not in the allowlist"
+    end
+
+    module_directory = File.join(File.dirname(path), name, "mod.rs")
+    unless File.file?(module_directory)
+      errors << "#{rel}:#{line}: public module #{name.inspect} must be directory-backed by #{relative(module_directory)}"
+    end
+  end
+
+  next unless File.basename(path) == "mod.rs"
+
+  implementation = /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+|unsafe\s+)?(?:struct|enum|union|trait|fn|const|static|type)\b|^\s*impl(?:\s|<)|^\s*macro_rules!/
+  source.to_enum(:scan, implementation).each do
+    errors << "#{rel}:#{line_number(source, Regexp.last_match.begin(0))}: mod.rs files may contain declarations and re-exports only"
+  end
+  source.to_enum(:scan, /\b(?:cfg_select|include)!\s*[({]/).each do
+    errors << "#{rel}:#{line_number(source, Regexp.last_match.begin(0))}: executable selection/include macros are not allowed in mod.rs"
+  end
+  source.to_enum(:scan, /^\s*use\s+/).each do
+    errors << "#{rel}:#{line_number(source, Regexp.last_match.begin(0))}: mod.rs imports must be facade re-exports"
+  end
+end
+
+# Named record structs use one field visibility. This intentionally ignores
+# tuple structs: their fields are positional construction APIs and rustc's
+# visibility checks already cover each position.
+files.each do |path|
+  rel = relative(path)
+  source = File.read(path)
+  source.to_enum(:scan, /\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)/).each do
+    match = Regexp.last_match
+    name = match[1]
+    opening = source.index("{", match.end(0))
+    terminator = source.index(";", match.end(0))
+    next if opening.nil? || (!terminator.nil? && terminator < opening)
+
+    depth = 1
+    body_length = nil
+    source[(opening + 1)..].each_char.with_index do |character, index|
+      case character
+      when "{" then depth += 1
+      when "}" then depth -= 1
+      end
+      if depth.zero?
+        body_length = index
+        break
+      end
+    end
+    next if body_length.nil?
+
+    body = source[(opening + 1), body_length]
+    field_depth = 0
+    visibilities = []
+    body.each_line do |line|
+      if field_depth.zero? && (field = line.match(/^\s*(?:(pub(?:\(crate\))?)\s+)?[A-Za-z_][A-Za-z0-9_]*\s*:/))
+        visibilities << (field[1] || "private")
+      end
+      field_depth += line.count("{") - line.count("}")
+    end
+    kinds = visibilities.uniq
+    next unless kinds.length > 1
+
+    errors << "#{rel}:#{line_number(source, match.begin(0))}: struct #{name} mixes field visibility (#{kinds.join(", ")})"
+  end
+end
+
+if errors.empty?
+  puts "Rust module structure matches the responsibility and visibility design."
+  exit 0
+end
+
+warn errors.join("\n")
+warn "#{errors.length} Rust module-structure violation#{errors.length == 1 ? "" : "s"} found."
+exit 1

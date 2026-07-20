@@ -1,9 +1,4 @@
-//! Native parallel-decoder execution using the shared worker pool when requested.
-
-use std::collections::BTreeMap;
-use std::sync::atomic::Ordering;
-
-use super::*;
+// Native parallel-decoder execution using the shared worker pool when requested.
 
 enum FragmentCompletion {
     Complete(DecodeFragment),
@@ -11,7 +6,7 @@ enum FragmentCompletion {
 }
 
 #[derive(Default)]
-pub(super) struct ParallelStreamState {
+pub(crate) struct ParallelStreamState {
     completion_sender: Option<crossbeam_channel::Sender<FragmentCompletion>>,
     completion_receiver: Option<crossbeam_channel::Receiver<FragmentCompletion>>,
     in_flight: usize,
@@ -20,20 +15,20 @@ pub(super) struct ParallelStreamState {
     available_buffers: Vec<DecodeFragmentBuffers>,
 }
 
-pub(super) fn effective_workers(requested: usize, metrics: &ParallelDecoderMetrics) -> usize {
-    let workers = requested.min(signal_processing::worker_pool::shared_worker_pool().workers());
+fn platform_effective_workers(requested: usize, metrics: &ParallelDecoderMetrics) -> usize {
+    let workers = requested.min(signal_processing::shared_worker_pool().workers());
     metrics.inner.workers.store(workers, Ordering::Relaxed);
     workers
 }
 
-pub(super) fn work(
+fn work_with_platform_backend(
     decoder: &mut ParallelDecoder,
     inputs: &[InputPort],
     outputs: &[OutputPort],
     blocks: &mut StreamBlockState,
 ) -> WorkResult<usize> {
     let workers = if decoder.parallel_workers > 1 {
-        effective_workers(decoder.parallel_workers, &decoder.parallel_metrics)
+        platform_effective_workers(decoder.parallel_workers, &decoder.parallel_metrics)
     } else {
         1
     };
@@ -227,7 +222,7 @@ fn work_parallel(
             .as_ref()
             .expect("completion channel initialized above")
             .clone();
-        signal_processing::worker_pool::shared_worker_pool()
+        signal_processing::shared_worker_pool()
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     scan_stream_fragment(
@@ -327,16 +322,16 @@ fn work_parallel(
 }
 
 #[cfg(test)]
-mod tests {
+mod parallel_worker_tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use crossbeam_channel::bounded;
 
-    use signal_processing::node::ProcessNode;
-    use signal_processing::scheduler::Scheduler;
-    use signal_processing::sender::{ChannelMessage, Sender};
-    use signal_processing::watchdog::Watchdog;
+    use signal_processing::ProcessNode;
+    use signal_processing::Scheduler;
+    use signal_processing::{ChannelMessage, Sender};
+    use signal_processing::Watchdog;
 
     use super::*;
 

@@ -1,18 +1,10 @@
-use serde_json::Value;
+mod implementation;
 
-use crate::compiler::LiveCaptureFeature;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "native.rs"]
+mod platform;
+#[cfg(target_arch = "wasm32")]
+#[path = "wasm.rs"]
+mod platform;
 
-std::cfg_select! {
-    target_arch = "wasm32" => {
-        #[path = "wasm.rs"]
-        mod imp;
-    }
-    _ => {
-        #[path = "native.rs"]
-        mod imp;
-    }
-}
-
-pub(super) fn feature(state: &Value) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
-    imp::feature(state)
-}
+pub(crate) use implementation::feature;

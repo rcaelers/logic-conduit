@@ -4,23 +4,19 @@ use serde_json::Value;
 
 use logic_analyzer_processing::{
     AcquisitionContext, AcquisitionResult, CaptureAnalysisChannel, CaptureAnalysisSource,
-    DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider, LinkSpeed,
-    LogicCaptureConfig, PreparedAcquisition, u3pro16_buffered_plan,
-    u3pro16_streaming_plan,
+    DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider, LinkSpeed, LogicCaptureConfig,
+    PreparedAcquisition, u3pro16_buffered_plan, u3pro16_streaming_plan,
 };
 use signal_processing::{
     CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery, CaptureFraction,
     CapturePolicyCapabilities, CapturePolicyContext, CaptureProviderCapabilities,
     CaptureSessionPlan, CaptureStartMode, CaptureStoreCursor, CompletionPolicyKind, ProcessNode,
-    RecordingStart, RetentionPolicyKind, TriggerPlacementCapability, TriggerTimeoutAction,
-    TriggerProgram,
-};
-
-use crate::compiler::{
-    CaptureGraphSourceFactory, LiveCaptureFeature, SimpleTriggerChannel, parse_state,
+    RecordingStart, RetentionPolicyKind, TriggerPlacementCapability, TriggerProgram,
+    TriggerTimeoutAction,
 };
 
 use super::{U3Pro16State, capture_config, requested_capture_policy};
+use crate::{CaptureGraphSourceFactory, LiveCaptureFeature, SimpleTriggerChannel, parse_state};
 
 struct U3Pro16GraphSourceFactory {
     channels: Arc<[CaptureAnalysisChannel]>,
@@ -28,10 +24,7 @@ struct U3Pro16GraphSourceFactory {
 }
 
 impl CaptureGraphSourceFactory for U3Pro16GraphSourceFactory {
-    fn create(
-        &self,
-        cursor: Box<dyn CaptureStoreCursor>,
-    ) -> Result<Box<dyn ProcessNode>, String> {
+    fn create(&self, cursor: Box<dyn CaptureStoreCursor>) -> Result<Box<dyn ProcessNode>, String> {
         CaptureAnalysisSource::new(
             "u3pro16-captured-analysis",
             cursor,
@@ -122,9 +115,11 @@ impl U3Pro16LiveCaptureFeature {
         let mut config = self.config;
         let plan = if mode == CaptureStartMode::CaptureNow {
             if !self.capabilities.commands().capture_now {
-                return Err(logic_analyzer_processing::AcquisitionError::UnsupportedOperation(
-                    "capture now".into(),
-                ));
+                return Err(
+                    logic_analyzer_processing::AcquisitionError::UnsupportedOperation(
+                        "capture now".into(),
+                    ),
+                );
             }
             config.trigger = Default::default();
             self.session_plan.clone().capture_now()
@@ -134,20 +129,16 @@ impl U3Pro16LiveCaptureFeature {
         context.publish_plan(plan)?;
         match self.profile {
             U3Pro16AcquisitionProfile::Buffered => {
-                DsLogicU3Pro16BufferedProvider::open_first(config, self.channels)?
-                    .prepare(context)
+                DsLogicU3Pro16BufferedProvider::open_first(config, self.channels)?.prepare(context)
             }
             U3Pro16AcquisitionProfile::Streaming => {
-                DsLogicU3Pro16StreamingProvider::open_first(config, self.channels)?
-                    .prepare(context)
+                DsLogicU3Pro16StreamingProvider::open_first(config, self.channels)?.prepare(context)
             }
         }
     }
 }
 
-pub(super) fn feature(
-    state: &Value,
-) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
+pub(crate) fn feature(state: &Value) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
     let state = parse_state::<U3Pro16State>(state)?;
     let config = capture_config(&state)?;
     let trigger_conditions = super::trigger::conditions(&state)?;
@@ -218,14 +209,11 @@ pub(super) fn feature(
         ]),
     )
     .map_err(|error| error.to_string())?;
-    let capabilities = CaptureProviderCapabilities::single(
-        delivery,
-        Arc::clone(&channels),
-        config.sample_rate_hz,
-    )
-    .with_commands(CaptureCommandCapabilities::new(true, false, false, true))
-    .with_policy(policy_capabilities)
-    .with_trigger_schema(super::trigger::schema());
+    let capabilities =
+        CaptureProviderCapabilities::single(delivery, Arc::clone(&channels), config.sample_rate_hz)
+            .with_commands(CaptureCommandCapabilities::new(true, false, false, true))
+            .with_policy(policy_capabilities)
+            .with_trigger_schema(super::trigger::schema());
     let requested_policy = requested_capture_policy(&state)?;
     let mut policy = capabilities
         .policy()
@@ -243,15 +231,13 @@ pub(super) fn feature(
         Some(signal_processing::TriggerPlacement::Fraction(fraction)) => {
             fraction.samples_of(actual_samples)
         }
-        Some(signal_processing::TriggerPlacement::DurationBefore(duration)) => {
-            u64::try_from(
-                duration
-                    .as_nanos()
-                    .saturating_mul(u128::from(config.sample_rate_hz))
-                    .div_ceil(1_000_000_000),
-            )
-            .unwrap_or(actual_samples)
-        }
+        Some(signal_processing::TriggerPlacement::DurationBefore(duration)) => u64::try_from(
+            duration
+                .as_nanos()
+                .saturating_mul(u128::from(config.sample_rate_hz))
+                .div_ceil(1_000_000_000),
+        )
+        .unwrap_or(actual_samples),
         None => 0,
     };
     policy.effective.completion = signal_processing::CompletionPolicy::SamplesAfterOrigin(

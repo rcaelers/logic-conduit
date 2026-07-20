@@ -7,11 +7,10 @@ use logic_analyzer_viewer::{SamplingEdge, ViewerOutputPresentation};
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, Word};
 
-use crate::compiler::{
+use crate::{
     CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, SamplingOverlayDescriptor,
-    SamplingQualifierDescriptor, parse_state,
+    SamplingQualifierDescriptor, nodes, parse_state,
 };
-use crate::nodes;
 
 pub(crate) struct SpiDecoderBuilder;
 

@@ -55,7 +55,7 @@ fn condition_icon(condition: SimpleTriggerCondition) -> &'static str {
 }
 
 impl LogicAnalyzerViewer {
-    pub(crate) fn simple_trigger_rect(&self, layout: AnalyzerLayout, row: usize) -> Rect {
+    fn simple_trigger_rect(&self, layout: AnalyzerLayout, row: usize) -> Rect {
         let row_top = self.row_top(layout.labels_rect.top(), row, layout.row_height);
         let height = self
             .row_order

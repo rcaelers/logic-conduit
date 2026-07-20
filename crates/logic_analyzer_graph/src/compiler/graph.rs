@@ -42,21 +42,45 @@ use super::port_kind::PortKind;
 /// run makes stale viewer lanes vanish atomically on re-run.
 #[derive(Default)]
 pub struct CompileCtx {
-    pub derived_lanes: DerivedLanes,
-    pub viewer_lanes: ViewerLaneRegistry,
+    derived_lanes: DerivedLanes,
+    viewer_lanes: ViewerLaneRegistry,
     /// Storage policy selected by the graph's source. Finite sources retain
     /// their complete timeline; continuous sources can explicitly choose a
     /// bounded rolling window.
-    pub viewer_retention: ViewerRetention,
-    pub viewer_word_caches: Vec<Option<PersistentStoreConfig>>,
-    pub persistent_cache_directory: Option<std::path::PathBuf>,
+    viewer_retention: ViewerRetention,
+    viewer_word_caches: Vec<Option<PersistentStoreConfig>>,
+    persistent_cache_directory: Option<std::path::PathBuf>,
     /// Clocked-node sampling overlays resolved during lowering. The host
     /// application chooses at most one candidate to display.
-    pub sampling_overlays: Vec<SamplingOverlayCandidate>,
+    sampling_overlays: Vec<SamplingOverlayCandidate>,
     sampling_activities: HashMap<(String, usize), SamplingActivity>,
 }
 
 impl CompileCtx {
+    pub fn derived_lanes(&self) -> &DerivedLanes {
+        &self.derived_lanes
+    }
+
+    pub fn viewer_lanes(&self) -> &ViewerLaneRegistry {
+        &self.viewer_lanes
+    }
+
+    pub fn viewer_retention(&self) -> ViewerRetention {
+        self.viewer_retention
+    }
+
+    pub fn viewer_word_cache(&self, member: usize) -> Option<&PersistentStoreConfig> {
+        self.viewer_word_caches.get(member).and_then(Option::as_ref)
+    }
+
+    pub fn set_persistent_cache_directory(&mut self, directory: std::path::PathBuf) {
+        self.persistent_cache_directory = Some(directory);
+    }
+
+    pub fn take_sampling_overlays(&mut self) -> Vec<SamplingOverlayCandidate> {
+        std::mem::take(&mut self.sampling_overlays)
+    }
+
     pub fn sampling_activity(&self, runtime_name: &str, input: usize) -> Option<SamplingActivity> {
         self.sampling_activities
             .get(&(runtime_name.to_owned(), input))
@@ -87,10 +111,24 @@ pub struct SamplingQualifierDescriptor {
 /// A fully resolved, selectable sampling overlay belonging to one graph node.
 #[derive(Debug, Clone)]
 pub struct SamplingOverlayCandidate {
-    pub node_id: NodeId,
-    pub node_title: String,
-    pub overlay: SamplingOverlay,
+    node_id: NodeId,
+    node_title: String,
+    overlay: SamplingOverlay,
     runtime_activities: Vec<(usize, SamplingActivity)>,
+}
+
+impl SamplingOverlayCandidate {
+    pub fn node_id(&self) -> NodeId {
+        self.node_id
+    }
+
+    pub fn node_title(&self) -> &str {
+        &self.node_title
+    }
+
+    pub fn overlay(&self) -> &SamplingOverlay {
+        &self.overlay
+    }
 }
 
 /// What one input edge settled on: the negotiated stream kind plus a
@@ -286,8 +324,8 @@ pub trait LiveCaptureFeature: Send {
 }
 
 pub struct DiscoveredLiveCaptureFeature {
-    pub source_node: NodeId,
-    pub source_title: String,
+    source_node: NodeId,
+    source_title: String,
     feature: Box<dyn LiveCaptureFeature>,
 }
 
@@ -306,6 +344,14 @@ impl DiscoveredLiveCaptureFeature {
 
     pub fn channels(&self) -> &[CaptureChannelId] {
         self.feature.channels()
+    }
+
+    pub fn source_node(&self) -> NodeId {
+        self.source_node
+    }
+
+    pub fn source_title(&self) -> &str {
+        &self.source_title
     }
 
     pub fn channel_names(&self) -> &[String] {
@@ -494,7 +540,7 @@ impl BuilderRegistry {
         self
     }
 
-    pub(super) fn get(&self, def_name: &str) -> Option<&dyn RuntimeBuilder> {
+    pub(crate) fn get(&self, def_name: &str) -> Option<&dyn RuntimeBuilder> {
         self.0.get(def_name).map(|b| b.as_ref())
     }
 }
@@ -711,7 +757,7 @@ pub struct CompiledNode {
     /// Pipeline node name: `n{id}_{title_slug}`.
     pub runtime_name: String,
     pub resolved: ResolvedInputs,
-    pub(super) viewer_word_caches: Vec<Option<PersistentStoreConfig>>,
+    pub viewer_word_caches: Vec<Option<PersistentStoreConfig>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1336,7 +1382,7 @@ fn topo_order(compiled: &CompiledGraph) -> Vec<NodeId> {
     order
 }
 
-pub(super) fn compiled_node(compiled: &CompiledGraph, id: NodeId) -> &CompiledNode {
+pub(crate) fn compiled_node(compiled: &CompiledGraph, id: NodeId) -> &CompiledNode {
     compiled
         .nodes
         .iter()
@@ -1951,19 +1997,19 @@ mod tests {
 
     fn startup_widget() -> NodeGraphWidget {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
-        nodes::test_graphs::populate_startup(&mut widget);
+        nodes::test_graphs_tests::populate_startup(&mut widget);
         widget
     }
 
     fn uart_demo_widget() -> NodeGraphWidget {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
-        nodes::test_graphs::populate_uart_demo(&mut widget);
+        nodes::test_graphs_tests::populate_uart_demo(&mut widget);
         widget
     }
 
     fn binary_decoder_demo_widget() -> NodeGraphWidget {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
-        nodes::test_graphs::build_binary_decoder_demo(&mut widget);
+        nodes::test_graphs_tests::build_binary_decoder_demo(&mut widget);
         widget
     }
 
@@ -2402,7 +2448,7 @@ mod tests {
                     let end = metadata.extent_end_ns.unwrap_or(0);
                     Some(
                         indexed
-                            .query
+                            .query()
                             .exact_window(
                                 0,
                                 end,
@@ -2440,7 +2486,7 @@ mod tests {
         const SAMPLES_PER_CHUNK: u64 = 128;
 
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
-        let source_node = nodes::test_graphs::build_live_binary_test(&mut widget);
+        let source_node = nodes::test_graphs_tests::build_live_binary_test(&mut widget);
         let captured_feature =
             discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
                 .unwrap()
@@ -2804,7 +2850,7 @@ mod tests {
     fn trigger_configuration_discovery_does_not_require_acquisition() {
         let mut node_types = nodes::build_registry();
         let mut builders = BuilderRegistry::standard();
-        crate::compiler::PluginContext::new(&mut node_types, &mut builders).register_builder(
+        crate::PluginContext::new(&mut node_types, &mut builders).register_builder(
             nodes::DemoCaptureSource::name(),
             Box::new(TriggerOnlyPluginBuilder),
         );
@@ -3031,7 +3077,7 @@ mod tests {
         use signal_processing::{NumberSample, TextSample};
 
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
-        nodes::test_graphs::build_binary_decoder_demo(&mut widget);
+        nodes::test_graphs_tests::build_binary_decoder_demo(&mut widget);
         for definition in [nodes::Counter::name(), nodes::StringFormatter::name()] {
             let node = widget
                 .graph_mut()
@@ -3615,7 +3661,7 @@ mod tests {
 
         let mut node_types = nodes::build_registry();
         let mut builders = BuilderRegistry::standard();
-        crate::compiler::PluginContext::new(&mut node_types, &mut builders)
+        crate::PluginContext::new(&mut node_types, &mut builders)
             .register_builder("Plugin Presenter", Box::new(PluginBuilder));
         let widget = uart_demo_widget();
         let socket = &widget
@@ -3639,7 +3685,7 @@ mod tests {
     fn buffered_provider_registers_through_the_existing_live_feature_contract() {
         let mut node_types = nodes::build_registry();
         let mut builders = BuilderRegistry::standard();
-        crate::compiler::PluginContext::new(&mut node_types, &mut builders).register_builder(
+        crate::PluginContext::new(&mut node_types, &mut builders).register_builder(
             nodes::DemoCaptureSource::name(),
             Box::new(BufferedPluginBuilder),
         );
@@ -3678,7 +3724,7 @@ mod tests {
     fn advanced_trigger_program_routes_unchanged_to_the_registered_builder() {
         let mut node_types = nodes::build_registry();
         let mut builders = BuilderRegistry::standard();
-        crate::compiler::PluginContext::new(&mut node_types, &mut builders).register_builder(
+        crate::PluginContext::new(&mut node_types, &mut builders).register_builder(
             nodes::DemoCaptureSource::name(),
             Box::new(BufferedPluginBuilder),
         );
@@ -4709,7 +4755,7 @@ mod tests {
                 .iter()
                 .filter_map(|lane| match &lane.data {
                     DerivedLaneData::IndexedAnnotations(indexed) => {
-                        Some((lane.name.clone(), Arc::clone(&indexed.query)))
+                        Some((lane.name.clone(), Arc::clone(indexed.query())))
                     }
                     _ => None,
                 })

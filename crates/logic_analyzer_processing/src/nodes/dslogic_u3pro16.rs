@@ -80,7 +80,7 @@ pub enum LinkSpeed {
 
 /// Generic user-facing capture settings for this device.
 #[derive(Debug, Clone)]
-pub(super) struct DsLogicCaptureSettings {
+struct DsLogicCaptureSettings {
     pub mode: CaptureMode,
     pub sample_rate_hz: u64,
     /// Physical DSLogic input bits. The source exposes enabled inputs in increasing order.
@@ -96,7 +96,7 @@ pub(super) struct DsLogicCaptureSettings {
 }
 
 impl DsLogicCaptureSettings {
-    pub(super) fn finite(sample_rate_hz: u64, input_mask: u16, sample_limit: u64) -> Self {
+    fn finite(sample_rate_hz: u64, input_mask: u16, sample_limit: u64) -> Self {
         Self {
             mode: CaptureMode::Finite,
             sample_rate_hz,
@@ -1675,17 +1675,15 @@ fn build_plan(
     )?;
     let stream_buffer = match speed {
         LinkSpeed::Super => round_up_usize(
-            usize::try_from(bytes_per_ms.div_ceil(STREAMING_TRANSFER_PARTS_PER_MS))
-            .map_err(|_| {
-                LogicAnalyzerError::InvalidSettings("stream buffer is too large".into())
-            })?,
+            usize::try_from(bytes_per_ms.div_ceil(STREAMING_TRANSFER_PARTS_PER_MS)).map_err(
+                |_| LogicAnalyzerError::InvalidSettings("stream buffer is too large".into()),
+            )?,
             1024,
         ),
         LinkSpeed::High => round_up_usize(
-            usize::try_from(bytes_per_ms.div_ceil(STREAMING_TRANSFER_PARTS_PER_MS))
-            .map_err(|_| {
-                LogicAnalyzerError::InvalidSettings("stream buffer is too large".into())
-            })?,
+            usize::try_from(bytes_per_ms.div_ceil(STREAMING_TRANSFER_PARTS_PER_MS)).map_err(
+                |_| LogicAnalyzerError::InvalidSettings("stream buffer is too large".into()),
+            )?,
             512,
         ),
     };
@@ -1901,11 +1899,10 @@ mod tests {
         NativeCaptureStore, NativeCaptureStoreConfig, bounded_capture_event_queue,
     };
 
+    use super::*;
     use crate::live_capture::{
         AcquisitionContext, DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider,
     };
-
-    use super::*;
 
     #[derive(Deserialize)]
     struct PacketFixture {
@@ -2620,7 +2617,9 @@ mod tests {
         analyzer.next_chunk().unwrap();
 
         assert_eq!(
-            analyzer.take_trigger_header().and_then(|header| header.trigger_sample()),
+            analyzer
+                .take_trigger_header()
+                .and_then(|header| header.trigger_sample()),
             Some(u64::from(fixture.trigger_sample))
         );
     }
@@ -2974,12 +2973,8 @@ mod tests {
                 while !viewer_stop_worker.load(Ordering::Relaxed) {
                     let total_samples = viewer_index.current_metadata().total_samples;
                     if total_samples > 0 {
-                        let _ = viewer_index.sampled_window(
-                            &viewer_channels,
-                            0,
-                            total_samples,
-                            1_920,
-                        );
+                        let _ =
+                            viewer_index.sampled_window(&viewer_channels, 0, total_samples, 1_920);
                     }
                     std::thread::sleep(Duration::from_millis(8));
                 }
@@ -3008,7 +3003,8 @@ mod tests {
             let outcome = acquisition.join().unwrap();
             let acquisition_elapsed = started.elapsed();
             let lag_at_finish = samples.saturating_sub(analyzed_samples.load(Ordering::Relaxed));
-            let summary_lag_at_finish = samples.saturating_sub(index.current_metadata().total_samples);
+            let summary_lag_at_finish =
+                samples.saturating_sub(index.current_metadata().total_samples);
             viewer_stop.store(true, Ordering::Relaxed);
             viewer.join().unwrap();
             let summary_started = Instant::now();

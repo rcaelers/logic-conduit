@@ -9,7 +9,7 @@ use logic_analyzer_processing::TgckRecorder;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, TextSample, Word};
 
-use crate::compiler::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
+use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
 
 pub(crate) struct TgckRecorderBuilder;
 

@@ -4,11 +4,10 @@ use std::collections::VecDeque;
 
 use tracing::{debug, warn};
 
-use signal_processing::errors::{WorkError, WorkResult};
-use signal_processing::events::Trigger;
-use signal_processing::node::ProcessNode;
-use signal_processing::ports::{InputPort, OutputPort, PortDirection, PortSchema};
-use signal_processing::sample::Sample;
+use signal_processing::{
+    InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, Sample, Trigger, WorkError,
+    WorkResult,
+};
 
 /// Set/reset latch over [`Trigger`] streams.
 ///
@@ -150,8 +149,7 @@ impl ProcessNode for SrLatch {
 #[cfg(test)]
 mod tests {
     use crossbeam_channel::bounded;
-    use signal_processing::sender::{ChannelMessage, Sender};
-    use signal_processing::watchdog::Watchdog;
+    use signal_processing::{ChannelMessage, Sender, Watchdog};
 
     use super::*;
 

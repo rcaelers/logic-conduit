@@ -583,13 +583,13 @@ std::cfg_select! {
         for &position in &positions {
             let query_end = position.saturating_add(100_000).min(end);
             let started = Instant::now();
-            let cold = lane.query.exact_window(position, query_end, 4_096)?;
+            let cold = lane.query().exact_window(position, query_end, 4_096)?;
             exact_cold.push(started.elapsed());
             if !cold.complete {
                 return Err("exact validation window exceeded 4,096 words".into());
             }
             let started = Instant::now();
-            let warm = lane.query.exact_window(position, query_end, 4_096)?;
+            let warm = lane.query().exact_window(position, query_end, 4_096)?;
             exact_warm.push(started.elapsed());
             if cold.annotations != warm.annotations {
                 return Err("cold and warm exact queries returned different words".into());
@@ -599,7 +599,7 @@ std::cfg_select! {
         let mut presence = Vec::with_capacity(sample_count);
         for _ in 0..sample_count {
             let started = Instant::now();
-            let buckets = lane.query.presence_window(first, end, 1_920)?;
+            let buckets = lane.query().presence_window(first, end, 1_920)?;
             presence.push(started.elapsed());
             if metadata.total_word_count > 0 && buckets.is_empty() {
                 return Err("full-extent presence query returned no buckets".into());
@@ -609,7 +609,7 @@ std::cfg_select! {
         let mut cursor = Vec::with_capacity(sample_count);
         for &position in &positions {
             let started = Instant::now();
-            let _ = lane.query.nearest_boundary(position, 1_000_000)?;
+            let _ = lane.query().nearest_boundary(position, 1_000_000)?;
             cursor.push(started.elapsed());
         }
         let decoded_cache = decoded_block_cache_stats();

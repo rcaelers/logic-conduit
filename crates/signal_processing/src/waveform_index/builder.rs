@@ -16,7 +16,7 @@ struct BuildJob {
     block: u64,
 }
 
-pub(super) struct IndexBuilder<'a, S: CaptureDataSource> {
+pub(crate) struct IndexBuilder<'a, S: CaptureDataSource> {
     data_source: &'a S,
     index_path: &'a Path,
     header: &'a CaptureMetadata,
@@ -27,7 +27,7 @@ impl<'a, S> IndexBuilder<'a, S>
 where
     S: CaptureDataSource,
 {
-    pub(super) fn new(
+    pub(crate) fn new(
         data_source: &'a S,
         index_path: &'a Path,
         header: &'a CaptureMetadata,
@@ -41,7 +41,7 @@ where
         }
     }
 
-    pub(super) fn build<P>(&self, mut progress: P) -> Result<()>
+    pub(crate) fn build<P>(&self, mut progress: P) -> Result<()>
     where
         P: FnMut(CaptureIndexProgress),
     {

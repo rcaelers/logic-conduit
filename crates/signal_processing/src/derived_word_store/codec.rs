@@ -1,23 +1,23 @@
 use super::config::BlockCodecConfig;
+use super::errors::{CodecError, CodecResult};
 use super::format::{
     BLOCK_CHECKSUM_OFFSET, BLOCK_FLAG_HAS_DURATIONS, BLOCK_HEADER_SIZE,
     DEFAULT_MAX_WORDS_PER_BLOCK, RESTART_ENTRY_SIZE, RestartEntry, WordBlockHeader,
 };
 use super::vlq::{decode_u64, encode_u64, encoded_len};
-use super::errors::{CodecError, CodecResult};
 use crate::crc32c::block_checksum;
 use crate::events::Word;
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PushResult {
+enum PushResult {
     Appended,
     BlockFull,
 }
 
 /// Accumulates one ordered block and predicts configured block boundaries.
 #[derive(Debug)]
-pub(super) struct WordBlockBuilder {
+pub(crate) struct WordBlockBuilder {
     config: BlockCodecConfig,
     words: Vec<Word>,
     timestamp_bytes: usize,
@@ -28,7 +28,7 @@ pub(super) struct WordBlockBuilder {
 }
 
 impl WordBlockBuilder {
-    pub(super) fn new(config: BlockCodecConfig) -> CodecResult<Self> {
+    pub(crate) fn new(config: BlockCodecConfig) -> CodecResult<Self> {
         if config.restart_interval == 0 {
             return Err(CodecError::InvalidRestartInterval);
         }
@@ -58,22 +58,22 @@ impl WordBlockBuilder {
         })
     }
 
-    pub(super) fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.words.is_empty()
     }
 
-    pub(super) fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.words.len()
     }
 
-    pub(super) fn words(&self) -> &[Word] {
+    pub(crate) fn words(&self) -> &[Word] {
         &self.words
     }
 
     /// Appends `word`, or reports that the current non-empty block should be
     /// committed first. `word` is not consumed when `BlockFull` is returned.
     #[cfg(test)]
-    pub(super) fn push(&mut self, word: Word) -> CodecResult<PushResult> {
+    fn push(&mut self, word: Word) -> CodecResult<PushResult> {
         self.validate_order(word)?;
         self.push_ordered(word)
     }
@@ -157,9 +157,7 @@ impl WordBlockBuilder {
                 let word_count = next_index + 1;
                 let record_bytes = next_timestamp_bytes + word_count * next_value_bytes;
                 let restart_count = word_count.div_ceil(self.config.restart_interval);
-                if record_bytes
-                    + restart_count * RESTART_ENTRY_SIZE
-                    + next_duration_bytes
+                if record_bytes + restart_count * RESTART_ENTRY_SIZE + next_duration_bytes
                     > self.config.max_payload_bytes
                 {
                     break;
@@ -243,7 +241,7 @@ impl WordBlockBuilder {
         accepted
     }
 
-    pub(super) fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.words.clear();
         self.reset_metadata();
     }
@@ -256,7 +254,7 @@ impl WordBlockBuilder {
         self.max_value = 0;
     }
 
-    pub(super) fn encode(
+    pub(crate) fn encode(
         &self,
         sequence: u64,
         output: &mut Vec<u8>,
@@ -346,24 +344,24 @@ impl Default for WordBlockBuilder {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct EncodedBlockMetadata {
-    pub header: WordBlockHeader,
-    pub restarts: Vec<RestartEntry>,
+pub(crate) struct EncodedBlockMetadata {
+    pub(crate) header: WordBlockHeader,
+    pub(crate) restarts: Vec<RestartEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct DecodedWordBlock {
+pub(crate) struct DecodedWordBlock {
     pub header: WordBlockHeader,
     pub restarts: Vec<RestartEntry>,
     pub words: Vec<Word>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct DecodedWordRange {
-    pub header: WordBlockHeader,
-    pub words: Vec<Word>,
-    pub complete: bool,
-    pub decoded_records: usize,
+pub(crate) struct DecodedWordRange {
+    pub(crate) header: WordBlockHeader,
+    pub(crate) words: Vec<Word>,
+    pub(crate) complete: bool,
+    pub(crate) decoded_records: usize,
 }
 
 #[cfg(test)]
@@ -491,7 +489,7 @@ fn encode_validated_word_block_with_interval(
     Ok(EncodedBlockMetadata { header, restarts })
 }
 
-pub(super) fn decode_word_block(bytes: &[u8]) -> CodecResult<DecodedWordBlock> {
+pub(crate) fn decode_word_block(bytes: &[u8]) -> CodecResult<DecodedWordBlock> {
     let parsed = parse_word_block(bytes)?;
     let header = parsed.header;
     let value_bytes = parsed.value_bytes;
@@ -549,7 +547,7 @@ pub(super) fn decode_word_block(bytes: &[u8]) -> CodecResult<DecodedWordBlock> {
 /// nearest restart entry rather than at the start of the block. The result
 /// includes two predecessors and one successor when available. Two prior
 /// timestamps are required to infer the cadence before a long word gap.
-pub(super) fn decode_word_block_range(
+pub(crate) fn decode_word_block_range(
     bytes: &[u8],
     start_ns: u64,
     end_ns: u64,

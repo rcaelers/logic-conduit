@@ -1,9 +1,9 @@
 //! Small deterministic mixed-protocol capture used by the web demo.
 
-use signal_processing::errors::{WorkError, WorkResult};
-use signal_processing::node::ProcessNode;
-use signal_processing::ports::{InputPort, OutputPort, PortDirection, PortSchema};
-use signal_processing::sample::{Sample, SampleBlock};
+use signal_processing::{
+    InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, Sample, SampleBlock, WorkError,
+    WorkResult,
+};
 
 const CHANNEL_COUNT: usize = 11;
 const SAMPLE_COUNT: usize = 60_000;

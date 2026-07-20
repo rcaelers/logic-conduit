@@ -5,11 +5,11 @@ use signal_processing::{
 
 use super::DemoCaptureSourceState;
 use super::definition::DEMO_CAPTURE_CHANNELS;
-use crate::compiler::{SimpleTriggerChannel, TriggerConfigurationFeature};
+use crate::{SimpleTriggerChannel, TriggerConfigurationFeature};
 
 const SCHEMA_ID: &str = "dsl.demo-capture.trigger";
 
-pub(super) fn schema() -> TriggerEditorSchema {
+pub(crate) fn schema() -> TriggerEditorSchema {
     TriggerEditorSchema::new(
         TriggerIdentifier::new(SCHEMA_ID).expect("static trigger schema ID is valid"),
         1,
@@ -44,19 +44,19 @@ pub(super) fn schema() -> TriggerEditorSchema {
     )
 }
 
-pub(super) fn channel_ids() -> Vec<CaptureChannelId> {
+pub(crate) fn channel_ids() -> Vec<CaptureChannelId> {
     (0..DEMO_CAPTURE_CHANNELS)
         .map(|channel| CaptureChannelId::new(format!("demo:{channel}")))
         .collect()
 }
 
-pub(super) fn program_from_conditions(
+pub(crate) fn program_from_conditions(
     conditions: &[SimpleTriggerCondition],
 ) -> Result<Option<TriggerProgram>, String> {
     schema().simple_program(channel_ids().into_iter().zip(conditions.iter().copied()))
 }
 
-pub(super) fn conditions(
+pub(crate) fn conditions(
     program: Option<&TriggerProgram>,
 ) -> Result<Vec<SimpleTriggerCondition>, String> {
     let channel_ids = channel_ids();
@@ -81,7 +81,7 @@ pub(super) fn conditions(
         .collect())
 }
 
-pub(super) fn validate_program(program: Option<&TriggerProgram>) -> Result<(), String> {
+pub(crate) fn validate_program(program: Option<&TriggerProgram>) -> Result<(), String> {
     if let Some(program) = program {
         schema()
             .validate_program(program, &channel_ids())
@@ -90,7 +90,7 @@ pub(super) fn validate_program(program: Option<&TriggerProgram>) -> Result<(), S
     Ok(())
 }
 
-pub(super) fn set_condition(
+pub(crate) fn set_condition(
     program: Option<&TriggerProgram>,
     channel: usize,
     condition: SimpleTriggerCondition,
@@ -104,7 +104,7 @@ pub(super) fn set_condition(
         .map_err(|error| error.to_string())
 }
 
-pub(super) fn configuration(
+pub(crate) fn configuration(
     state: &DemoCaptureSourceState,
 ) -> Result<TriggerConfigurationFeature, String> {
     let conditions = conditions(state.trigger_program())?;

@@ -136,7 +136,7 @@ pub struct ViewerValueLane {
 
 #[derive(Clone)]
 pub struct IndexedAnnotationLane {
-    pub query: Arc<dyn AnnotationQuery>,
+    query: Arc<dyn AnnotationQuery>,
     store: IndexedAnnotationStore,
 }
 
@@ -150,6 +150,10 @@ impl IndexedAnnotationLane {
 
     pub fn metadata(&self) -> AnnotationStoreMetadata {
         self.query.metadata()
+    }
+
+    pub fn query(&self) -> &Arc<dyn AnnotationQuery> {
+        &self.query
     }
 
     pub fn status(&self) -> StoreStatus {

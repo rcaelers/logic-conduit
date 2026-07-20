@@ -9,7 +9,7 @@ use signal_processing::{SimpleTriggerCondition, TriggerProgram};
 
 use crate::nodes::registry::{COLOR_SOURCES, Signal};
 
-pub(super) const DEMO_CAPTURE_CHANNELS: usize = 11;
+pub(crate) const DEMO_CAPTURE_CHANNELS: usize = 11;
 const DEMO_CAPTURE_STATE_VERSION: u16 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

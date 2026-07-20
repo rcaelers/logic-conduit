@@ -4,10 +4,10 @@ use std::collections::VecDeque;
 
 use tracing::debug;
 
-use signal_processing::errors::{WorkError, WorkResult};
-use signal_processing::events::{NumberSample, Trigger};
-use signal_processing::node::ProcessNode;
-use signal_processing::ports::{InputPort, OutputPort, PortDirection, PortSchema};
+use signal_processing::{
+    InputPort, NumberSample, OutputPort, PortDirection, PortSchema, ProcessNode, Trigger,
+    WorkError, WorkResult,
+};
 
 /// Counts triggers into a [`NumberSample`] level: `start` at t=0, then
 /// `start + n*step` after the n-th trigger.
@@ -100,8 +100,7 @@ impl ProcessNode for TriggerCounter {
 #[cfg(test)]
 mod tests {
     use crossbeam_channel::bounded;
-    use signal_processing::sender::{ChannelMessage, Sender};
-    use signal_processing::watchdog::Watchdog;
+    use signal_processing::{ChannelMessage, Sender, Watchdog};
 
     use super::*;
 

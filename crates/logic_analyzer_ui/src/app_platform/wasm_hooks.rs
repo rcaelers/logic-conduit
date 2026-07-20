@@ -1,29 +1,31 @@
-use super::*;
+use logic_analyzer_graph::{self as compiler, nodes};
+
+use crate::app::App;
 
 impl App {
-    pub(super) fn platform_clear_capture_caches(
+    pub(crate) fn platform_clear_capture_caches(
         &mut self,
         _configs: &[signal_processing::PersistentStoreConfig],
     ) -> Result<(), String> {
         Ok(())
     }
 
-    pub(super) fn platform_load_startup_file(&mut self, _file: Option<&std::path::Path>) {}
+    pub(crate) fn platform_load_startup_file(&mut self, _file: Option<&std::path::Path>) {}
 
-    pub(super) fn platform_prepare_run(&mut self, _ctx: &mut compiler::CompileCtx) {}
+    pub(crate) fn platform_prepare_run(&mut self, _ctx: &mut compiler::CompileCtx) {}
 
-    pub(super) fn platform_raw_input_hook(
+    pub(crate) fn platform_raw_input_hook(
         &mut self,
         _ctx: &egui::Context,
         _raw_input: &mut egui::RawInput,
     ) {
     }
 
-    pub(super) fn platform_logic(&mut self, _ctx: &egui::Context) {}
+    pub(crate) fn platform_logic(&mut self, _ctx: &egui::Context) {}
 
-    pub(super) fn platform_save(&mut self, _storage: &mut dyn eframe::Storage) {}
+    pub(crate) fn platform_save(&mut self, _storage: &mut dyn eframe::Storage) {}
 
-    pub(super) fn platform_before_ui(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn platform_before_ui(&mut self, ui: &mut egui::Ui) {
         let shortcut = |action| {
             self.input_bindings
                 .shortcut(&["global"], action)
@@ -92,7 +94,7 @@ impl App {
         });
     }
 
-    pub(super) fn platform_sync_capture(&mut self) {
+    pub(crate) fn platform_sync_capture(&mut self) {
         if self.logic_analyzer.has_growing_capture() {
             return;
         }
@@ -108,13 +110,13 @@ impl App {
         }
     }
 
-    pub(super) fn platform_restore_graph_capture(&mut self) {
+    pub(crate) fn platform_restore_graph_capture(&mut self) {
         self.platform.preview_source = None;
     }
 
-    pub(super) fn platform_before_graph(&mut self) {}
+    pub(crate) fn platform_before_graph(&mut self) {}
 
-    pub(super) fn platform_after_graph(&mut self) {}
+    pub(crate) fn platform_after_graph(&mut self) {}
 
-    pub(super) fn platform_after_ui(&mut self, _ctx: &egui::Context) {}
+    pub(crate) fn platform_after_ui(&mut self, _ctx: &egui::Context) {}
 }

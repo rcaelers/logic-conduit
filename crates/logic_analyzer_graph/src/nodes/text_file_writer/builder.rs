@@ -7,8 +7,7 @@ use logic_analyzer_processing::TextFileWriter;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, TextSample};
 
-use crate::compiler::{CompileCtx, ResolvedInputs, RuntimeBuilder};
-use crate::compiler::PortKind;
+use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
 
 pub(crate) struct TextFileWriterBuilder;
 

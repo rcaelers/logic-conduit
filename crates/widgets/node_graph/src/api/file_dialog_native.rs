@@ -1,8 +1,8 @@
 use super::builtins::FileFilter;
 
-pub(super) const AVAILABLE: bool = true;
+pub(crate) const AVAILABLE: bool = true;
 
-pub(super) fn pick(title: &str, filters: &[FileFilter], save: bool) -> Option<String> {
+pub(crate) fn pick(title: &str, filters: &[FileFilter], save: bool) -> Option<String> {
     let mut dialog = rfd::FileDialog::new();
     if !title.is_empty() {
         dialog = dialog.set_title(title);

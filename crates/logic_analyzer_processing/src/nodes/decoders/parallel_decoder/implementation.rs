@@ -1,10 +1,12 @@
-//! Parallel bus decoder for block-based processing.
-//!
-//! Accepts SampleBlock inputs for high-bandwidth signals (strobe, data, CS)
-//! and Sample inputs for low-bandwidth control signals (enable_signal).
-//! Outputs Word events.
+// Parallel bus decoder for block-based processing.
+//
+// Accepts SampleBlock inputs for high-bandwidth signals (strobe, data, CS)
+// and Sample inputs for low-bandwidth control signals (enable_signal).
+// Outputs Word events.
 
 use std::collections::VecDeque;
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -12,29 +14,16 @@ use tracing::debug;
 
 use signal_processing::SamplingActivity;
 use signal_processing::capture::CaptureTransition;
-use signal_processing::edge_query::EdgeQuery;
-use signal_processing::errors::{WorkError, WorkResult};
-use signal_processing::events::Word;
-use signal_processing::node::{InputProtocolCandidate, ProcessNode};
-use signal_processing::ports::{InputPort, OutputPort};
-use signal_processing::protocol::ProtocolKind;
-use signal_processing::receiver::Receiver;
-use signal_processing::sample::{Sample, SampleBlock};
+use signal_processing::EdgeQuery;
+use signal_processing::{WorkError, WorkResult};
+use signal_processing::Word;
+use signal_processing::{InputProtocolCandidate, ProcessNode};
+use signal_processing::{InputPort, OutputPort};
+use signal_processing::ProtocolKind;
+use signal_processing::Receiver;
+use signal_processing::{Sample, SampleBlock};
 
-use super::types::{CsPolarity, Endianness, ParallelInputStrategy, StrobeMode};
-
-std::cfg_select! {
-    target_arch = "wasm32" => {
-        #[path = "parallel_decoder/sequential_worker.rs"]
-        mod worker_backend;
-    }
-    _ => {
-        #[path = "parallel_decoder/parallel_worker.rs"]
-        mod worker_backend;
-    }
-}
-
-use self::worker_backend::ParallelStreamState;
+use crate::nodes::decoders::{CsPolarity, Endianness, ParallelInputStrategy, StrobeMode};
 
 #[derive(Clone)]
 pub struct ParallelDecoderMetrics {
@@ -213,7 +202,7 @@ impl ParallelDecoder {
     }
 
     pub fn parallel_workers(&self) -> usize {
-        worker_backend::effective_workers(self.parallel_workers, &self.parallel_metrics)
+        platform_effective_workers(self.parallel_workers, &self.parallel_metrics)
     }
 
     pub fn parallel_metrics(&self) -> ParallelDecoderMetrics {
@@ -252,8 +241,8 @@ impl ProcessNode for ParallelDecoder {
         1 // Word output
     }
 
-    fn input_schema(&self) -> Vec<signal_processing::ports::PortSchema> {
-        use signal_processing::ports::{PortDirection, PortSchema};
+    fn input_schema(&self) -> Vec<signal_processing::PortSchema> {
+        use signal_processing::{PortDirection, PortSchema};
 
         // A level trigger must inspect every sample and therefore always
         // streams. Edge-triggered modes honor the explicit strategy; Auto
@@ -306,8 +295,8 @@ impl ProcessNode for ParallelDecoder {
         schemas
     }
 
-    fn output_schema(&self) -> Vec<signal_processing::ports::PortSchema> {
-        use signal_processing::ports::{PortDirection, PortSchema};
+    fn output_schema(&self) -> Vec<signal_processing::PortSchema> {
+        use signal_processing::{PortDirection, PortSchema};
 
         vec![PortSchema::new::<Word>("words", 0, PortDirection::Output)]
     }
@@ -1217,7 +1206,7 @@ impl ParallelDecoder {
     /// connection that didn't negotiate `EdgeQuery`.
     fn work_streamed(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
         let mut blocks = std::mem::take(&mut self.stream_blocks);
-        let result = worker_backend::work(self, inputs, outputs, &mut blocks);
+        let result = work_with_platform_backend(self, inputs, outputs, &mut blocks);
         self.stream_blocks = blocks;
         result
     }
@@ -1411,9 +1400,9 @@ mod tests {
 
     use crossbeam_channel::bounded;
 
-    use signal_processing::node::ProcessNode;
-    use signal_processing::sender::{ChannelMessage, Sender};
-    use signal_processing::watchdog::Watchdog;
+    use signal_processing::ProcessNode;
+    use signal_processing::{ChannelMessage, Sender};
+    use signal_processing::Watchdog;
 
     use super::*;
 

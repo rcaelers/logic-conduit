@@ -6,24 +6,24 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use signal_processing::PersistentStoreConfig;
 use node_graph::{GraphState, NodeId};
+use signal_processing::PersistentStoreConfig;
 
 use super::errors::CompileError;
 use super::graph::{BuilderRegistry, CompiledGraph};
 
-pub(super) fn assign_viewer_caches(_compiled: &mut CompiledGraph) {}
+pub(crate) fn assign_viewer_caches(_compiled: &mut CompiledGraph) {}
 
-pub(super) fn configure_directory(_compiled: &mut CompiledGraph, _directory: Option<&Path>) {}
+pub(crate) fn configure_directory(_compiled: &mut CompiledGraph, _directory: Option<&Path>) {}
 
-pub(super) fn prepare_execution(
+pub(crate) fn prepare_execution(
     compiled: &CompiledGraph,
     _registry: &BuilderRegistry,
 ) -> (CompiledGraph, bool) {
     (compiled.clone(), false)
 }
 
-pub(super) fn cache_configs_by_node(
+pub(crate) fn cache_configs_by_node(
     _graph: &GraphState,
     _registry: &BuilderRegistry,
     _directory: &std::path::Path,

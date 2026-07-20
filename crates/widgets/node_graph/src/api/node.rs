@@ -28,12 +28,12 @@ impl SocketTypeIdentity {
 }
 
 pub struct InputDef<S> {
-    pub label: String,
-    pub type_name: &'static str,
+    pub(crate) label: String,
+    pub(crate) type_name: &'static str,
     /// Idle look shown while unconnected; defaults to the native type's
     /// identity, overridable per def via [`InputDef::idle_style`].
-    pub color: Color32,
-    pub shape: SocketShape,
+    pub(crate) color: Color32,
+    pub(crate) shape: SocketShape,
     /// Native type identity (never restyled) — feeds the type identity table.
     pub(crate) identity: SocketTypeIdentity,
     /// Extra types this input accepts; the node handles them itself.
@@ -102,10 +102,10 @@ impl<S: 'static> InputDef<S> {
 }
 
 pub struct OutputDef<S> {
-    pub label: String,
-    pub type_name: &'static str,
-    pub color: Color32,
-    pub shape: SocketShape,
+    pub(crate) label: String,
+    pub(crate) type_name: &'static str,
+    pub(crate) color: Color32,
+    pub(crate) shape: SocketShape,
     pub(crate) identity: SocketTypeIdentity,
     pub(crate) control: Option<Box<dyn ControlBinding<S>>>,
 }
@@ -157,8 +157,7 @@ impl<S, T: InlineControl> ControlBinding<S> for ControlBindingRenderer<S, T> {
 
 /// Declarative binding between a node-state field and an inline control.
 pub struct PropDef<S> {
-    pub id: &'static str,
-    pub label: &'static str,
+    pub(crate) id: &'static str,
     /// Row height when rendered in the properties panel; `None` uses the
     /// panel's default row height. Controls that need more vertical room
     /// (e.g. a channel grid) set this.
@@ -174,7 +173,6 @@ impl<S: 'static> PropDef<S> {
     ) -> Self {
         Self {
             id,
-            label,
             panel_height: None,
             binding: Box::new(ControlBindingRenderer {
                 label: label.to_owned(),

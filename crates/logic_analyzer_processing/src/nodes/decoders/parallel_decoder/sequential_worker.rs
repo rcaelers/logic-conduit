@@ -1,15 +1,13 @@
-//! Sequential parallel-decoder execution used by wasm.
-
-use super::*;
+// Sequential parallel-decoder execution used by wasm.
 
 #[derive(Default)]
-pub(super) struct ParallelStreamState;
+pub(crate) struct ParallelStreamState;
 
-pub(super) fn effective_workers(_requested: usize, _metrics: &ParallelDecoderMetrics) -> usize {
+fn platform_effective_workers(_requested: usize, _metrics: &ParallelDecoderMetrics) -> usize {
     1
 }
 
-pub(super) fn work(
+fn work_with_platform_backend(
     decoder: &mut ParallelDecoder,
     inputs: &[InputPort],
     outputs: &[OutputPort],

@@ -29,7 +29,7 @@ impl<R> IndexSampler<R>
 where
     R: BlockCaptureSource,
 {
-    pub(super) fn new(
+    fn new(
         display_name: String,
         storage: IndexReader,
         raw_reader: R,

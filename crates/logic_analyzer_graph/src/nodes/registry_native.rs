@@ -8,13 +8,11 @@ use super::file_source::{DslFileSource, DslFileSourceState};
 use super::file_source_builder::FileSourceBuilder;
 use super::file_writer::FileWriter;
 use super::file_writer_builder::FileWriterBuilder;
-use super::sigrok_file_source::{
-    SigrokFileSource, SigrokFileSourceBuilder, SigrokFileSourceState,
-};
+use super::sigrok_file_source::{SigrokFileSource, SigrokFileSourceBuilder, SigrokFileSourceState};
 use super::text_file_writer::{TextFileWriter, TextFileWriterBuilder};
-use crate::compiler::RuntimeBuilder;
+use crate::RuntimeBuilder;
 
-pub(super) fn register_nodes(registry: &mut NodeTypeRegistry) {
+pub(crate) fn register_nodes(registry: &mut NodeTypeRegistry) {
     registry.register::<DslFileSource>();
     registry.register::<DsLogicU3Pro16>();
     registry.register::<SigrokFileSource>();
@@ -23,21 +21,15 @@ pub(super) fn register_nodes(registry: &mut NodeTypeRegistry) {
     registry.register::<CsvWriter>();
 }
 
-pub(super) fn register_builders(builders: &mut HashMap<String, Box<dyn RuntimeBuilder>>) {
+pub(crate) fn register_builders(builders: &mut HashMap<String, Box<dyn RuntimeBuilder>>) {
     builders.insert("DSL File Source".into(), Box::new(FileSourceBuilder));
-    builders.insert(
-        "DSLogic U3Pro16".into(),
-        Box::new(DsLogicU3Pro16Builder),
-    );
+    builders.insert("DSLogic U3Pro16".into(), Box::new(DsLogicU3Pro16Builder));
     builders.insert(
         "Sigrok File Source".into(),
         Box::new(SigrokFileSourceBuilder),
     );
     builders.insert("File Writer".into(), Box::new(FileWriterBuilder));
-    builders.insert(
-        "Text File Writer".into(),
-        Box::new(TextFileWriterBuilder),
-    );
+    builders.insert("Text File Writer".into(), Box::new(TextFileWriterBuilder));
     builders.insert("CSV Writer".into(), Box::new(CsvWriterBuilder));
 }
 
@@ -69,11 +61,11 @@ mod tests {
     use signal_processing::{CaptureChannelId, CaptureDataDelivery, SimpleTriggerCondition};
 
     use super::*;
-    use crate::compiler::{
+    use crate::nodes::{U3Pro16State, build_registry, test_graphs_tests};
+    use crate::{
         BuilderRegistry, LiveCaptureEdit, apply_live_capture_edit, discover_live_capture_feature,
         lower,
     };
-    use crate::nodes::{U3Pro16State, build_registry, test_graphs};
 
     #[test]
     fn native_hardware_source_registers_and_lowers() {
@@ -98,18 +90,16 @@ mod tests {
         let source = widget
             .add_node_at(DsLogicU3Pro16::name(), Pos2::ZERO)
             .unwrap();
-        let streaming =
-            discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
-                .unwrap()
-                .expect("stream mode should expose a live feature");
+        let streaming = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
+            .unwrap()
+            .expect("stream mode should expose a live feature");
         assert_eq!(
             streaming.capabilities().data_delivery(),
             CaptureDataDelivery::DuringAcquisition
         );
-        let mut state = serde_json::from_value::<U3Pro16State>(
-            widget.graph().nodes[&source].state.clone(),
-        )
-        .unwrap();
+        let mut state =
+            serde_json::from_value::<U3Pro16State>(widget.graph().nodes[&source].state.clone())
+                .unwrap();
         state.mode.select("Buffer");
         state.channels.enabled.fill(false);
         for channel in [0, 2, 9] {
@@ -122,7 +112,7 @@ mod tests {
         let feature = discover_live_capture_feature(widget.graph(), &builders)
             .unwrap()
             .expect("buffer mode should expose the concrete live feature");
-        assert_eq!(feature.source_node, source);
+        assert_eq!(feature.source_node(), source);
         assert_eq!(
             feature.channels(),
             [
@@ -167,10 +157,9 @@ mod tests {
         let source = widget
             .add_node_at(DsLogicU3Pro16::name(), Pos2::ZERO)
             .unwrap();
-        let mut state = serde_json::from_value::<U3Pro16State>(
-            widget.graph().nodes[&source].state.clone(),
-        )
-        .unwrap();
+        let mut state =
+            serde_json::from_value::<U3Pro16State>(widget.graph().nodes[&source].state.clone())
+                .unwrap();
         state.mode.select("Buffer");
         state.sample_rate.select("1 GHz");
         state.channels.enabled.fill(true);
@@ -190,10 +179,9 @@ mod tests {
         let source = widget
             .add_node_at(DsLogicU3Pro16::name(), Pos2::ZERO)
             .unwrap();
-        let mut state = serde_json::from_value::<U3Pro16State>(
-            widget.graph().nodes[&source].state.clone(),
-        )
-        .unwrap();
+        let mut state =
+            serde_json::from_value::<U3Pro16State>(widget.graph().nodes[&source].state.clone())
+                .unwrap();
         state.mode.select("Stream");
         state.sample_rate.select("1 GHz");
         state.channels.enabled.fill(false);
@@ -213,7 +201,7 @@ mod tests {
     #[test]
     fn dsl_source_path_found_by_def_name_after_rename() {
         let mut widget = NodeGraphWidget::new(build_registry());
-        test_graphs::populate_startup(&mut widget);
+        test_graphs_tests::populate_startup(&mut widget);
         let source_id = *widget
             .graph()
             .nodes

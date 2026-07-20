@@ -9,8 +9,7 @@ use signal_processing::{
     NumberSample, ProcessNode, Sample, SampleBlock, TextSample, Trigger, Word,
 };
 
-use crate::compiler::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
-use crate::nodes;
+use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, nodes, parse_state};
 
 /// Maps a `BufferState.kind` selection (see `nodes::buffer::KIND_LABELS`) to
 /// the concrete `PortKind` it names. Falls back to `Signal` for state that

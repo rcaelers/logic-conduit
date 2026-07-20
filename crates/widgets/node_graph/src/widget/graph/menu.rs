@@ -85,10 +85,7 @@ fn build_link_drag_search_items(
     items
 }
 
-pub(super) fn build_add_entries(
-    registry: &NodeTypeRegistry,
-    canvas_pos: Pos2,
-) -> Vec<MenuEntry<GraphAction>> {
+fn build_add_entries(registry: &NodeTypeRegistry, canvas_pos: Pos2) -> Vec<MenuEntry<GraphAction>> {
     let mut cats: Vec<String> = Vec::new();
     let mut map: HashMap<String, Vec<String>> = HashMap::new();
     for def in registry.all() {
@@ -147,7 +144,7 @@ fn paste_entry(canvas_pos: Pos2, input_bindings: &InputBindings) -> MenuEntry<Gr
     )
 }
 
-pub(super) fn build_empty_canvas_entries(
+fn build_empty_canvas_entries(
     registry: &NodeTypeRegistry,
     canvas_pos: Pos2,
     can_paste: bool,
@@ -165,7 +162,7 @@ pub(super) fn build_empty_canvas_entries(
     entries
 }
 
-pub(super) struct ContextMenuState<'a> {
+pub(crate) struct ContextMenuState<'a> {
     pub registry: &'a NodeTypeRegistry,
     pub canvas_pos: Pos2,
     pub screen_pos: Pos2,
@@ -185,7 +182,7 @@ pub(super) struct ContextMenuState<'a> {
     pub input_bindings: &'a InputBindings,
 }
 
-pub(super) fn build_context_entries(context: ContextMenuState<'_>) -> Vec<MenuEntry<GraphAction>> {
+pub(crate) fn build_context_entries(context: ContextMenuState<'_>) -> Vec<MenuEntry<GraphAction>> {
     let ContextMenuState {
         registry,
         canvas_pos,
@@ -680,7 +677,7 @@ impl AddSearchPopup {
     }
 }
 
-pub(super) struct MenuController {
+pub(crate) struct MenuController {
     popup: PopupMenu<GraphAction>,
     add_search: AddSearchPopup,
     add_popup_pos: Pos2,
@@ -689,7 +686,7 @@ pub(super) struct MenuController {
 }
 
 impl MenuController {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             popup: PopupMenu::new(egui::Id::new("dsl_add_node_popup")),
             add_search: AddSearchPopup::new(),
@@ -700,12 +697,12 @@ impl MenuController {
     }
 
     /// Open the standalone add-node popup (e.g. Shift+A).
-    pub(super) fn open_popup(&mut self, screen_pos: Pos2, entries: Vec<MenuEntry<GraphAction>>) {
+    pub(crate) fn open_popup(&mut self, screen_pos: Pos2, entries: Vec<MenuEntry<GraphAction>>) {
         self.add_search.close();
         self.popup.open_popup(screen_pos, entries);
     }
 
-    pub(super) fn open_add_popup(
+    pub(crate) fn open_add_popup(
         &mut self,
         screen_pos: Pos2,
         registry: &NodeTypeRegistry,
@@ -724,7 +721,7 @@ impl MenuController {
     /// Opens the search box directly (skipping the intermediate "Add" popup)
     /// filtered to node types compatible with `from` — the link-drag-search
     /// gesture triggered by releasing a dragged wire over empty canvas.
-    pub(super) fn open_link_drag_search(
+    pub(crate) fn open_link_drag_search(
         &mut self,
         screen_pos: Pos2,
         registry: &NodeTypeRegistry,
@@ -736,7 +733,7 @@ impl MenuController {
         self.add_search.open(screen_pos, items);
     }
 
-    pub(super) fn context_trigger_pos(
+    pub(crate) fn context_trigger_pos(
         &mut self,
         ui: &egui::Ui,
         pointer: Option<Pos2>,
@@ -772,13 +769,13 @@ impl MenuController {
         (press.distance(release) <= TABLET_CONTEXT_DRIFT_THRESHOLD).then_some(press)
     }
 
-    pub(super) fn blocks_canvas_scroll(&self, ui: &egui::Ui) -> bool {
+    pub(crate) fn blocks_canvas_scroll(&self, ui: &egui::Ui) -> bool {
         self.add_search.blocks_canvas_scroll(ui)
     }
 
     /// Drive for one frame: tablet gesture detection, keyboard nav, rendering.
     /// `allow`: false while wire-cutting is active.
-    pub(super) fn update(
+    pub(crate) fn update(
         &mut self,
         ui: &mut egui::Ui,
         response: &egui::Response,

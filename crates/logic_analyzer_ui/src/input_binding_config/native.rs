@@ -9,16 +9,20 @@ pub(crate) fn load() -> InputBindings {
     path().map_or_else(super::embedded_defaults, |path| load_path(&path))
 }
 
-pub(crate) fn path() -> Option<PathBuf> {
+fn path() -> Option<PathBuf> {
     dirs::config_dir().map(|directory| directory.join("dsl").join(CONFIG_FILE))
 }
 
 fn load_path(path: &Path) -> InputBindings {
     match std::fs::read_to_string(path) {
-        Ok(json) => InputBindings::from_json(&json)
-            .unwrap_or_else(|error| panic!("invalid input bindings in {}: {error}", path.display())),
+        Ok(json) => InputBindings::from_json(&json).unwrap_or_else(|error| {
+            panic!("invalid input bindings in {}: {error}", path.display())
+        }),
         Err(error) if error.kind() == ErrorKind::NotFound => super::embedded_defaults(),
-        Err(error) => panic!("cannot read input bindings from {}: {error}", path.display()),
+        Err(error) => panic!(
+            "cannot read input bindings from {}: {error}",
+            path.display()
+        ),
     }
 }
 

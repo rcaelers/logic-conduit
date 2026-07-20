@@ -14,25 +14,30 @@ mod presence;
 mod query;
 mod state;
 
-std::cfg_select! {
-    target_arch = "wasm32" => {}
-    _ => {
-        mod cache;
-        mod codec;
-        mod format;
-        mod persistent;
-        mod vlq;
-    }
-}
+#[cfg(not(target_arch = "wasm32"))]
+mod cache;
+#[cfg(not(target_arch = "wasm32"))]
+mod codec;
+#[cfg(not(target_arch = "wasm32"))]
+mod format;
+#[cfg(not(target_arch = "wasm32"))]
+mod persistent;
+#[cfg(not(target_arch = "wasm32"))]
+mod vlq;
 
 pub(crate) use backend::{AnnotationStoreBackend, AnnotationStoreWriterBackend};
 pub use config::{BlockCodecConfig, LiveStoreConfig, PersistentStoreConfig};
 pub use errors::{CodecError, CodecResult};
-pub(crate) use platform::store;
-pub use platform::*;
+pub(crate) use platform::default_working_directory;
+#[cfg(not(target_arch = "wasm32"))]
+pub use platform::{
+    CommittedAnnotationBlock, DecodedBlockCacheStats, cleanup_cache, clear_cache,
+    clear_cache_entry, configure_decoded_block_cache, decoded_block_cache_stats,
+    reset_decoded_block_cache_stats,
+};
+pub use platform::{IndexedAnnotationStore, IndexedAnnotationWriter, StoreError, StoreResult};
 pub use query::{
     AnnotationQuery, AnnotationQueryError, AnnotationQueryResult, AnnotationStoreMetadata,
     ExactAnnotationWindow, WordPresenceBucket,
 };
-pub(crate) use state::LiveStoreMetadata;
-pub use state::StoreStatus;
+pub use state::{LiveStoreMetadata, StoreStatus};

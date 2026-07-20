@@ -16,17 +16,7 @@ pub use app_platform::{
 };
 use input_bindings::InputBindings;
 
-pub fn application_config_path() -> Option<std::path::PathBuf> {
-    application_config::path()
-}
-
 pub fn application_input_bindings() -> &'static InputBindings {
     static BINDINGS: OnceLock<InputBindings> = OnceLock::new();
     BINDINGS.get_or_init(input_binding_config::load)
-}
-
-/// Standard per-user location for an optional input-binding override.
-/// Returns `None` on platforms without filesystem configuration, such as web.
-pub fn application_input_bindings_path() -> Option<std::path::PathBuf> {
-    input_binding_config::path()
 }

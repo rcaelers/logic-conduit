@@ -8,7 +8,7 @@ use crate::viewer::LogicAnalyzerViewer;
 const MARKER_SPACING_PX: f64 = 6.0;
 
 impl LogicAnalyzerViewer {
-    pub(super) fn draw_sampling_overlay(&self, painter: &Painter, layout: AnalyzerLayout) {
+    pub(crate) fn draw_sampling_overlay(&self, painter: &Painter, layout: AnalyzerLayout) {
         let Some(overlay) = &self.sampling_overlay else {
             return;
         };

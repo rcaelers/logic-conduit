@@ -14,6 +14,12 @@ pub struct GraphState {
     pub nodes: HashMap<NodeId, Node>,
     pub connections: Vec<Connection>,
     pub frames: Vec<Frame>,
+    #[serde(flatten)]
+    pub metadata: GraphMetadata,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct GraphMetadata {
     next_id: u32,
     next_frame_id: u32,
     /// Namespaced, host-owned document state. Generic graph code preserves
@@ -27,7 +33,8 @@ impl GraphState {
         &self,
         key: &str,
     ) -> Result<Option<T>, serde_json::Error> {
-        self.extensions
+        self.metadata
+            .extensions
             .get(key)
             .cloned()
             .map(serde_json::from_value)
@@ -39,18 +46,19 @@ impl GraphState {
         key: impl Into<String>,
         value: T,
     ) -> Result<(), serde_json::Error> {
-        self.extensions
+        self.metadata
+            .extensions
             .insert(key.into(), serde_json::to_value(value)?);
         Ok(())
     }
 
     pub fn remove_extension(&mut self, key: &str) {
-        self.extensions.remove(key);
+        self.metadata.extensions.remove(key);
     }
 
     pub fn next_id(&mut self) -> NodeId {
-        let id = NodeId(self.next_id);
-        self.next_id += 1;
+        let id = NodeId(self.metadata.next_id);
+        self.metadata.next_id += 1;
         id
     }
 
@@ -403,8 +411,8 @@ impl GraphState {
     }
 
     pub fn add_frame(&mut self, label: String, color: Color32, node_ids: Vec<NodeId>) -> FrameId {
-        let id = FrameId(self.next_frame_id);
-        self.next_frame_id += 1;
+        let id = FrameId(self.metadata.next_frame_id);
+        self.metadata.next_frame_id += 1;
         self.frames.push(Frame {
             id,
             label,

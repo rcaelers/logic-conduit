@@ -32,7 +32,13 @@ pub(crate) enum IndexedAnnotationSamples {
 pub(crate) struct IndexedAnnotationCacheEntry {
     key: IndexedAnnotationCacheKey,
     sampled_at: Instant,
-    pub(crate) samples: IndexedAnnotationSamples,
+    samples: IndexedAnnotationSamples,
+}
+
+impl IndexedAnnotationCacheEntry {
+    pub(crate) fn samples(&self) -> &IndexedAnnotationSamples {
+        &self.samples
+    }
 }
 
 impl LogicAnalyzerViewer {
@@ -53,7 +59,7 @@ impl LogicAnalyzerViewer {
                 .iter()
                 .filter_map(|lane| match &lane.data {
                     DerivedLaneData::IndexedAnnotations(indexed) => {
-                        Some((lane.name.clone(), Arc::clone(&indexed.query)))
+                        Some((lane.name.clone(), Arc::clone(indexed.query())))
                     }
                     _ => None,
                 })

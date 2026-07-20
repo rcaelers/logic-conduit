@@ -9,7 +9,7 @@ fn implementation_source(source: &'static str) -> &'static str {
 fn generic_capture_components_contain_no_provider_or_model_contracts() {
     let sources = [
         ("application", include_str!("../app.rs")),
-        ("coordinator contract", include_str!("mod.rs")),
+        ("coordinator contract", include_str!("implementation.rs")),
         ("native coordinator", include_str!("native.rs")),
         (
             "compiler",
@@ -17,7 +17,7 @@ fn generic_capture_components_contain_no_provider_or_model_contracts() {
         ),
         (
             "capture runtime",
-            include_str!("../../../signal_processing/src/live_capture.rs"),
+            include_str!("../../../signal_processing/src/live_capture/implementation.rs"),
         ),
         (
             "capture store contract",

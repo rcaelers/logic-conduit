@@ -9,8 +9,7 @@ use node_graph::Socket;
 use signal_processing::{ConfigValue, NodeConfig, ProcessNode, Sample, Trigger, Word};
 
 use super::definition::parse_hex;
-use crate::compiler::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
-use crate::nodes;
+use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, nodes, parse_state};
 
 pub(crate) struct WordMatcherBuilder;
 

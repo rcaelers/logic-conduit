@@ -288,17 +288,13 @@ impl LogicAnalyzerViewer {
 
     /// First toggle strictly after `sample`, searched across the whole
     /// capture.
-    pub(crate) fn next_transition_after(
-        &mut self,
-        channel_index: usize,
-        sample: u64,
-    ) -> Option<(u64, bool)> {
+    fn next_transition_after(&mut self, channel_index: usize, sample: u64) -> Option<(u64, bool)> {
         let total_samples = self.capture_info.as_ref()?.header.total_samples;
         self.find_transition(channel_index, sample, sample, total_samples, false)
     }
 
     /// Last toggle at or before `sample`, searched across the whole capture.
-    pub(crate) fn prev_transition_at_or_before(
+    fn prev_transition_at_or_before(
         &mut self,
         channel_index: usize,
         sample: u64,
@@ -312,7 +308,7 @@ impl LogicAnalyzerViewer {
     /// skipped wholesale, so even a bounding toggle many seconds away costs
     /// only a handful of coarse queries. Returns the toggle's sample and the
     /// level after it.
-    pub(crate) fn find_transition(
+    fn find_transition(
         &mut self,
         channel_index: usize,
         from_sample: u64,
@@ -506,7 +502,7 @@ pub(crate) fn pulse_measurement_from_window(
     })
 }
 
-pub(crate) fn us_to_sample(time_us: f64, samplerate_hz: f64) -> u64 {
+fn us_to_sample(time_us: f64, samplerate_hz: f64) -> u64 {
     (time_us.max(0.0) * samplerate_hz / 1_000_000.0).round() as u64
 }
 
@@ -514,11 +510,7 @@ pub(crate) fn sample_to_us(sample: u64, samplerate_hz: f64) -> f64 {
     sample as f64 * 1_000_000.0 / samplerate_hz
 }
 
-pub(crate) fn visible_sample_range(
-    capture: &CaptureInfo,
-    start_us: f64,
-    span_us: f64,
-) -> (u64, u64) {
+fn visible_sample_range(capture: &CaptureInfo, start_us: f64, span_us: f64) -> (u64, u64) {
     let samplerate_hz = capture.header.samplerate_hz;
     let total_samples = capture.header.total_samples;
     let visible_start = us_to_sample(start_us, samplerate_hz).min(total_samples.saturating_sub(1));

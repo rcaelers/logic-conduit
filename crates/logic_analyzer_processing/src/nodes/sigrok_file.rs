@@ -18,12 +18,10 @@ use signal_processing::capture::{
     BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureMetadata,
     CaptureSource,
 };
-use signal_processing::errors::{WorkError, WorkResult};
-use signal_processing::node::ProcessNode;
-use signal_processing::ports::{InputPort, OutputPort, PortDirection, PortSchema};
-use signal_processing::sample::Sample;
-use signal_processing::sender::Sender;
-use signal_processing::{Error, Result};
+use signal_processing::{
+    Error, InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, Result, Sample, Sender,
+    WorkError, WorkResult,
+};
 
 use super::capture_archive::zip_error;
 
@@ -57,9 +55,7 @@ struct ChannelStream {
 impl ChannelStream {
     fn run(self) {
         let value_at = |sample| {
-            self.samples[sample * self.unitsize + self.channel / 8]
-                & (1 << (self.channel % 8))
-                != 0
+            self.samples[sample * self.unitsize + self.channel / 8] & (1 << (self.channel % 8)) != 0
         };
         let mut current = value_at(0);
         if self.sender.send(Sample::new(current, 0)).is_ok() {
@@ -183,9 +179,7 @@ impl CaptureDataSource for SigrokFileCaptureDataSource {
 
 pub type SigrokChunkedCaptureReader = signal_processing::IndexSampler<SigrokCaptureReader>;
 
-pub fn open_sigrok_chunked_capture<P: AsRef<Path>>(
-    path: P,
-) -> Result<SigrokChunkedCaptureReader> {
+pub fn open_sigrok_chunked_capture<P: AsRef<Path>>(path: P) -> Result<SigrokChunkedCaptureReader> {
     signal_processing::IndexSampler::open_data_source(SigrokFileCaptureDataSource::open(path)?)
 }
 
@@ -250,9 +244,9 @@ impl SigrokFileSource {
         let trigger_sample = values
             .get("trigger sample")
             .map(|sample| {
-                sample.parse::<u64>().map_err(|_| {
-                    Error::ParseError("invalid device X.trigger sample".to_string())
-                })
+                sample
+                    .parse::<u64>()
+                    .map_err(|_| Error::ParseError("invalid device X.trigger sample".to_string()))
             })
             .transpose()?;
 
@@ -337,7 +331,6 @@ impl SigrokFileSource {
     pub fn header(&self) -> &CaptureMetadata {
         &self.header
     }
-
 }
 
 impl ProcessNode for SigrokFileSource {

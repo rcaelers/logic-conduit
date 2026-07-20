@@ -1,24 +1,23 @@
 //! Device-buffered live-acquisition adapter for the concrete U3Pro16 driver.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
 use signal_processing::{
-    CaptureAcquisitionPhase, CaptureChannelId, CaptureChunk, CaptureProgress,
-    CaptureCompletion, CaptureSessionId, CaptureSessionState,
+    CaptureAcquisitionPhase, CaptureChannelId, CaptureChunk, CaptureCompletion, CaptureProgress,
+    CaptureSessionId, CaptureSessionState,
 };
 
-use crate::nodes::{
-    DsLogicCapturePlan, DsLogicU3Pro16, LogicAnalyzer, LogicCaptureConfig,
-    RusbTransport, UsbTransport,
-};
-
+use super::u3pro16_common_native::{CanonicalTransferAssembler, map_analyzer_error};
 use super::{
     AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult,
     PreparedAcquisition,
 };
-use super::u3pro16_common_native::{CanonicalTransferAssembler, map_analyzer_error};
+use crate::nodes::{
+    DsLogicCapturePlan, DsLogicU3Pro16, LogicAnalyzer, LogicCaptureConfig, RusbTransport,
+    UsbTransport,
+};
 
 pub struct DsLogicU3Pro16BufferedProvider<T: UsbTransport = RusbTransport> {
     analyzer: DsLogicU3Pro16<T>,
@@ -168,9 +167,7 @@ impl<T: UsbTransport> PreparedBufferedAcquisition<T> {
                 }
                 Err(error) => return Err(map_analyzer_error(error)),
             };
-            if !header_seen
-                && let Some(header) = analyzer.take_trigger_header()
-            {
+            if !header_seen && let Some(header) = analyzer.take_trigger_header() {
                 header_seen = true;
                 expected_samples = Some(header.captured_samples());
                 if let Some(trigger_sample) = header.trigger_sample() {
@@ -269,7 +266,9 @@ impl<T: UsbTransport> PreparedBufferedAcquisition<T> {
 
     fn join_worker(&mut self) -> AcquisitionResult<AcquisitionOutcome> {
         let handle = self.handle.take().ok_or(AcquisitionError::NotStarted)?;
-        handle.join().map_err(|_| AcquisitionError::WorkerPanicked)?
+        handle
+            .join()
+            .map_err(|_| AcquisitionError::WorkerPanicked)?
     }
 }
 
@@ -282,8 +281,14 @@ impl<T: UsbTransport> PreparedAcquisition for PreparedBufferedAcquisition<T> {
         if self.started {
             return Err(AcquisitionError::AlreadyStarted);
         }
-        let context = self.context.take().ok_or(AcquisitionError::AlreadyStarted)?;
-        let analyzer = self.analyzer.take().ok_or(AcquisitionError::AlreadyStarted)?;
+        let context = self
+            .context
+            .take()
+            .ok_or(AcquisitionError::AlreadyStarted)?;
+        let analyzer = self
+            .analyzer
+            .take()
+            .ok_or(AcquisitionError::AlreadyStarted)?;
         let config = self.config.clone();
         let channels = Arc::clone(&self.channels);
         let plan = self.plan;
@@ -291,9 +296,7 @@ impl<T: UsbTransport> PreparedAcquisition for PreparedBufferedAcquisition<T> {
         self.handle = Some(
             std::thread::Builder::new()
                 .name("u3pro16-buffered-capture".into())
-                .spawn(move || {
-                    Self::run(context, analyzer, config, channels, plan, stop_requested)
-                })
+                .spawn(move || Self::run(context, analyzer, config, channels, plan, stop_requested))
                 .map_err(|error| AcquisitionError::WorkerStart(error.to_string()))?,
         );
         self.started = true;

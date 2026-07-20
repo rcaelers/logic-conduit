@@ -15,7 +15,7 @@ use super::uart_decoder::UartDecoderBuilder;
 use super::uart_demo_source::UartDemoSourceBuilder;
 use super::viewer::ViewerBuilder;
 use super::word_matcher::WordMatcherBuilder;
-use crate::compiler::RuntimeBuilder;
+use crate::RuntimeBuilder;
 
 pub(crate) fn standard_builders() -> HashMap<String, Box<dyn RuntimeBuilder>> {
     let mut builders: HashMap<String, Box<dyn RuntimeBuilder>> = HashMap::new();

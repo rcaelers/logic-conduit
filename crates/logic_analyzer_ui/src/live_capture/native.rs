@@ -10,7 +10,7 @@ use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
-use logic_analyzer_graph::compiler::{CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature};
+use logic_analyzer_graph::{CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature};
 use logic_analyzer_processing::{
     AcquisitionContext, CaptureExportObserver, CaptureExportProgress, CaptureExportReport,
     CaptureExportRequest, RawCaptureExportFormat, export_finalized_capture,
@@ -319,7 +319,7 @@ pub(crate) struct CaptureCoordinator {
 
 impl CaptureCoordinator {
     #[cfg(test)]
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         let root = tempfile::tempdir().expect("temporary capture root must be available");
         let repository = NativeCaptureSessionRepository::new(
             NativeCaptureSessionRepositoryConfig::new(root.path()),
@@ -363,7 +363,7 @@ impl CaptureCoordinator {
         }
     }
 
-    pub(crate) fn current_session_id(&self) -> Option<CaptureSessionId> {
+    fn current_session_id(&self) -> Option<CaptureSessionId> {
         self.completed
             .as_ref()
             .map(|completed| completed.capture.manifest().descriptor.session_id())
@@ -583,8 +583,8 @@ impl CaptureCoordinator {
         }
         self.discard_all_capture_data()?;
         let session_id = fresh_session_id();
-        let source_node = feature.source_node;
-        let source_title = feature.source_title.clone();
+        let source_node = feature.source_node();
+        let source_title = feature.source_title().to_owned();
         let session_plan = feature.session_plan().cloned().map(|plan| {
             if mode == CaptureStartMode::CaptureNow {
                 plan.capture_now()
@@ -1368,12 +1368,12 @@ fn run_capture_worker(
         .map_err(|error| format!("could not build live analysis source: {error}"))?;
     analysis_ready
         .send(CaptureAnalysisAttachment {
-            source_node: feature.source_node,
+            source_node: feature.source_node(),
             process: analysis_process,
         })
         .map_err(|_| "live analysis attachment receiver closed".to_owned())?;
-    let source_node = feature.source_node;
-    let source_title = feature.source_title.clone();
+    let source_node = feature.source_node();
+    let source_title = feature.source_title().to_owned();
     let (waveform, waveform_worker) = NativeGrowingCaptureIndex::spawn(
         store.clone(),
         source_title,
@@ -1723,11 +1723,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    use logic_analyzer_graph::compiler::{
-        CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature, LiveCaptureFeature,
-        SimpleTriggerChannel,
+    use logic_analyzer_graph::{
+        self as compiler, CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature,
+        LiveCaptureFeature, SimpleTriggerChannel, nodes,
     };
-    use logic_analyzer_graph::{compiler, nodes};
     use logic_analyzer_processing::{
         AcquisitionContext, AcquisitionError, AcquisitionResult, BufferedFakeConfig,
         BufferedFakeController, BufferedFakeProvider, CaptureAnalysisChannel,
@@ -2111,7 +2110,7 @@ mod tests {
         prepare_calls: Arc<AtomicUsize>,
         drive_capture: impl FnOnce(),
     ) {
-        let source_node = feature.source_node;
+        let source_node = feature.source_node();
         let channels = feature.channels().to_vec();
         assert_eq!(feature.capabilities().data_delivery(), expected_delivery);
 
@@ -2261,7 +2260,7 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(feature.source_node, source);
+        assert_eq!(feature.source_node(), source);
 
         let mut coordinator = CaptureCoordinator::new();
         coordinator

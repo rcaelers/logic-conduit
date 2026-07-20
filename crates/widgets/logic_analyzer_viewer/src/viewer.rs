@@ -617,7 +617,7 @@ impl LogicAnalyzerViewer {
         }
     }
 
-    pub(crate) fn layout(&self, ui: &Ui, rect: Rect) -> AnalyzerLayout {
+    fn layout(&self, ui: &Ui, rect: Rect) -> AnalyzerLayout {
         let ruler_height = 34.0;
         let row_height = 30.0;
         let label_pad = 12.0;
@@ -709,7 +709,7 @@ impl LogicAnalyzerViewer {
     /// Returns the time viewport to its origin and fits the complete
     /// recording. Uses capture metadata when available, otherwise the latest
     /// timestamp in loaded channel transitions or derived lanes.
-    pub(crate) fn reset_time_view(&mut self) {
+    fn reset_time_view(&mut self) {
         self.leave_live_edge();
         self.visible_start_us = 0.0;
         if let Some(capture) = self.capture_info.as_ref() {

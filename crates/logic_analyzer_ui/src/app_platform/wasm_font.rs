@@ -1,3 +1,3 @@
-pub(super) fn load_symbol_fonts() -> Vec<egui::FontData> {
+pub(crate) fn load_symbol_fonts() -> Vec<egui::FontData> {
     Vec::new()
 }

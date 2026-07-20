@@ -3,17 +3,6 @@ use std::sync::Arc;
 
 use crate::Result;
 
-std::cfg_select! {
-    target_arch = "wasm32" => {
-        #[path = "capture_backing_wasm.rs"]
-        mod capture_backing;
-    }
-    _ => {
-        #[path = "capture_backing_native.rs"]
-        mod capture_backing;
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct CaptureMetadata {
     /// Total number of probes/channels.
@@ -179,7 +168,7 @@ pub struct BlockData {
     len: usize,
 }
 
-trait BlockBacking: Send + Sync {
+pub(crate) trait BlockBacking: Send + Sync {
     fn bytes(&self) -> &[u8];
 
     fn shares_backing(&self, _other: &dyn BlockBacking) -> bool {
@@ -210,6 +199,15 @@ impl BlockBacking for SharedBlockBacking {
 }
 
 impl BlockData {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn from_backing(backing: Arc<dyn BlockBacking>, offset: usize, len: usize) -> Self {
+        Self {
+            backing,
+            offset,
+            len,
+        }
+    }
+
     /// Creates a view into this backing allocation without copying bytes.
     pub fn slice(&self, offset: usize, len: usize) -> Option<Self> {
         let end = offset.checked_add(len)?;

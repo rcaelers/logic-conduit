@@ -7,13 +7,13 @@ use crate::model::{Node, NodeBadge, Socket};
 /// Layout facts about one panel section, including the stable identity and
 /// row height of each property.
 pub(crate) struct PanelSectionMeta {
-    pub title: &'static str,
-    pub props: Vec<PanelPropMeta>,
+    pub(crate) title: &'static str,
+    pub(crate) props: Vec<PanelPropMeta>,
 }
 
 pub(crate) struct PanelPropMeta {
-    pub id: &'static str,
-    pub height: Option<f32>,
+    pub(crate) id: &'static str,
+    pub(crate) height: Option<f32>,
 }
 
 pub(crate) trait NodeInstance {

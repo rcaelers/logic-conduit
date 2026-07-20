@@ -3,36 +3,20 @@ use std::path::Path;
 use std::sync::Arc;
 
 use input_bindings::{InputBindings, PointerButtonName, PointerGesture, Trigger};
-use logic_analyzer_graph::{compiler, nodes};
+use logic_analyzer_graph::{self as compiler, nodes};
 use logic_analyzer_viewer::{LogicAnalyzerViewer, SimpleTriggerEdit, SimpleTriggerLane};
 use node_graph::{GraphState, NodeBadge, NodeContextAction, NodeGraphWidget, NodeId};
 use panel_layout::{BoundaryInteraction, PanelIcon, PanelLayout, PanelSlot, PanelSpec};
 use trigger_editor::{TriggerEditor, TriggerEditorChannel};
 
 use crate::about::AboutWindow;
+use crate::app_platform::load_symbol_fonts;
 use crate::demo_signals;
 use crate::live_capture::{
     CaptureAnalysisAttachment, CaptureAvailability, CaptureCoordinator, CaptureCoordinatorContract,
     CaptureReplayAttachment, ConfigurationEpochResolution, capture_availability,
 };
 use crate::toast::Toasts;
-
-std::cfg_select! {
-    target_arch = "wasm32" => {
-        #[path = "app_platform/wasm_font.rs"]
-        mod font_platform;
-        #[path = "app_platform/wasm_hooks.rs"]
-        mod platform_hooks;
-    }
-    _ => {
-        #[path = "app_platform/native_font.rs"]
-        mod font_platform;
-        #[path = "app_platform/native_hooks.rs"]
-        mod platform_hooks;
-    }
-}
-
-use self::font_platform::load_symbol_fonts;
 
 const SAMPLING_OVERLAY_EXTENSION: &str = "logic_analyzer_ui.sampling_overlay";
 
@@ -62,38 +46,38 @@ fn save_sampling_overlay(
 }
 
 pub struct App {
-    node_graph: NodeGraphWidget,
-    logic_analyzer: LogicAnalyzerViewer,
-    input_bindings: Arc<InputBindings>,
-    panel_layout: PanelLayout,
-    builders: compiler::BuilderRegistry,
-    capture: CaptureCoordinator,
-    capture_availability: CaptureAvailability,
-    trigger_configuration: Option<compiler::DiscoveredTriggerConfiguration>,
-    trigger_configuration_error: Option<String>,
-    capture_graph: Option<GraphState>,
-    capture_analysis: Option<compiler::AppRun>,
-    capture_analysis_error: Option<String>,
-    capture_epoch_observed_graph: Option<Vec<u8>>,
-    capture_epoch_request_in_flight: bool,
-    last_capture_epoch_sync: f64,
-    run: Option<compiler::AppRun>,
+    pub(crate) node_graph: NodeGraphWidget,
+    pub(crate) logic_analyzer: LogicAnalyzerViewer,
+    pub(crate) input_bindings: Arc<InputBindings>,
+    pub(crate) panel_layout: PanelLayout,
+    pub(crate) builders: compiler::BuilderRegistry,
+    pub(crate) capture: CaptureCoordinator,
+    pub(crate) capture_availability: CaptureAvailability,
+    pub(crate) trigger_configuration: Option<compiler::DiscoveredTriggerConfiguration>,
+    pub(crate) trigger_configuration_error: Option<String>,
+    pub(crate) capture_graph: Option<GraphState>,
+    pub(crate) capture_analysis: Option<compiler::AppRun>,
+    pub(crate) capture_analysis_error: Option<String>,
+    pub(crate) capture_epoch_observed_graph: Option<Vec<u8>>,
+    pub(crate) capture_epoch_request_in_flight: bool,
+    pub(crate) last_capture_epoch_sync: f64,
+    pub(crate) run: Option<compiler::AppRun>,
     /// Persistent run *state* shown in the status bar next to Run/Stop — the
     /// current compile-error summary, or "stop & rerun to apply" while a
     /// live edit can't be applied in place. One-off events (a live edit that
     /// *did* apply, one that failed) go through `toasts` instead (Phase 4.2).
-    run_message: Option<(String, bool /* is_error */)>,
+    pub(crate) run_message: Option<(String, bool /* is_error */)>,
     /// Transient one-off notifications (file loaded/saved, node(s)
     /// copied/pasted, live-edit results) — bottom-right, self-clearing.
-    toasts: Toasts,
-    platform: crate::app_platform::PlatformState,
-    about: AboutWindow,
+    pub(crate) toasts: Toasts,
+    pub(crate) platform: crate::app_platform::PlatformState,
+    pub(crate) about: AboutWindow,
     /// Nodes badged with compile errors; cleared on the next Run.
-    error_badges: Vec<NodeId>,
+    pub(crate) error_badges: Vec<NodeId>,
     /// Last time the running pipeline was diffed against the edited graph.
-    last_live_sync: f64,
-    sampling_overlay_candidates: Vec<compiler::SamplingOverlayCandidate>,
-    selected_sampling_overlay: Option<NodeId>,
+    pub(crate) last_live_sync: f64,
+    pub(crate) sampling_overlay_candidates: Vec<compiler::SamplingOverlayCandidate>,
+    pub(crate) selected_sampling_overlay: Option<NodeId>,
 }
 
 impl App {
@@ -212,7 +196,7 @@ impl App {
         self.refresh_trigger_configuration();
     }
 
-    fn set_capture_preview(&mut self, signals: Vec<nodes::CapturePreviewSignal>) {
+    pub(crate) fn set_capture_preview(&mut self, signals: Vec<nodes::CapturePreviewSignal>) {
         let duration_us = signals
             .iter()
             .flat_map(|signal| signal.transitions.last().map(|(time, _)| *time))
@@ -355,25 +339,25 @@ impl App {
         let overlay = self.selected_sampling_overlay.and_then(|selected| {
             self.sampling_overlay_candidates
                 .iter()
-                .find(|candidate| candidate.node_id == selected)
-                .map(|candidate| candidate.overlay.clone())
+                .find(|candidate| candidate.node_id() == selected)
+                .map(|candidate| candidate.overlay().clone())
         });
         self.logic_analyzer.set_sampling_overlay(overlay);
 
         let mut actions: HashMap<NodeId, Vec<NodeContextAction>> = HashMap::new();
         for candidate in &self.sampling_overlay_candidates {
-            let selected = self.selected_sampling_overlay == Some(candidate.node_id);
+            let selected = self.selected_sampling_overlay == Some(candidate.node_id());
             let mut action = NodeContextAction::new("sampling_overlay", "Sampling Points")
                 .with_checkmark(selected);
             if !selected {
                 action = action.with_icon("◆");
             }
-            actions.insert(candidate.node_id, vec![action]);
+            actions.insert(candidate.node_id(), vec![action]);
         }
         self.node_graph.set_node_context_actions(actions);
     }
 
-    fn restore_sampling_overlay_setting(&mut self) {
+    pub(crate) fn restore_sampling_overlay_setting(&mut self) {
         match saved_sampling_overlay(self.node_graph.graph()) {
             Ok(selected) => self.selected_sampling_overlay = selected,
             Err(error) => {
@@ -406,7 +390,7 @@ impl App {
             !self
                 .sampling_overlay_candidates
                 .iter()
-                .any(|candidate| candidate.node_id == selected)
+                .any(|candidate| candidate.node_id() == selected)
         }) {
             self.selected_sampling_overlay = None;
             self.persist_sampling_overlay_setting();
@@ -419,7 +403,7 @@ impl App {
             || !self
                 .sampling_overlay_candidates
                 .iter()
-                .any(|candidate| candidate.node_id == node_id)
+                .any(|candidate| candidate.node_id() == node_id)
         {
             return;
         }
@@ -506,9 +490,9 @@ impl App {
             self.platform_prepare_run(&mut ctx);
         }
         self.logic_analyzer
-            .set_derived_lanes(ctx.derived_lanes.clone());
+            .set_derived_lanes(ctx.derived_lanes().clone());
         self.logic_analyzer
-            .set_viewer_lanes(ctx.viewer_lanes.clone());
+            .set_viewer_lanes(ctx.viewer_lanes().clone());
 
         let started = match replay {
             Some(CaptureReplayAttachment {
@@ -528,7 +512,7 @@ impl App {
         };
         match started {
             Ok(run) => {
-                self.set_sampling_overlay_candidates(ctx.sampling_overlays);
+                self.set_sampling_overlay_candidates(ctx.take_sampling_overlays());
                 self.run = Some(run);
             }
             Err(errors) => {
@@ -539,7 +523,7 @@ impl App {
         }
     }
 
-    fn is_running(&self) -> bool {
+    pub(crate) fn is_running(&self) -> bool {
         self.run.as_ref().is_some_and(|run| !run.is_finished())
     }
 
@@ -552,13 +536,13 @@ impl App {
     /// already are (only one is ever shown at a time), so triggering either
     /// while it doesn't apply (Run while already running, Stop while not)
     /// is a safe no-op rather than double-starting or double-stopping.
-    fn run_command(&mut self) {
+    pub(crate) fn run_command(&mut self) {
         if !self.is_running() && !self.capture.is_active() && !self.is_capture_analysis_active() {
             self.start_run();
         }
     }
 
-    fn run_unavailable_reason(&self) -> Option<String> {
+    pub(crate) fn run_unavailable_reason(&self) -> Option<String> {
         if self.is_running() {
             return Some("The pipeline is already running".into());
         }
@@ -577,7 +561,7 @@ impl App {
         }
     }
 
-    fn stop_command(&mut self) {
+    pub(crate) fn stop_command(&mut self) {
         if self.is_running()
             && !self.is_stopping()
             && let Some(run) = &mut self.run
@@ -722,16 +706,16 @@ impl App {
         }
         let mut ctx = compiler::CompileCtx::default();
         self.logic_analyzer
-            .set_derived_lanes(ctx.derived_lanes.clone());
+            .set_derived_lanes(ctx.derived_lanes().clone());
         self.logic_analyzer
-            .set_viewer_lanes(ctx.viewer_lanes.clone());
+            .set_viewer_lanes(ctx.viewer_lanes().clone());
         let source = compiler::LiveAnalysisSource {
             source_node: attachment.source_node,
             process: attachment.process,
         };
         match compiler::start_live_analysis(&graph, &self.builders, &mut ctx, source) {
             Ok(run) => {
-                self.set_sampling_overlay_candidates(ctx.sampling_overlays);
+                self.set_sampling_overlay_candidates(ctx.take_sampling_overlays());
                 self.capture_analysis = Some(run);
             }
             Err(errors) => {
@@ -868,7 +852,7 @@ impl App {
         }
     }
 
-    fn is_capture_analysis_active(&self) -> bool {
+    pub(crate) fn is_capture_analysis_active(&self) -> bool {
         self.capture_analysis
             .as_ref()
             .is_some_and(|run| !run.is_finished())
@@ -1400,7 +1384,7 @@ impl App {
         }
     }
 
-    fn show_view_panel(&mut self, content_id: &str) {
+    pub(crate) fn show_view_panel(&mut self, content_id: &str) {
         self.panel_layout.ensure_right_column_content(
             content_id,
             &VIEW_PANEL_ORDER,
@@ -1408,7 +1392,7 @@ impl App {
         );
     }
 
-    fn reset_panel_layout(&mut self) {
+    pub(crate) fn reset_panel_layout(&mut self) {
         self.panel_layout = PanelLayout::new([
             ("logic_analyzer", DEFAULT_ANALYZER_SPLIT),
             ("node_graph", 1.0 - DEFAULT_ANALYZER_SPLIT),

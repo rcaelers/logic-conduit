@@ -52,7 +52,7 @@ pub struct LiveStoreConfig {
 impl Default for LiveStoreConfig {
     fn default() -> Self {
         Self {
-            directory: super::store::default_working_directory(),
+            directory: super::default_working_directory(),
             cache_key_prefix: [0; 16],
             block: BlockCodecConfig::default(),
             hot_tail_publish_words: DEFAULT_HOT_TAIL_PUBLISH_WORDS,

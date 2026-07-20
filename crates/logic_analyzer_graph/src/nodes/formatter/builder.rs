@@ -6,8 +6,7 @@ use logic_analyzer_processing::TextFormatter;
 use node_graph::Socket;
 use signal_processing::{ConfigValue, NodeConfig, NumberSample, ProcessNode, TextSample};
 
-use crate::compiler::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
-use crate::nodes;
+use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, nodes, parse_state};
 
 pub(crate) struct FormatterBuilder;
 

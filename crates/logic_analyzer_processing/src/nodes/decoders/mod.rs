@@ -2,10 +2,10 @@
 //!
 //! Decoders for live data processing using the channel-based architecture.
 
-pub mod parallel_decoder;
-pub mod spi_decoder;
-pub mod types;
-pub mod uart_decoder;
+mod parallel_decoder;
+mod spi_decoder;
+mod types;
+mod uart_decoder;
 
 // Re-export common types
 // Re-export decoders

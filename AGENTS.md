@@ -38,6 +38,35 @@ See `docs/DECODER_VIEW_LANE_DESIGN.md` for the detailed viewer-lane decision.
 See `docs/RESPONSIBILITY_AND_VISIBILITY_DESIGN.md` for symbol ownership,
 visibility, error-boundary, and enforcement rules.
 
+# Module layout and facades
+
+The owner-facade layout below is mandatory throughout the Rust workspace.
+
+1. Module declarations occur only in `lib.rs`, `main.rs`, and `mod.rs`. Test modules are the only
+   exception: they may occur in any Rust file, but their module names must contain `tests`.
+2. Modules are private by default. Symbols needed by another module are selectively re-exported
+   by the owning `mod.rs` or crate `lib.rs`; consumers import the facade path rather than a leaf
+   implementation path.
+3. Public modules are limited API namespaces. The public-module allowlist is maintained in
+   `docs/RESPONSIBILITY_AND_VISIBILITY_DESIGN.md`; every module absent from it is private. Adding
+   a public module requires an explicit design update and API review.
+4. Every public module is directory-backed and has a `mod.rs`. Do not create a public module
+   backed directly by a sibling `.rs` file.
+5. A `mod.rs` contains only module documentation, attributes on declarations or re-exports,
+   module declarations, and re-exports. Put structs, enums, traits, implementations, functions,
+   constants, type aliases, executable macro bodies, and other implementation code in leaf files.
+6. Use private visibility for same-module implementation details, `pub(crate)` for symbols
+   re-exported through an internal crate facade, and `pub` only for supported cross-crate or
+   plugin contracts re-exported through an allowed public facade. Do not use `pub(super)` or
+   `pub(in ...)`.
+7. Struct fields are private by default. Behavioral or invariant-owning structs expose methods.
+   Plain record types intended for construction or pattern matching may expose fields, but all
+   data fields use one visibility matching the record contract; do not mix private, `pub(crate)`,
+   and `pub` data fields in one struct.
+
+See the module layout and public-module allowlist in
+`docs/RESPONSIBILITY_AND_VISIBILITY_DESIGN.md`.
+
 # Platform boundaries
 
 - Do not scatter `#[cfg(target_arch = "wasm32")]` or its inverse across

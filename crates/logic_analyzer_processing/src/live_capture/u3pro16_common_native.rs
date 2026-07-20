@@ -4,17 +4,16 @@ use std::sync::Arc;
 
 use signal_processing::CaptureBytes;
 
+use super::{AcquisitionError, AcquisitionResult};
 use crate::nodes::{LogicAnalyzerError, LogicChunk, LogicEncoding};
 
-use super::{AcquisitionError, AcquisitionResult};
-
-pub(super) struct CanonicalTransfer {
-    pub bytes: CaptureBytes,
-    pub sample_count: u64,
+pub(crate) struct CanonicalTransfer {
+    pub(crate) bytes: CaptureBytes,
+    pub(crate) sample_count: u64,
 }
 
 impl CanonicalTransfer {
-    pub(super) fn limit_samples(
+    pub(crate) fn limit_samples(
         self,
         maximum: u64,
         channel_count: usize,
@@ -40,13 +39,13 @@ impl CanonicalTransfer {
 }
 
 #[derive(Default)]
-pub(super) struct CanonicalTransferAssembler {
+pub(crate) struct CanonicalTransferAssembler {
     input_bits: u64,
     carry: Vec<bool>,
 }
 
 impl CanonicalTransferAssembler {
-    pub(super) fn push(
+    pub(crate) fn push(
         &mut self,
         chunk: &LogicChunk,
         channel_count: usize,
@@ -80,7 +79,7 @@ impl CanonicalTransferAssembler {
         Ok((transfer.0.sample_count != 0).then_some(transfer.0))
     }
 
-    pub(super) fn finish(&self) -> AcquisitionResult<()> {
+    pub(crate) fn finish(&self) -> AcquisitionResult<()> {
         if self.carry.is_empty() {
             Ok(())
         } else {
@@ -186,7 +185,7 @@ fn canonicalize_transfer(
     ))
 }
 
-pub(super) fn map_analyzer_error(error: LogicAnalyzerError) -> AcquisitionError {
+pub(crate) fn map_analyzer_error(error: LogicAnalyzerError) -> AcquisitionError {
     match error {
         LogicAnalyzerError::InvalidSettings(message) => AcquisitionError::InvalidRequest(message),
         LogicAnalyzerError::Transport(message) | LogicAnalyzerError::Timeout(message) => {

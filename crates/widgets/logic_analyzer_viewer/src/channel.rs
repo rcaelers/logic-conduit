@@ -223,14 +223,14 @@ impl LogicAnalyzerViewer {
         self.row_at_y(layout, pointer.y)
     }
 
-    pub(crate) fn row_at_y(&self, layout: AnalyzerLayout, y: f32) -> Option<usize> {
+    fn row_at_y(&self, layout: AnalyzerLayout, y: f32) -> Option<usize> {
         if y < layout.labels_rect.top() || y > layout.labels_rect.bottom() {
             return None;
         }
         self.row_at_vertical(layout.labels_rect.top(), y, layout.row_height)
     }
 
-    pub(crate) fn row_badge_rect(&self, layout: AnalyzerLayout, row: usize) -> Rect {
+    fn row_badge_rect(&self, layout: AnalyzerLayout, row: usize) -> Rect {
         let row_top = self.row_top(layout.labels_rect.top(), row, layout.row_height);
         let height = self
             .row_order
@@ -304,7 +304,7 @@ impl LogicAnalyzerViewer {
         }
     }
 
-    pub(crate) fn set_row_name(&mut self, key: &RowKey, name: String) {
+    fn set_row_name(&mut self, key: &RowKey, name: String) {
         match key {
             RowKey::Channel(index) => self.set_channel_name(*index, name),
             RowKey::Derived(group_id) => {
@@ -324,7 +324,7 @@ impl LogicAnalyzerViewer {
         }
     }
 
-    pub(crate) fn set_channel_name(&mut self, channel_index: usize, name: String) {
+    fn set_channel_name(&mut self, channel_index: usize, name: String) {
         let name = name.trim().to_string();
         if name.is_empty() || name == channel_index.to_string() {
             self.channel_names.remove(&channel_index);
@@ -341,7 +341,7 @@ impl LogicAnalyzerViewer {
         }
     }
 
-    pub(crate) fn channel_display_name(&self, channel_index: usize) -> String {
+    fn channel_display_name(&self, channel_index: usize) -> String {
         self.channel_names
             .get(&channel_index)
             .cloned()
@@ -481,7 +481,7 @@ impl LogicAnalyzerViewer {
 
     /// Moves any row — channel or derived lane — to `target_row`, freely
     /// interleaving the two.
-    pub(crate) fn move_row(&mut self, key: &RowKey, target_row: usize) {
+    fn move_row(&mut self, key: &RowKey, target_row: usize) {
         let Some(from_row) = self.row_order.iter().position(|existing| existing == key) else {
             return;
         };

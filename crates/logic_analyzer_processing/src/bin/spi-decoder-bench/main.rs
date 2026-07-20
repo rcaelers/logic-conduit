@@ -61,7 +61,7 @@ std::cfg_select! {
                 sink: SinkKind,
             }
 
-            pub(super) fn main() -> Result<(), Box<dyn std::error::Error>> {
+            pub(crate) fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let args = Args::parse();
                 let channels = args.clk.max(args.mosi).max(args.cs) + 1;
                 let source = DslFileSource::new(&args.capture, channels as u8)?;

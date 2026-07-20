@@ -145,10 +145,10 @@ impl node_graph::SocketWithControlDef for TextOpenPath {
 
 // ── Category colors ──────────────────────────────────────────────────────────
 
-pub(super) const COLOR_SOURCES: Color32 = Color32::from_rgb(100, 75, 140);
-pub(super) const COLOR_DECODERS: Color32 = Color32::from_rgb(60, 100, 160);
-pub(super) const COLOR_LOGIC: Color32 = Color32::from_rgb(60, 140, 100);
-pub(super) const COLOR_OUTPUT: Color32 = Color32::from_rgb(160, 80, 60);
+pub(crate) const COLOR_SOURCES: Color32 = Color32::from_rgb(100, 75, 140);
+pub(crate) const COLOR_DECODERS: Color32 = Color32::from_rgb(60, 100, 160);
+pub(crate) const COLOR_LOGIC: Color32 = Color32::from_rgb(60, 140, 100);
+pub(crate) const COLOR_OUTPUT: Color32 = Color32::from_rgb(160, 80, 60);
 
 // ── Registry ─────────────────────────────────────────────────────────────────
 
@@ -175,7 +175,7 @@ pub fn build_registry() -> NodeTypeRegistry {
 // ── Test graph fixtures ──────────────────────────────────────────────────────
 
 #[cfg(test)]
-pub(crate) mod test_graphs {
+pub(crate) mod test_graphs_tests {
     use node_graph::NodeDef;
 
     use super::super::binary_decoder::{self, BinaryDecoderState};
@@ -252,8 +252,7 @@ pub(crate) mod test_graphs {
         widget.set_node_state(
             spi,
             serde_json::to_value(SpiDecoderState {
-                schema_version: 1,
-                compatibility_warning: None,
+                metadata: crate::nodes::SpiDecoderMetadata::current(),
                 display_format: crate::nodes::uart_decoder::default_display_format(),
                 word_size: IntValue::new(8, 1, 64),
                 cpol: EnumValue::new(0, &["0", "1"]),
@@ -392,8 +391,7 @@ pub(crate) mod test_graphs {
         widget.set_node_state(
             spi,
             serde_json::to_value(SpiDecoderState {
-                schema_version: 1,
-                compatibility_warning: None,
+                metadata: crate::nodes::SpiDecoderMetadata::current(),
                 display_format: crate::nodes::uart_decoder::default_display_format(),
                 word_size: IntValue::new(24, 1, 32),
                 cpol: EnumValue::new(0, &["0", "1"]),
@@ -554,7 +552,7 @@ mod tests {
     #[test]
     fn startup_graph_builds_with_compatible_wiring() {
         let mut widget = NodeGraphWidget::new(build_registry());
-        test_graphs::populate_startup(&mut widget);
+        test_graphs_tests::populate_startup(&mut widget);
         let graph = widget.graph();
 
         assert_eq!(graph.nodes.len(), 10);
@@ -580,10 +578,10 @@ mod tests {
 
     #[test]
     fn binary_decoder_demo_fixture_lowers() {
-        use crate::compiler::{BuilderRegistry, lower};
+        use crate::{BuilderRegistry, lower};
 
         let mut widget = NodeGraphWidget::new(build_registry());
-        test_graphs::build_binary_decoder_demo(&mut widget);
+        test_graphs_tests::build_binary_decoder_demo(&mut widget);
         assert!(
             widget
                 .graph()
@@ -621,7 +619,7 @@ mod tests {
     #[test]
     fn graph_file_api_round_trips_the_startup_graph() {
         let mut original = NodeGraphWidget::new(build_registry());
-        test_graphs::populate_startup(&mut original);
+        test_graphs_tests::populate_startup(&mut original);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pipeline.json");
         original.save_to_path(&path).unwrap();
@@ -638,10 +636,10 @@ mod tests {
     /// compile to the same pipeline.
     #[test]
     fn graph_json_round_trip_compiles_identically() {
-        use crate::compiler::{BuilderRegistry, lower};
+        use crate::{BuilderRegistry, lower};
 
         let mut widget = NodeGraphWidget::new(build_registry());
-        test_graphs::populate_startup(&mut widget);
+        test_graphs_tests::populate_startup(&mut widget);
         let registry = BuilderRegistry::standard();
         let original = lower(widget.graph(), &registry).expect("original lowers");
 
@@ -663,7 +661,7 @@ mod tests {
                 a.builder
             );
         }
-        let edges = |compiled: &crate::compiler::CompiledGraph| {
+        let edges = |compiled: &crate::CompiledGraph| {
             let mut edges: Vec<String> = compiled
                 .edges
                 .iter()

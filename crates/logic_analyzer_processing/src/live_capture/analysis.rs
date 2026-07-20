@@ -3,11 +3,9 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use signal_processing::errors::{WorkError, WorkResult};
-use signal_processing::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 use signal_processing::{
-    CaptureChannelId, CaptureCursorItem, CaptureStoreCursor, ProcessNode, Sample, SampleBlock,
-    SampleKind,
+    CaptureChannelId, CaptureCursorItem, CaptureStoreCursor, InputPort, OutputPort, PortDirection,
+    PortSchema, ProcessNode, Sample, SampleBlock, SampleKind, WorkError, WorkResult,
 };
 
 const CURSOR_WAIT: Duration = Duration::from_millis(10);
@@ -329,10 +327,9 @@ mod tests {
 
     use crossbeam_channel::bounded;
 
-    use signal_processing::sender::{ChannelMessage, Sender};
-    use signal_processing::watchdog::Watchdog;
     use signal_processing::{
         CaptureChunk, CaptureCursorItem, CaptureSessionId, CaptureStoreCursor, CaptureStoreResult,
+        ChannelMessage, Sender, Watchdog,
     };
 
     use super::*;

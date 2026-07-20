@@ -120,7 +120,7 @@ impl LogicAnalyzerViewer {
         ));
     }
 
-    pub(crate) fn capture_trigger_x(&self, wave_rect: Rect) -> Option<f32> {
+    fn capture_trigger_x(&self, wave_rect: Rect) -> Option<f32> {
         let capture = self.capture_info.as_ref()?;
         let sample = capture.header.trigger_sample?;
         let time_us = sample as f64 * 1_000_000.0 / capture.header.samplerate_hz;
@@ -295,7 +295,7 @@ impl LogicAnalyzerViewer {
                                 else {
                                     continue;
                                 };
-                                match &cached.samples {
+                                match cached.samples() {
                                     IndexedAnnotationSamples::Exact {
                                         annotations,
                                         last_timestamp_ns,
@@ -395,7 +395,7 @@ impl LogicAnalyzerViewer {
                     DerivedLaneData::IndexedAnnotations(_) => self
                         .indexed_annotation_cache
                         .get(&lane.name)
-                        .map_or((Vec::new(), true), |cached| match &cached.samples {
+                        .map_or((Vec::new(), true), |cached| match cached.samples() {
                             IndexedAnnotationSamples::Exact { annotations, .. } => (
                                 annotations
                                     .iter()
@@ -592,7 +592,7 @@ impl LogicAnalyzerViewer {
         (start_ns, end_ns)
     }
 
-    pub(super) fn ns_to_x(&self, rect: Rect, ns: u64) -> f32 {
+    pub(crate) fn ns_to_x(&self, rect: Rect, ns: u64) -> f32 {
         self.time_to_x(rect, ns as f64 / 1_000.0)
     }
 

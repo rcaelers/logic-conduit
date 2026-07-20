@@ -45,7 +45,7 @@ pub struct PortSchema {
     /// [`super::node::ProcessNode::edge_query`]).
     pub protocols: Vec<ProtocolKind>,
     /// Payload kinds (`Sample` vs `SampleBlock`) this *output* port can
-    /// produce, most preferred first — see [`super::sample_kind::negotiate`].
+    /// produce, most preferred first — see [`crate::negotiate_sample_kind`].
     /// Default empty, meaning "not polymorphic — `type_id` is the only
     /// option," true of every port except polymorphic raw-channel sources.
     /// Input ports leave this

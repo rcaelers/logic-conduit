@@ -12,10 +12,8 @@ use crate::nodes::registry::{COLOR_DECODERS, Signal, Words};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpiDecoderState {
-    #[serde(default)]
-    pub(crate) schema_version: u8,
-    #[serde(skip)]
-    pub(crate) compatibility_warning: Option<String>,
+    #[serde(flatten)]
+    pub metadata: SpiDecoderMetadata,
     #[serde(default = "crate::nodes::uart_decoder::default_display_format")]
     pub display_format: EnumValue,
     pub word_size: IntValue,
@@ -24,6 +22,23 @@ pub struct SpiDecoderState {
     pub bit_order: EnumValue,
     pub cs_polarity: EnumValue,
     pub has_miso: BoolValue,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SpiDecoderMetadata {
+    #[serde(default)]
+    schema_version: u8,
+    #[serde(skip)]
+    compatibility_warning: Option<String>,
+}
+
+impl SpiDecoderMetadata {
+    pub(crate) fn current() -> Self {
+        Self {
+            schema_version: 1,
+            compatibility_warning: None,
+        }
+    }
 }
 
 pub struct SpiDecoder;
@@ -62,8 +77,7 @@ impl NodeDef for SpiDecoder {
 
     fn state() -> Self::State {
         SpiDecoderState {
-            schema_version: 1,
-            compatibility_warning: None,
+            metadata: SpiDecoderMetadata::current(),
             display_format: crate::nodes::uart_decoder::default_display_format(),
             word_size: IntValue::new(8, 1, 64),
             cpol: EnumValue::new(0, &["0", "1"]),
@@ -99,7 +113,7 @@ impl NodeDef for SpiDecoder {
     }
 
     fn on_update(state: &mut Self::State, inputs: &mut [Socket], outputs: &mut [Socket]) {
-        if state.schema_version == 0 {
+        if state.metadata.schema_version == 0 {
             for (legacy, bits, data) in [(0, 2, 3), (1, 4, 5)] {
                 let was_in_view = outputs
                     .get(legacy)
@@ -116,8 +130,8 @@ impl NodeDef for SpiDecoder {
                     }
                 }
             }
-            state.schema_version = 1;
-            state.compatibility_warning = Some(
+            state.metadata.schema_version = 1;
+            state.metadata.compatibility_warning = Some(
                 "Upgraded SPI viewer outputs to Bits/Data; existing explicit Words connections were preserved"
                     .to_owned(),
             );
@@ -142,7 +156,11 @@ impl NodeDef for SpiDecoder {
     }
 
     fn badge(state: &Self::State) -> Option<NodeBadge> {
-        state.compatibility_warning.as_ref().map(NodeBadge::warning)
+        state
+            .metadata
+            .compatibility_warning
+            .as_ref()
+            .map(NodeBadge::warning)
     }
 }
 

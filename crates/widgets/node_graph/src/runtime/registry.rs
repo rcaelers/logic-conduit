@@ -239,7 +239,7 @@ fn build_node<T: NodeDef>(id: NodeId, pos: Pos2, state: T::State) -> NodeRuntime
         collapsed: false,
         muted: false,
         state: state_json,
-        property_count: properties.len(),
+        metadata: crate::model::NodeMetadata::with_property_count(properties.len()),
         badge: None,
         selected: false,
     };
@@ -256,11 +256,11 @@ fn build_node<T: NodeDef>(id: NodeId, pos: Pos2, state: T::State) -> NodeRuntime
     NodeRuntime { node, instance }
 }
 
-pub(crate) fn create_node<T: NodeDef>(id: NodeId, pos: Pos2) -> NodeRuntime {
+fn create_node<T: NodeDef>(id: NodeId, pos: Pos2) -> NodeRuntime {
     build_node::<T>(id, pos, T::state())
 }
 
-pub(crate) fn restore_node<T: NodeDef>(node: &mut Node) -> Box<dyn NodeInstance> {
+fn restore_node<T: NodeDef>(node: &mut Node) -> Box<dyn NodeInstance> {
     let state = serde_json::from_value(node.state.clone()).unwrap_or_else(|_| T::state());
     let inputs = T::inputs();
     let outputs = T::outputs();
@@ -270,7 +270,7 @@ pub(crate) fn restore_node<T: NodeDef>(node: &mut Node) -> Box<dyn NodeInstance>
     reconcile_input_sockets(&mut node.inputs, &inputs);
     reconcile_output_sockets(&mut node.outputs, &outputs);
 
-    node.property_count = properties.len();
+    node.set_property_count(properties.len());
     if node.type_name.is_empty() {
         node.type_name = T::name().to_owned();
     }
@@ -290,14 +290,14 @@ pub(crate) fn restore_node<T: NodeDef>(node: &mut Node) -> Box<dyn NodeInstance>
 // ── RegisteredNodeType ────────────────────────────────────────────────────────
 
 pub(crate) struct RegisteredNodeType {
-    pub name: String,
-    pub category: String,
-    pub create: fn(NodeId, Pos2) -> NodeRuntime,
-    pub restore: fn(&mut Node) -> Box<dyn NodeInstance>,
+    pub(crate) name: String,
+    pub(crate) category: String,
+    pub(crate) create: fn(NodeId, Pos2) -> NodeRuntime,
+    pub(crate) restore: fn(&mut Node) -> Box<dyn NodeInstance>,
 }
 
 impl RegisteredNodeType {
-    pub(crate) fn from_def<T: NodeDef>() -> Self {
+    fn from_def<T: NodeDef>() -> Self {
         Self {
             name: T::name().to_owned(),
             category: T::category().to_owned(),
@@ -379,7 +379,7 @@ impl NodeTypeRegistry {
         &self.types
     }
 
-    pub(crate) fn find(&self, name: &str) -> Option<&RegisteredNodeType> {
+    fn find(&self, name: &str) -> Option<&RegisteredNodeType> {
         self.types.iter().find(|d| d.name == name)
     }
 

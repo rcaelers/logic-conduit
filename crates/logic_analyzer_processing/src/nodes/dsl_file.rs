@@ -22,17 +22,11 @@ use signal_processing::capture::{
     BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureMetadata,
     CaptureSampledWindow, CaptureSource, CaptureTransition,
 };
-use signal_processing::edge_query::EdgeQuery;
-use signal_processing::errors::WorkResult;
-use signal_processing::events::TextSample;
-use signal_processing::node::ProcessNode;
-use signal_processing::ports::{InputPort, OutputPort};
-use signal_processing::protocol::ProtocolKind;
-use signal_processing::sample::{Sample, SampleBlock};
-use signal_processing::sample_kind::SampleKind;
-use signal_processing::sender::Sender;
 use signal_processing::waveform_index::{CaptureIndexProgress, IndexSampler};
-use signal_processing::{Error, Result};
+use signal_processing::{
+    EdgeQuery, Error, InputPort, OutputPort, ProcessNode, ProtocolKind, Result, Sample,
+    SampleBlock, SampleKind, Sender, TextSample, WorkResult,
+};
 
 use super::capture_archive::zip_error;
 
@@ -517,7 +511,7 @@ impl DslFileSource {
         guard.clone()
     }
 
-    pub(crate) fn parse_header(archive: &mut ZipArchive<File>) -> Result<CaptureMetadata> {
+    fn parse_header(archive: &mut ZipArchive<File>) -> Result<CaptureMetadata> {
         let mut header_file = archive
             .by_name("header")
             .map_err(|e| Error::ParseError(format!("Cannot find header file: {}", e)))?;
@@ -682,7 +676,7 @@ impl DslFileSource {
 
     /// Extract a single bit from a byte array at the given bit index
     #[inline]
-    pub(crate) fn get_bit(data: &[u8], bit_index: usize) -> bool {
+    fn get_bit(data: &[u8], bit_index: usize) -> bool {
         let byte_index = bit_index / 8;
         let bit_offset = bit_index % 8;
 
@@ -985,8 +979,8 @@ impl ProcessNode for DslFileSource {
         self.num_channels as usize
     }
 
-    fn output_schema(&self) -> Vec<signal_processing::ports::PortSchema> {
-        use signal_processing::ports::{PortDirection, PortSchema};
+    fn output_schema(&self) -> Vec<signal_processing::PortSchema> {
+        use signal_processing::{PortDirection, PortSchema};
 
         (0..self.num_channels)
             .map(|i| {
@@ -1030,7 +1024,7 @@ impl ProcessNode for DslFileSource {
     }
 
     fn work(&mut self, _inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
-        use signal_processing::errors::WorkError;
+        use signal_processing::WorkError;
 
         if self.threads_spawned {
             // Already started - this shouldn't be called again for self-threading nodes
@@ -1241,8 +1235,8 @@ impl ProcessNode for DeferredDslFileSource {
         self.num_channels as usize
     }
 
-    fn input_schema(&self) -> Vec<signal_processing::ports::PortSchema> {
-        use signal_processing::ports::{PortDirection, PortSchema};
+    fn input_schema(&self) -> Vec<signal_processing::PortSchema> {
+        use signal_processing::{PortDirection, PortSchema};
         vec![PortSchema::new::<TextSample>(
             "filename",
             0,
@@ -1250,8 +1244,8 @@ impl ProcessNode for DeferredDslFileSource {
         )]
     }
 
-    fn output_schema(&self) -> Vec<signal_processing::ports::PortSchema> {
-        use signal_processing::ports::{PortDirection, PortSchema};
+    fn output_schema(&self) -> Vec<signal_processing::PortSchema> {
+        use signal_processing::{PortDirection, PortSchema};
 
         // Mirrors `DslFileSource::output_schema` minus the `EdgeQuery`
         // protocol — the index can't answer queries before the file is
@@ -1265,7 +1259,7 @@ impl ProcessNode for DeferredDslFileSource {
     }
 
     fn work(&mut self, inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
-        use signal_processing::errors::WorkError;
+        use signal_processing::WorkError;
 
         if self.inner.is_some() {
             return Err(WorkError::NodeError(
@@ -1351,8 +1345,9 @@ fn block_destination_group(
 
 #[cfg(test)]
 mod tests {
+    use signal_processing::ProcessNode;
+
     use super::*;
-    use signal_processing::node::ProcessNode;
 
     #[test]
     fn bounded_block_cache_evicts_least_recently_used_entry() {
@@ -1389,11 +1384,7 @@ mod tests {
     #[test]
     fn deferred_source_reports_unopenable_file() {
         use crossbeam_channel::bounded;
-
-        use signal_processing::events::TextSample;
-        use signal_processing::errors::WorkError;
-        use signal_processing::sender::ChannelMessage;
-        use signal_processing::watchdog::Watchdog;
+        use signal_processing::{ChannelMessage, TextSample, Watchdog, WorkError};
 
         let wd = Watchdog::new();
         let (name_tx, name_rx) = bounded::<ChannelMessage<TextSample>>(4);
@@ -1422,11 +1413,7 @@ mod tests {
     #[test]
     fn deferred_source_shuts_down_on_closed_filename_channel() {
         use crossbeam_channel::bounded;
-
-        use signal_processing::events::TextSample;
-        use signal_processing::errors::WorkError;
-        use signal_processing::sender::ChannelMessage;
-        use signal_processing::watchdog::Watchdog;
+        use signal_processing::{ChannelMessage, TextSample, Watchdog, WorkError};
 
         let wd = Watchdog::new();
         let (name_tx, name_rx) = bounded::<ChannelMessage<TextSample>>(4);
@@ -1449,8 +1436,7 @@ mod tests {
     fn deferred_source_streams_the_named_file() {
         use std::sync::{Arc, Mutex};
 
-        use signal_processing::events::{TextSample};
-use signal_processing::pipeline::{Pipeline};
+        use signal_processing::{Pipeline, TextSample};
 
         let path = std::path::Path::new("_captures/wipneus5.dsl");
         if !path.exists() {
@@ -1473,8 +1459,8 @@ use signal_processing::pipeline::{Pipeline};
             fn num_outputs(&self) -> usize {
                 1
             }
-            fn output_schema(&self) -> Vec<signal_processing::ports::PortSchema> {
-                use signal_processing::ports::{PortDirection, PortSchema};
+            fn output_schema(&self) -> Vec<signal_processing::PortSchema> {
+                use signal_processing::{PortDirection, PortSchema};
                 vec![PortSchema::new::<TextSample>(
                     "text",
                     0,
@@ -1482,7 +1468,7 @@ use signal_processing::pipeline::{Pipeline};
                 )]
             }
             fn work(&mut self, _: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
-                use signal_processing::errors::WorkError;
+                use signal_processing::WorkError;
                 if self.sent {
                     return Err(WorkError::Shutdown);
                 }
@@ -1508,12 +1494,12 @@ use signal_processing::pipeline::{Pipeline};
             fn num_outputs(&self) -> usize {
                 0
             }
-            fn input_schema(&self) -> Vec<signal_processing::ports::PortSchema> {
-                use signal_processing::ports::{PortDirection, PortSchema};
+            fn input_schema(&self) -> Vec<signal_processing::PortSchema> {
+                use signal_processing::{PortDirection, PortSchema};
                 vec![PortSchema::new::<Sample>("in", 0, PortDirection::Input)]
             }
             fn work(&mut self, inputs: &[InputPort], _: &[OutputPort]) -> WorkResult<usize> {
-                use signal_processing::errors::WorkError;
+                use signal_processing::WorkError;
                 let mut buffer = std::collections::VecDeque::new();
                 let mut input = inputs
                     .first()
