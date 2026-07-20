@@ -10,6 +10,11 @@
   model.
 - Display live-source snapshots in the viewer through the same `CaptureDataSource` boundary
   used by file captures.
+- Make sampling-point overlays passive viewer data. Move clock-edge selection, qualifier
+  evaluation, and sampled-value lookup out of `logic_analyzer_viewer` into the owning concrete
+  runtime node or neutral processing infrastructure. Pass explicit, generic sampling-point
+  records and presentation metadata to the viewer so an overlay reflects produced data rather
+  than the viewer interpreting raw channels before the node has run.
 
 ### Plugin-extensible viewer payloads
 
