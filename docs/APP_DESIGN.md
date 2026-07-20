@@ -96,8 +96,9 @@ The `sources`, `decoders`, `logic`, and `sinks` directories mirror the processin
 Each executable feature directory within them groups a `node_graph::NodeDef` in `definition.rs`
 with its `RuntimeBuilder` in `builder.rs` and optional presentation metadata. Placement rule: the node body
 carries sockets and the controls someone tweaks while reading the graph (matcher pattern,
-gate op, template); everything else goes to the properties panel (SPI CPOL/CPHA/bit order,
-writer options, device settings).
+gate op, template); everything else goes to the properties panel (SPI word size/CPOL/CPHA/bit
+order, writer options, device settings). Viewer lane selection and presentation settings such as
+decoder data format live in the separate View panel.
 
 Sources: DSL File Source, DSLogic U3Pro16 (device settings in the panel — capture/signal
 sections and a 16-channel enable grid with the channel-count↔rate constraint enforced in

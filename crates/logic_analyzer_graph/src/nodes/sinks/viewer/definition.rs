@@ -50,9 +50,9 @@ impl NodeDef for Viewer {
         }
     }
 
-    fn panel() -> Vec<PanelSection<Self::State>> {
+    fn view_panel() -> Vec<PanelSection<Self::State>> {
         vec![PanelSection::new(
-            "Options",
+            "Presentation",
             vec![PropDef::control("label", "Label", |state| &mut state.label)],
         )]
     }

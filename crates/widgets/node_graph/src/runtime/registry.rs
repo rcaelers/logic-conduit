@@ -224,6 +224,7 @@ fn build_node<T: NodeDef>(id: NodeId, pos: Pos2, state: T::State) -> NodeRuntime
     let outputs = T::outputs();
     let properties = T::props();
     let panel = T::panel();
+    let view_panel = T::view_panel();
     let state_json = serde_json::to_value(&state).expect("node state must serialize");
     let input_sockets = build_input_sockets(&inputs);
     let output_sockets = build_output_sockets(&outputs);
@@ -249,6 +250,7 @@ fn build_node<T: NodeDef>(id: NodeId, pos: Pos2, state: T::State) -> NodeRuntime
         outputs,
         properties,
         panel,
+        view_panel,
     });
     instance.update(&mut node.inputs, &mut node.outputs);
     node.state = instance.save_state();
@@ -266,6 +268,7 @@ fn restore_node<T: NodeDef>(node: &mut Node) -> Box<dyn NodeInstance> {
     let outputs = T::outputs();
     let properties = T::props();
     let panel = T::panel();
+    let view_panel = T::view_panel();
 
     reconcile_input_sockets(&mut node.inputs, &inputs);
     reconcile_output_sockets(&mut node.outputs, &outputs);
@@ -280,6 +283,7 @@ fn restore_node<T: NodeDef>(node: &mut Node) -> Box<dyn NodeInstance> {
         outputs,
         properties,
         panel,
+        view_panel,
     });
     instance.update(&mut node.inputs, &mut node.outputs);
     node.state = instance.save_state();
@@ -435,7 +439,10 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
-    use crate::api::{AnySocket, FloatSocket, InputDef, IntSocket, NodeDef, OutputDef};
+    use crate::api::{
+        AnySocket, FloatSocket, InputDef, IntSocket, NodeDef, OutputDef, PanelSection, PropDef,
+        StringValue,
+    };
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     struct MixState;
@@ -473,6 +480,55 @@ mod tests {
         assert_eq!(inputs[0].def_index, 0);
         assert!(inputs[1].is_variadic_placeholder());
         assert_eq!(inputs[1].def_index, 1);
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    struct ViewPanelState {
+        label: StringValue,
+    }
+
+    struct ViewPanelNode;
+    impl NodeDef for ViewPanelNode {
+        type State = ViewPanelState;
+
+        fn name() -> &'static str {
+            "ViewPanel"
+        }
+        fn category() -> &'static str {
+            "Test"
+        }
+        fn inputs() -> Vec<InputDef<ViewPanelState>> {
+            vec![]
+        }
+        fn outputs() -> Vec<OutputDef<ViewPanelState>> {
+            vec![]
+        }
+        fn state() -> ViewPanelState {
+            ViewPanelState {
+                label: StringValue::new(""),
+            }
+        }
+        fn view_panel() -> Vec<PanelSection<ViewPanelState>> {
+            vec![PanelSection::new(
+                "Presentation",
+                vec![PropDef::control("label", "Label", |state| &mut state.label)],
+            )]
+        }
+    }
+
+    #[test]
+    fn create_and_restore_keep_view_panel_sections_separate() {
+        let runtime = create_node::<ViewPanelNode>(NodeId(0), Pos2::ZERO);
+        assert!(runtime.instance.panel_sections().is_empty());
+        let sections = runtime.instance.view_panel_sections();
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].title, "Presentation");
+        assert_eq!(sections[0].props.len(), 1);
+
+        let mut node = runtime.node;
+        let restored = restore_node::<ViewPanelNode>(&mut node);
+        assert!(restored.panel_sections().is_empty());
+        assert_eq!(restored.view_panel_sections().len(), 1);
     }
 
     #[test]

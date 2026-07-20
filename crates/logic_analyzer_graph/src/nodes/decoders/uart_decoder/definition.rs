@@ -120,9 +120,6 @@ impl NodeDef for UartDecoder {
         vec![PanelSection::new(
             "Options",
             vec![
-                PropDef::control("display_format", "Data display", |state| {
-                    &mut state.display_format
-                }),
                 PropDef::control("baud_preset", "Baud rate", |state| &mut state.baud_preset),
                 PropDef::control("baud_rate", "Custom baud rate", |state| {
                     &mut state.baud_rate
@@ -139,6 +136,17 @@ impl NodeDef for UartDecoder {
                     &mut state.error_output
                 }),
             ],
+        )]
+    }
+
+    fn view_panel() -> Vec<PanelSection<Self::State>> {
+        vec![PanelSection::new(
+            "Presentation",
+            vec![PropDef::control(
+                "display_format",
+                "Data display",
+                |state| &mut state.display_format,
+            )],
         )]
     }
 

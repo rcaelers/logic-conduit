@@ -93,9 +93,6 @@ impl NodeDef for SpiDecoder {
             "Options",
             vec![
                 PropDef::control("word_size", "Word size", |state| &mut state.word_size),
-                PropDef::control("display_format", "Data display", |state| {
-                    &mut state.display_format
-                }),
                 PropDef::control("cpol", "CPOL", |state| &mut state.cpol),
                 PropDef::control("cpha", "CPHA", |state| &mut state.cpha),
                 PropDef::control("bit_order", "Bit order", |state| &mut state.bit_order),
@@ -104,6 +101,17 @@ impl NodeDef for SpiDecoder {
                 }),
                 PropDef::control("has_miso", "Has MISO", |state| &mut state.has_miso),
             ],
+        )]
+    }
+
+    fn view_panel() -> Vec<PanelSection<Self::State>> {
+        vec![PanelSection::new(
+            "Presentation",
+            vec![PropDef::control(
+                "display_format",
+                "Data display",
+                |state| &mut state.display_format,
+            )],
         )]
     }
 

@@ -1,6 +1,7 @@
 //! Blender-style properties panel (N-panel): a resizable strip docked to the
-//! right border of the graph view showing the *active* node's low-frequency
-//! configuration. Widgets render in screen space at full
+//! right border of the graph view. The Node tab shows the *active* node's
+//! low-frequency configuration; the View tab shows its viewer lane and
+//! presentation configuration. Widgets render in screen space at full
 //! size, unaffected by graph zoom; edits mutate the same node state as
 //! inline controls and run `on_update` through the same path.
 
@@ -105,7 +106,7 @@ impl NodeGraphWidget {
     fn panel_height(&self, canvas_rect: Rect) -> f32 {
         let natural = match self.panel.active_tab {
             Some(PanelTab::Node) => self.node_panel_height(),
-            Some(PanelTab::View) => PANEL_MARGIN_Y * 2.0 + PANEL_TITLE_BLOCK_HEIGHT,
+            Some(PanelTab::View) => self.view_panel_height(),
             None => 0.0,
         };
         natural.clamp(0.0, canvas_rect.height().max(0.0))
@@ -121,6 +122,26 @@ impl NodeGraphWidget {
             + 2.0 * DEFAULT_ROW_HEIGHT
             + PANEL_SECTION_GAP;
 
+        if let Some(instance) = self.runtime.get(&node_id) {
+            for section in instance.panel_sections() {
+                height += COLLAPSING_HEADER_HEIGHT + PANEL_SECTION_GAP;
+                height += section
+                    .props
+                    .iter()
+                    .map(|prop| prop.height.unwrap_or(DEFAULT_ROW_HEIGHT))
+                    .sum::<f32>();
+            }
+        }
+
+        height
+    }
+
+    fn view_panel_height(&self) -> f32 {
+        let Some(node_id) = self.panel_target() else {
+            return PANEL_MARGIN_Y * 2.0 + PANEL_TITLE_BLOCK_HEIGHT;
+        };
+        let mut height = PANEL_MARGIN_Y * 2.0 + PANEL_TITLE_BLOCK_HEIGHT;
+
         let watchable_outputs = self
             .graph
             .nodes
@@ -134,7 +155,7 @@ impl NodeGraphWidget {
         }
 
         if let Some(instance) = self.runtime.get(&node_id) {
-            for section in instance.panel_sections() {
+            for section in instance.view_panel_sections() {
                 height += COLLAPSING_HEADER_HEIGHT + PANEL_SECTION_GAP;
                 height += section
                     .props
@@ -327,41 +348,6 @@ impl NodeGraphWidget {
                                     });
                                 });
 
-                            // Built-in section, generic across every node type
-                            // (no per-node code): one checkbox per output,
-                            // showing it as a logic analyzer lane without an
-                            // explicit wire to a `Viewer` node — the compiler
-                            // synthesizes the connection from `Socket::show_in_view`.
-                            let watchable: Vec<usize> = node
-                                .outputs
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, output)| output.visible)
-                                .map(|(index, _)| index)
-                                .collect();
-                            if !watchable.is_empty() {
-                                egui::CollapsingHeader::new("View").default_open(true).show(
-                                    ui,
-                                    |ui| {
-                                        for index in watchable {
-                                            let output = &mut node.outputs[index];
-                                            if ui
-                                                .add_enabled(
-                                                    editing_enabled,
-                                                    egui::Checkbox::new(
-                                                        &mut output.show_in_view,
-                                                        &output.name,
-                                                    ),
-                                                )
-                                                .changed()
-                                            {
-                                                changed = true;
-                                            }
-                                        }
-                                    },
-                                );
-                            }
-
                             for (section_index, section) in sections.iter().enumerate() {
                                 egui::CollapsingHeader::new(section.title)
                                     .id_salt(("props-panel-section", section.title, section_index))
@@ -432,7 +418,127 @@ impl NodeGraphWidget {
         );
     }
 
-    fn show_view_panel(&self, ui: &mut Ui, panel_rect: Rect) {
+    fn show_view_panel(&mut self, ui: &mut Ui, panel_rect: Rect) {
+        let Some(node_id) = self.panel_target() else {
+            self.show_empty_view_panel(ui, panel_rect);
+            return;
+        };
+
+        let painter = ui.painter_at(panel_rect);
+        painter.rect_filled(panel_rect, 0.0, Color32::from_rgb(38, 38, 38));
+        painter.line_segment(
+            [panel_rect.left_top(), panel_rect.left_bottom()],
+            Stroke::new(1.0_f32, Color32::from_rgb(70, 70, 70)),
+        );
+        let Some(node) = self.graph.nodes.get_mut(&node_id) else {
+            return;
+        };
+        let Some(instance) = self.runtime.get_mut(&node_id) else {
+            return;
+        };
+        let sections = instance.view_panel_sections();
+        let editing_enabled = self.editing_enabled;
+
+        let content = panel_rect.shrink2(Vec2::new(10.0, 8.0));
+        let mut changed = false;
+        ui.scope_builder(
+            UiBuilder::new()
+                .max_rect(content)
+                .layout(Layout::top_down(Align::Min)),
+            |ui| {
+                ui.set_clip_rect(panel_rect);
+                egui::ScrollArea::vertical()
+                    .id_salt("view-panel-scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.push_id(("view-panel", node_id.0), |ui| {
+                            ui.label(RichText::new(&node.title).size(15.0).strong());
+                            ui.label(RichText::new("Viewer settings").size(11.0).weak());
+                            ui.add_space(6.0);
+
+                            // Generic lane selection: one checkbox per visible
+                            // output. The compiler consumes `show_in_view`
+                            // without interpreting the node or output names.
+                            let watchable: Vec<usize> = node
+                                .outputs
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, output)| output.visible)
+                                .map(|(index, _)| index)
+                                .collect();
+                            if !watchable.is_empty() {
+                                egui::CollapsingHeader::new("Lanes")
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        for index in watchable {
+                                            let output = &mut node.outputs[index];
+                                            if ui
+                                                .add_enabled(
+                                                    editing_enabled,
+                                                    egui::Checkbox::new(
+                                                        &mut output.show_in_view,
+                                                        &output.name,
+                                                    ),
+                                                )
+                                                .changed()
+                                            {
+                                                changed = true;
+                                            }
+                                        }
+                                    });
+                            }
+
+                            for (section_index, section) in sections.iter().enumerate() {
+                                egui::CollapsingHeader::new(section.title)
+                                    .id_salt(("view-panel-section", section.title, section_index))
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        for (prop_index, prop) in section.props.iter().enumerate() {
+                                            ui.push_id(
+                                                (
+                                                    "view-panel-property",
+                                                    section.title,
+                                                    section_index,
+                                                    prop.id,
+                                                ),
+                                                |ui| {
+                                                    let height =
+                                                        prop.height.unwrap_or(DEFAULT_ROW_HEIGHT);
+                                                    let width = ui.available_width();
+                                                    let (rect, _) = ui.allocate_exact_size(
+                                                        Vec2::new(width, height),
+                                                        Sense::hover(),
+                                                    );
+                                                    if ui
+                                                        .add_enabled_ui(editing_enabled, |ui| {
+                                                            instance.draw_view_panel_prop(
+                                                                section_index,
+                                                                prop_index,
+                                                                ui,
+                                                                rect,
+                                                                panel_rect,
+                                                            )
+                                                        })
+                                                        .inner
+                                                    {
+                                                        changed = true;
+                                                    }
+                                                },
+                                            );
+                                        }
+                                    });
+                            }
+                        });
+                    });
+            },
+        );
+
+        if changed {
+            self.run_update(node_id);
+        }
+    }
+
+    fn show_empty_view_panel(&self, ui: &mut Ui, panel_rect: Rect) {
         let painter = ui.painter_at(panel_rect);
         painter.rect_filled(panel_rect, 0.0, Color32::from_rgb(38, 38, 38));
         painter.line_segment(
@@ -447,7 +553,7 @@ impl NodeGraphWidget {
             |ui| {
                 ui.set_clip_rect(panel_rect);
                 ui.label(RichText::new("View").size(15.0).strong());
-                ui.label(RichText::new("Viewport settings").size(11.0).weak());
+                ui.label(RichText::new("No active node").size(11.0).weak());
             },
         );
     }

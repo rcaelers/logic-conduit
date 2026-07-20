@@ -158,7 +158,7 @@ impl<S, T: InlineControl> ControlBinding<S> for ControlBindingRenderer<S, T> {
 /// Declarative binding between a node-state field and an inline control.
 pub struct PropDef<S> {
     pub(crate) id: &'static str,
-    /// Row height when rendered in the properties panel; `None` uses the
+    /// Row height when rendered in a side panel; `None` uses the
     /// panel's default row height. Controls that need more vertical room
     /// (e.g. a channel grid) set this.
     pub(crate) panel_height: Option<f32>,
@@ -181,15 +181,14 @@ impl<S: 'static> PropDef<S> {
         }
     }
 
-    /// Requests a taller row in the properties panel.
+    /// Requests a taller row in a side panel.
     pub fn panel_height(mut self, height: f32) -> Self {
         self.panel_height = Some(height);
         self
     }
 }
 
-/// A titled, collapsible group of props in the properties panel:
-/// the home of low-frequency configuration that would bloat the node body.
+/// A titled, collapsible group of controls in a side panel.
 pub struct PanelSection<S> {
     pub title: &'static str,
     pub props: Vec<PropDef<S>>,
@@ -235,6 +234,16 @@ pub trait NodeDef: 'static {
     /// is active. Edits run through the same state/`on_update` path as
     /// inline controls.
     fn panel() -> Vec<PanelSection<Self::State>>
+    where
+        Self: Sized,
+    {
+        vec![]
+    }
+    /// Viewer-only properties shown in the right-docked View panel when this
+    /// node is active. Concrete nodes declare presentation controls here;
+    /// the generic graph widget renders them without interpreting their
+    /// meaning.
+    fn view_panel() -> Vec<PanelSection<Self::State>>
     where
         Self: Sized,
     {

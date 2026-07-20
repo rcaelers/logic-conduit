@@ -961,7 +961,7 @@ fn member_index(node: &Node, socket_index: usize) -> usize {
 }
 
 /// Fixed id for the compiler-synthesized `Viewer` sink that gathers every
-/// output checked in the node panel's generic "View" section
+/// output checked in the graph widget's generic View panel
 /// (`Socket::show_in_view`, `docs/APP_DESIGN.md`) without an explicit wire.
 /// Kept constant (rather than derived from the graph's own ids) so
 /// live-diffing sees the same node across `lower()` calls while the watched

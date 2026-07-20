@@ -63,7 +63,7 @@ pub struct Socket {
     pub hidden: bool,
     #[serde(default, skip_serializing)]
     pub has_control: bool,
-    /// User-toggled from the node panel's generic "View" section (outputs
+    /// User-toggled from the graph widget's generic View panel (outputs
     /// only): show this output as a logic analyzer lane without an explicit
     /// wire to a `Viewer` node. The compiler synthesizes the connection.
     #[serde(default, skip_serializing_if = "is_false")]

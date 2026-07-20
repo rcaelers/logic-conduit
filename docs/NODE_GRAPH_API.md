@@ -116,6 +116,9 @@ impl NodeDef for Counter {
             PropDef::control("step",  "Step",  |s| &mut s.step),
         ])]
     }
+    fn view_panel() -> Vec<PanelSection<Self::State>> {
+        vec![] // viewer-only presentation controls, when applicable
+    }
 }
 ```
 
@@ -136,7 +139,9 @@ impl NodeDef for Counter {
 - `panel()` → `Vec<PanelSection>` render in the right-docked **properties panel**
   (screen-space, full-size widgets) when the node is active. `PropDef::panel_height(h)`
   requests a taller row (e.g. a channel grid).
-- Both mutate the same `State` and trigger the same update path.
+- `view_panel()` → `Vec<PanelSection>` render in the right-docked **View panel** alongside
+  the generic visible-output lane checkboxes. Use it only for viewer presentation controls.
+- All three mutate the same `State` and trigger the same update path.
 
 ### Hooks
 

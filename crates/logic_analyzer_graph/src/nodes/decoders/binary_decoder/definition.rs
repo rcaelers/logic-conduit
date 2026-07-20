@@ -74,9 +74,6 @@ impl NodeDef for BinaryDecoder {
         vec![PanelSection::new(
             "Options",
             vec![
-                PropDef::control("display_format", "Data display", |state| {
-                    &mut state.display_format
-                }),
                 PropDef::control("sample_on", "Sample on", |state| &mut state.sample_on),
                 PropDef::control("input_strategy", "Input strategy", |state| {
                     &mut state.input_strategy
@@ -87,6 +84,17 @@ impl NodeDef for BinaryDecoder {
                 PropDef::control("endianness", "Endianness", |state| &mut state.endianness),
                 PropDef::control("cs_polarity", "CS polarity", |state| &mut state.cs_polarity),
             ],
+        )]
+    }
+
+    fn view_panel() -> Vec<PanelSection<Self::State>> {
+        vec![PanelSection::new(
+            "Presentation",
+            vec![PropDef::control(
+                "display_format",
+                "Data display",
+                |state| &mut state.display_format,
+            )],
         )]
     }
 }
