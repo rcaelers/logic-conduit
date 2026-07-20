@@ -88,16 +88,11 @@ impl NodeDef for SpiDecoder {
         }
     }
 
-    fn props() -> Vec<PropDef<Self::State>> {
-        vec![PropDef::control("word_size", "Word size", |state| {
-            &mut state.word_size
-        })]
-    }
-
     fn panel() -> Vec<PanelSection<Self::State>> {
         vec![PanelSection::new(
             "Options",
             vec![
+                PropDef::control("word_size", "Word size", |state| &mut state.word_size),
                 PropDef::control("display_format", "Data display", |state| {
                     &mut state.display_format
                 }),
