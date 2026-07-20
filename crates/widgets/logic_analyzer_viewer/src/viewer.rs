@@ -376,8 +376,10 @@ impl LogicAnalyzerViewer {
     }
 
     /// Attaches a growing waveform while preserving a host-provided capture
-    /// window. The planned span is generic presentation metadata: it may be
-    /// longer than the samples committed so far, leaving future time visible.
+    /// window. The planned span is generic presentation metadata and may be
+    /// longer than the samples committed so far. The initial visible span is
+    /// capped to elapsed capture time so the time axis never starts below
+    /// zero.
     pub fn set_growing_capture_with_planned_span(
         &mut self,
         sampler: Box<dyn CaptureIndex>,
@@ -405,8 +407,9 @@ impl LogicAnalyzerViewer {
         self.hover_measurement = None;
         let duration_us = metadata.duration_us();
         let planned_span_us = planned_span_us.filter(|span| span.is_finite() && *span > 0.0);
-        self.visible_span_us =
-            planned_span_us.unwrap_or_else(|| DEFAULT_VISIBLE_SPAN_US.min(duration_us.max(1.0)));
+        self.visible_span_us = planned_span_us
+            .unwrap_or(DEFAULT_VISIBLE_SPAN_US)
+            .min(duration_us.max(1.0));
         self.visible_start_us = (duration_us - self.visible_span_us).max(0.0);
         self.fit_to_capture = false;
         self.growing_capture = Some(GrowingCaptureView {
@@ -476,15 +479,10 @@ impl LogicAnalyzerViewer {
     }
 
     fn refresh_growing_capture(&mut self) {
-        let Some((paused, follow_newest, known_generation, planned_span_us)) =
-            self.growing_capture.as_ref().map(|view| {
-                (
-                    view.paused,
-                    view.follow_newest,
-                    view.generation,
-                    view.planned_span_us,
-                )
-            })
+        let Some((paused, follow_newest, known_generation)) = self
+            .growing_capture
+            .as_ref()
+            .map(|view| (view.paused, view.follow_newest, view.generation))
         else {
             return;
         };
@@ -510,8 +508,7 @@ impl LogicAnalyzerViewer {
             capture.duration_us = duration_us;
         }
         if follow_newest {
-            self.visible_span_us =
-                planned_span_us.unwrap_or_else(|| self.visible_span_us.min(duration_us.max(1.0)));
+            self.visible_span_us = self.visible_span_us.min(duration_us.max(1.0));
             self.visible_start_us = (duration_us - self.visible_span_us).max(0.0);
         } else {
             self.clamp_to_capture_duration();
@@ -988,7 +985,7 @@ mod tests {
     }
 
     #[test]
-    fn planned_live_span_stays_visible_while_samples_arrive() {
+    fn planned_live_span_never_places_the_view_before_capture_start() {
         let total_samples = Arc::new(AtomicU64::new(10_000));
         let generation = Arc::new(AtomicU64::new(1));
         let mut viewer = LogicAnalyzerViewer::new();
@@ -1000,15 +997,15 @@ mod tests {
             Some(1_000_000.0),
         );
 
-        assert_eq!(viewer.visible_span_us, 1_000_000.0);
+        assert_eq!(viewer.visible_span_us, 10_000.0);
         assert_eq!(viewer.visible_start_us, 0.0);
 
         total_samples.store(20_000, Ordering::Relaxed);
         generation.store(2, Ordering::Relaxed);
         viewer.refresh_growing_capture();
 
-        assert_eq!(viewer.visible_span_us, 1_000_000.0);
-        assert_eq!(viewer.visible_start_us, 0.0);
+        assert_eq!(viewer.visible_span_us, 10_000.0);
+        assert_eq!(viewer.visible_start_us, 10_000.0);
     }
 
     #[test]

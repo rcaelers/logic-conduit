@@ -72,7 +72,13 @@ impl LogicAnalyzerViewer {
     /// Zooms the visible time window by `factor` (< 1 zooms in, > 1 zooms
     /// out) around `pointer_x` (0..1, fraction across `wave_rect`).
     fn zoom_time_axis(&mut self, factor: f64, pointer_x: f64) {
-        self.leave_live_edge();
+        let follows_live_edge = self
+            .growing_capture
+            .as_ref()
+            .is_some_and(|capture| capture.follow_newest && !capture.paused && !capture.complete);
+        if !follows_live_edge {
+            self.leave_live_edge();
+        }
         if self.capture_info.is_some() {
             self.fit_to_capture = false;
         }
@@ -83,15 +89,44 @@ impl LogicAnalyzerViewer {
             .as_ref()
             .map_or(f64::MAX, |capture| capture.duration_us.max(1.0));
         self.visible_span_us = (self.visible_span_us * factor).clamp(0.001, max_span);
-        self.visible_start_us = pivot_time - self.visible_span_us * pointer_x;
-        self.visible_start_us = self.visible_start_us.max(0.0);
-        self.clamp_to_capture_duration();
+        if follows_live_edge {
+            let duration_us = self
+                .capture_info
+                .as_ref()
+                .map_or(0.0, |capture| capture.duration_us);
+            self.visible_start_us = (duration_us - self.visible_span_us).max(0.0);
+        } else {
+            self.visible_start_us = pivot_time - self.visible_span_us * pointer_x;
+            self.visible_start_us = self.visible_start_us.max(0.0);
+            self.clamp_to_capture_duration();
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use signal_processing::CaptureMetadata;
+
     use super::*;
+    use crate::types::CaptureInfo;
+    use crate::viewer::GrowingCaptureView;
+
+    fn capture_info(duration_us: f64) -> CaptureInfo {
+        CaptureInfo {
+            duration_us,
+            header: CaptureMetadata {
+                total_probes: 1,
+                samplerate: "1 MHz".into(),
+                samplerate_hz: 1_000_000.0,
+                sample_period: 0.000_001,
+                total_samples: duration_us as u64,
+                total_blocks: 1,
+                samples_per_block: 64,
+                probe_names: vec!["D0".into()],
+                trigger_sample: None,
+            },
+        }
+    }
 
     #[test]
     fn zoom_time_axis_shrinks_span_and_keeps_pivot_centered() {
@@ -130,5 +165,27 @@ mod tests {
 
         let pivot = viewer.visible_start_us + viewer.visible_span_us * 0.2;
         assert!((pivot - 200.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn zooming_live_capture_keeps_the_newest_sample_at_the_right_edge() {
+        let mut viewer = LogicAnalyzerViewer::new();
+        viewer.capture_info = Some(capture_info(2_000.0));
+        viewer.growing_capture = Some(GrowingCaptureView {
+            generation: 1,
+            paused: false,
+            follow_newest: true,
+            complete: false,
+            planned_span_us: Some(10_000.0),
+        });
+        viewer.visible_start_us = 1_100.0;
+        viewer.visible_span_us = 900.0;
+
+        viewer.zoom_time_axis(4.0, 0.25);
+
+        assert!(viewer.follows_newest());
+        assert_eq!(viewer.visible_span_us, 2_000.0);
+        assert_eq!(viewer.visible_start_us, 0.0);
+        assert_eq!(viewer.visible_start_us + viewer.visible_span_us, 2_000.0);
     }
 }

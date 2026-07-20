@@ -29,11 +29,13 @@ const BULK_TIMEOUT: Duration = Duration::from_millis(1_000);
 const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 const FPGA_DONE_TIMEOUT: Duration = Duration::from_secs(5);
 const FPGA_UPLOAD_SETTLE: Duration = Duration::from_millis(20);
-const STREAMING_DATA_RECEIVE_DEPTH: u8 = 4;
-/// Target half a millisecond of signal time per host-streaming transfer.
-/// Four queued transfers preserve USB throughput while keeping the written
-/// prefix close enough to the device for interactive waveform following.
-const STREAMING_TRANSFER_PARTS_PER_MS: u64 = 2;
+/// Seven data transfers plus the trigger-header transfer fill the transport's
+/// eight-request queue while capture starts.
+const STREAMING_DATA_RECEIVE_DEPTH: u8 = 7;
+/// Target four milliseconds of signal time per host-streaming transfer. At
+/// 125 MHz across 16 inputs this is about 1 MB; seven queued transfers give
+/// the host roughly 28 ms to absorb scheduling, indexing, and storage jitter.
+const STREAMING_TRANSFER_MILLISECONDS: u64 = 4;
 const FPGA_DIVIDER_CLOCK_HZ: u64 = 500_000_000;
 const FPGA_PRE_DIVIDER: u64 = 5;
 const ADC_CONTROL_ADDRESS: u16 = 0x48;
@@ -1673,17 +1675,20 @@ fn build_plan(
             })?,
         8_000,
     )?;
+    let transfer_bytes = bytes_per_ms
+        .checked_mul(STREAMING_TRANSFER_MILLISECONDS)
+        .ok_or_else(|| LogicAnalyzerError::InvalidSettings("stream buffer is too large".into()))?;
     let stream_buffer = match speed {
         LinkSpeed::Super => round_up_usize(
-            usize::try_from(bytes_per_ms.div_ceil(STREAMING_TRANSFER_PARTS_PER_MS)).map_err(
-                |_| LogicAnalyzerError::InvalidSettings("stream buffer is too large".into()),
-            )?,
+            usize::try_from(transfer_bytes).map_err(|_| {
+                LogicAnalyzerError::InvalidSettings("stream buffer is too large".into())
+            })?,
             1024,
         ),
         LinkSpeed::High => round_up_usize(
-            usize::try_from(bytes_per_ms.div_ceil(STREAMING_TRANSFER_PARTS_PER_MS)).map_err(
-                |_| LogicAnalyzerError::InvalidSettings("stream buffer is too large".into()),
-            )?,
+            usize::try_from(transfer_bytes).map_err(|_| {
+                LogicAnalyzerError::InvalidSettings("stream buffer is too large".into())
+            })?,
             512,
         ),
     };
@@ -2918,6 +2923,7 @@ mod tests {
 
         assert_eq!(get16(&packet, 10), 1);
         assert_eq!(get16(&packet, 12), 3 << 8);
+        assert_eq!(plan.stream_buffer_bytes(), 1_000_448);
     }
 
     #[test]

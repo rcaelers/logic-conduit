@@ -839,9 +839,9 @@ impl CaptureCoordinator {
                         completed.waveform.clone(),
                     )
                 });
-                self.waveform_update = Some(match previous {
-                    Some((session_id, waveform)) => {
-                        match self.pinned_waveform_update(session_id, waveform) {
+                if let Some((session_id, waveform)) = previous {
+                    self.waveform_update =
+                        Some(match self.pinned_waveform_update(session_id, waveform) {
                             Ok(update) => update,
                             Err(error) => {
                                 if let Some(status) = &mut self.status {
@@ -849,10 +849,8 @@ impl CaptureCoordinator {
                                 }
                                 None
                             }
-                        }
-                    }
-                    None => None,
-                });
+                        });
+                }
             }
         }
         self.refresh_recent_sessions();
@@ -1709,8 +1707,8 @@ mod tests {
     };
 
     use super::{
-        CaptureCoordinator, CaptureCoordinatorContract, CaptureRawExportFormat,
-        waveform_ready_for_publication,
+        ActiveCapture, CaptureCoordinator, CaptureCoordinatorContract, CaptureRawExportFormat,
+        WorkerCompletion, bounded_capture_event_queue, waveform_ready_for_publication,
     };
 
     impl CaptureCoordinator {
@@ -2076,6 +2074,30 @@ mod tests {
             coordinator.poll();
             std::thread::yield_now();
         }
+    }
+
+    #[test]
+    fn failed_capture_does_not_detach_an_already_published_waveform() {
+        let mut coordinator = CaptureCoordinator::new();
+        let (commands, _command_receiver) = crossbeam_channel::unbounded();
+        let (_completion_sender, completion) = crossbeam_channel::bounded(1);
+        let (_waveform_sender, waveforms) = crossbeam_channel::bounded(1);
+        let (_analysis_sender, analyses) = crossbeam_channel::bounded(1);
+        let (_event_publisher, events) = bounded_capture_event_queue(1).unwrap();
+        coordinator.active = Some(ActiveCapture {
+            commands,
+            completion,
+            waveforms,
+            analyses,
+            events,
+            worker: None,
+            stop_requested: false,
+            abort_requested: false,
+        });
+
+        coordinator.finish_worker(WorkerCompletion::Failed("stream overflow".into()));
+
+        assert!(coordinator.take_waveform_update().is_none());
     }
 
     fn run_triggered_coordinator_contract(
