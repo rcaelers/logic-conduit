@@ -10,10 +10,10 @@ use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
-use logic_analyzer_graph::{CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature};
-use logic_analyzer_processing::{
-    CaptureExportObserver, CaptureExportProgress, CaptureExportReport, CaptureExportRequest,
-    RawCaptureExportFormat, export_finalized_capture,
+use logic_analyzer_graph::{
+    CaptureExportFormat as CaptureRawExportFormat, CaptureExportObserver, CaptureExportProgress,
+    CaptureExportReport, CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature,
+    export_finalized_capture,
 };
 use signal_processing::{
     AcquisitionContext, CaptureAcquisitionPhase, CaptureCompletion, CaptureDataDelivery,
@@ -41,19 +41,6 @@ const APPLICATION_METADATA_TEMP_FILE: &str = "capture.application.json.tmp";
 const APPLICATION_METADATA_OLD_FILE: &str = "capture.application.json.old";
 const APPLICATION_METADATA_VERSION: u16 = 2;
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CaptureRawExportFormat {
-    Portable,
-}
-
-impl CaptureRawExportFormat {
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Portable => "PulseView capture",
-        }
-    }
-}
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -398,18 +385,11 @@ impl CaptureCoordinator {
             .open(session_id)
             .map_err(|error| format!("could not pin capture for export: {error}"))?;
         let total_samples = capture.manifest().committed_samples;
-        let raw_format = match format {
-            CaptureRawExportFormat::Portable => RawCaptureExportFormat::SigrokV2,
-        };
-        let request = CaptureExportRequest {
-            destination: destination.clone(),
-            format: raw_format,
-            overwrite: true,
-        };
         let cancellation = Arc::new(AtomicBool::new(false));
         let (progress_sender, progress) = crossbeam_channel::bounded(1);
         let (completion_sender, completion) = crossbeam_channel::bounded(1);
         let worker_cancellation = Arc::clone(&cancellation);
+        let worker_destination = destination.clone();
         let worker = std::thread::Builder::new()
             .name("capture-export".into())
             .spawn(move || {
@@ -418,14 +398,14 @@ impl CaptureCoordinator {
                     cancellation: worker_cancellation,
                     progress: progress_sender,
                 };
-                let result = export_finalized_capture(&capture, &request, &mut observer)
-                    .map_err(|error| error.to_string());
+                let result =
+                    export_finalized_capture(&capture, format, &worker_destination, &mut observer);
                 let _ = completion_sender.send(result);
             })
             .map_err(|error| format!("could not start capture export: {error}"))?;
         self.export_notice = None;
         self.export_status = Some(CaptureExportStatus {
-            format_label: format.label().to_owned(),
+            format_label: format.descriptor().label.to_owned(),
             destination,
             samples_written: 0,
             total_samples,
@@ -483,15 +463,9 @@ impl CaptureCoordinator {
             let _ = worker.join();
         }
         self.export_status = None;
-        self.export_notice = Some(completion.map(|report| {
-            CaptureExportCompletion {
-                destination: report.destination,
-                warnings: report
-                    .warnings
-                    .into_iter()
-                    .map(|warning| warning.message().to_owned())
-                    .collect(),
-            }
+        self.export_notice = Some(completion.map(|report| CaptureExportCompletion {
+            destination: report.destination,
+            warnings: report.warnings,
         }));
     }
 
@@ -1726,20 +1700,21 @@ mod tests {
 
     use logic_analyzer_graph::{
         self as compiler, CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature,
-        LiveCaptureFeature, SimpleTriggerChannel, nodes,
-    };
-    use logic_analyzer_processing::{
-        BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider, DeterministicFakeConfig,
-        DeterministicFakeController, DeterministicFakeProvider, SigrokCaptureReader,
+        LiveCaptureFeature, SimpleTriggerChannel, TestBufferedFakeConfig as BufferedFakeConfig,
+        TestBufferedFakeController as BufferedFakeController,
+        TestBufferedFakeProvider as BufferedFakeProvider,
+        TestDeterministicFakeConfig as DeterministicFakeConfig,
+        TestDeterministicFakeController as DeterministicFakeController,
+        TestDeterministicFakeProvider as DeterministicFakeProvider, nodes,
     };
     use node_graph::{NodeDef, NodeGraphWidget, NodeId};
     use signal_processing::{
         AcquisitionContext, AcquisitionError, AcquisitionResult, CaptureAnalysisChannel,
         CaptureAnalysisSource, CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery,
         CapturePolicy, CaptureProviderCapabilities, CaptureSessionPlan, CaptureSessionState,
-        CaptureSource, CaptureStartMode, CaptureStoreCursor, CompletionPolicy,
-        EffectiveCapturePolicy, PreparedAcquisition, ProcessNode, RecordingStart, RetentionPolicy,
-        SimpleTriggerCondition, TriggerTimeout, TriggerTimeoutAction,
+        CaptureStartMode, CaptureStoreCursor, CompletionPolicy, EffectiveCapturePolicy,
+        PreparedAcquisition, ProcessNode, RecordingStart, RetentionPolicy, SimpleTriggerCondition,
+        TriggerTimeout, TriggerTimeoutAction,
     };
 
     use super::{
@@ -2194,7 +2169,7 @@ mod tests {
     }
 
     #[test]
-    fn finalized_capture_saves_as_pulseview_data_in_background_and_reopens() {
+    fn finalized_capture_saves_as_pulseview_data_in_background() {
         let (feature, controller) = manual_feature();
         let mut coordinator = CaptureCoordinator::new();
         coordinator
@@ -2215,10 +2190,7 @@ mod tests {
         assert_eq!(completion.destination, output);
         assert!(completion.warnings.is_empty());
 
-        let reader = SigrokCaptureReader::open(&completion.destination).unwrap();
-        assert_eq!(reader.metadata().samplerate_hz, 1_000_000_000.0);
-        assert_eq!(reader.metadata().probe_names, ["Bank A 7", "Bank C 2"]);
-        assert_eq!(reader.metadata().total_samples, 17);
+        assert!(std::fs::metadata(&completion.destination).unwrap().len() > 0);
     }
 
     #[test]

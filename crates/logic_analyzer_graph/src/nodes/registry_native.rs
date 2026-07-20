@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
-use node_graph::{NodeDef, NodeTypeRegistry};
+use node_graph::NodeTypeRegistry;
 
 use super::sinks::{
     CsvWriter, CsvWriterBuilder, FileWriter, FileWriterBuilder, TextFileWriter,
     TextFileWriterBuilder,
 };
 use super::sources::{
-    DsLogicU3Pro16, DsLogicU3Pro16Builder, DslFileSource, DslFileSourceState, FileSourceBuilder,
-    SigrokFileSource, SigrokFileSourceBuilder, SigrokFileSourceState,
+    DsLogicU3Pro16, DsLogicU3Pro16Builder, DslFileSource, FileSourceBuilder, SigrokFileSource,
+    SigrokFileSourceBuilder,
 };
 use crate::RuntimeBuilder;
 
@@ -31,27 +31,6 @@ pub(crate) fn register_builders(builders: &mut HashMap<String, Box<dyn RuntimeBu
     builders.insert("File Writer".into(), Box::new(FileWriterBuilder));
     builders.insert("Text File Writer".into(), Box::new(TextFileWriterBuilder));
     builders.insert("CSV Writer".into(), Box::new(CsvWriterBuilder));
-}
-
-/// The single file-backed source currently displayed by the logic-analyzer
-/// view. Multiple sources and live-capture snapshots are future work.
-pub enum CaptureFileSource {
-    Dsl(String),
-    Sigrok(String),
-}
-
-pub fn capture_file_source(graph: &node_graph::GraphState) -> Option<CaptureFileSource> {
-    graph.nodes.values().find_map(|node| {
-        if node.def_name() == DslFileSource::name() {
-            let state = serde_json::from_value::<DslFileSourceState>(node.state.clone()).ok()?;
-            (!state.file.value.is_empty()).then_some(CaptureFileSource::Dsl(state.file.value))
-        } else if node.def_name() == SigrokFileSource::name() {
-            let state = serde_json::from_value::<SigrokFileSourceState>(node.state.clone()).ok()?;
-            (!state.file.value.is_empty()).then_some(CaptureFileSource::Sigrok(state.file.value))
-        } else {
-            None
-        }
-    })
 }
 
 #[cfg(test)]
@@ -199,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn dsl_source_path_found_by_def_name_after_rename() {
+    fn dsl_source_presentation_is_builder_owned_after_node_rename() {
         let mut widget = NodeGraphWidget::new(build_registry());
         test_graphs_tests::populate_startup(&mut widget);
         let source_id = *widget
@@ -210,12 +189,20 @@ mod tests {
             .map(|(id, _)| id)
             .unwrap();
         widget.graph_mut().nodes.get_mut(&source_id).unwrap().title = "My capture".to_owned();
-        assert_eq!(
-            match capture_file_source(widget.graph()) {
-                Some(CaptureFileSource::Dsl(path)) => path,
-                _ => String::new(),
-            },
-            ""
-        );
+        let mut state = serde_json::from_value::<crate::nodes::DslFileSourceState>(
+            widget.graph().nodes[&source_id].state.clone(),
+        )
+        .unwrap();
+        state.file.value = "capture.dsl".into();
+        widget.graph_mut().nodes.get_mut(&source_id).unwrap().state =
+            serde_json::to_value(state).unwrap();
+        let presentation =
+            crate::discover_capture_presentation(widget.graph(), &BuilderRegistry::standard())
+                .unwrap()
+                .unwrap();
+        let crate::CapturePresentation::Indexed { identity, .. } = presentation.presentation else {
+            panic!("DSL source should provide an indexed presentation");
+        };
+        assert_eq!(identity, std::path::PathBuf::from("capture.dsl"));
     }
 }

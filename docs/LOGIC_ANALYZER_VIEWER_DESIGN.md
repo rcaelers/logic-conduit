@@ -29,10 +29,9 @@ The widget's public API is documented in
 
 The viewer renders three independent kinds of rows:
 
-1. **Capture channels** — sampled on demand from an indexed `.dsl` capture
-   (`set_capture_path`). The viewer is generic over `CaptureDataSource`; the application
-   supplies a closure that opens the concrete source, so the widget crate never depends on
-   a file format.
+1. **Capture channels** — sampled on demand from an indexed capture. The viewer accepts a generic
+   `CaptureIndexFactory`; concrete graph-source builders own format-specific construction and the
+   widget never depends on a file format.
 2. **In-memory channels** — raw `(time, level)` transition lists handed in wholesale
    (`set_channels`), used for demo signals and any host-provided data.
 3. **Derived lanes** — a shared `DerivedLanes` store (`Arc<RwLock<…>>`) that running
@@ -69,10 +68,10 @@ one channel.
 ## Architecture
 
 ```text
-.dsl ZIP capture
+concrete capture source
   │
-  ├─ DslFileCaptureDataSource            (path, header, sidecar path, fingerprint = file size)
-  │    └─ DslCaptureReader               (ZipArchive + small LRU of decompressed blocks)
+  ├─ graph-owned CaptureIndexFactory     (opaque identity and deferred open)
+  │    └─ concrete processing reader     (DSL, Sigrok, or another registered format)
   │
   ├─ Waveform index (crates/signal_processing/src/waveform_index)
   │    ├─ IndexBuilder              — builds finite sidecars on worker threads

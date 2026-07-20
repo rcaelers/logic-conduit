@@ -334,6 +334,25 @@ pub trait CaptureIndex {
     ) -> Result<CaptureSampledWindow>;
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaptureIndexBuildProgress {
+    pub completed: usize,
+    pub total: usize,
+}
+
+/// Deferred construction of an indexed capture view.
+///
+/// Concrete file formats implement this at their owning integration boundary. Consumers can move
+/// the factory to a worker without knowing the format or opening files on the UI thread.
+pub trait CaptureIndexFactory: Send + 'static {
+    fn display_name(&self) -> String;
+
+    fn open(
+        self: Box<Self>,
+        progress: &mut dyn FnMut(CaptureIndexBuildProgress),
+    ) -> Result<Box<dyn CaptureIndex + Send>>;
+}
+
 pub fn packed_bit(data: &[u8], bit_index: usize) -> bool {
     let byte_index = bit_index / 8;
     let bit_offset = bit_index % 8;

@@ -18,7 +18,7 @@ pub use lanes::{
 ```
 
 Capture/lane data types come from the `signal-processing` crate: `CaptureDataSource`,
-`DslFileCaptureDataSource`, `DerivedLanes`.
+`CaptureIndexFactory`, and `DerivedLanes`. Concrete file sources remain outside the widget.
 
 ---
 
@@ -42,22 +42,17 @@ paints, and schedules repaints while a capture is opening or indexing.
 The viewer renders three independent kinds of rows, freely combined; a single internal row
 order spans all of them (user-reorderable by dragging labels).
 
-### 1. Capture files — `set_capture_path`
+### 1. Indexed captures — `set_capture_factory`
 
 ```rust
-viewer.set_capture_path(path, |path| {
-    logic_analyzer_processing::DslFileCaptureDataSource::open(path).map_err(|e| e.to_string())
-});
+viewer.set_capture_factory(identity, factory);
 ```
 
-The viewer only knows the generic `signal_processing::CaptureDataSource` trait (`open_reader`,
-`metadata`, `fingerprint`, `index_path`, `display_name`); the `open` closure is the one
-place that knows what a path means. Calling it again with the same path is a no-op;
-a new path replaces the capture rows (derived lanes are untouched) and spawns a background
-worker that parses the header (channels appear immediately), builds or validates the
-sidecar waveform index (progress bar in the header), and finally hands the UI a synchronous
-sampler. On open failure the viewer clears capture rows and shows the error in its status
-line. Native only (`#[cfg(not(target_arch = "wasm32"))]`).
+The viewer only knows the generic `signal_processing::CaptureIndexFactory`. Concrete graph-source
+features create factories for their formats. Calling the method again with the same opaque
+identity is a no-op; a new identity replaces the capture rows and moves all opening and index work
+to a background worker. `set_capture_path` remains available to lower-level hosts that already own
+a concrete `CaptureDataSource`.
 
 ### 2. In-memory channels — `set_channels`
 

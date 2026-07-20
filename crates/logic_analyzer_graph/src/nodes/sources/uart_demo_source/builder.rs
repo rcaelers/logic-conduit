@@ -7,7 +7,9 @@ use logic_analyzer_processing::UartDemoSource;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample};
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::{
+    CapturePresentation, CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state,
+};
 
 pub(crate) struct UartDemoSourceBuilder;
 
@@ -29,6 +31,9 @@ impl RuntimeBuilder for UartDemoSourceBuilder {
     }
     fn viewer_channel_origin(&self, _socket: &Socket, _state: &Value) -> Option<usize> {
         Some(0)
+    }
+    fn capture_presentation(&self, _state: &Value) -> Result<Option<CapturePresentation>, String> {
+        Ok(Some(CapturePresentation::Channels(vec![(0, "RX".into())])))
     }
     fn input_required(&self, _: &Socket, _: &Value) -> bool {
         false

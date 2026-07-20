@@ -10,6 +10,6 @@ mod implementation;
 
 pub use implementation::{
     BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureIndex,
-    CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,
-    CaptureWaveformSegment, packed_bit,
+    CaptureIndexBuildProgress, CaptureIndexFactory, CaptureMetadata, CaptureSampledChannel,
+    CaptureSampledWindow, CaptureSource, CaptureTransition, CaptureWaveformSegment, packed_bit,
 };

@@ -9,8 +9,8 @@ mod dslogic_u3pro16;
 #[cfg(not(target_arch = "wasm32"))]
 mod sigrok_file_source;
 
-pub use demo_capture_source::{CapturePreviewSignal, DemoCaptureSource, DemoCaptureSourceState};
-pub(crate) use demo_capture_source::{DemoCaptureSourceBuilder, capture_preview};
+pub(crate) use demo_capture_source::DemoCaptureSourceBuilder;
+pub use demo_capture_source::{DemoCaptureSource, DemoCaptureSourceState};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use dslogic_u3pro16::DsLogicU3Pro16Builder;
 #[cfg(not(target_arch = "wasm32"))]

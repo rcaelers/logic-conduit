@@ -7,8 +7,8 @@ use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock};
 
 use crate::{
-    CompileCtx, LiveCaptureEdit, LiveCaptureFeature, PortKind, ResolvedInputs, RuntimeBuilder,
-    TriggerConfigurationFeature,
+    CapturePresentation, CapturePresentationSignal, CompileCtx, LiveCaptureEdit,
+    LiveCaptureFeature, PortKind, ResolvedInputs, RuntimeBuilder, TriggerConfigurationFeature,
 };
 
 pub(crate) struct DemoCaptureSourceBuilder;
@@ -48,6 +48,34 @@ impl RuntimeBuilder for DemoCaptureSourceBuilder {
 
     fn viewer_channel_origin(&self, socket: &Socket, _state: &Value) -> Option<usize> {
         Some(socket.def_index)
+    }
+
+    fn capture_presentation(&self, _state: &Value) -> Result<Option<CapturePresentation>, String> {
+        let channels = DemoCaptureSource::preview_channels();
+        let signals = (0..=8)
+            .chain(std::iter::once(10))
+            .map(|index| {
+                let samples = &channels[index];
+                CapturePresentationSignal {
+                    index,
+                    name: format!("Ch {index}"),
+                    initial: samples.first().is_some_and(|sample| sample.value),
+                    transitions: samples
+                        .iter()
+                        .skip(1)
+                        .map(|sample| (sample.start_time_ns as f64 / 1_000.0, sample.value))
+                        .collect(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let duration_us = signals
+            .iter()
+            .flat_map(|signal| signal.transitions.last().map(|(time, _)| *time))
+            .fold(1.0_f64, f64::max);
+        Ok(Some(CapturePresentation::InMemory {
+            signals,
+            duration_us,
+        }))
     }
 
     fn live_capture_feature(

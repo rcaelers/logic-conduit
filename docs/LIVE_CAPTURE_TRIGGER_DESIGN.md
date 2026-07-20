@@ -1016,8 +1016,9 @@ The finalized internal capture is the lossless source for **Save Capture Data**.
 a compressed sigrok v2 `.sr` file containing the raw physical channels, channel names, and sample
 rate. It preserves the trigger in an optional compatible metadata key and reports a warning because
 v2 has no standard trigger-position field. Derived lanes are not represented by this raw format and
-are not silently presented as saved. The exporter lives in `logic_analyzer_processing`; the file
-dialog and overwrite confirmation remain in the native application service.
+are not silently presented as saved. The concrete encoder lives in `logic_analyzer_processing`;
+`logic_analyzer_graph` exposes its application-facing export contract, while the file dialog and
+overwrite confirmation remain in the native application service.
 
 ### Failure and integrity rules
 

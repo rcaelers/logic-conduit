@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
-use logic_analyzer_graph::{self as compiler, nodes};
-use logic_analyzer_processing::{DslFileCaptureDataSource, SigrokFileCaptureDataSource};
+use logic_analyzer_graph as compiler;
 use node_graph::NodeId;
 
 use crate::app::App;
@@ -134,69 +133,47 @@ impl App {
         if self.logic_analyzer.has_growing_capture() {
             return;
         }
-        match nodes::capture_file_source(self.node_graph.graph()) {
-            Some(nodes::CaptureFileSource::Dsl(file)) => {
-                self.platform.preview_source = None;
-                self.platform.live_channel_layout = None;
-                self.logic_analyzer.set_capture_path(file, |path| {
-                    DslFileCaptureDataSource::open(path).map_err(|e| e.to_string())
-                })
+        let discovered =
+            compiler::discover_capture_presentation(self.node_graph.graph(), &self.builders)
+                .ok()
+                .flatten();
+        let Some(discovered) = discovered else {
+            if self.platform.capture_presentation_identity.take().is_some() {
+                self.logic_analyzer.clear_capture();
             }
-            Some(nodes::CaptureFileSource::Sigrok(file)) => {
-                self.platform.preview_source = None;
-                self.platform.live_channel_layout = None;
-                self.logic_analyzer.set_capture_path(file, |path| {
-                    SigrokFileCaptureDataSource::open(path).map_err(|e| e.to_string())
-                })
+            return;
+        };
+        if self.platform.capture_presentation_identity.as_deref()
+            == Some(discovered.identity.as_str())
+        {
+            return;
+        }
+        self.platform.capture_presentation_identity = Some(discovered.identity);
+        match discovered.presentation {
+            compiler::CapturePresentation::Indexed { identity, factory } => {
+                self.logic_analyzer.set_capture_factory(identity, factory);
             }
-            None => match nodes::capture_preview(self.node_graph.graph()) {
-                Some((source, signals)) if self.platform.preview_source != Some(source) => {
-                    self.platform.preview_source = Some(source);
-                    self.platform.live_channel_layout = None;
-                    self.set_capture_preview(signals);
-                }
-                Some(_) => {}
-                None => {
-                    self.platform.preview_source = None;
-                    let live_channels = self.trigger_configuration.as_ref().map(|configuration| {
-                        configuration
-                            .feature
-                            .channels()
-                            .iter()
-                            .map(|channel| (channel.viewer_channel, channel.name.clone()))
-                            .collect::<Vec<_>>()
-                    });
-                    match live_channels {
-                        Some(layout)
-                            if self.platform.live_channel_layout.as_ref() != Some(&layout) =>
-                        {
-                            self.logic_analyzer.set_channels(
-                                layout
-                                    .iter()
-                                    .map(|(index, name)| logic_analyzer_viewer::ChannelSignal {
-                                        index: *index,
-                                        name: name.clone(),
-                                        initial: false,
-                                        transitions: Vec::new(),
-                                    })
-                                    .collect(),
-                            );
-                            self.platform.live_channel_layout = Some(layout);
-                        }
-                        Some(_) => {}
-                        None => {
-                            self.platform.live_channel_layout = None;
-                            self.logic_analyzer.clear_capture();
-                        }
-                    }
-                }
-            },
+            compiler::CapturePresentation::InMemory { signals, .. } => {
+                self.set_capture_preview(signals);
+            }
+            compiler::CapturePresentation::Channels(channels) => {
+                self.logic_analyzer.set_channels(
+                    channels
+                        .into_iter()
+                        .map(|(index, name)| logic_analyzer_viewer::ChannelSignal {
+                            index,
+                            name,
+                            initial: false,
+                            transitions: Vec::new(),
+                        })
+                        .collect(),
+                );
+            }
         }
     }
 
     pub(crate) fn platform_restore_graph_capture(&mut self) {
-        self.platform.preview_source = None;
-        self.platform.live_channel_layout = None;
+        self.platform.capture_presentation_identity = None;
     }
 
     pub(crate) fn platform_before_graph(&mut self) {
@@ -348,11 +325,11 @@ impl App {
 
     fn choose_and_save_capture_data(&mut self) {
         let format = CaptureRawExportFormat::Portable;
-        let (extension, title, file_name) = ("sr", "Save Capture Data", "capture.sr");
+        let descriptor = format.descriptor();
         let mut dialog = rfd::FileDialog::new()
-            .set_title(title)
-            .set_file_name(file_name)
-            .add_filter(format.label(), &[extension]);
+            .set_title(descriptor.dialog_title)
+            .set_file_name(descriptor.default_file_name)
+            .add_filter(descriptor.label, &[descriptor.extension]);
         if let Some(parent) = self
             .platform
             .current_file
@@ -365,7 +342,7 @@ impl App {
             return;
         };
         if path.extension().is_none() {
-            path.set_extension(extension);
+            path.set_extension(descriptor.extension);
         }
         if let Err(error) = self.capture.start_export_current(format, path) {
             self.toasts.error(error);

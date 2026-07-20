@@ -8,8 +8,8 @@ use signal_processing::{ProcessNode, Sample, SampleBlock, ViewerRetention};
 
 use super::definition::U3Pro16State;
 use crate::{
-    CompileCtx, LiveCaptureEdit, LiveCaptureFeature, PortKind, ResolvedInputs, RuntimeBuilder,
-    TriggerConfigurationFeature, parse_state,
+    CapturePresentation, CompileCtx, LiveCaptureEdit, LiveCaptureFeature, PortKind, ResolvedInputs,
+    RuntimeBuilder, TriggerConfigurationFeature, parse_state,
 };
 
 pub(crate) struct DsLogicU3Pro16Builder;
@@ -79,6 +79,22 @@ impl RuntimeBuilder for DsLogicU3Pro16Builder {
                 .filter(|enabled| **enabled)
                 .count(),
         )
+    }
+
+    fn capture_presentation(&self, state: &Value) -> Result<Option<CapturePresentation>, String> {
+        let state: U3Pro16State = parse_state(state)?;
+        let channels = state
+            .channels
+            .enabled
+            .iter()
+            .enumerate()
+            .filter(|(_, enabled)| **enabled)
+            .enumerate()
+            .map(|(viewer_channel, (physical_channel, _))| {
+                (viewer_channel, format!("Ch {physical_channel}"))
+            })
+            .collect();
+        Ok(Some(CapturePresentation::Channels(channels)))
     }
 
     fn live_capture_feature(

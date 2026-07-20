@@ -1,5 +1,5 @@
 pub(crate) struct PlatformState {
-    pub(crate) preview_source: Option<node_graph::NodeId>,
+    pub(crate) capture_presentation_identity: Option<String>,
 }
 
 impl PlatformState {
@@ -9,7 +9,7 @@ impl PlatformState {
     ) -> (Self, Option<panel_layout::PanelLayoutState>, f32) {
         (
             Self {
-                preview_source: None,
+                capture_presentation_identity: None,
             },
             None,
             // Four additional 30px waveform rows on a typical browser

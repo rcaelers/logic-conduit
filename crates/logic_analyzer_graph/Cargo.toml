@@ -8,6 +8,9 @@ authors = ["Rob Caelers <rob.caelers@gmail.com>"]
 name = "logic_analyzer_graph"
 path = "src/lib.rs"
 
+[features]
+test-support = []
+
 [dependencies]
 signal-processing = { path = "../signal_processing" }
 logic-analyzer-processing = { path = "../logic_analyzer_processing" }

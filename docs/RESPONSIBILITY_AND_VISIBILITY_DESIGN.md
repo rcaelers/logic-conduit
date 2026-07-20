@@ -21,7 +21,9 @@ The crate boundaries in `AGENTS.md` are enforced at both dependency and symbol l
 - `logic_analyzer_processing` owns concrete capture formats, devices, protocol decoders,
   processing nodes, and sinks. Format parsing and device-transport errors originate here and are
   mapped to generic runtime errors only where a generic trait requires it.
-- `logic_analyzer_graph` owns concrete node definitions, lowering, builders, and registration.
+- `logic_analyzer_graph` owns concrete node definitions, lowering, builders, registration, and
+  application-facing adapters for concrete source presentation and capture export. The UI depends
+  on those capability contracts and never imports `logic_analyzer_processing` directly.
   Definition defaults and lowering helpers remain crate-private unless plugin authors or another
   crate implement against a documented contract.
 - Generic graph, viewer, compiler, runtime, and widget crates consume explicit metadata and

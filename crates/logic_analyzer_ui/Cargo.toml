@@ -11,7 +11,6 @@ path = "src/lib.rs"
 [dependencies]
 input-bindings = { path = "../input_bindings" }
 signal-processing = { path = "../signal_processing" }
-logic-analyzer-processing = { path = "../logic_analyzer_processing" }
 logic-analyzer-graph = { path = "../logic_analyzer_graph" }
 logic-analyzer-viewer = { path = "../widgets/logic_analyzer_viewer" }
 node-graph = { path = "../widgets/node_graph" }
@@ -29,4 +28,5 @@ rfd = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]
+logic-analyzer-graph = { path = "../logic_analyzer_graph", features = ["test-support"] }
 tempfile = { workspace = true }

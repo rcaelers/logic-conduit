@@ -2,7 +2,8 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
 use signal_processing::{
-    CaptureDataSource, CaptureIndex, CaptureIndexProgress, CaptureMetadata, IndexSampler,
+    CaptureDataSource, CaptureIndex, CaptureIndexBuildProgress, CaptureIndexFactory,
+    CaptureIndexProgress, CaptureMetadata, IndexSampler,
 };
 
 use crate::channel::placeholder_channels;
@@ -106,6 +107,22 @@ impl LogicAnalyzerViewer {
                     if self.capture_path.as_deref() != Some(path.as_path()) {
                         continue;
                     }
+                    if self.capture_info.is_none() {
+                        let header = sampler.current_metadata();
+                        let duration_us = header.duration_us();
+                        self.capture_info = Some(CaptureInfo {
+                            display_name: sampler.display_name(),
+                            header: header.clone(),
+                            duration_us,
+                        });
+                        self.visible_start_us = 0.0;
+                        self.visible_span_us = duration_us.max(1.0);
+                        let mut channels = placeholder_channels(&header);
+                        self.apply_channel_names(&mut channels);
+                        self.apply_channel_order(&mut channels);
+                        self.channels = channels;
+                        self.ensure_row_order();
+                    }
                     self.index_progress = None;
                     self.sampler = Some(sampler);
                     self.sampled_key = None;
@@ -203,6 +220,61 @@ pub(crate) fn spawn_capture_worker(
             let _ = responses.send(response);
         })
         .expect("capture indexer thread should start");
+}
+
+pub(crate) fn spawn_capture_factory_worker(
+    identity: PathBuf,
+    factory: Box<dyn CaptureIndexFactory>,
+    responses: Sender<WorkerResponse>,
+) {
+    std::thread::Builder::new()
+        .name("capture_index_factory".to_string())
+        .spawn(move || {
+            let display_name = factory.display_name();
+            let _ = responses.send(WorkerResponse::Status {
+                path: identity.clone(),
+                message: format!("Opening {display_name}…"),
+            });
+            let progress_path = identity.clone();
+            let progress_responses = responses.clone();
+            let mut last_progress_sent = std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_millis(100))
+                .unwrap_or_else(std::time::Instant::now);
+            let mut last_progress_completed = 0_usize;
+            let result = factory.open(&mut |progress: CaptureIndexBuildProgress| {
+                let now = std::time::Instant::now();
+                let enough_time = now.duration_since(last_progress_sent)
+                    >= std::time::Duration::from_millis(100);
+                let enough_work = progress.completed.saturating_sub(last_progress_completed) >= 64;
+                if progress.completed == 0
+                    || progress.completed >= progress.total
+                    || enough_time
+                    || enough_work
+                {
+                    last_progress_sent = now;
+                    last_progress_completed = progress.completed;
+                    let _ = progress_responses.send(WorkerResponse::IndexProgress {
+                        path: progress_path.clone(),
+                        progress: CaptureIndexProgress {
+                            completed_roots: progress.completed,
+                            total_roots: progress.total,
+                        },
+                    });
+                }
+            });
+            let response = match result {
+                Ok(sampler) => WorkerResponse::IndexReady {
+                    path: identity,
+                    sampler,
+                },
+                Err(error) => WorkerResponse::Error {
+                    path: identity,
+                    message: format!("Could not open capture: {error}"),
+                },
+            };
+            let _ = responses.send(response);
+        })
+        .expect("capture index factory thread should start");
 }
 
 fn capture_status(capture: &CaptureInfo) -> String {

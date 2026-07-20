@@ -6,10 +6,38 @@ use serde_json::Value;
 use logic_analyzer_processing::{DeferredDslFileSource, DslFileSource};
 use node_graph::Socket;
 use signal_processing::{
-    DEFAULT_VIEWER_MAX_ENTRIES, ProcessNode, Sample, SampleBlock, TextSample, ViewerRetention,
+    CaptureIndexBuildProgress, CaptureIndexFactory, DEFAULT_VIEWER_MAX_ENTRIES, IndexSampler,
+    ProcessNode, Sample, SampleBlock, TextSample, ViewerRetention,
 };
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::{
+    CapturePresentation, CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state,
+};
+
+struct DslCaptureIndexFactory {
+    path: std::path::PathBuf,
+}
+
+impl CaptureIndexFactory for DslCaptureIndexFactory {
+    fn display_name(&self) -> String {
+        self.path.display().to_string()
+    }
+
+    fn open(
+        self: Box<Self>,
+        progress: &mut dyn FnMut(CaptureIndexBuildProgress),
+    ) -> signal_processing::Result<Box<dyn signal_processing::CaptureIndex + Send>> {
+        let source = logic_analyzer_processing::DslFileCaptureDataSource::open(&self.path)
+            .map_err(|error| signal_processing::Error::ParseError(error.to_string()))?;
+        IndexSampler::open_data_source_with_progress(source, |value| {
+            progress(CaptureIndexBuildProgress {
+                completed: value.completed_roots,
+                total: value.total_roots,
+            });
+        })
+        .map(|index| Box::new(index) as Box<dyn signal_processing::CaptureIndex + Send>)
+    }
+}
 
 pub(crate) struct FileSourceBuilder;
 
@@ -48,6 +76,17 @@ impl RuntimeBuilder for FileSourceBuilder {
     }
     fn viewer_channel_origin(&self, socket: &Socket, _state: &Value) -> Option<usize> {
         Some(socket.def_index)
+    }
+    fn capture_presentation(&self, state: &Value) -> Result<Option<CapturePresentation>, String> {
+        let state: super::definition::DslFileSourceState = parse_state(state)?;
+        let path = std::path::PathBuf::from(state.file.value);
+        if path.as_os_str().is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(CapturePresentation::Indexed {
+            identity: path.clone(),
+            factory: Box::new(DslCaptureIndexFactory { path }),
+        }))
     }
     fn input_required(&self, _socket: &Socket, _state: &Value) -> bool {
         // Empty paths are valid in saved/example graphs.  Runtime start will

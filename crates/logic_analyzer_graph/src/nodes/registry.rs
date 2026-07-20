@@ -589,8 +589,16 @@ mod tests {
                 .count(),
             10
         );
-        let (_, preview) = crate::nodes::capture_preview(widget.graph())
-            .expect("demo source should provide a pre-run capture preview");
+        let preview =
+            crate::discover_capture_presentation(widget.graph(), &BuilderRegistry::standard())
+                .unwrap()
+                .expect("demo source should provide a pre-run capture preview");
+        let crate::CapturePresentation::InMemory {
+            signals: preview, ..
+        } = preview.presentation
+        else {
+            panic!("demo source should provide an in-memory presentation");
+        };
         assert_eq!(preview.len(), 10);
         assert_eq!(preview.first().unwrap().name, "Ch 0");
         assert_eq!(preview.last().unwrap().name, "Ch 10");

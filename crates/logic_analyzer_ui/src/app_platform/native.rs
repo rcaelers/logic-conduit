@@ -91,8 +91,7 @@ pub(crate) struct PlatformState {
     pub(crate) confirm_clear_recent: bool,
     pub(crate) confirm_clear_derived_caches: bool,
     pub(crate) derived_cache_nodes: HashSet<NodeId>,
-    pub(crate) preview_source: Option<NodeId>,
-    pub(crate) live_channel_layout: Option<Vec<(usize, String)>>,
+    pub(crate) capture_presentation_identity: Option<String>,
     #[cfg(target_os = "macos")]
     pub(crate) native_menu_commands: crossbeam_channel::Receiver<NativeMenuCommand>,
 }
@@ -200,8 +199,7 @@ impl PlatformState {
                 confirm_clear_recent: false,
                 confirm_clear_derived_caches: false,
                 derived_cache_nodes: HashSet::new(),
-                preview_source: None,
-                live_channel_layout: None,
+                capture_presentation_identity: None,
                 #[cfg(target_os = "macos")]
                 native_menu_commands,
             },

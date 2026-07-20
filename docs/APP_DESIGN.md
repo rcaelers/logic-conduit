@@ -39,9 +39,10 @@ One window, split by a draggable horizontal splitter:
 - Graphs are saved/loaded as the editor's JSON document (`⌘O` / `⌘S` / `⇧⌘S`); the binary
   accepts a graph file argument (`dsl-ui graphs/spi_controlled_decode.json`). Example graphs live in
   [graphs/](../graphs).
-- Every frame, the app checks the graph for a `DSL File Source` node and hands its file
-  path to the viewer (`set_capture_path` with `DslFileCaptureDataSource::open`) — the one
-  place that knows what a `.dsl` path means. The viewer itself is format-agnostic.
+- Every frame, the app asks the graph integration for an opaque pre-run capture presentation.
+  Concrete source builders supply an indexed-capture factory, an in-memory preview, or a channel
+  layout. The app and viewer do not identify node types or know what DSL and Sigrok paths mean.
+  Runtime processing nodes remain compiler-owned and are created only when a run starts.
 - `logic-analyzer-app-native` binary (named `dsl-ui`): clap CLI,
   `tracing_subscriber` with `RUST_LOG` env filter,
   and an eframe native window.

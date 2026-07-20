@@ -196,7 +196,10 @@ impl App {
         self.refresh_trigger_configuration();
     }
 
-    pub(crate) fn set_capture_preview(&mut self, signals: Vec<nodes::CapturePreviewSignal>) {
+    pub(crate) fn set_capture_preview(
+        &mut self,
+        signals: Vec<compiler::CapturePresentationSignal>,
+    ) {
         let duration_us = signals
             .iter()
             .flat_map(|signal| signal.transitions.last().map(|(time, _)| *time))

@@ -14,6 +14,7 @@
 //! same `Word` runtime type regardless of which decoder produced it.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::{Color32, Pos2};
@@ -28,10 +29,10 @@ use node_graph::{
 };
 use signal_processing::{
     AcquisitionContext, AcquisitionError, AcquisitionResult, AppManager, CaptureChannelId,
-    CaptureProviderCapabilities, CaptureSessionPlan, CaptureStartMode, CaptureStoreCursor,
-    ConfigurationBoundary, DerivedLanes, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy,
-    PersistentStoreConfig, PreparedAcquisition, ProcessNode, SampleBlock, SamplingActivity,
-    SimpleTriggerCondition, TriggerEditorSchema, TriggerProgram, ViewerRetention,
+    CaptureIndexFactory, CaptureProviderCapabilities, CaptureSessionPlan, CaptureStartMode,
+    CaptureStoreCursor, ConfigurationBoundary, DerivedLanes, DisconnectEvent, InputSub, NodeConfig,
+    OverflowPolicy, PersistentStoreConfig, PreparedAcquisition, ProcessNode, SampleBlock,
+    SamplingActivity, SimpleTriggerCondition, TriggerEditorSchema, TriggerProgram, ViewerRetention,
 };
 
 use super::cache_platform;
@@ -451,6 +452,10 @@ pub trait RuntimeBuilder {
     fn viewer_channel_origin(&self, _socket: &Socket, _state: &Value) -> Option<usize> {
         None
     }
+    /// Optional pre-run raw-capture presentation supplied by this concrete source.
+    fn capture_presentation(&self, _state: &Value) -> Result<Option<CapturePresentation>, String> {
+        Ok(None)
+    }
     /// Optional protocol-neutral description of how this node samples its
     /// inputs. Concrete builders own the mapping from node state and input
     /// definitions to this electrical presentation contract.
@@ -516,6 +521,30 @@ pub trait RuntimeBuilder {
     }
 }
 
+pub struct CapturePresentationSignal {
+    pub index: usize,
+    pub name: String,
+    pub initial: bool,
+    pub transitions: Vec<(f64, bool)>,
+}
+
+pub enum CapturePresentation {
+    Indexed {
+        identity: PathBuf,
+        factory: Box<dyn CaptureIndexFactory>,
+    },
+    InMemory {
+        signals: Vec<CapturePresentationSignal>,
+        duration_us: f64,
+    },
+    Channels(Vec<(usize, String)>),
+}
+
+pub struct DiscoveredCapturePresentation {
+    pub identity: String,
+    pub presentation: CapturePresentation,
+}
+
 pub struct BuilderRegistry(HashMap<String, Box<dyn RuntimeBuilder>>);
 
 impl BuilderRegistry {
@@ -538,6 +567,37 @@ impl BuilderRegistry {
 
     pub(crate) fn get(&self, def_name: &str) -> Option<&dyn RuntimeBuilder> {
         self.0.get(def_name).map(|b| b.as_ref())
+    }
+}
+
+/// Discovers a concrete source's pre-run presentation through its builder contract.
+pub fn discover_capture_presentation(
+    graph: &GraphState,
+    builders: &BuilderRegistry,
+) -> Result<Option<DiscoveredCapturePresentation>, String> {
+    let mut candidates = Vec::new();
+    for (&node_id, node) in &graph.nodes {
+        if node.kind != NodeKind::Regular || node.muted {
+            continue;
+        }
+        let Some(builder) = builders.get(node.def_name()) else {
+            continue;
+        };
+        let Some(presentation) = builder.capture_presentation(&node.state)? else {
+            continue;
+        };
+        let state = serde_json::to_vec(&node.state).map_err(|error| error.to_string())?;
+        candidates.push(DiscoveredCapturePresentation {
+            identity: format!("{node_id:?}:{}", blake3::hash(&state).to_hex()),
+            presentation,
+        });
+    }
+    match candidates.len() {
+        0 => Ok(None),
+        1 => Ok(candidates.pop()),
+        count => Err(format!(
+            "the graph has {count} enabled sources with pre-run capture presentations"
+        )),
     }
 }
 

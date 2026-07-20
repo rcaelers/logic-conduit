@@ -1,4 +1,4 @@
-use logic_analyzer_graph::{self as compiler, nodes};
+use logic_analyzer_graph as compiler;
 
 use crate::app::App;
 
@@ -98,20 +98,40 @@ impl App {
         if self.logic_analyzer.has_growing_capture() {
             return;
         }
-        let preview = nodes::capture_preview(self.node_graph.graph());
-        let source = preview.as_ref().map(|(id, _)| *id);
-        if source == self.platform.preview_source {
+        let presentation =
+            compiler::discover_capture_presentation(self.node_graph.graph(), &self.builders)
+                .ok()
+                .flatten();
+        let identity = presentation.as_ref().map(|value| value.identity.as_str());
+        if identity == self.platform.capture_presentation_identity.as_deref() {
             return;
         }
-        self.platform.preview_source = source;
-        match preview {
-            Some((_, signals)) => self.set_capture_preview(signals),
-            None => self.logic_analyzer.clear_capture(),
+        self.platform.capture_presentation_identity = identity.map(str::to_owned);
+        match presentation.map(|value| value.presentation) {
+            Some(compiler::CapturePresentation::InMemory { signals, .. }) => {
+                self.set_capture_preview(signals)
+            }
+            Some(compiler::CapturePresentation::Channels(channels)) => {
+                self.logic_analyzer.set_channels(
+                    channels
+                        .into_iter()
+                        .map(|(index, name)| logic_analyzer_viewer::ChannelSignal {
+                            index,
+                            name,
+                            initial: false,
+                            transitions: Vec::new(),
+                        })
+                        .collect(),
+                );
+            }
+            Some(compiler::CapturePresentation::Indexed { .. }) | None => {
+                self.logic_analyzer.clear_capture()
+            }
         }
     }
 
     pub(crate) fn platform_restore_graph_capture(&mut self) {
-        self.platform.preview_source = None;
+        self.platform.capture_presentation_identity = None;
     }
 
     pub(crate) fn platform_before_graph(&mut self) {}

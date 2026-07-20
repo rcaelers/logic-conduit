@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver};
 use egui::{FontId, Pos2, Rect, Sense, Ui};
 
 use input_bindings::InputBindings;
-use signal_processing::{CaptureDataSource, CaptureIndex, DerivedLanes};
+use signal_processing::{CaptureDataSource, CaptureIndex, CaptureIndexFactory, DerivedLanes};
 
 use crate::channel::LogicChannel;
 use crate::indexed_annotations::IndexedAnnotationCacheEntry;
@@ -326,6 +326,26 @@ impl LogicAnalyzerViewer {
 
         let (response_tx, response_rx) = mpsc::channel();
         crate::worker::spawn_capture_worker(path, data_source, response_tx);
+        self.worker_responses = Some(response_rx);
+    }
+
+    /// Attaches a deferred, format-neutral indexed capture source.
+    pub fn set_capture_factory(
+        &mut self,
+        identity: impl Into<PathBuf>,
+        factory: Box<dyn CaptureIndexFactory>,
+    ) {
+        let identity = identity.into();
+        if self.capture_path.as_ref() == Some(&identity) {
+            return;
+        }
+        let display_name = factory.display_name();
+        self.clear_capture();
+        self.capture_path = Some(identity.clone());
+        self.fit_to_capture = true;
+        self.status = format!("Opening {display_name}");
+        let (response_tx, response_rx) = mpsc::channel();
+        crate::worker::spawn_capture_factory_worker(identity, factory, response_tx);
         self.worker_responses = Some(response_rx);
     }
 
