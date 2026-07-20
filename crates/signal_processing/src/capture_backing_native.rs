@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use super::{BlockBacking, BlockData};
+use super::implementation::{BlockBacking, BlockData};
 
 struct MappedBlockBacking(Arc<memmap2::Mmap>);
 

@@ -73,7 +73,7 @@ fn format_template(template: &str, values: &[i64]) -> String {
 /// Single input keeps the original 1:1 mapping: every incoming sample
 /// (including the t=0 initial) emits the formatted text at the same
 /// timestamp. With several inputs the node merges them in strict timestamp
-/// order (like [`LogicGate`](super::LogicGate)) — holding every input's
+/// order (like [`LogicGate`](super::logic_gate::LogicGate)) — holding every input's
 /// current value, initially 0 — and emits whenever the formatted text
 /// changes.
 pub struct TextFormatter {

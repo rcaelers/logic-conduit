@@ -309,8 +309,8 @@ impl PipelineManager {
     }
 
     /// No-op: threads drive themselves. Exists so callers that hold
-    /// [`super::AppManager`] can call `pump` unconditionally — it only does
-    /// real work on [`CooperativeManager`](super::CooperativeManager).
+    /// [`AppManager`](super::app_manager::AppManager) can call `pump` unconditionally — it only
+    /// does real work on [`CooperativeManager`](super::cooperative_manager::CooperativeManager).
     pub fn pump(&mut self, _budget: usize) {}
 
     pub fn contains(&self, name: &str) -> bool {

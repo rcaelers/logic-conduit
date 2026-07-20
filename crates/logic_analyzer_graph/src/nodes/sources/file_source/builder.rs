@@ -9,7 +9,7 @@ use signal_processing::{
     DEFAULT_VIEWER_MAX_ENTRIES, ProcessNode, Sample, SampleBlock, TextSample, ViewerRetention,
 };
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, nodes, parse_state};
+use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 pub(crate) struct FileSourceBuilder;
 
@@ -61,7 +61,7 @@ impl RuntimeBuilder for FileSourceBuilder {
         resolved: &ResolvedInputs,
         _ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::DslFileSourceState = parse_state(state)?;
+        let state: super::definition::DslFileSourceState = parse_state(state)?;
         let channels = state.channels.value.clamp(1, 32) as u8;
         if resolved.kind(0).is_some() {
             // File socket wired: the path arrives over the wire at run

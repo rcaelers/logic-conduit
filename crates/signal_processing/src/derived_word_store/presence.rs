@@ -1,4 +1,4 @@
-use super::WordPresenceBucket;
+use super::query::WordPresenceBucket;
 
 const FAN_OUT: usize = 64;
 

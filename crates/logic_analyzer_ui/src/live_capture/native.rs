@@ -27,7 +27,7 @@ use signal_processing::{
     RecordingStart, TriggerTimeoutAction, bounded_capture_event_queue,
 };
 
-use super::{
+use super::implementation::{
     CaptureAnalysisAttachment, CaptureCoordinatorContract, CaptureExportCompletion,
     CaptureExportStatus, CaptureReplayAttachment, CaptureSessionStatus, CaptureWaveformUpdate,
 };
@@ -104,7 +104,7 @@ enum CaptureCommand {
     },
     ResolveConfigurationEpoch {
         epoch_id: u64,
-        resolution: super::ConfigurationEpochResolution,
+        resolution: super::implementation::ConfigurationEpochResolution,
         response: Sender<Result<(), String>>,
     },
 }
@@ -311,7 +311,8 @@ pub(crate) struct CaptureCoordinator {
     export_notice: Option<Result<CaptureExportCompletion, String>>,
     active_export: Option<ActiveExport>,
     pending_configuration_epoch: Option<PendingConfigurationEpoch>,
-    configuration_epoch_preparation: Option<Result<super::PreparedConfigurationEpoch, String>>,
+    configuration_epoch_preparation:
+        Option<Result<super::implementation::PreparedConfigurationEpoch, String>>,
     configuration_epoch_resolutions: Vec<Receiver<Result<(), String>>>,
     configuration_epoch_notice: Option<Result<(), String>>,
     state_history: Vec<CaptureSessionState>,
@@ -509,15 +510,14 @@ impl CaptureCoordinator {
                 .pending_configuration_epoch
                 .take()
                 .expect("preparation came from a pending epoch");
-            self.configuration_epoch_preparation =
-                Some(
-                    preparation.map(|prepared| super::PreparedConfigurationEpoch {
-                        epoch_id: prepared.epoch_id,
-                        source_sample: prepared.source_sample,
-                        boundary: prepared.boundary,
-                        graph: pending.graph,
-                    }),
-                );
+            self.configuration_epoch_preparation = Some(preparation.map(|prepared| {
+                super::implementation::PreparedConfigurationEpoch {
+                    epoch_id: prepared.epoch_id,
+                    source_sample: prepared.source_sample,
+                    boundary: prepared.boundary,
+                    graph: pending.graph,
+                }
+            }));
         }
 
         let mut index = 0;
@@ -1125,14 +1125,14 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
 
     fn take_configuration_epoch_preparation(
         &mut self,
-    ) -> Option<Result<super::PreparedConfigurationEpoch, String>> {
+    ) -> Option<Result<super::implementation::PreparedConfigurationEpoch, String>> {
         self.configuration_epoch_preparation.take()
     }
 
     fn resolve_configuration_epoch(
         &mut self,
         epoch_id: u64,
-        resolution: super::ConfigurationEpochResolution,
+        resolution: super::implementation::ConfigurationEpochResolution,
     ) -> Result<(), String> {
         let active = self.active.as_ref().ok_or_else(|| {
             "capture ended before the configuration epoch was resolved".to_owned()
@@ -1686,7 +1686,7 @@ fn resolve_configuration_epoch(
     metadata: &mut Option<CaptureApplicationMetadata>,
     directory: &Path,
     epoch_id: u64,
-    resolution: super::ConfigurationEpochResolution,
+    resolution: super::implementation::ConfigurationEpochResolution,
 ) -> Result<(), String> {
     let metadata = metadata
         .as_mut()
@@ -1702,13 +1702,13 @@ fn resolve_configuration_epoch(
         ));
     }
     let (outcome, message) = match resolution {
-        super::ConfigurationEpochResolution::Applied => {
+        super::implementation::ConfigurationEpochResolution::Applied => {
             (PersistedConfigurationEpochOutcome::Applied, None)
         }
-        super::ConfigurationEpochResolution::Deferred(message) => {
+        super::implementation::ConfigurationEpochResolution::Deferred(message) => {
             (PersistedConfigurationEpochOutcome::Deferred, Some(message))
         }
-        super::ConfigurationEpochResolution::Failed(message) => {
+        super::implementation::ConfigurationEpochResolution::Failed(message) => {
             (PersistedConfigurationEpochOutcome::Failed, Some(message))
         }
     };
@@ -2430,7 +2430,7 @@ mod tests {
         coordinator
             .resolve_configuration_epoch(
                 prepared.epoch_id,
-                super::super::ConfigurationEpochResolution::Applied,
+                super::super::implementation::ConfigurationEpochResolution::Applied,
             )
             .unwrap();
         loop {

@@ -65,6 +65,10 @@ The workspace uses an owner-facade module layout.
   module name contains `tests`.
 - Modules are private by default. An owning `mod.rs` or crate `lib.rs` selectively re-exports the
   symbols that form its internal or external contract.
+- Leaf files within the same module use sibling implementation paths directly, such as
+  `super::presentation::render` or `super::definition::State`. They do not route same-module
+  dependencies through re-exports in their own `mod.rs`; a facade re-export serves only consumers
+  outside the owning module.
 - A public module is an intentional API namespace, not a way to make its implementation easier
   to import. Public modules are limited to the allowlist below.
 - Every public module is directory-backed and has a `mod.rs`; public file modules such as
@@ -79,10 +83,11 @@ The workspace uses an owner-facade module layout.
 
 ### Visibility through facades
 
-Leaf symbols used only in their defining module are private. A symbol re-exported for another
-module in the same crate is `pub(crate)` at its definition and at the owning facade. A supported
-cross-crate or plugin contract is `pub` at its definition and is publicly re-exported from an
-allowlisted public module or the crate root.
+Leaf symbols used only in their defining file are private. Symbols shared directly between
+sibling leaf modules are `pub(crate)` at their definition but are not re-exported by the owning
+`mod.rs`. A symbol re-exported for another module in the same crate is `pub(crate)` at its
+definition and at the owning facade. A supported cross-crate or plugin contract is `pub` at its
+definition and is publicly re-exported from an allowlisted public module or the crate root.
 
 The layout does not use `pub(super)` or `pub(in ...)`. The facade path communicates the
 owner and intended dependency direction, while `pub(crate)` provides the visibility required to

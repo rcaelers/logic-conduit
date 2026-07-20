@@ -1,5 +1,7 @@
 use input_bindings::InputBindings;
 
+use super::implementation::embedded_defaults;
+
 pub(crate) fn load() -> InputBindings {
-    super::embedded_defaults()
+    embedded_defaults()
 }

@@ -61,8 +61,9 @@ impl RuntimeBuilder for DemoCaptureSourceBuilder {
         &self,
         state: &Value,
     ) -> Result<Option<TriggerConfigurationFeature>, String> {
-        let state = serde_json::from_value::<super::DemoCaptureSourceState>(state.clone())
-            .map_err(|error| format!("invalid demo capture state: {error}"))?;
+        let state =
+            serde_json::from_value::<super::definition::DemoCaptureSourceState>(state.clone())
+                .map_err(|error| format!("invalid demo capture state: {error}"))?;
         super::trigger::configuration(&state).map(Some)
     }
 
@@ -71,7 +72,7 @@ impl RuntimeBuilder for DemoCaptureSourceBuilder {
         state: &Value,
         edit: &LiveCaptureEdit,
     ) -> Result<Option<Value>, String> {
-        super::apply_live_capture_edit(state, edit).map(Some)
+        super::implementation::apply_live_capture_edit(state, edit).map(Some)
     }
 
     fn input_required(&self, _socket: &Socket, _state: &Value) -> bool {

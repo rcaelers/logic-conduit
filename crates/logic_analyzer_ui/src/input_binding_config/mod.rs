@@ -7,5 +7,4 @@ mod platform;
 #[path = "wasm.rs"]
 mod platform;
 
-pub(crate) use implementation::embedded_defaults;
 pub(crate) use platform::load;

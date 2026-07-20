@@ -1,7 +1,7 @@
 use egui::Color32;
 use serde::{Deserialize, Serialize};
 
-use super::SocketDirection;
+use super::ids::SocketDirection;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SocketShape {
@@ -117,7 +117,7 @@ impl Socket {
 
     /// Whether a socket in direction `from_dir` could connect to `to` in
     /// direction `to_dir` — the same output-accepts-input check `accepts`
-    /// performs, usable before either socket has a [`super::SocketId`] (e.g.
+    /// performs, usable before either socket has a [`super::ids::SocketId`] (e.g.
     /// a freshly instantiated, not-yet-added node being probed for
     /// compatibility with a dragged wire).
     pub fn compatible(

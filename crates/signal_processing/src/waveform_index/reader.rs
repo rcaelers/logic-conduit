@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use super::builder::IndexBuilder;
-use super::exact_window_sample_limit;
+use super::exact::exact_window_sample_limit;
 use super::query::{GroupSummary, sample_summary_channel};
-use super::select_summary_resolution;
+use super::resolution::select_summary_resolution;
 use super::storage::{IndexReader, LevelsView};
 use super::types::{
     CaptureIndexProgress, SAMPLES_PER_L1_BIT, SAMPLES_PER_L2_BIT, SAMPLES_PER_L3_BIT, bit,

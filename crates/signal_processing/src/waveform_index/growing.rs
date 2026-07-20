@@ -10,8 +10,9 @@ use crate::{
     Error, NativeCaptureRandomReader, NativeCaptureStore, NativeFinalizedCapture, Result,
 };
 
+use super::exact::exact_window_sample_limit;
 use super::query::{GroupSummary, sample_summary_channel};
-use super::{exact_window_sample_limit, select_summary_resolution};
+use super::resolution::select_summary_resolution;
 
 const LEAF_SAMPLES: u64 = 64;
 const FAN_OUT: usize = 64;

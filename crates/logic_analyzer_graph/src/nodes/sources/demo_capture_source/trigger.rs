@@ -3,8 +3,7 @@ use signal_processing::{
     TriggerEditorSchema, TriggerIdentifier, TriggerLogicOperator, TriggerPredicate, TriggerProgram,
 };
 
-use super::DemoCaptureSourceState;
-use super::definition::DEMO_CAPTURE_CHANNELS;
+use super::definition::{DEMO_CAPTURE_CHANNELS, DemoCaptureSourceState};
 use crate::{SimpleTriggerChannel, TriggerConfigurationFeature};
 
 const SCHEMA_ID: &str = "dsl.demo-capture.trigger";

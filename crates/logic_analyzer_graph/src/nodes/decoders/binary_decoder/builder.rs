@@ -11,16 +11,16 @@ use signal_processing::{ProcessNode, Sample, SampleBlock, Word};
 
 use crate::{
     CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, SamplingOverlayDescriptor,
-    SamplingQualifierDescriptor, nodes, parse_state,
+    SamplingQualifierDescriptor, parse_state,
 };
 
 pub(crate) struct BinaryDecoderBuilder;
 
 impl BinaryDecoderBuilder {
-    fn parsed(state: &Value) -> Result<nodes::BinaryDecoderState, String> {
+    fn parsed(state: &Value) -> Result<super::definition::BinaryDecoderState, String> {
         parse_state(state)
     }
-    fn cs_polarity(state: &nodes::BinaryDecoderState) -> CsPolarity {
+    fn cs_polarity(state: &super::definition::BinaryDecoderState) -> CsPolarity {
         match state.cs_polarity.selected() {
             "Active low" => CsPolarity::ActiveLow,
             "Active high" => CsPolarity::ActiveHigh,
@@ -154,12 +154,13 @@ impl RuntimeBuilder for BinaryDecoderBuilder {
 mod tests {
     use node_graph::NodeDef;
 
+    use super::super::definition::BinaryDecoder;
     use super::*;
 
     #[test]
     fn sampling_overlay_follows_edge_mode_and_ignores_level_modes() {
         let builder = BinaryDecoderBuilder;
-        let mut state = nodes::BinaryDecoder::state();
+        let mut state = BinaryDecoder::state();
         for (mode, expected) in [
             ("Rising (SDR)", Some(SamplingEdge::Rising)),
             ("Falling (SDR)", Some(SamplingEdge::Falling)),

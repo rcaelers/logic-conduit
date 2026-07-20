@@ -16,7 +16,7 @@ use signal_processing::{
     ViewerSink, Word,
 };
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, nodes, parse_state};
+use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 pub(crate) struct ViewerBuilder;
 
@@ -68,7 +68,7 @@ impl RuntimeBuilder for ViewerBuilder {
         resolved: &ResolvedInputs,
         ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::ViewerState = parse_state(state)?;
+        let state: super::definition::ViewerState = parse_state(state)?;
         let prefix = state.label.value.trim().to_owned();
         let mut sink = ViewerSink::new(ctx.derived_lanes().clone())
             .with_name(name)

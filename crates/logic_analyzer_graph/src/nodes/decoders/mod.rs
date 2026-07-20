@@ -15,4 +15,4 @@ pub use spi_decoder::{SpiDecoder, SpiDecoderMetadata, SpiDecoderState};
 #[cfg(test)]
 pub(crate) use uart_decoder::default_baud_preset;
 pub use uart_decoder::{UartDecoder, UartDecoderState};
-pub(crate) use uart_decoder::{UartDecoderBuilder, default_display_format, selected_baud_rate};
+pub(crate) use uart_decoder::{UartDecoderBuilder, default_display_format};

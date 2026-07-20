@@ -9,16 +9,16 @@ use signal_processing::{ProcessNode, Sample, Word};
 
 use crate::{
     CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, SamplingOverlayDescriptor,
-    SamplingQualifierDescriptor, nodes, parse_state,
+    SamplingQualifierDescriptor, parse_state,
 };
 
 pub(crate) struct SpiDecoderBuilder;
 
 impl SpiDecoderBuilder {
-    fn parsed(state: &Value) -> Result<nodes::SpiDecoderState, String> {
+    fn parsed(state: &Value) -> Result<super::definition::SpiDecoderState, String> {
         parse_state(state)
     }
-    fn cs_polarity(state: &nodes::SpiDecoderState) -> CsPolarity {
+    fn cs_polarity(state: &super::definition::SpiDecoderState) -> CsPolarity {
         match state.cs_polarity.selected() {
             "Active high" => CsPolarity::ActiveHigh,
             "Disabled" => CsPolarity::Disabled,
@@ -33,7 +33,7 @@ impl RuntimeBuilder for SpiDecoderBuilder {
         socket: &Socket,
         _state: &Value,
     ) -> Option<ViewerOutputPresentation> {
-        super::spi_output_presentation(socket.def_index)
+        super::presentation::spi_output_presentation(socket.def_index)
     }
 
     fn word_display_format(&self, socket: &Socket, state: &Value) -> Option<String> {
@@ -155,12 +155,13 @@ impl RuntimeBuilder for SpiDecoderBuilder {
 mod tests {
     use node_graph::NodeDef;
 
+    use super::super::definition::SpiDecoder;
     use super::*;
 
     #[test]
     fn sampling_overlay_uses_spi_sampling_edge() {
         let builder = SpiDecoderBuilder;
-        let mut state = nodes::SpiDecoder::state();
+        let mut state = SpiDecoder::state();
         for (cpol, cpha, expected) in [
             ("0", "0", SamplingEdge::Rising),
             ("0", "1", SamplingEdge::Falling),

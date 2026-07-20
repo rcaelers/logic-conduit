@@ -47,19 +47,23 @@ The owner-facade layout below is mandatory throughout the Rust workspace.
 2. Modules are private by default. Symbols needed by another module are selectively re-exported
    by the owning `mod.rs` or crate `lib.rs`; consumers import the facade path rather than a leaf
    implementation path.
-3. Public modules are limited API namespaces. The public-module allowlist is maintained in
+3. Within one module, leaf files import symbols from sibling leaf modules directly (for example,
+   `super::presentation::render` or `super::definition::State`). They do not consume symbols
+   re-exported by their own `mod.rs`; those re-exports exist only for consumers outside the module.
+4. Public modules are limited API namespaces. The public-module allowlist is maintained in
    `docs/RESPONSIBILITY_AND_VISIBILITY_DESIGN.md`; every module absent from it is private. Adding
    a public module requires an explicit design update and API review.
-4. Every public module is directory-backed and has a `mod.rs`. Do not create a public module
+5. Every public module is directory-backed and has a `mod.rs`. Do not create a public module
    backed directly by a sibling `.rs` file.
-5. A `mod.rs` contains only module documentation, attributes on declarations or re-exports,
+6. A `mod.rs` contains only module documentation, attributes on declarations or re-exports,
    module declarations, and re-exports. Put structs, enums, traits, implementations, functions,
    constants, type aliases, executable macro bodies, and other implementation code in leaf files.
-6. Use private visibility for same-module implementation details, `pub(crate)` for symbols
-   re-exported through an internal crate facade, and `pub` only for supported cross-crate or
-   plugin contracts re-exported through an allowed public facade. Do not use `pub(super)` or
+7. Use private visibility for details confined to one leaf file. Use `pub(crate)` for symbols
+   shared directly between sibling leaf modules or re-exported through an internal crate facade;
+   sibling-only symbols are not re-exported by `mod.rs`. Use `pub` only for supported cross-crate
+   or plugin contracts re-exported through an allowed public facade. Do not use `pub(super)` or
    `pub(in ...)`.
-7. Struct fields are private by default. Behavioral or invariant-owning structs expose methods.
+8. Struct fields are private by default. Behavioral or invariant-owning structs expose methods.
    Plain record types intended for construction or pattern matching may expose fields, but all
    data fields use one visibility matching the record contract; do not mix private, `pub(crate)`,
    and `pub` data fields in one struct.

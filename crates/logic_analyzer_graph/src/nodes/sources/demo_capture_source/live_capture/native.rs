@@ -17,7 +17,7 @@ use signal_processing::{
     TriggerPlacementCapability, TriggerPredicate, TriggerProgram, TriggerTimeoutAction,
 };
 
-use crate::nodes::DemoCaptureSourceState;
+use super::super::definition::DemoCaptureSourceState;
 use crate::{CaptureGraphSourceFactory, LiveCaptureFeature, SimpleTriggerChannel};
 
 const CHUNK_SAMPLES: u64 = 4_096;

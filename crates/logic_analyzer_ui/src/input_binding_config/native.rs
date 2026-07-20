@@ -3,10 +3,12 @@ use std::path::{Path, PathBuf};
 
 use input_bindings::InputBindings;
 
+use super::implementation::embedded_defaults;
+
 const CONFIG_FILE: &str = "input_bindings.json";
 
 pub(crate) fn load() -> InputBindings {
-    path().map_or_else(super::embedded_defaults, |path| load_path(&path))
+    path().map_or_else(embedded_defaults, |path| load_path(&path))
 }
 
 fn path() -> Option<PathBuf> {
@@ -18,7 +20,7 @@ fn load_path(path: &Path) -> InputBindings {
         Ok(json) => InputBindings::from_json(&json).unwrap_or_else(|error| {
             panic!("invalid input bindings in {}: {error}", path.display())
         }),
-        Err(error) if error.kind() == ErrorKind::NotFound => super::embedded_defaults(),
+        Err(error) if error.kind() == ErrorKind::NotFound => embedded_defaults(),
         Err(error) => panic!(
             "cannot read input bindings from {}: {error}",
             path.display()

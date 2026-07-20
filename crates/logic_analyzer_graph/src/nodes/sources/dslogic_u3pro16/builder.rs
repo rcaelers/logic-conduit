@@ -6,7 +6,7 @@ use logic_analyzer_processing::DsLogicU3Pro16;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock, ViewerRetention};
 
-use crate::nodes::U3Pro16State;
+use super::definition::U3Pro16State;
 use crate::{
     CompileCtx, LiveCaptureEdit, LiveCaptureFeature, PortKind, ResolvedInputs, RuntimeBuilder,
     TriggerConfigurationFeature, parse_state,
@@ -101,7 +101,7 @@ impl RuntimeBuilder for DsLogicU3Pro16Builder {
         state: &Value,
         edit: &LiveCaptureEdit,
     ) -> Result<Option<Value>, String> {
-        super::apply_live_capture_edit(state, edit).map(Some)
+        super::implementation::apply_live_capture_edit(state, edit).map(Some)
     }
 
     fn build(
@@ -112,7 +112,7 @@ impl RuntimeBuilder for DsLogicU3Pro16Builder {
         _ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: U3Pro16State = parse_state(state)?;
-        let config = super::capture_config(&state)?;
+        let config = super::implementation::capture_config(&state)?;
         let source = DsLogicU3Pro16::open_first()
             .map_err(|error| error.to_string())?
             .into_source(config)

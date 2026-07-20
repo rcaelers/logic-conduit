@@ -4,10 +4,11 @@ use egui::Color32;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use super::{
-    Connection, Frame, FrameId, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId,
-    VariadicInfo,
-};
+use super::connection::Connection;
+use super::frame::{Frame, FrameId};
+use super::ids::{NodeId, SocketDirection, SocketId};
+use super::node::{Node, NodeKind};
+use super::socket::{Socket, VariadicInfo};
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct GraphState {

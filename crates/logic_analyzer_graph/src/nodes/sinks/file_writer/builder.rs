@@ -7,7 +7,7 @@ use logic_analyzer_processing::{BinaryFileWriter, WriteWidth};
 use node_graph::Socket;
 use signal_processing::{ProcessNode, TextSample, Word};
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, nodes, parse_state};
+use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 pub(crate) struct FileWriterBuilder;
 
@@ -39,7 +39,7 @@ impl RuntimeBuilder for FileWriterBuilder {
         match socket.def_index {
             // The Filename input can stay unconnected when the node's own
             // static filename (save-dialog prop) is set.
-            1 => parse_state::<nodes::FileWriterState>(state)
+            1 => parse_state::<super::definition::FileWriterState>(state)
                 .map(|state| state.filename.value.trim().is_empty())
                 .unwrap_or(true),
             _ => true,
@@ -52,7 +52,7 @@ impl RuntimeBuilder for FileWriterBuilder {
         resolved: &ResolvedInputs,
         _ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::FileWriterState = parse_state(state)?;
+        let state: super::definition::FileWriterState = parse_state(state)?;
         let width = match state.write_width.selected() {
             "U16 LE" => WriteWidth::U16Le,
             "U32 LE" => WriteWidth::U32Le,

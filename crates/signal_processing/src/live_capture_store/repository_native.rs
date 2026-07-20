@@ -5,10 +5,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use super::{
+use super::implementation::{
     CaptureReclamationReport, CaptureRecoveryReport, CaptureSessionOutcome, CaptureStoreError,
-    CaptureStoreResult, NativeFinalizedCapture,
+    CaptureStoreResult,
 };
+use super::native::NativeFinalizedCapture;
 use crate::{CaptureRetentionTracker, CaptureSessionId};
 
 #[derive(Clone, Debug)]

@@ -11,12 +11,9 @@ mod platform;
 #[path = "wasm.rs"]
 mod platform;
 
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use implementation::PreparedConfigurationEpoch;
 pub(crate) use implementation::{
     CaptureAnalysisAttachment, CaptureAvailability, CaptureCoordinatorContract,
-    CaptureExportCompletion, CaptureExportStatus, CaptureReplayAttachment, CaptureSessionStatus,
-    CaptureWaveformUpdate, ConfigurationEpochResolution, capture_availability,
+    CaptureReplayAttachment, ConfigurationEpochResolution, capture_availability,
 };
 #[cfg(target_arch = "wasm32")]
 pub(crate) use platform::CaptureCoordinator;

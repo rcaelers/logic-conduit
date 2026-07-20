@@ -6,7 +6,7 @@ use logic_analyzer_processing::SigrokFileSource;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample};
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, nodes, parse_state};
+use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 pub(crate) struct SigrokFileSourceBuilder;
 
@@ -31,7 +31,7 @@ impl RuntimeBuilder for SigrokFileSourceBuilder {
     }
     fn input_required(&self, socket: &Socket, state: &Value) -> bool {
         socket.def_index == 0
-            && parse_state::<nodes::SigrokFileSourceState>(state)
+            && parse_state::<super::definition::SigrokFileSourceState>(state)
                 .map(|state| state.file.value.trim().is_empty())
                 .unwrap_or(true)
     }
@@ -42,7 +42,7 @@ impl RuntimeBuilder for SigrokFileSourceBuilder {
         _resolved: &ResolvedInputs,
         _ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::SigrokFileSourceState = parse_state(state)?;
+        let state: super::definition::SigrokFileSourceState = parse_state(state)?;
         SigrokFileSource::new(&state.file.value, state.channels.value.clamp(1, 32) as u8)
             .map(|source| Box::new(source.with_name(name)) as Box<dyn ProcessNode>)
             .map_err(|error| format!("cannot open '{}': {error}", state.file.value))

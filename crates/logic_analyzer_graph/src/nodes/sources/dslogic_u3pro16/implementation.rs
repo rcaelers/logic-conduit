@@ -10,7 +10,8 @@ use signal_processing::{
     TriggerPlacement, TriggerTimeout, TriggerTimeoutAction,
 };
 
-use super::{U3Pro16State, trigger};
+use super::definition::U3Pro16State;
+use super::trigger;
 use crate::{LiveCaptureEdit, parse_state};
 
 fn selected_sample_rate_hz(state: &U3Pro16State) -> Result<u64, String> {

@@ -28,7 +28,6 @@ mod vlq;
 pub(crate) use backend::{AnnotationStoreBackend, AnnotationStoreWriterBackend};
 pub use config::{BlockCodecConfig, LiveStoreConfig, PersistentStoreConfig};
 pub use errors::{CodecError, CodecResult};
-pub(crate) use platform::default_working_directory;
 #[cfg(not(target_arch = "wasm32"))]
 pub use platform::{
     CommittedAnnotationBlock, DecodedBlockCacheStats, cleanup_cache, clear_cache,

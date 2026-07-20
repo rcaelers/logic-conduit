@@ -7,7 +7,7 @@ use logic_analyzer_viewer::ViewerOutputPresentation;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, Trigger, Word};
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, nodes, parse_state};
+use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 pub(crate) struct UartDecoderBuilder;
 
@@ -17,12 +17,12 @@ impl RuntimeBuilder for UartDecoderBuilder {
         socket: &Socket,
         _state: &Value,
     ) -> Option<ViewerOutputPresentation> {
-        super::uart_output_presentation(socket.def_index)
+        super::presentation::uart_output_presentation(socket.def_index)
     }
 
     fn word_display_format(&self, socket: &Socket, state: &Value) -> Option<String> {
         if socket.def_index == 3 {
-            parse_state::<nodes::UartDecoderState>(state)
+            parse_state::<super::definition::UartDecoderState>(state)
                 .ok()
                 .map(|state| state.display_format.selected().to_string())
         } else {
@@ -61,7 +61,7 @@ impl RuntimeBuilder for UartDecoderBuilder {
         _resolved: &ResolvedInputs,
         _ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::UartDecoderState = parse_state(state)?;
+        let state: super::definition::UartDecoderState = parse_state(state)?;
         let parity = match state.parity.selected() {
             "Odd" => UartParity::Odd,
             "Even" => UartParity::Even,
@@ -82,7 +82,7 @@ impl RuntimeBuilder for UartDecoderBuilder {
             BitOrder::LsbFirst
         };
         let decoder = UartDecoder::new(
-            nodes::selected_baud_rate(&state).max(1) as u64,
+            super::definition::selected_baud_rate(&state).max(1) as u64,
             state.data_bits.value.clamp(5, 9) as usize,
         )
         .with_parity(parity, state.check_parity.value)

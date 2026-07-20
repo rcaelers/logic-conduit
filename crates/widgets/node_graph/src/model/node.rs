@@ -2,7 +2,8 @@ use egui::{Color32, Pos2};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{NodeId, Socket, SocketShape};
+use super::ids::NodeId;
+use super::socket::{Socket, SocketShape};
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub enum NodeKind {

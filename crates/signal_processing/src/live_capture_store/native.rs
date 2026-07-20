@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use super::{
+use super::implementation::{
     CaptureCursorItem, CaptureReclamationReport, CaptureRecoveryReport, CaptureSessionMetadata,
     CaptureSessionOutcome, CaptureStoreCursor, CaptureStoreDescriptor, CaptureStoreError,
     CaptureStoreManifest, CaptureStoreResult, CaptureStoreSnapshot, CaptureTimelineMetadata,

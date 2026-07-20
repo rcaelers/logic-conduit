@@ -1,12 +1,12 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use super::ApplicationConfig;
+use super::implementation::{ApplicationConfig, embedded_defaults};
 
 const CONFIG_FILE: &str = "application.json";
 
 pub(crate) fn load() -> ApplicationConfig {
-    path().map_or_else(super::embedded_defaults, |path| load_path(&path))
+    path().map_or_else(embedded_defaults, |path| load_path(&path))
 }
 
 fn path() -> Option<PathBuf> {
@@ -21,7 +21,7 @@ fn load_path(path: &Path) -> ApplicationConfig {
                 path.display()
             )
         }),
-        Err(error) if error.kind() == ErrorKind::NotFound => super::embedded_defaults(),
+        Err(error) if error.kind() == ErrorKind::NotFound => embedded_defaults(),
         Err(error) => panic!(
             "cannot read application configuration from {}: {error}",
             path.display()

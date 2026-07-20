@@ -1,6 +1,7 @@
-use super::{
-    AnnotationQuery, IndexedAnnotationWriter, LiveStoreConfig, StoreStatus, WordPresenceBucket,
-};
+use super::config::LiveStoreConfig;
+use super::platform::IndexedAnnotationWriter;
+use super::query::{AnnotationQuery, WordPresenceBucket};
+use super::state::StoreStatus;
 use crate::events::{Annotation, Word};
 
 fn config() -> LiveStoreConfig {

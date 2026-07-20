@@ -9,13 +9,13 @@ use signal_processing::{
     NumberSample, ProcessNode, Sample, SampleBlock, TextSample, Trigger, Word,
 };
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, nodes, parse_state};
+use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 /// Maps a `BufferState.kind` selection to
 /// the concrete `PortKind` it names. Falls back to `Signal` for state that
-/// fails to parse — matches `nodes::BufferState::state()`'s default index.
+/// fails to parse — matches `super::definition::BufferState::state()`'s default index.
 fn selected_kind(state: &Value) -> PortKind {
-    let selected = parse_state::<nodes::BufferState>(state)
+    let selected = parse_state::<super::definition::BufferState>(state)
         .map(|s| s.kind.selected().to_string())
         .unwrap_or_default();
     match selected.as_str() {
@@ -44,7 +44,7 @@ impl RuntimeBuilder for BufferBuilder {
         Some("out".into())
     }
     fn input_buffer_override(&self, _socket: &Socket, state: &Value) -> Option<usize> {
-        parse_state::<nodes::BufferState>(state)
+        parse_state::<super::definition::BufferState>(state)
             .ok()
             .map(|s| s.capacity.value.max(1) as usize)
     }
@@ -55,7 +55,7 @@ impl RuntimeBuilder for BufferBuilder {
         _resolved: &ResolvedInputs,
         _ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::BufferState = parse_state(state)?;
+        let state: super::definition::BufferState = parse_state(state)?;
         let node: Box<dyn ProcessNode> = match state.kind.selected() {
             "Block" => Box::new(BufferNode::<SampleBlock>::new(name)),
             "Word" => Box::new(BufferNode::<Word>::new(name)),

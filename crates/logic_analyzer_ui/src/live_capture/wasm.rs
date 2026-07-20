@@ -1,7 +1,7 @@
 use logic_analyzer_graph::DiscoveredLiveCaptureFeature;
 use signal_processing::CaptureStartMode;
 
-use super::{
+use super::implementation::{
     CaptureAnalysisAttachment, CaptureCoordinatorContract, CaptureExportCompletion,
     CaptureExportStatus, CaptureReplayAttachment, CaptureSessionStatus, CaptureWaveformUpdate,
 };

@@ -6,7 +6,7 @@ use logic_analyzer_processing::{GateOp, LogicGate};
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample};
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, nodes, parse_state};
+use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 pub(crate) struct LogicGateBuilder;
 
@@ -36,7 +36,7 @@ impl RuntimeBuilder for LogicGateBuilder {
         resolved: &ResolvedInputs,
         _ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::LogicGateState = parse_state(state)?;
+        let state: super::definition::LogicGateState = parse_state(state)?;
         let inputs = resolved.member_count(0);
         if inputs == 0 {
             return Err("no inputs connected".into());

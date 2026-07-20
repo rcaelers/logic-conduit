@@ -7,7 +7,7 @@ use logic_analyzer_processing::{CsvValueFormat, CsvWordWriter};
 use node_graph::Socket;
 use signal_processing::{ProcessNode, TextSample, Word};
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, nodes, parse_state};
+use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 pub(crate) struct CsvWriterBuilder;
 
@@ -39,7 +39,7 @@ impl RuntimeBuilder for CsvWriterBuilder {
         match socket.def_index {
             // The Filename input can stay unconnected when the node's own
             // static filename (save-dialog prop) is set.
-            1 => parse_state::<nodes::CsvWriterState>(state)
+            1 => parse_state::<super::definition::CsvWriterState>(state)
                 .map(|state| state.filename.value.trim().is_empty())
                 .unwrap_or(true),
             _ => true,
@@ -52,7 +52,7 @@ impl RuntimeBuilder for CsvWriterBuilder {
         resolved: &ResolvedInputs,
         _ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: nodes::CsvWriterState = parse_state(state)?;
+        let state: super::definition::CsvWriterState = parse_state(state)?;
         let format = match state.value_format.selected() {
             "Hex" => CsvValueFormat::Hex {
                 width: state.hex_digits.value.clamp(1, 16) as usize,

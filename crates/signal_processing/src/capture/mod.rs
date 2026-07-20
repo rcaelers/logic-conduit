@@ -8,8 +8,6 @@ mod backing;
 mod backing;
 mod implementation;
 
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use implementation::BlockBacking;
 pub use implementation::{
     BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureIndex,
     CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow, CaptureSource, CaptureTransition,

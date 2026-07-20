@@ -9,11 +9,11 @@ use signal_processing::{
     CaptureSessionId, CaptureSessionState,
 };
 
-use super::u3pro16_common_native::{CanonicalTransferAssembler, map_analyzer_error};
-use super::{
+use super::implementation::{
     AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult,
     PreparedAcquisition,
 };
+use super::u3pro16_common_native::{CanonicalTransferAssembler, map_analyzer_error};
 use crate::nodes::sources::{
     DsLogicCapturePlan, DsLogicU3Pro16, LogicAnalyzer, LogicCaptureConfig, RusbTransport,
     UsbTransport,

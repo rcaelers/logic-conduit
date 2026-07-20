@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use egui::{Color32, Pos2};
 
-use super::{NodeInstance, NodeRuntime, TypedNode};
+use super::instance::{NodeInstance, NodeRuntime, TypedNode};
 use crate::api::{InputDef, NodeDef, OutputDef};
 use crate::model::{Node, NodeId, NodeKind, Socket, SocketDirection, SocketShape, VariadicInfo};
 

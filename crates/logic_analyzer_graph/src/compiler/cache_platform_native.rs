@@ -138,7 +138,7 @@ pub(crate) fn cache_configs_by_node(
     registry: &BuilderRegistry,
     directory: &Path,
 ) -> Result<HashMap<NodeId, Vec<PersistentStoreConfig>>, Vec<CompileError>> {
-    let mut compiled = super::lower(graph, registry)?;
+    let mut compiled = super::graph::lower(graph, registry)?;
     configure_directory(&mut compiled, Some(directory));
     let mut result: HashMap<NodeId, Vec<PersistentStoreConfig>> = HashMap::new();
     for viewer in compiled

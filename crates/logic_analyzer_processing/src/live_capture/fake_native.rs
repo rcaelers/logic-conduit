@@ -8,7 +8,7 @@ use signal_processing::{
     CaptureProgress, CaptureSessionId, CaptureSessionState, SimpleTriggerCondition,
 };
 
-use super::{
+use super::implementation::{
     AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult,
     PreparedAcquisition,
 };

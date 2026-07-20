@@ -6,8 +6,7 @@ use signal_processing::{
     TriggerEditorSchema, TriggerIdentifier, TriggerLogicOperator, TriggerPredicate, TriggerProgram,
 };
 
-use super::U3Pro16State;
-use super::definition::U3PRO16_CHANNELS;
+use super::definition::{U3PRO16_CHANNELS, U3Pro16State};
 use crate::{SimpleTriggerChannel, TriggerConfigurationFeature};
 
 const SCHEMA_ID: &str = "dsl.dslogic-u3pro16.trigger";

@@ -17,7 +17,6 @@ mod registry_platform;
 mod registry_platform;
 
 pub(crate) use catalog::standard_builders;
-pub(crate) use decoders::selected_baud_rate;
 pub use decoders::{
     BinaryDecoder, BinaryDecoderState, I2cDecoder, SpiDecoder, SpiDecoderMetadata, SpiDecoderState,
     UartDecoder, UartDecoderState,

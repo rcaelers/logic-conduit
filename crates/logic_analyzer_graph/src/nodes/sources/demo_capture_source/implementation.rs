@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::{DemoCaptureSource, DemoCaptureSourceState};
+use super::definition::{DemoCaptureSource, DemoCaptureSourceState};
 use crate::LiveCaptureEdit;
 
 pub(crate) fn apply_live_capture_edit(

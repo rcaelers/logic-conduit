@@ -12,7 +12,7 @@ use signal_processing::{
     CaptureSessionOutcome, CaptureSessionPlan, CaptureSessionState, ProcessNode,
 };
 
-use super::CaptureCoordinator;
+use super::platform::CaptureCoordinator;
 
 /// Outer `Option` on the coordinator method means "no update"; this inner
 /// option carries either a new growing index or an explicit detach.

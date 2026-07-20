@@ -15,7 +15,8 @@ use signal_processing::{
     TriggerTimeoutAction,
 };
 
-use super::{U3Pro16State, capture_config, requested_capture_policy};
+use super::definition::U3Pro16State;
+use super::implementation::{capture_config, requested_capture_policy};
 use crate::{CaptureGraphSourceFactory, LiveCaptureFeature, SimpleTriggerChannel, parse_state};
 
 struct U3Pro16GraphSourceFactory {

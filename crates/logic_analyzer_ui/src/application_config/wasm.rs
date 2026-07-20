@@ -1,5 +1,5 @@
-use super::ApplicationConfig;
+use super::implementation::{ApplicationConfig, embedded_defaults};
 
 pub(crate) fn load() -> ApplicationConfig {
-    super::embedded_defaults()
+    embedded_defaults()
 }

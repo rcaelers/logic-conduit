@@ -10,7 +10,7 @@ use signal_processing::{
     CaptureSessionState, CaptureSettingCombination, SimpleTriggerCondition,
 };
 
-use super::{
+use super::implementation::{
     AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult,
     PreparedAcquisition,
 };
