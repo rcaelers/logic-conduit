@@ -317,7 +317,7 @@ mod tests {
         let mut state = U3Pro16State::default();
         state.mode.select("Buffer");
         state.sample_rate.select("100 MHz");
-        state.duration_ms.value = 10;
+        state.duration.set_milliseconds(10);
         state.channels.enabled.fill(false);
         state.channels.enabled[0] = true;
         state

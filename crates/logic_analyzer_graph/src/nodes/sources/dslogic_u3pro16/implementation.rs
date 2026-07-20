@@ -10,7 +10,7 @@ use signal_processing::{
     TriggerPlacement, TriggerTimeout, TriggerTimeoutAction,
 };
 
-use super::definition::U3Pro16State;
+use super::definition::{U3Pro16State, capture_duration_limit_ns, channel_rate_validation_error};
 use super::trigger;
 use crate::{LiveCaptureEdit, parse_state};
 
@@ -48,8 +48,19 @@ fn physical_input_mask(state: &U3Pro16State) -> u64 {
 }
 
 pub(crate) fn capture_config(state: &U3Pro16State) -> Result<LogicCaptureConfig, String> {
+    if let Some(error) = channel_rate_validation_error(state) {
+        return Err(error);
+    }
     let sample_rate_hz = selected_sample_rate_hz(state)?;
-    let duration_ms = u64::try_from(state.duration_ms.value.max(1)).unwrap_or(1);
+    let enabled_channels = state.channels.enabled_count();
+    let duration_ns = state.duration.nanoseconds().min(capture_duration_limit_ns(
+        state.mode.selected(),
+        sample_rate_hz,
+        enabled_channels,
+    ));
+    let sample_limit = (u128::from(sample_rate_hz) * u128::from(duration_ns))
+        .div_ceil(1_000_000_000)
+        .min(u128::from(u64::MAX)) as u64;
     Ok(LogicCaptureConfig {
         mode: if state.mode.selected() == "Stream" {
             CaptureMode::Streaming
@@ -58,7 +69,7 @@ pub(crate) fn capture_config(state: &U3Pro16State) -> Result<LogicCaptureConfig,
         },
         sample_rate_hz,
         input_mask: physical_input_mask(state),
-        sample_limit: sample_rate_hz.saturating_mul(duration_ms).div_ceil(1_000),
+        sample_limit,
         trigger_percent: u8::try_from(state.trigger_position_percent.value.clamp(0, 100))
             .unwrap_or(50),
         threshold_volts: Some(state.threshold.value),
@@ -182,6 +193,7 @@ mod tests {
     };
     use signal_processing::SimpleTriggerCondition;
 
+    use super::super::definition::CaptureDurationValue;
     use super::{U3Pro16State, capture_config};
 
     #[test]
@@ -189,7 +201,7 @@ mod tests {
         let mut state = U3Pro16State::default();
         state.mode.select("Buffer");
         state.sample_rate.select("100 MHz");
-        state.duration_ms.value = 10;
+        state.duration.set_milliseconds(10);
         state.channels.enabled.fill(false);
         state.channels.enabled[0] = true;
         state.channels.enabled[2] = true;
@@ -224,5 +236,38 @@ mod tests {
             TriggerCondition::Falling
         );
         assert_eq!(config.trigger.stages[0].plane0[1], TriggerCondition::Ignore);
+    }
+
+    #[test]
+    fn microsecond_capture_duration_lowers_to_samples() {
+        let mut state = U3Pro16State::default();
+        state.sample_rate.select("100 MHz");
+        state.duration = CaptureDurationValue::from_nanoseconds(10_000);
+
+        let config = capture_config(&state).unwrap();
+
+        assert_eq!(config.sample_limit, 1_000);
+    }
+
+    #[test]
+    fn streaming_capture_is_capped_at_the_dsview_sample_depth() {
+        let mut state = U3Pro16State::default();
+        state.sample_rate.select("1 MHz");
+        state.duration = CaptureDurationValue::from_nanoseconds(u64::MAX);
+
+        let config = capture_config(&state).unwrap();
+
+        assert_eq!(config.sample_limit, 1_u64 << 34);
+    }
+
+    #[test]
+    fn capture_config_rejects_too_many_channels_for_stream_rate() {
+        let mut state = U3Pro16State::default();
+        state.sample_rate.select("1 GHz");
+
+        let error = capture_config(&state).unwrap_err();
+
+        assert!(error.contains("Too many channels"));
+        assert!(error.contains("Ch 0–2"));
     }
 }

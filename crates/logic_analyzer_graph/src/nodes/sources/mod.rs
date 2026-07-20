@@ -14,7 +14,7 @@ pub use demo_capture_source::{DemoCaptureSource, DemoCaptureSourceState};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use dslogic_u3pro16::DsLogicU3Pro16Builder;
 #[cfg(not(target_arch = "wasm32"))]
-pub use dslogic_u3pro16::{DsLogicU3Pro16, U3Pro16Metadata, U3Pro16State};
+pub use dslogic_u3pro16::{CaptureDurationValue, DsLogicU3Pro16, U3Pro16Metadata, U3Pro16State};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use file_source::FileSourceBuilder;
 pub use file_source::{DslFileSource, DslFileSourceState};

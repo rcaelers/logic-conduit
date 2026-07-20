@@ -101,8 +101,12 @@ order, writer options, device settings). Viewer lane selection and presentation 
 decoder data format live in the separate View panel.
 
 Sources: DSL File Source, DSLogic U3Pro16 (device settings in the panel — capture/signal
-sections and a 16-channel enable grid with the channel-count↔rate constraint enforced in
-`on_update`), UART Demo Source. Decoders: SPI, UART, Binary (parallel bus, SDR/DDR), and
+sections and an aligned 16-channel enable grid with invalid channel/rate combinations preserved
+for correction, shown as node errors, and rejected at runtime; the grid supports anchored
+Shift-click ranges and click-drag state painting; capture duration uses human-scale presets and a
+configuration-derived maximum:
+`2^34` samples for streaming, or the channel-dependent device depth for buffered capture), UART
+Demo Source. Decoders: SPI, UART, Binary (parallel bus, SDR/DDR), and
 an I2C placeholder (a `NodeDef` with no builder: editable, not runnable).
 Logic: Word Matcher, SR Flip-Flop, Logic Gate (op enum retitles the node; NOT caps the
 variadic group at one), Buffer, Counter, String Formatter. Sinks: File Writer (inline save

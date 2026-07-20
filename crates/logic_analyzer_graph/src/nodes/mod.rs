@@ -32,11 +32,12 @@ pub use registry::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use sinks::{CsvWriter, CsvWriterState, TextFileWriter};
 pub use sinks::{FileWriter, FileWriterState, TgckRecorder, Viewer, ViewerState};
+#[cfg(not(target_arch = "wasm32"))]
+pub use sources::{
+    CaptureDurationValue, DsLogicU3Pro16, SigrokFileSource, SigrokFileSourceState, U3Pro16Metadata,
+    U3Pro16State,
+};
 pub use sources::{
     DemoCaptureSource, DemoCaptureSourceState, DslFileSource, DslFileSourceState, UartDemoSource,
     UartDemoSourceState,
-};
-#[cfg(not(target_arch = "wasm32"))]
-pub use sources::{
-    DsLogicU3Pro16, SigrokFileSource, SigrokFileSourceState, U3Pro16Metadata, U3Pro16State,
 };

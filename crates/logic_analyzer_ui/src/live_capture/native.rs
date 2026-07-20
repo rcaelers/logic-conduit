@@ -2910,7 +2910,7 @@ mod tests {
         .unwrap();
         state.mode.select("Buffer");
         state.sample_rate.select("1 MHz");
-        state.duration_ms.value = 1;
+        state.duration.set_milliseconds(1);
         state.channels.enabled.fill(false);
         state.channels.enabled[0] = true;
         state.channels.enabled[1] = true;
@@ -2963,7 +2963,7 @@ mod tests {
         .unwrap();
         state.mode.select("Stream");
         state.sample_rate.select("1 MHz");
-        state.duration_ms.value = 10;
+        state.duration.set_milliseconds(10);
         state.channels.enabled.fill(false);
         state.channels.enabled[0] = true;
         state.channels.enabled[1] = true;
