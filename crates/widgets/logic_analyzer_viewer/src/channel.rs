@@ -11,8 +11,8 @@ use signal_processing::{
 use crate::lanes::{DerivedLaneId, ViewerLaneBadge, ViewerLaneGroup, ViewerLaneGroupId};
 use crate::sampling::sample_to_us;
 use crate::types::{
-    AnalyzerLayout, RowDragState, RowKey, RowLabel, RowRenameState, Transition, WaveformSegment,
-    WaveformSegmentKind,
+    AnalyzerLayout, RowDragState, RowKey, RowLabel, RowRenameState, Transition, ViewerRowId,
+    WaveformSegment, WaveformSegmentKind,
 };
 use crate::viewer::LogicAnalyzerViewer;
 
@@ -367,6 +367,43 @@ impl LogicAnalyzerViewer {
             .collect()
     }
 
+    /// Current interleaved raw/derived row order using stable identities.
+    pub fn viewer_row_order(&self) -> Vec<ViewerRowId> {
+        self.row_order.iter().map(ViewerRowId::from).collect()
+    }
+
+    /// Applies the host's preferred order to rows that currently exist.
+    /// Missing rows are ignored and newly appearing rows retain their current
+    /// relative order until a later call includes them.
+    pub fn apply_viewer_row_order(&mut self, requested: &[ViewerRowId]) {
+        self.ensure_row_order();
+        let current = self.row_order.iter().cloned().collect::<HashSet<_>>();
+        let mut seen = HashSet::new();
+        let mut order = Vec::with_capacity(self.row_order.len());
+        for requested in requested {
+            let key = RowKey::from(requested);
+            if current.contains(&key) && seen.insert(key.clone()) {
+                order.push(key);
+            }
+        }
+        for key in &self.row_order {
+            if seen.insert(key.clone()) {
+                order.push(key.clone());
+            }
+        }
+        if self.row_order != order {
+            self.row_order = order;
+            self.hover_measurement = None;
+            self.sampled_key = None;
+        }
+    }
+
+    /// Reports and clears the user-drag order change flag. Programmatic
+    /// restoration does not set it.
+    pub fn take_viewer_row_order_changed(&mut self) -> bool {
+        std::mem::take(&mut self.row_order_changed)
+    }
+
     pub(crate) fn apply_channel_order(&self, channels: &mut [LogicChannel]) {
         let order = self.requested_channel_order();
         channels.sort_by_key(|channel| {
@@ -492,6 +529,7 @@ impl LogicAnalyzerViewer {
 
         let entry = self.row_order.remove(from_row);
         self.row_order.insert(target_row, entry);
+        self.row_order_changed = true;
         self.hover_measurement = None;
         self.sampled_key = None;
     }
@@ -1035,6 +1073,60 @@ mod tests {
         assert_eq!(viewer.row_order[4], RowKey::Channel(3));
         // Nothing lost or duplicated by the move.
         assert_eq!(viewer.row_order.len(), 12);
+    }
+
+    #[test]
+    fn viewer_row_order_restores_interleaved_raw_and_derived_rows() {
+        let mut viewer = viewer_with_derived();
+        let requested = vec![
+            ViewerRowId::Derived(ViewerLaneGroupId::new("default:decoded.words")),
+            ViewerRowId::Channel(2),
+            ViewerRowId::Derived(ViewerLaneGroupId::new("default:decoded.rx")),
+            ViewerRowId::Channel(0),
+        ];
+
+        viewer.apply_viewer_row_order(&requested);
+
+        assert_eq!(&viewer.viewer_row_order()[..requested.len()], &requested);
+        assert!(!viewer.take_viewer_row_order_changed());
+    }
+
+    #[test]
+    fn saved_derived_row_order_can_be_reapplied_after_lanes_appear() {
+        let mut viewer = viewer_with_channels(3);
+        let requested = vec![
+            ViewerRowId::Derived(ViewerLaneGroupId::new("default:decoded.words")),
+            ViewerRowId::Channel(1),
+            ViewerRowId::Channel(0),
+        ];
+
+        viewer.apply_viewer_row_order(&requested);
+        assert_eq!(
+            viewer.viewer_row_order(),
+            vec![
+                ViewerRowId::Channel(1),
+                ViewerRowId::Channel(0),
+                ViewerRowId::Channel(2),
+            ]
+        );
+
+        let lanes = DerivedLanes::new();
+        lanes.register("decoded.words", DerivedLaneData::Annotations(Vec::new()));
+        viewer.set_derived_lanes(lanes);
+        viewer.apply_viewer_row_order(&requested);
+
+        assert_eq!(&viewer.viewer_row_order()[..3], &requested);
+    }
+
+    #[test]
+    fn user_row_move_reports_one_persistence_change() {
+        let mut viewer = viewer_with_derived();
+        let derived_key = RowKey::Derived(ViewerLaneGroupId::new("default:decoded.rx"));
+
+        viewer.move_row(&derived_key, 0);
+
+        assert!(viewer.take_viewer_row_order_changed());
+        assert!(!viewer.take_viewer_row_order_changed());
     }
 
     #[test]

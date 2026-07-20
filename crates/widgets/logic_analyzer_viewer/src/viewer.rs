@@ -37,6 +37,7 @@ pub struct LogicAnalyzerViewer {
     /// Display order across both `channels` and `derived` lanes — the only
     /// source of truth for row order, kept in sync by `ensure_row_order`.
     pub(crate) row_order: Vec<RowKey>,
+    pub(crate) row_order_changed: bool,
     pub(crate) row_drag: Option<RowDragState>,
     pub(crate) channel_names: HashMap<usize, String>,
     pub(crate) derived_names: HashMap<ViewerLaneGroupId, String>,
@@ -106,6 +107,7 @@ impl LogicAnalyzerViewer {
                     .expect("empty input binding configuration is valid"),
             ),
             row_order: Vec::new(),
+            row_order_changed: false,
             channels: Vec::new(),
             row_drag: None,
             channel_names: HashMap::new(),

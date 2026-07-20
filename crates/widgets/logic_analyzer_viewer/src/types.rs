@@ -4,6 +4,13 @@ use signal_processing::CaptureMetadata;
 
 use crate::lanes::ViewerLaneGroupId;
 
+/// Stable identity of one displayed viewer row for host-owned persistence.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ViewerRowId {
+    Channel(usize),
+    Derived(ViewerLaneGroupId),
+}
+
 /// Color profile for the viewer. DSView (Tango-based channel colors, bright
 /// traces) is the default; Classic is the viewer's original muted look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +67,24 @@ impl ColorProfile {
 pub(crate) enum RowKey {
     Channel(usize),
     Derived(ViewerLaneGroupId),
+}
+
+impl From<&RowKey> for ViewerRowId {
+    fn from(value: &RowKey) -> Self {
+        match value {
+            RowKey::Channel(index) => Self::Channel(*index),
+            RowKey::Derived(group) => Self::Derived(group.clone()),
+        }
+    }
+}
+
+impl From<&ViewerRowId> for RowKey {
+    fn from(value: &ViewerRowId) -> Self {
+        match value {
+            ViewerRowId::Channel(index) => Self::Channel(*index),
+            ViewerRowId::Derived(group) => Self::Derived(group.clone()),
+        }
+    }
 }
 
 pub(crate) struct RowRenameState {

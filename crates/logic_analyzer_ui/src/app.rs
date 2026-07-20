@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use input_bindings::{InputBindings, PointerButtonName, PointerGesture, Trigger};
 use logic_analyzer_graph::{self as compiler, nodes};
-use logic_analyzer_viewer::{LogicAnalyzerViewer, SimpleTriggerEdit, SimpleTriggerLane};
+use logic_analyzer_viewer::{
+    LogicAnalyzerViewer, SimpleTriggerEdit, SimpleTriggerLane, ViewerLaneGroupId, ViewerRowId,
+};
 use node_graph::{GraphState, NodeBadge, NodeContextAction, NodeGraphWidget, NodeId};
 use panel_layout::{BoundaryInteraction, PanelIcon, PanelLayout, PanelSlot, PanelSpec};
 use trigger_editor::{TriggerEditor, TriggerEditorChannel};
@@ -19,6 +21,31 @@ use crate::live_capture::{
 use crate::toast::Toasts;
 
 const SAMPLING_OVERLAY_EXTENSION: &str = "logic_analyzer_ui.sampling_overlay";
+const VIEWER_LANE_ORDER_EXTENSION: &str = "logic_analyzer_ui.viewer_lane_order";
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+enum SavedViewerRow {
+    Channel(usize),
+    Derived(String),
+}
+
+impl From<&ViewerRowId> for SavedViewerRow {
+    fn from(value: &ViewerRowId) -> Self {
+        match value {
+            ViewerRowId::Channel(index) => Self::Channel(*index),
+            ViewerRowId::Derived(group) => Self::Derived(group.as_str().to_owned()),
+        }
+    }
+}
+
+impl From<&SavedViewerRow> for ViewerRowId {
+    fn from(value: &SavedViewerRow) -> Self {
+        match value {
+            SavedViewerRow::Channel(index) => Self::Channel(*index),
+            SavedViewerRow::Derived(group) => Self::Derived(ViewerLaneGroupId::new(group.clone())),
+        }
+    }
+}
 
 fn planned_waveform_span_us(plan: &signal_processing::CaptureSessionPlan) -> Option<f64> {
     let samples = plan.capture_window_samples?;
@@ -42,6 +69,24 @@ fn save_sampling_overlay(
             graph.remove_extension(SAMPLING_OVERLAY_EXTENSION);
             Ok(())
         }
+    }
+}
+
+fn saved_viewer_lane_order(graph: &GraphState) -> Result<Vec<SavedViewerRow>, serde_json::Error> {
+    Ok(graph
+        .extension(VIEWER_LANE_ORDER_EXTENSION)?
+        .unwrap_or_default())
+}
+
+fn save_viewer_lane_order(
+    graph: &mut GraphState,
+    order: &[SavedViewerRow],
+) -> Result<(), serde_json::Error> {
+    if order.is_empty() {
+        graph.remove_extension(VIEWER_LANE_ORDER_EXTENSION);
+        Ok(())
+    } else {
+        graph.set_extension(VIEWER_LANE_ORDER_EXTENSION, order)
     }
 }
 
@@ -78,6 +123,7 @@ pub struct App {
     pub(crate) last_live_sync: f64,
     pub(crate) sampling_overlay_candidates: Vec<compiler::SamplingOverlayCandidate>,
     pub(crate) selected_sampling_overlay: Option<NodeId>,
+    viewer_lane_order: Vec<SavedViewerRow>,
 }
 
 impl App {
@@ -227,6 +273,7 @@ impl App {
         let mut app = Self::build(cc, |_ctx| {});
         app.node_graph.set_graph(graph);
         app.restore_sampling_overlay_setting();
+        app.restore_viewer_lane_order_setting();
         app
     }
 
@@ -334,7 +381,57 @@ impl App {
             last_live_sync: -1.0,
             sampling_overlay_candidates: Vec::new(),
             selected_sampling_overlay: None,
+            viewer_lane_order: Vec::new(),
         }
+    }
+
+    pub(crate) fn restore_viewer_lane_order_setting(&mut self) {
+        match saved_viewer_lane_order(self.node_graph.graph()) {
+            Ok(order) => self.viewer_lane_order = order,
+            Err(error) => {
+                self.viewer_lane_order.clear();
+                self.toasts
+                    .error(format!("Could not restore the viewer lane order: {error}"));
+            }
+        }
+        let order = self
+            .viewer_lane_order
+            .iter()
+            .map(ViewerRowId::from)
+            .collect::<Vec<_>>();
+        self.logic_analyzer.apply_viewer_row_order(&order);
+    }
+
+    fn sync_viewer_lane_order(&mut self) {
+        if self.logic_analyzer.take_viewer_row_order_changed() {
+            let current = self.logic_analyzer.viewer_row_order();
+            let current_set = current
+                .iter()
+                .cloned()
+                .collect::<std::collections::HashSet<_>>();
+            let mut saved = current.iter().map(SavedViewerRow::from).collect::<Vec<_>>();
+            saved.extend(
+                self.viewer_lane_order
+                    .iter()
+                    .filter(|row| !current_set.contains(&ViewerRowId::from(*row)))
+                    .cloned(),
+            );
+            self.viewer_lane_order = saved;
+            if let Err(error) =
+                save_viewer_lane_order(self.node_graph.graph_mut(), &self.viewer_lane_order)
+            {
+                self.toasts
+                    .error(format!("Could not save the viewer lane order: {error}"));
+            }
+            return;
+        }
+
+        let requested = self
+            .viewer_lane_order
+            .iter()
+            .map(ViewerRowId::from)
+            .collect::<Vec<_>>();
+        self.logic_analyzer.apply_viewer_row_order(&requested);
     }
 
     fn refresh_sampling_overlay_ui(&mut self) {
@@ -1711,6 +1808,7 @@ impl eframe::App for App {
                     ..
                 } => {
                     self.logic_analyzer.show(panel_ui);
+                    self.sync_viewer_lane_order();
                     if let Some(edit) = self.logic_analyzer.take_simple_trigger_edit() {
                         self.apply_simple_trigger_edit(edit);
                     }
@@ -1790,7 +1888,10 @@ impl eframe::App for App {
 mod font_tests {
     use node_graph::{GraphState, NodeId};
 
-    use super::{install_fonts, load_symbol_fonts, save_sampling_overlay, saved_sampling_overlay};
+    use super::{
+        SavedViewerRow, install_fonts, load_symbol_fonts, save_sampling_overlay,
+        save_viewer_lane_order, saved_sampling_overlay, saved_viewer_lane_order,
+    };
 
     #[test]
     fn application_input_bindings_are_valid() {
@@ -1817,6 +1918,24 @@ mod font_tests {
 
         save_sampling_overlay(&mut restored, None).unwrap();
         assert_eq!(saved_sampling_overlay(&restored).unwrap(), None);
+    }
+
+    #[test]
+    fn viewer_lane_order_round_trips_with_the_graph_document() {
+        let mut graph = GraphState::default();
+        let order = vec![
+            SavedViewerRow::Derived("node-7:decoded.words".to_owned()),
+            SavedViewerRow::Channel(3),
+            SavedViewerRow::Channel(0),
+        ];
+        save_viewer_lane_order(&mut graph, &order).unwrap();
+
+        let json = serde_json::to_string(&graph).unwrap();
+        let mut restored: GraphState = serde_json::from_str(&json).unwrap();
+        assert_eq!(saved_viewer_lane_order(&restored).unwrap(), order);
+
+        save_viewer_lane_order(&mut restored, &[]).unwrap();
+        assert!(saved_viewer_lane_order(&restored).unwrap().is_empty());
     }
 
     #[test]

@@ -29,5 +29,5 @@ pub use lanes::{
 };
 pub use sampling_overlay::{SamplingEdge, SamplingOverlay, SamplingQualifier};
 pub use simple_trigger::{SimpleTriggerEdit, SimpleTriggerLane};
-pub use types::ColorProfile;
+pub use types::{ColorProfile, ViewerRowId};
 pub use viewer::{ChannelSignal, LogicAnalyzerViewer};

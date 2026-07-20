@@ -205,6 +205,7 @@ impl App {
                 self.run_message = None;
                 self.error_badges.clear();
                 self.restore_sampling_overlay_setting();
+                self.restore_viewer_lane_order_setting();
                 self.platform.current_file = Some(path.clone());
                 self.mark_graph_saved();
                 self.push_recent_file(path.clone());
@@ -237,6 +238,7 @@ impl App {
         self.error_badges.clear();
         self.node_graph.new_graph();
         self.restore_sampling_overlay_setting();
+        self.restore_viewer_lane_order_setting();
         self.platform.derived_cache_nodes.clear();
         self.platform.current_file = None;
         self.mark_graph_saved();
