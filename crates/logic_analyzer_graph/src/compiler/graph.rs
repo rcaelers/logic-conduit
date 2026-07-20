@@ -1971,7 +1971,6 @@ impl LiveRun {
     }
 
     /// Blocks until the run completes naturally (tests / headless).
-    #[allow(dead_code)]
     pub fn wait(&mut self) {
         self.manager.wait();
     }

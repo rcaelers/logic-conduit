@@ -181,9 +181,6 @@ pub(crate) struct ExactWindow {
 
 #[derive(Debug, Clone)]
 pub(crate) struct CaptureInfo {
-    // Rendered by the native capture worker's status text.
-    #[allow(dead_code)]
-    pub(crate) display_name: String,
     pub(crate) header: CaptureMetadata,
     pub(crate) duration_us: f64,
 }

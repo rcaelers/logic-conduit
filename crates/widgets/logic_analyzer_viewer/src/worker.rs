@@ -55,11 +55,6 @@ impl LogicAnalyzerViewer {
                         continue;
                     }
                     self.capture_info = Some(CaptureInfo {
-                        display_name: path
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .unwrap_or("capture")
-                            .to_string(),
                         header: header.clone(),
                         duration_us,
                     });
@@ -67,7 +62,7 @@ impl LogicAnalyzerViewer {
                     self.visible_span_us = duration_us.max(1.0);
                     self.fit_to_capture = true;
                     if let Some(capture) = self.capture_info.as_ref() {
-                        self.status = capture_status(capture);
+                        self.status = capture_status(path_display_name(&path), capture);
                     }
                     let mut channels = placeholder_channels(&header);
                     self.apply_channel_names(&mut channels);
@@ -107,11 +102,11 @@ impl LogicAnalyzerViewer {
                     if self.capture_path.as_deref() != Some(path.as_path()) {
                         continue;
                     }
+                    let display_name = sampler.display_name();
                     if self.capture_info.is_none() {
                         let header = sampler.current_metadata();
                         let duration_us = header.duration_us();
                         self.capture_info = Some(CaptureInfo {
-                            display_name: sampler.display_name(),
                             header: header.clone(),
                             duration_us,
                         });
@@ -134,7 +129,7 @@ impl LogicAnalyzerViewer {
                     self.status = self
                         .capture_info
                         .as_ref()
-                        .map(capture_status)
+                        .map(|capture| capture_status(&display_name, capture))
                         .unwrap_or_else(|| "Capture ready".to_string());
                 }
                 WorkerResponse::Error { path, message } => {
@@ -277,10 +272,16 @@ pub(crate) fn spawn_capture_factory_worker(
         .expect("capture index factory thread should start");
 }
 
-fn capture_status(capture: &CaptureInfo) -> String {
+fn path_display_name(path: &std::path::Path) -> &str {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("capture")
+}
+
+fn capture_status(display_name: &str, capture: &CaptureInfo) -> String {
     format!(
         "{} · {} · {:.1} MHz · {} samples",
-        capture.display_name,
+        display_name,
         capture.header.samplerate,
         capture.header.samplerate_hz / 1_000_000.0,
         capture.header.total_samples

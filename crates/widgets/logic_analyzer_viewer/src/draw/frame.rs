@@ -667,7 +667,6 @@ mod frame_tests {
     fn capture_trigger_marker_uses_the_raw_sample_time_and_culls_offscreen() {
         let mut viewer = LogicAnalyzerViewer::new();
         viewer.capture_info = Some(CaptureInfo {
-            display_name: "trigger test".into(),
             duration_us: 100.0,
             header: CaptureMetadata {
                 total_probes: 1,

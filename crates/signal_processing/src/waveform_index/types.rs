@@ -67,11 +67,6 @@ impl CaptureIndexProgress {
 
 /// Bits used to index within one level group: each group covers 2^LEVEL_POWER children.
 const LEVEL_POWER: usize = 6;
-/// Number of mipmap levels stored in the index (L1, L2, L3).
-/// L0 is the raw sample data kept in the capture source, not duplicated here.
-#[allow(dead_code)]
-const LEVEL_COUNT: usize = 3;
-
 pub(crate) const SAMPLES_PER_L1_BIT: u64 = (1_usize << LEVEL_POWER) as u64; // 64
 pub(crate) const SAMPLES_PER_L2_BIT: u64 = (1_usize << (LEVEL_POWER * 2)) as u64; // 4 096
 pub(crate) const SAMPLES_PER_L3_BIT: u64 = (1_usize << (LEVEL_POWER * 3)) as u64; // 262 144

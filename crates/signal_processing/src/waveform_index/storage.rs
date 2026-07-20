@@ -221,7 +221,6 @@ impl Drop for IndexWriter {
 
 /// Zero-copy view of one leaf chunk inside the mapped index file.
 pub(crate) struct LeafView<'a> {
-    #[allow(dead_code)]
     pub(crate) valid_samples: u32,
     pub(crate) first: bool,
     pub(crate) last: bool,
@@ -233,10 +232,7 @@ pub(crate) struct LevelsView<'a> {
     pub l1_last: &'a [u64],
     pub l2_toggle: &'a [u64],
     pub l2_last: &'a [u64],
-    #[allow(dead_code)]
     pub l3_toggle: u64,
-    #[allow(dead_code)]
-    pub l3_last: u64,
 }
 
 pub(crate) struct IndexReader {
@@ -312,7 +308,20 @@ impl IndexReader {
             .checked_add(entry.len as usize)
             .and_then(|end| self.mmap.get(start..end))
             .ok_or_else(|| Error::ParseError("truncated waveform sidecar".to_string()))?;
-        leaf_view(data)
+        let leaf = leaf_view(data)?;
+        let block_start = block as u64 * self.header.samples_per_block;
+        let expected_samples = self
+            .header
+            .total_samples
+            .saturating_sub(block_start)
+            .min(self.header.samples_per_block)
+            .min(u32::MAX as u64) as u32;
+        if leaf.valid_samples != expected_samples {
+            return Err(Error::ParseError(
+                "invalid waveform sidecar leaf length".to_string(),
+            ));
+        }
+        Ok(leaf)
     }
 
     pub(crate) fn load_root_summary(&self, channel: usize, block: usize) -> Result<RootDirEntry> {
@@ -462,7 +471,6 @@ fn leaf_view(data: &[u8]) -> Result<LeafView<'_>> {
             l2_toggle,
             l2_last,
             l3_toggle: rest[0],
-            l3_last: rest[1],
         })
     } else {
         None

@@ -384,12 +384,10 @@ impl LogicAnalyzerViewer {
         planned_span_us: Option<f64>,
     ) {
         let metadata = sampler.current_metadata();
-        let display_name = sampler.display_name();
         let generation = sampler.generation();
         let complete = sampler.is_complete();
         self.capture_path = None;
         self.capture_info = Some(CaptureInfo {
-            display_name,
             duration_us: metadata.duration_us(),
             header: metadata.clone(),
         });

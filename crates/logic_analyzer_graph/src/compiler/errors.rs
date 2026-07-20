@@ -26,7 +26,6 @@ impl CompileError {
 
 /// An error applying an edited graph to a live run.
 #[derive(Debug)]
-#[allow(dead_code)] // payloads carried for logs/tests
 pub enum ApplyError {
     /// The edited graph does not lower; the running pipeline is untouched.
     Compile(Vec<CompileError>),
@@ -36,3 +35,23 @@ pub enum ApplyError {
     /// A live edit failed midway (e.g. a node failed to build).
     Apply(String),
 }
+
+impl std::fmt::Display for ApplyError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Compile(errors) => {
+                write!(
+                    formatter,
+                    "edited graph has {} compile error(s)",
+                    errors.len()
+                )
+            }
+            Self::NeedsFullRestart(message) => {
+                write!(formatter, "live edit requires a full restart: {message}")
+            }
+            Self::Apply(message) => write!(formatter, "could not apply live edit: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for ApplyError {}
