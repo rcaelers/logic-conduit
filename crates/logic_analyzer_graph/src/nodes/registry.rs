@@ -331,8 +331,10 @@ pub(crate) mod test_graphs_tests {
     ) -> node_graph::NodeId {
         use egui::Pos2;
 
+        use super::super::sources::DemoLiveCaptureSource;
+
         let source = widget
-            .add_node_at(DemoCaptureSource::name(), Pos2::new(40.0, 80.0))
+            .add_node_at(DemoLiveCaptureSource::name(), Pos2::new(40.0, 80.0))
             .expect("demo source is registered");
         let decoder = widget
             .add_node_at(BinaryDecoder::name(), Pos2::new(360.0, 80.0))

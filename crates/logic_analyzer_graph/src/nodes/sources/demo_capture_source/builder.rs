@@ -7,8 +7,8 @@ use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock};
 
 use crate::{
-    CapturePresentation, CapturePresentationSignal, CompileCtx, LiveCaptureEdit,
-    LiveCaptureFeature, PortKind, ResolvedInputs, RuntimeBuilder, TriggerConfigurationFeature,
+    CapturePresentation, CapturePresentationSignal, CompileCtx, PortKind, ResolvedInputs,
+    RuntimeBuilder,
 };
 
 pub(crate) struct DemoCaptureSourceBuilder;
@@ -76,31 +76,6 @@ impl RuntimeBuilder for DemoCaptureSourceBuilder {
             signals,
             duration_us,
         }))
-    }
-
-    fn live_capture_feature(
-        &self,
-        state: &Value,
-    ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
-        super::live_capture::feature(state)
-    }
-
-    fn trigger_configuration(
-        &self,
-        state: &Value,
-    ) -> Result<Option<TriggerConfigurationFeature>, String> {
-        let state =
-            serde_json::from_value::<super::definition::DemoCaptureSourceState>(state.clone())
-                .map_err(|error| format!("invalid demo capture state: {error}"))?;
-        super::trigger::configuration(&state).map(Some)
-    }
-
-    fn apply_live_capture_edit(
-        &self,
-        state: &Value,
-        edit: &LiveCaptureEdit,
-    ) -> Result<Option<Value>, String> {
-        super::implementation::apply_live_capture_edit(state, edit).map(Some)
     }
 
     fn input_required(&self, _socket: &Socket, _state: &Value) -> bool {

@@ -195,7 +195,7 @@ pub(crate) fn feature(state: &Value) -> Result<Option<Box<dyn LiveCaptureFeature
         .map(|channel| format!("D{channel}"))
         .collect::<Vec<_>>()
         .into();
-    let trigger_conditions = super::super::trigger::conditions(state.trigger_program())?;
+    let trigger_conditions = super::super::live_builder::conditions(state.trigger_program())?;
     let config = DeterministicFakeConfig::new(
         Arc::clone(&channels),
         vec![CHUNK_SAMPLES; CHUNK_COUNT],

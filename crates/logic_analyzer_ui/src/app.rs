@@ -298,6 +298,7 @@ impl App {
                 .max_storage_gib
                 .saturating_mul(1024 * 1024 * 1024),
         );
+        let capture_availability = capture_availability(widget.graph(), &builders);
         Self {
             node_graph: widget,
             logic_analyzer,
@@ -313,9 +314,7 @@ impl App {
             ),
             builders,
             capture,
-            capture_availability: CaptureAvailability::Unavailable {
-                reason: "Checking the graph for a live capture source".into(),
-            },
+            capture_availability,
             trigger_configuration: None,
             trigger_configuration_error: Some(
                 "Checking the graph for a trigger-configurable source".into(),

@@ -1,18 +1,19 @@
 use std::collections::HashMap;
 
-use node_graph::NodeTypeRegistry;
+use node_graph::{NodeDef, NodeTypeRegistry};
 
 use super::sinks::{
     CsvWriter, CsvWriterBuilder, FileWriter, FileWriterBuilder, TextFileWriter,
     TextFileWriterBuilder,
 };
 use super::sources::{
-    DsLogicU3Pro16, DsLogicU3Pro16Builder, DslFileSource, FileSourceBuilder, SigrokFileSource,
-    SigrokFileSourceBuilder,
+    DemoLiveCaptureSource, DemoLiveCaptureSourceBuilder, DsLogicU3Pro16, DsLogicU3Pro16Builder,
+    DslFileSource, FileSourceBuilder, SigrokFileSource, SigrokFileSourceBuilder,
 };
 use crate::RuntimeBuilder;
 
 pub(crate) fn register_nodes(registry: &mut NodeTypeRegistry) {
+    registry.register::<DemoLiveCaptureSource>();
     registry.register::<DslFileSource>();
     registry.register::<DsLogicU3Pro16>();
     registry.register::<SigrokFileSource>();
@@ -22,6 +23,10 @@ pub(crate) fn register_nodes(registry: &mut NodeTypeRegistry) {
 }
 
 pub(crate) fn register_builders(builders: &mut HashMap<String, Box<dyn RuntimeBuilder>>) {
+    builders.insert(
+        DemoLiveCaptureSource::name().into(),
+        Box::new(DemoLiveCaptureSourceBuilder),
+    );
     builders.insert("DSL File Source".into(), Box::new(FileSourceBuilder));
     builders.insert("DSLogic U3Pro16".into(), Box::new(DsLogicU3Pro16Builder));
     builders.insert(

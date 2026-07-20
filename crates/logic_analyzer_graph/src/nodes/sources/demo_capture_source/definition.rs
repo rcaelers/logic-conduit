@@ -158,6 +158,18 @@ impl<'de> Deserialize<'de> for DemoCaptureSourceState {
 
 pub struct DemoCaptureSource;
 
+pub struct DemoLiveCaptureSource;
+
+fn outputs() -> Vec<OutputDef<DemoCaptureSourceState>> {
+    (0..DEMO_CAPTURE_CHANNELS)
+        .map(|channel| OutputDef::new::<Signal>(format!("Ch {channel}")).view_selectable(false))
+        .collect()
+}
+
+fn badge(state: &DemoCaptureSourceState) -> Option<NodeBadge> {
+    state.compatibility_warning.as_ref().map(NodeBadge::warning)
+}
+
 impl NodeDef for DemoCaptureSource {
     type State = DemoCaptureSourceState;
 
@@ -178,9 +190,7 @@ impl NodeDef for DemoCaptureSource {
     }
 
     fn outputs() -> Vec<OutputDef<Self::State>> {
-        (0..DEMO_CAPTURE_CHANNELS)
-            .map(|channel| OutputDef::new::<Signal>(format!("Ch {channel}")).view_selectable(false))
-            .collect()
+        outputs()
     }
 
     fn state() -> Self::State {
@@ -188,7 +198,39 @@ impl NodeDef for DemoCaptureSource {
     }
 
     fn badge(state: &Self::State) -> Option<NodeBadge> {
-        state.compatibility_warning.as_ref().map(NodeBadge::warning)
+        badge(state)
+    }
+}
+
+impl NodeDef for DemoLiveCaptureSource {
+    type State = DemoCaptureSourceState;
+
+    fn name() -> &'static str {
+        "Demo Live Capture Source"
+    }
+
+    fn category() -> &'static str {
+        "Sources"
+    }
+
+    fn color() -> Color32 {
+        COLOR_SOURCES
+    }
+
+    fn inputs() -> Vec<InputDef<Self::State>> {
+        vec![]
+    }
+
+    fn outputs() -> Vec<OutputDef<Self::State>> {
+        outputs()
+    }
+
+    fn state() -> Self::State {
+        DemoCaptureSourceState::default()
+    }
+
+    fn badge(state: &Self::State) -> Option<NodeBadge> {
+        badge(state)
     }
 }
 
@@ -196,9 +238,29 @@ impl NodeDef for DemoCaptureSource {
 mod tests {
     use node_graph::NodeDef;
     use signal_processing::SimpleTriggerCondition::{Falling, High, Ignore};
+    use signal_processing::{SimpleTriggerCondition, TriggerPredicate, TriggerProgram};
 
-    use super::super::trigger;
     use super::{DEMO_CAPTURE_CHANNELS, DemoCaptureSource, DemoCaptureSourceState};
+
+    fn conditions(program: Option<&TriggerProgram>) -> Vec<SimpleTriggerCondition> {
+        let mut conditions = [Ignore; DEMO_CAPTURE_CHANNELS];
+        if let Some(stage) = program.and_then(|program| program.stages.first()) {
+            for predicate in &stage.predicates {
+                let TriggerPredicate::Digital { channel, condition } = predicate else {
+                    continue;
+                };
+                if let Some(index) = channel
+                    .as_str()
+                    .strip_prefix("demo:")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .filter(|index| *index < DEMO_CAPTURE_CHANNELS)
+                {
+                    conditions[index] = *condition;
+                }
+            }
+        }
+        conditions.to_vec()
+    }
 
     #[test]
     fn current_state_round_trips_every_trigger_condition_without_a_warning() {
@@ -216,7 +278,7 @@ mod tests {
         let restored: DemoCaptureSourceState =
             serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(
-            trigger::conditions(restored.trigger_program()).unwrap(),
+            conditions(restored.trigger_program()),
             [Ignore; DEMO_CAPTURE_CHANNELS]
         );
         let warning = DemoCaptureSource::badge(&restored).unwrap();
@@ -235,9 +297,9 @@ mod tests {
             "trigger_conditions": ["high", "future_condition"]
         }))
         .unwrap();
-        let conditions = trigger::conditions(restored.trigger_program()).unwrap();
-        assert_eq!(conditions[0], High);
-        assert_eq!(conditions[1], Ignore);
+        let restored_conditions = conditions(restored.trigger_program());
+        assert_eq!(restored_conditions[0], High);
+        assert_eq!(restored_conditions[1], Ignore);
         let warning = DemoCaptureSource::badge(&restored).unwrap();
         assert!(warning.text.contains("trigger input 1"));
         assert!(warning.text.contains("schema 0"));

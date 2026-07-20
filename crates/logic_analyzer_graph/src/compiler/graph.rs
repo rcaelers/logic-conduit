@@ -2679,7 +2679,10 @@ mod tests {
         let compiled = lower(widget.graph(), &registry).unwrap();
         let mut manager = CooperativeManager::new();
         let mut names = HashMap::new();
-        let mut ctx = CompileCtx::default();
+        let mut ctx = CompileCtx {
+            sampling_activities: sampling_activity_map(&compiled),
+            ..CompileCtx::default()
+        };
 
         for id in topo_order(&compiled) {
             let node = compiled_node(&compiled, id);
@@ -2825,7 +2828,7 @@ mod tests {
     fn development_capture_feature_is_discovered_without_node_name_matching() {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let source = widget
-            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(nodes::DemoLiveCaptureSource::name(), Pos2::ZERO)
             .unwrap();
         let feature = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
             .unwrap()
@@ -2957,7 +2960,7 @@ mod tests {
         let builders = BuilderRegistry::standard();
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let source = widget
-            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(nodes::DemoLiveCaptureSource::name(), Pos2::ZERO)
             .unwrap();
         let configuration = discover_trigger_configuration(widget.graph(), &builders)
             .unwrap()
@@ -3053,10 +3056,10 @@ mod tests {
     fn discovery_rejects_multiple_live_capture_features() {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let first = widget
-            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(nodes::DemoLiveCaptureSource::name(), Pos2::ZERO)
             .unwrap();
         let second = widget
-            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::new(100.0, 0.0))
+            .add_node_at(nodes::DemoLiveCaptureSource::name(), Pos2::new(100.0, 0.0))
             .unwrap();
 
         let error = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
@@ -3070,7 +3073,10 @@ mod tests {
     fn compiled_discovery_ignores_a_disconnected_live_feature() {
         let mut widget = uart_demo_widget();
         widget
-            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::new(1_000.0, 0.0))
+            .add_node_at(
+                nodes::DemoLiveCaptureSource::name(),
+                Pos2::new(1_000.0, 0.0),
+            )
             .unwrap();
         let builders = BuilderRegistry::standard();
         let compiled = lower(widget.graph(), &builders).unwrap();
@@ -3508,6 +3514,19 @@ mod tests {
         assert_eq!(items_for("Demo Capture Source"), 60_000);
         assert_eq!(items_for("SPI Decoder"), 60);
         assert_eq!(items_for("Binary Decoder"), 96);
+
+        let binary_sampling = compiled
+            .sampling_overlays
+            .iter()
+            .find(|candidate| candidate.node_title == "Parallel Decoder")
+            .expect("parallel decoder should expose sampling points");
+        let enable = binary_sampling
+            .overlay
+            .activities
+            .first()
+            .expect("parallel decoder should publish its derived enable activity");
+        assert!(enable.is_active_at(800_000_000));
+        assert!(!enable.is_active_at(1_200_000_000));
     }
 
     #[test]

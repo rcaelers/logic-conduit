@@ -1,10 +1,9 @@
 use signal_processing::{
     CaptureChannelId, SimpleTriggerCondition, TriggerCountCapabilities, TriggerCountMode,
-    TriggerEditorSchema, TriggerIdentifier, TriggerLogicOperator, TriggerPredicate, TriggerProgram,
+    TriggerEditorSchema, TriggerIdentifier, TriggerLogicOperator, TriggerProgram,
 };
 
-use super::definition::{DEMO_CAPTURE_CHANNELS, DemoCaptureSourceState};
-use crate::{SimpleTriggerChannel, TriggerConfigurationFeature};
+use super::definition::DEMO_CAPTURE_CHANNELS;
 
 const SCHEMA_ID: &str = "dsl.demo-capture.trigger";
 
@@ -55,31 +54,6 @@ pub(crate) fn program_from_conditions(
     schema().simple_program(channel_ids().into_iter().zip(conditions.iter().copied()))
 }
 
-pub(crate) fn conditions(
-    program: Option<&TriggerProgram>,
-) -> Result<Vec<SimpleTriggerCondition>, String> {
-    let channel_ids = channel_ids();
-    validate_program(program)?;
-    let mut conditions = std::collections::BTreeMap::new();
-    if let Some(stage) = program.and_then(|program| program.stages.first()) {
-        for predicate in &stage.predicates {
-            let TriggerPredicate::Digital { channel, condition } = predicate else {
-                unreachable!("validated demo schemas contain only digital predicates");
-            };
-            conditions.insert(channel.clone(), *condition);
-        }
-    }
-    Ok(channel_ids
-        .iter()
-        .map(|channel| {
-            conditions
-                .get(channel)
-                .copied()
-                .unwrap_or(SimpleTriggerCondition::Ignore)
-        })
-        .collect())
-}
-
 pub(crate) fn validate_program(program: Option<&TriggerProgram>) -> Result<(), String> {
     if let Some(program) = program {
         schema()
@@ -101,25 +75,4 @@ pub(crate) fn set_condition(
     schema()
         .with_simple_condition(program, &channels, channel, condition)
         .map_err(|error| error.to_string())
-}
-
-pub(crate) fn configuration(
-    state: &DemoCaptureSourceState,
-) -> Result<TriggerConfigurationFeature, String> {
-    let conditions = conditions(state.trigger_program())?;
-    let channels = channel_ids()
-        .into_iter()
-        .zip(conditions)
-        .enumerate()
-        .map(
-            |(viewer_channel, (channel_id, condition))| SimpleTriggerChannel {
-                channel_id,
-                viewer_channel,
-                name: format!("D{viewer_channel}"),
-                enabled: true,
-                condition,
-            },
-        )
-        .collect();
-    TriggerConfigurationFeature::new(schema(), state.trigger_program().cloned(), channels)
 }

@@ -35,7 +35,11 @@ struct NodeLayout {
     section_sep_y: Vec<f32>,
 }
 
-fn compute_node_layout(node: &Node) -> NodeLayout {
+fn socket_is_laid_out(visible: bool, hidden: bool, connected: bool) -> bool {
+    connected || (visible && !hidden)
+}
+
+fn compute_node_layout(graph: &GraphState, node_id: NodeId, node: &Node) -> NodeLayout {
     if node.kind == NodeKind::Reroute {
         let cy = node.pos.y + REROUTE_SIZE / 2.0;
         let node_rect = Rect::from_min_size(node.pos, Vec2::splat(REROUTE_SIZE));
@@ -56,12 +60,34 @@ fn compute_node_layout(node: &Node) -> NodeLayout {
         let visible_inputs = node
             .inputs
             .iter()
-            .filter(|socket| socket.visible && !socket.hidden)
+            .enumerate()
+            .filter(|(index, socket)| {
+                socket_is_laid_out(
+                    socket.visible,
+                    socket.hidden,
+                    graph.is_input_connected(SocketId {
+                        node: node_id,
+                        index: *index,
+                        direction: SocketDirection::Input,
+                    }),
+                )
+            })
             .count();
         let visible_outputs = node
             .outputs
             .iter()
-            .filter(|socket| socket.visible && !socket.hidden)
+            .enumerate()
+            .filter(|(index, socket)| {
+                socket_is_laid_out(
+                    socket.visible,
+                    socket.hidden,
+                    graph.is_output_connected(SocketId {
+                        node: node_id,
+                        index: *index,
+                        direction: SocketDirection::Output,
+                    }),
+                )
+            })
             .count();
         let socket_rows = visible_inputs.max(visible_outputs).max(1);
         let height = (NODE_HEADER_HEIGHT * 1.8)
@@ -76,7 +102,15 @@ fn compute_node_layout(node: &Node) -> NodeLayout {
         let mut input_socket_pos = vec![None; node.inputs.len()];
         let mut input_row = 0usize;
         for (index, socket) in node.inputs.iter().enumerate() {
-            if !socket.visible || socket.hidden {
+            if !socket_is_laid_out(
+                socket.visible,
+                socket.hidden,
+                graph.is_input_connected(SocketId {
+                    node: node_id,
+                    index,
+                    direction: SocketDirection::Input,
+                }),
+            ) {
                 continue;
             }
             input_socket_pos[index] = Some(Pos2::new(
@@ -92,7 +126,15 @@ fn compute_node_layout(node: &Node) -> NodeLayout {
         let mut output_socket_pos = vec![None; node.outputs.len()];
         let mut output_row = 0usize;
         for (index, socket) in node.outputs.iter().enumerate() {
-            if !socket.visible || socket.hidden {
+            if !socket_is_laid_out(
+                socket.visible,
+                socket.hidden,
+                graph.is_output_connected(SocketId {
+                    node: node_id,
+                    index,
+                    direction: SocketDirection::Output,
+                }),
+            ) {
                 continue;
             }
             output_socket_pos[index] = Some(Pos2::new(
@@ -124,7 +166,15 @@ fn compute_node_layout(node: &Node) -> NodeLayout {
     let mut output_widget_rects = vec![None; node.outputs.len()];
     let mut vis_row = 0usize;
     for (i, s) in node.outputs.iter().enumerate() {
-        if !s.visible || s.hidden {
+        if !socket_is_laid_out(
+            s.visible,
+            s.hidden,
+            graph.is_output_connected(SocketId {
+                node: node_id,
+                index: i,
+                direction: SocketDirection::Output,
+            }),
+        ) {
             continue;
         }
         let row_y = body_top + vis_row as f32 * SOCKET_ROW_HEIGHT;
@@ -161,7 +211,15 @@ fn compute_node_layout(node: &Node) -> NodeLayout {
     let mut input_widget_rects = vec![None; node.inputs.len()];
     vis_row = 0;
     for (i, s) in node.inputs.iter().enumerate() {
-        if !s.visible || s.hidden {
+        if !socket_is_laid_out(
+            s.visible,
+            s.hidden,
+            graph.is_input_connected(SocketId {
+                node: node_id,
+                index: i,
+                direction: SocketDirection::Input,
+            }),
+        ) {
             continue;
         }
         let row_y = input_start_y + vis_row as f32 * SOCKET_ROW_HEIGHT;
@@ -233,9 +291,9 @@ pub(crate) struct NodeControlContext<'a> {
 }
 
 impl NodeWidget {
-    pub(crate) fn new(node: &Node) -> Self {
+    pub(crate) fn new(graph: &GraphState, node_id: NodeId, node: &Node) -> Self {
         Self {
-            layout: compute_node_layout(node),
+            layout: compute_node_layout(graph, node_id, node),
         }
     }
 
@@ -845,5 +903,18 @@ fn socket_outline_color(color: Color32) -> Color32 {
         Color32::from_rgb(210, 210, 210)
     } else {
         Color32::from_rgb(20, 20, 20)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::socket_is_laid_out;
+
+    #[test]
+    fn connected_sockets_remain_visible_despite_definition_or_user_hiding() {
+        assert!(socket_is_laid_out(false, false, true));
+        assert!(socket_is_laid_out(true, true, true));
+        assert!(!socket_is_laid_out(false, false, false));
+        assert!(!socket_is_laid_out(true, true, false));
     }
 }

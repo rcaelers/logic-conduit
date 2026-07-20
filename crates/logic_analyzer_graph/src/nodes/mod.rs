@@ -38,6 +38,6 @@ pub use sources::{
     U3Pro16State,
 };
 pub use sources::{
-    DemoCaptureSource, DemoCaptureSourceState, DslFileSource, DslFileSourceState, UartDemoSource,
-    UartDemoSourceState,
+    DemoCaptureSource, DemoCaptureSourceState, DemoLiveCaptureSource, DslFileSource,
+    DslFileSourceState, UartDemoSource, UartDemoSourceState,
 };
