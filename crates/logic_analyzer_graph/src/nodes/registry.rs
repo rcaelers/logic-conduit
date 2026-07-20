@@ -615,6 +615,19 @@ mod tests {
     }
 
     #[test]
+    fn auxiliary_test_graph_fixtures_build_with_registered_nodes() {
+        let mut live_binary = NodeGraphWidget::new(build_registry());
+        let source = test_graphs_tests::build_live_binary_test(&mut live_binary);
+        assert!(live_binary.graph().nodes.contains_key(&source));
+        assert_eq!(live_binary.graph().nodes.len(), 2);
+
+        let mut uart = NodeGraphWidget::new(build_registry());
+        test_graphs_tests::populate_uart_demo(&mut uart);
+        assert_eq!(uart.graph().nodes.len(), 3);
+        assert_eq!(uart.graph().connections.len(), 3);
+    }
+
+    #[test]
     fn graph_file_api_round_trips_the_startup_graph() {
         let mut original = NodeGraphWidget::new(build_registry());
         test_graphs_tests::populate_startup(&mut original);

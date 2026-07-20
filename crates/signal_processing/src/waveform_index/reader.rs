@@ -2,7 +2,7 @@ use std::path::Path;
 
 use super::builder::IndexBuilder;
 use super::exact::exact_window_sample_limit;
-use super::query::{GroupSummary, sample_summary_channel};
+use super::query::{GroupSummary, SummaryGrid, sample_summary_channel};
 use super::resolution::select_summary_resolution;
 use super::storage::{IndexReader, LevelsView};
 use super::types::{
@@ -604,10 +604,12 @@ where
             channel,
             name,
             initial,
-            start_sample,
-            end_sample,
-            end_sample,
-            target_points,
+            SummaryGrid {
+                start_sample,
+                available_end_sample: end_sample,
+                grid_end_sample: end_sample,
+                target_points,
+            },
             |visible_start, visible_end, previous_value| {
                 self.indexed_display_range_summary(
                     channel,

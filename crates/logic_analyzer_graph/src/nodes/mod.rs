@@ -24,7 +24,7 @@ pub use logic::{
     Buffer, BufferState, Counter, CounterState, LogicGate, LogicGateState, SrFlipFlop,
     SrFlipFlopState, StringFormatter, StringFormatterState, WordMatcher, WordMatcherState,
 };
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use registry::test_graphs_tests;
 pub use registry::{
     Number, Signal, Text, TextOpenPath, TextSavePath, Trigger, Words, build_registry,

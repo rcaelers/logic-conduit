@@ -7,34 +7,39 @@ pub(crate) struct GroupSummary {
     pub last: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SummaryGrid {
+    pub(crate) start_sample: u64,
+    pub(crate) available_end_sample: u64,
+    pub(crate) grid_end_sample: u64,
+    pub(crate) target_points: usize,
+}
+
 pub(crate) fn sample_summary_channel(
     channel: usize,
     name: String,
     initial: bool,
-    start_sample: u64,
-    available_end_sample: u64,
-    grid_end_sample: u64,
-    target_points: usize,
+    grid: SummaryGrid,
     mut summarize: impl FnMut(u64, u64, bool) -> Result<GroupSummary>,
 ) -> Result<CaptureSampledChannel> {
     let mut waveform = Vec::new();
-    let grid_samples = grid_end_sample.saturating_sub(start_sample);
-    let target_points = target_points.max(1) as u64;
-    let mut previous_end = start_sample;
+    let grid_samples = grid.grid_end_sample.saturating_sub(grid.start_sample);
+    let target_points = grid.target_points.max(1) as u64;
+    let mut previous_end = grid.start_sample;
     let mut previous_value = initial;
 
     for point in 0..target_points {
         let visible_start =
-            start_sample + grid_samples.saturating_mul(point) / target_points;
-        if visible_start >= available_end_sample {
+            grid.start_sample + grid_samples.saturating_mul(point) / target_points;
+        if visible_start >= grid.available_end_sample {
             break;
         }
         let visible_end = if point + 1 == target_points {
-            grid_end_sample
+            grid.grid_end_sample
         } else {
-            start_sample + grid_samples.saturating_mul(point + 1) / target_points
+            grid.start_sample + grid_samples.saturating_mul(point + 1) / target_points
         }
-        .min(available_end_sample);
+        .min(grid.available_end_sample);
         if visible_end <= visible_start || visible_start < previous_end {
             continue;
         }
@@ -155,7 +160,7 @@ fn push_activity(
 
 #[cfg(test)]
 mod tests {
-    use super::{GroupSummary, sample_summary_channel};
+    use super::{GroupSummary, SummaryGrid, sample_summary_channel};
 
     #[test]
     fn growing_prefix_uses_the_planned_viewport_grid() {
@@ -164,10 +169,12 @@ mod tests {
             0,
             "clk".into(),
             false,
-            0,
-            35,
-            100,
-            10,
+            SummaryGrid {
+                start_sample: 0,
+                available_end_sample: 35,
+                grid_end_sample: 100,
+                target_points: 10,
+            },
             |start, end, previous| {
                 early_ranges.push((start, end));
                 Ok(GroupSummary {
@@ -184,10 +191,12 @@ mod tests {
             0,
             "clk".into(),
             false,
-            0,
-            100,
-            100,
-            10,
+            SummaryGrid {
+                start_sample: 0,
+                available_end_sample: 100,
+                grid_end_sample: 100,
+                target_points: 10,
+            },
             |start, end, previous| {
                 complete_ranges.push((start, end));
                 Ok(GroupSummary {

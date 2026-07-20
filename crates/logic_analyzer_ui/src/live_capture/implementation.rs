@@ -1,11 +1,7 @@
 use std::path::PathBuf;
 
-#[cfg(test)]
-use logic_analyzer_graph::DiscoveredLiveCaptureFeature;
 use logic_analyzer_graph::{BuilderRegistry, discover_live_capture_feature};
 use node_graph::{GraphState, NodeId};
-#[cfg(test)]
-use signal_processing::CaptureStartMode;
 use signal_processing::{
     CaptureAcquisitionPhase, CaptureCommandCapabilities, CaptureCompletion, CaptureHealth,
     CaptureIndex, CaptureProgress, CaptureProviderCapabilities, CaptureSessionId,
@@ -129,12 +125,6 @@ pub(crate) enum ConfigurationEpochResolution {
 pub(crate) trait CaptureCoordinatorContract {
     fn backend_available() -> bool;
     fn backend_unavailable_reason() -> &'static str;
-    #[cfg(test)]
-    fn start(
-        &mut self,
-        feature: DiscoveredLiveCaptureFeature,
-        mode: CaptureStartMode,
-    ) -> Result<(), String>;
     fn request_stop(&mut self);
     fn request_abort(&mut self) -> Result<(), String>;
     fn request_force_trigger(&mut self) -> Result<(), String>;

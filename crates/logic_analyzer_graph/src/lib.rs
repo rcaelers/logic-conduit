@@ -10,7 +10,7 @@ pub mod nodes;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod capture_export;
-#[cfg(feature = "test-support")]
+#[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
 mod test_support;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -33,7 +33,7 @@ pub use compiler::{
     sampling_overlay_candidates, start_app_run, start_app_run_with_source_overrides, start_live,
     start_live_analysis,
 };
-#[cfg(feature = "test-support")]
+#[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub use test_support::{
     TestBufferedFakeConfig, TestBufferedFakeController, TestBufferedFakeProvider,

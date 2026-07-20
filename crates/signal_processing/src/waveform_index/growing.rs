@@ -11,7 +11,7 @@ use crate::{
 };
 
 use super::exact::exact_window_sample_limit;
-use super::query::{GroupSummary, sample_summary_channel};
+use super::query::{GroupSummary, SummaryGrid, sample_summary_channel};
 use super::resolution::select_summary_resolution;
 
 const LEAF_SAMPLES: u64 = 64;
@@ -754,10 +754,12 @@ impl NativeGrowingCaptureIndex {
                 channel,
                 self.header.probe_names[channel].clone(),
                 initial,
-                start_sample,
-                available_end_sample,
-                grid_end_sample,
-                target_points,
+                SummaryGrid {
+                    start_sample,
+                    available_end_sample,
+                    grid_end_sample,
+                    target_points,
+                },
                 |visible_start, visible_end, fallback_first| {
                     Ok(records_range_summary(
                         &records,

@@ -908,15 +908,6 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
         ""
     }
 
-    #[cfg(test)]
-    fn start(
-        &mut self,
-        feature: DiscoveredLiveCaptureFeature,
-        mode: CaptureStartMode,
-    ) -> Result<(), String> {
-        self.start_session(feature, None, mode)
-    }
-
     fn request_stop(&mut self) {
         if self
             .status
@@ -1721,6 +1712,16 @@ mod tests {
         CaptureCoordinator, CaptureCoordinatorContract, CaptureRawExportFormat,
         waveform_ready_for_publication,
     };
+
+    impl CaptureCoordinator {
+        fn start(
+            &mut self,
+            feature: DiscoveredLiveCaptureFeature,
+            mode: CaptureStartMode,
+        ) -> Result<(), String> {
+            self.start_session(feature, None, mode)
+        }
+    }
 
     #[test]
     fn triggered_waveform_is_published_only_with_its_complete_trigger_prefix() {

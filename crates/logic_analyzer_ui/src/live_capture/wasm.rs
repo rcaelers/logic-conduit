@@ -42,15 +42,6 @@ impl CaptureCoordinatorContract for CaptureCoordinator {
         "Live capture is not available in this web build"
     }
 
-    #[cfg(test)]
-    fn start(
-        &mut self,
-        _feature: DiscoveredLiveCaptureFeature,
-        _mode: CaptureStartMode,
-    ) -> Result<(), String> {
-        Err(Self::backend_unavailable_reason().into())
-    }
-
     fn request_stop(&mut self) {}
 
     fn request_abort(&mut self) -> Result<(), String> {
