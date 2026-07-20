@@ -352,7 +352,7 @@ impl CaptureCoordinator {
         }
     }
 
-    fn current_session_id(&self) -> Option<CaptureSessionId> {
+    pub(crate) fn current_session_id(&self) -> Option<CaptureSessionId> {
         self.completed
             .as_ref()
             .map(|completed| completed.capture.manifest().descriptor.session_id())
