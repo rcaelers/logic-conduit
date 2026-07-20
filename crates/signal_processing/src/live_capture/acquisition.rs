@@ -2,16 +2,15 @@
 
 use thiserror::Error;
 
-use signal_processing::{
+use super::implementation::{
     CaptureAcquisitionPhase, CaptureChunk, CaptureChunkWriter, CaptureCompletion, CaptureEvent,
     CaptureEventPublishError, CaptureEventPublisher, CaptureFailure, CaptureFailureKind,
-    CaptureHealth, CaptureProgress, CaptureSessionId, CaptureSessionPlan, CaptureSessionState,
-    CaptureStatus, CaptureWriteError,
+    CaptureHealth, CaptureProgress, CaptureSessionId, CaptureSessionState, CaptureStatus,
+    CaptureWriteError,
 };
+use crate::capture_policy::CaptureSessionPlan;
 
 pub type AcquisitionResult<T> = Result<T, AcquisitionError>;
-pub type LogicCaptureEvent = CaptureEvent;
-
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AcquisitionError {
     #[error("invalid acquisition request: {0}")]

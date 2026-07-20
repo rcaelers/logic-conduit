@@ -11,7 +11,7 @@ ROOT_FILES = %w[lib.rs main.rs mod.rs].freeze
 
 PUBLIC_MODULES = {
   "crates/signal_processing/src/lib.rs" => %w[capture derived_word_store live_capture live_capture_store waveform_index],
-  "crates/logic_analyzer_processing/src/lib.rs" => %w[live_capture nodes],
+  "crates/logic_analyzer_processing/src/lib.rs" => %w[nodes],
   "crates/logic_analyzer_processing/src/nodes/mod.rs" => %w[decoders logic sinks sources],
   "crates/logic_analyzer_graph/src/lib.rs" => %w[nodes],
   "crates/logic_analyzer_graph/src/nodes/mod.rs" => %w[decoders logic sinks sources]

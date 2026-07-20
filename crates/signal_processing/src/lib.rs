@@ -104,15 +104,17 @@ pub use events::{
 pub use graph::{Connection, GraphBuilder, NodeId};
 use idle::idle_backoff;
 pub use live_capture::{
-    CAPTURE_CHUNK_FORMAT_VERSION, CaptureAcquisitionPhase, CaptureBufferLease, CaptureBufferPool,
-    CaptureBufferPoolError, CaptureBufferPoolMetrics, CaptureBytes, CaptureChannelId, CaptureChunk,
-    CaptureChunkError, CaptureChunkPayload, CaptureChunkWriter, CaptureCommandCapabilities,
-    CaptureCompletion, CaptureDataDelivery, CaptureEvent, CaptureEventPublishError,
-    CaptureEventPublisher, CaptureEventQueuePublisher, CaptureEventQueueReader, CaptureFailure,
-    CaptureFailureKind, CaptureHealth, CaptureProgress, CaptureProviderCapabilities,
-    CaptureQueueConfigError, CaptureQueueLimits, CaptureQueueReader, CaptureQueueReceiveError,
-    CaptureQueueWriter, CaptureSessionId, CaptureSessionState, CaptureSettingCombination,
-    CaptureStatus, CaptureWriteError, SimpleTriggerCondition, bounded_capture_event_queue,
+    AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult,
+    CAPTURE_CHUNK_FORMAT_VERSION, CaptureAcquisitionPhase, CaptureAnalysisChannel,
+    CaptureAnalysisSource, CaptureBufferLease, CaptureBufferPool, CaptureBufferPoolError,
+    CaptureBufferPoolMetrics, CaptureBytes, CaptureChannelId, CaptureChunk, CaptureChunkError,
+    CaptureChunkPayload, CaptureChunkWriter, CaptureCommandCapabilities, CaptureCompletion,
+    CaptureDataDelivery, CaptureEvent, CaptureEventPublishError, CaptureEventPublisher,
+    CaptureEventQueuePublisher, CaptureEventQueueReader, CaptureFailure, CaptureFailureKind,
+    CaptureHealth, CaptureProgress, CaptureProviderCapabilities, CaptureQueueConfigError,
+    CaptureQueueLimits, CaptureQueueReader, CaptureQueueReceiveError, CaptureQueueWriter,
+    CaptureSessionId, CaptureSessionState, CaptureSettingCombination, CaptureStatus,
+    CaptureWriteError, PreparedAcquisition, SimpleTriggerCondition, bounded_capture_event_queue,
     bounded_capture_queue,
 };
 pub use live_capture_store::*;

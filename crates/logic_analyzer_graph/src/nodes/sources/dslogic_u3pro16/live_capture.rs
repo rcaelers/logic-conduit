@@ -3,16 +3,16 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use logic_analyzer_processing::{
-    AcquisitionContext, AcquisitionResult, CaptureAnalysisChannel, CaptureAnalysisSource,
     DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider, LinkSpeed, LogicCaptureConfig,
-    PreparedAcquisition, u3pro16_buffered_plan, u3pro16_streaming_plan,
+    u3pro16_buffered_plan, u3pro16_streaming_plan,
 };
 use signal_processing::{
-    CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery, CaptureFraction,
-    CapturePolicyCapabilities, CapturePolicyContext, CaptureProviderCapabilities,
-    CaptureSessionPlan, CaptureStartMode, CaptureStoreCursor, CompletionPolicyKind, ProcessNode,
-    RecordingStart, RetentionPolicyKind, TriggerPlacementCapability, TriggerProgram,
-    TriggerTimeoutAction,
+    AcquisitionContext, AcquisitionError, AcquisitionResult, CaptureAnalysisChannel,
+    CaptureAnalysisSource, CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery,
+    CaptureFraction, CapturePolicyCapabilities, CapturePolicyContext, CaptureProviderCapabilities,
+    CaptureSessionPlan, CaptureStartMode, CaptureStoreCursor, CompletionPolicyKind,
+    PreparedAcquisition, ProcessNode, RecordingStart, RetentionPolicyKind,
+    TriggerPlacementCapability, TriggerProgram, TriggerTimeoutAction,
 };
 
 use super::definition::U3Pro16State;
@@ -116,11 +116,7 @@ impl U3Pro16LiveCaptureFeature {
         let mut config = self.config;
         let plan = if mode == CaptureStartMode::CaptureNow {
             if !self.capabilities.commands().capture_now {
-                return Err(
-                    logic_analyzer_processing::AcquisitionError::UnsupportedOperation(
-                        "capture now".into(),
-                    ),
-                );
+                return Err(AcquisitionError::UnsupportedOperation("capture now".into()));
             }
             config.trigger = Default::default();
             self.session_plan.clone().capture_now()

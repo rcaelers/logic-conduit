@@ -3,17 +3,17 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use logic_analyzer_processing::{
-    AcquisitionContext, AcquisitionResult, CaptureAnalysisChannel, CaptureAnalysisSource,
     DeterministicFakeConfig, DeterministicFakeProvider, DeterministicTrigger,
     DeterministicTriggerCount, DeterministicTriggerCountMode, DeterministicTriggerLogic,
-    DeterministicTriggerPredicate, DeterministicTriggerStage, PreparedAcquisition,
+    DeterministicTriggerPredicate, DeterministicTriggerStage,
 };
 use signal_processing::{
+    AcquisitionContext, AcquisitionResult, CaptureAnalysisChannel, CaptureAnalysisSource,
     CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery, CaptureFraction,
     CapturePolicy, CapturePolicyCapabilities, CapturePolicyContext, CaptureProviderCapabilities,
     CaptureSessionPlan, CaptureSettingCombination, CaptureStartMode, CaptureStoreCursor,
-    CompletionPolicy, CompletionPolicyKind, ProcessNode, RecordingStart, RetentionPolicy,
-    RetentionPolicyKind, TriggerCountMode, TriggerLogicOperator, TriggerPlacement,
+    CompletionPolicy, CompletionPolicyKind, PreparedAcquisition, ProcessNode, RecordingStart,
+    RetentionPolicy, RetentionPolicyKind, TriggerCountMode, TriggerLogicOperator, TriggerPlacement,
     TriggerPlacementCapability, TriggerPredicate, TriggerProgram, TriggerTimeoutAction,
 };
 

@@ -1,7 +1,14 @@
 //! Provider-neutral live-capture contracts, events, queues, and buffers.
 
+mod acquisition;
+mod analysis;
 mod implementation;
 
+pub use acquisition::{
+    AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult,
+    PreparedAcquisition,
+};
+pub use analysis::{CaptureAnalysisChannel, CaptureAnalysisSource};
 pub use implementation::{
     CAPTURE_CHUNK_FORMAT_VERSION, CaptureAcquisitionPhase, CaptureBufferLease, CaptureBufferPool,
     CaptureBufferPoolError, CaptureBufferPoolMetrics, CaptureBytes, CaptureChannelId, CaptureChunk,

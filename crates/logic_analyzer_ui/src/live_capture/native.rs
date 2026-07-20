@@ -12,19 +12,20 @@ use tempfile::TempDir;
 
 use logic_analyzer_graph::{CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature};
 use logic_analyzer_processing::{
-    AcquisitionContext, CaptureExportObserver, CaptureExportProgress, CaptureExportReport,
-    CaptureExportRequest, RawCaptureExportFormat, export_finalized_capture,
+    CaptureExportObserver, CaptureExportProgress, CaptureExportReport, CaptureExportRequest,
+    RawCaptureExportFormat, export_finalized_capture,
 };
 use signal_processing::{
-    CaptureAcquisitionPhase, CaptureCompletion, CaptureDataDelivery, CaptureEvent,
-    CaptureEventPublishError, CaptureEventPublisher, CaptureEventQueueReader, CaptureHealth,
-    CaptureIndex, CaptureMetadata, CaptureProgress, CaptureQueueReceiveError, CaptureRecordingGate,
-    CaptureSampledWindow, CaptureSessionId, CaptureSessionOutcome, CaptureSessionPlan,
-    CaptureSessionState, CaptureStartMode, CaptureStoreDescriptor, CaptureTimelineMetadata,
-    NativeCaptureSessionPin, NativeCaptureSessionRepository, NativeCaptureSessionRepositoryConfig,
-    NativeCaptureSessionSummary, NativeCaptureStore, NativeCaptureStoreConfig,
-    NativeFinalizedCapture, NativeGrowingCaptureIndex, NativeGrowingCaptureIndexWorker,
-    RecordingStart, TriggerTimeoutAction, bounded_capture_event_queue,
+    AcquisitionContext, CaptureAcquisitionPhase, CaptureCompletion, CaptureDataDelivery,
+    CaptureEvent, CaptureEventPublishError, CaptureEventPublisher, CaptureEventQueueReader,
+    CaptureHealth, CaptureIndex, CaptureMetadata, CaptureProgress, CaptureQueueReceiveError,
+    CaptureRecordingGate, CaptureSampledWindow, CaptureSessionId, CaptureSessionOutcome,
+    CaptureSessionPlan, CaptureSessionState, CaptureStartMode, CaptureStoreDescriptor,
+    CaptureTimelineMetadata, NativeCaptureSessionPin, NativeCaptureSessionRepository,
+    NativeCaptureSessionRepositoryConfig, NativeCaptureSessionSummary, NativeCaptureStore,
+    NativeCaptureStoreConfig, NativeFinalizedCapture, NativeGrowingCaptureIndex,
+    NativeGrowingCaptureIndexWorker, RecordingStart, TriggerTimeoutAction,
+    bounded_capture_event_queue,
 };
 
 use super::implementation::{
@@ -1728,18 +1729,17 @@ mod tests {
         LiveCaptureFeature, SimpleTriggerChannel, nodes,
     };
     use logic_analyzer_processing::{
-        AcquisitionContext, AcquisitionError, AcquisitionResult, BufferedFakeConfig,
-        BufferedFakeController, BufferedFakeProvider, CaptureAnalysisChannel,
-        CaptureAnalysisSource, DeterministicFakeConfig, DeterministicFakeController,
-        DeterministicFakeProvider, PreparedAcquisition, SigrokCaptureReader,
+        BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider, DeterministicFakeConfig,
+        DeterministicFakeController, DeterministicFakeProvider, SigrokCaptureReader,
     };
     use node_graph::{NodeDef, NodeGraphWidget, NodeId};
     use signal_processing::{
-        CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery, CapturePolicy,
-        CaptureProviderCapabilities, CaptureSessionPlan, CaptureSessionState, CaptureSource,
-        CaptureStartMode, CaptureStoreCursor, CompletionPolicy, EffectiveCapturePolicy,
-        ProcessNode, RecordingStart, RetentionPolicy, SimpleTriggerCondition, TriggerTimeout,
-        TriggerTimeoutAction,
+        AcquisitionContext, AcquisitionError, AcquisitionResult, CaptureAnalysisChannel,
+        CaptureAnalysisSource, CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery,
+        CapturePolicy, CaptureProviderCapabilities, CaptureSessionPlan, CaptureSessionState,
+        CaptureSource, CaptureStartMode, CaptureStoreCursor, CompletionPolicy,
+        EffectiveCapturePolicy, PreparedAcquisition, ProcessNode, RecordingStart, RetentionPolicy,
+        SimpleTriggerCondition, TriggerTimeout, TriggerTimeoutAction,
     };
 
     use super::{

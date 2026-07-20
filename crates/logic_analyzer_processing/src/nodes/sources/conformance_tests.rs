@@ -3,16 +3,15 @@ use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
 use signal_processing::{
-    CaptureAcquisitionPhase, CaptureChannelId, CaptureCursorItem, CaptureDataDelivery,
-    CaptureEvent, CaptureProviderCapabilities, CaptureQueueReceiveError, CaptureSessionId,
-    CaptureSessionState, CaptureStoreCursor, CaptureStoreDescriptor, NativeCaptureStore,
-    NativeCaptureStoreConfig, NativeFinalizedCapture, SimpleTriggerCondition,
-    bounded_capture_event_queue,
+    AcquisitionContext, AcquisitionResult, CaptureAcquisitionPhase, CaptureChannelId,
+    CaptureCursorItem, CaptureDataDelivery, CaptureEvent, CaptureProviderCapabilities,
+    CaptureQueueReceiveError, CaptureSessionId, CaptureSessionState, CaptureStoreCursor,
+    CaptureStoreDescriptor, NativeCaptureStore, NativeCaptureStoreConfig, NativeFinalizedCapture,
+    PreparedAcquisition, SimpleTriggerCondition, bounded_capture_event_queue,
 };
 
-use super::buffered_fake_native::{BufferedFakeConfig, BufferedFakeProvider};
-use super::fake_native::{DeterministicFakeConfig, DeterministicFakeProvider};
-use super::implementation::{AcquisitionContext, AcquisitionResult, PreparedAcquisition};
+use super::buffered_fake::{BufferedFakeConfig, BufferedFakeProvider};
+use super::demo_capture_source::{DeterministicFakeConfig, DeterministicFakeProvider};
 
 const TIMEOUT: Duration = Duration::from_secs(2);
 

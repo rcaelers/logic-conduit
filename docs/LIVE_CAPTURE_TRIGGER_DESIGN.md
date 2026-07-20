@@ -14,7 +14,10 @@ can keep the graph fixed during acquisition without creating an architectural de
 The U3Pro16 graph node owns device settings and lowers to the UI-independent
 `LogicAnalyzerSource<DsLogicU3Pro16>` for an ordinary direct graph run. Both buffered and streamed
 modes register native live-capture profiles that use the authoritative capture-store path. The
-portable `LogicCaptureConfig` and U3Pro16 packet builder represent the hardware trigger stage.
+driver, transfer adaptation, and acquisition profiles are one processing source feature under
+`logic_analyzer_processing::nodes::sources`; generic live-capture infrastructure contains no
+U3Pro16 modules. The portable `LogicCaptureConfig` and U3Pro16 packet builder represent the
+hardware trigger stage.
 
 The existing live graph manager already supplies one important future invariant: hot changes and
 branch restarts take effect from the current stream position and do not rewrite previously emitted
@@ -68,7 +71,7 @@ The UI-independent live-capture foundation is also present:
   monotonically increasing generation so consumers can follow a growing committed prefix;
 - capture providers can fill a fixed-size reusable buffer pool and transfer immutable payload
   ownership directly to a synchronous store writer;
-- `logic_analyzer_processing::live_capture` defines `AcquisitionContext` and the object-safe
+- `signal_processing::live_capture` defines `AcquisitionContext` and the object-safe
   `PreparedAcquisition` lifecycle with Prepare, Start, idempotent Stop, non-blocking completion
   observation, and Join behavior;
 - `RuntimeBuilder` can expose a state-bound `LiveCaptureFeature`; compiler discovery considers
@@ -210,8 +213,8 @@ pre-trigger data can therefore be retained without pretending it belongs after t
 
 | Crate | Responsibility |
 | --- | --- |
-| `signal_processing` | Generic session IDs/status, append-only live raw store, committed-prefix queries, trigger point metadata, analysis cursors, and finalized capture handles. No USB, node names, or UI. |
-| `logic_analyzer_processing` | Portable analyzer control/events and concrete U3Pro16 USB behavior. It translates U3 trigger headers and chunks into the generic session contracts. |
+| `signal_processing` | Generic session IDs/status, provider acquisition lifecycle, append-only live raw store, committed-prefix queries, trigger point metadata, analysis cursor sources, and finalized capture handles. No USB, node names, or UI. |
+| `logic_analyzer_processing` | Concrete capture providers and source-owned U3Pro16 USB behavior. The U3Pro16 processing source feature translates trigger headers and chunks into the generic session contracts. |
 | `logic_analyzer_graph` | U3Pro16 saved trigger state, generic live-source descriptors, trigger-state lowering, replay override lowering, and builder registration. Concrete U3 behavior stays in its feature directory. |
 | `logic_analyzer_viewer` | Generic lane trigger icons, hit testing, live capture queries, and neutral trigger-edit events. It does not identify U3Pro16 or construct hardware trigger programs. |
 | `logic_analyzer_ui` | Capture-session coordinator, Start/Stop state machine, recording-time epoch orchestration, title-bar controls, status/toasts, and routing neutral edits between descriptors and widgets. It does not branch on node names. |
@@ -273,7 +276,7 @@ driver. The feature has three responsibilities:
 Preparation returns an object-safe `PreparedAcquisition` handle with `start`, `request_stop`, and
 `join` operations. Opening/configuring the device happens during preparation, while `start`
 performs the final non-blocking arm operation. The handle publishes only generic
-`LogicCaptureEvent` values and writes raw chunks through the supplied store contract. Its concrete
+`CaptureEvent` values and writes raw chunks through the supplied store contract. Its concrete
 type remains inside the U3Pro16 graph/processing feature.
 
 The presentation half of the feature returns a descriptor derived explicitly from node state:
@@ -635,14 +638,13 @@ The portable analyzer boundary exposes acquisition events rather than hiding tri
 inside `next_chunk`:
 
 ```rust
-pub enum LogicCaptureEvent {
-    Armed,
-    Triggered { sample: u64 },
-    PhaseChanged(CapturePhase),
-    Progress(CaptureProgress),
-    Data(CanonicalDigitalChunk),
-    Overflow,
-    Finished,
+pub enum CaptureEvent {
+    Status(CaptureStatus),
+    Progress { session_id: CaptureSessionId, progress: CaptureProgress },
+    Health { session_id: CaptureSessionId, health: CaptureHealth },
+    Plan { session_id: CaptureSessionId, plan: CaptureSessionPlan },
+    Triggered { session_id: CaptureSessionId, sample: u64 },
+    Failed(CaptureFailure),
 }
 ```
 

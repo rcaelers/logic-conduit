@@ -14,7 +14,7 @@ use rusb::{Context, DeviceHandle, UsbContext};
 
 use signal_processing::TriggerCountMode;
 
-use super::logic_analyzer::{
+use super::super::logic_analyzer::{
     CaptureMode, ClockEdge, ClockSource, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
     LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
     LogicEncodingRequest, LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic,
@@ -1894,15 +1894,15 @@ mod tests {
     use serde::Deserialize;
 
     use signal_processing::{
-        CaptureAcquisitionPhase, CaptureCursorItem, CaptureEvent, CaptureFailureKind, CaptureIndex,
-        CaptureQueueReceiveError, CaptureSessionId, CaptureStoreCursor, CaptureStoreDescriptor,
-        NativeCaptureStore, NativeCaptureStoreConfig, bounded_capture_event_queue,
+        AcquisitionContext, CaptureAcquisitionPhase, CaptureCursorItem, CaptureEvent,
+        CaptureFailureKind, CaptureIndex, CaptureQueueReceiveError, CaptureSessionId,
+        CaptureStoreCursor, CaptureStoreDescriptor, NativeCaptureStore, NativeCaptureStoreConfig,
+        bounded_capture_event_queue,
     };
 
+    use super::super::buffered::DsLogicU3Pro16BufferedProvider;
+    use super::super::streaming::DsLogicU3Pro16StreamingProvider;
     use super::*;
-    use crate::live_capture::{
-        AcquisitionContext, DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider,
-    };
 
     #[derive(Deserialize)]
     struct PacketFixture {
@@ -1950,14 +1950,14 @@ mod tests {
 
     fn packet_fixture() -> PacketFixture {
         serde_json::from_str(include_str!(
-            "../../../test_data/dslogic_u3pro16/buffered_packet.json"
+            "../../../../test_data/dslogic_u3pro16/buffered_packet.json"
         ))
         .unwrap()
     }
 
     fn advanced_trigger_packet_fixture() -> AdvancedTriggerPacketFixture {
         serde_json::from_str(include_str!(
-            "../../../test_data/dslogic_u3pro16/advanced_trigger_packet.json"
+            "../../../../test_data/dslogic_u3pro16/advanced_trigger_packet.json"
         ))
         .unwrap()
     }
@@ -2837,7 +2837,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            crate::live_capture::AcquisitionError::Integrity(_)
+            signal_processing::AcquisitionError::Integrity(_)
         ));
         let mut failure = None;
         loop {

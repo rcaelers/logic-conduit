@@ -19,7 +19,6 @@ use std::sync::Arc;
 use egui::{Color32, Pos2};
 use serde_json::Value;
 
-use logic_analyzer_processing::{AcquisitionContext, AcquisitionResult, PreparedAcquisition};
 use logic_analyzer_viewer::{
     SamplingEdge, SamplingOverlay, SamplingQualifier, ViewerLaneRegistry, ViewerOutputPresentation,
 };
@@ -28,10 +27,11 @@ use node_graph::{
     VariadicInfo,
 };
 use signal_processing::{
-    AppManager, CaptureChannelId, CaptureProviderCapabilities, CaptureSessionPlan,
-    CaptureStartMode, CaptureStoreCursor, ConfigurationBoundary, DerivedLanes, DisconnectEvent,
-    InputSub, NodeConfig, OverflowPolicy, PersistentStoreConfig, ProcessNode, SampleBlock,
-    SamplingActivity, SimpleTriggerCondition, TriggerEditorSchema, TriggerProgram, ViewerRetention,
+    AcquisitionContext, AcquisitionError, AcquisitionResult, AppManager, CaptureChannelId,
+    CaptureProviderCapabilities, CaptureSessionPlan, CaptureStartMode, CaptureStoreCursor,
+    ConfigurationBoundary, DerivedLanes, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy,
+    PersistentStoreConfig, PreparedAcquisition, ProcessNode, SampleBlock, SamplingActivity,
+    SimpleTriggerCondition, TriggerEditorSchema, TriggerProgram, ViewerRetention,
 };
 
 use super::cache_platform;
@@ -313,11 +313,7 @@ pub trait LiveCaptureFeature: Send {
         mode: CaptureStartMode,
     ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
         if mode == CaptureStartMode::CaptureNow {
-            return Err(
-                logic_analyzer_processing::AcquisitionError::UnsupportedOperation(
-                    "capture now".into(),
-                ),
-            );
+            return Err(AcquisitionError::UnsupportedOperation("capture now".into()));
         }
         self.prepare(context)
     }
@@ -1978,18 +1974,16 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    use logic_analyzer_processing::{
-        AcquisitionContext, AcquisitionResult, BinaryFileWriter, BufferedFakeConfig,
-        BufferedFakeProvider, CaptureAnalysisChannel, CaptureAnalysisSource, PreparedAcquisition,
-    };
+    use logic_analyzer_processing::{BinaryFileWriter, BufferedFakeConfig, BufferedFakeProvider};
     use node_graph::{NodeDef, NodeGraphWidget};
     use signal_processing::{
+        AcquisitionContext, AcquisitionResult, CaptureAnalysisChannel, CaptureAnalysisSource,
         CaptureChannelId, CaptureChunk, CaptureChunkWriter, CaptureDataDelivery,
         CaptureProviderCapabilities, CaptureSessionId, CaptureStoreCursor, ConfigValue,
         CooperativeManager, DerivedLaneData, NativeCaptureStore, NativeCaptureStoreConfig,
-        NodeSpec, Pipeline, Sample, Trigger, TriggerCount, TriggerCountMode, TriggerEditorSchema,
-        TriggerIdentifier, TriggerLogicOperator, TriggerPlacement, TriggerPredicate, TriggerStage,
-        Word,
+        NodeSpec, Pipeline, PreparedAcquisition, Sample, Trigger, TriggerCount, TriggerCountMode,
+        TriggerEditorSchema, TriggerIdentifier, TriggerLogicOperator, TriggerPlacement,
+        TriggerPredicate, TriggerStage, Word,
     };
 
     use super::*;

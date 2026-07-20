@@ -4,7 +4,11 @@ mod demo_capture_source;
 mod uart_demo_source;
 
 #[cfg(not(target_arch = "wasm32"))]
+mod buffered_fake;
+#[cfg(not(target_arch = "wasm32"))]
 mod capture_archive;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod conformance_tests;
 #[cfg(not(target_arch = "wasm32"))]
 mod dsl_file;
 #[cfg(not(target_arch = "wasm32"))]
@@ -14,7 +18,15 @@ mod logic_analyzer;
 #[cfg(not(target_arch = "wasm32"))]
 mod sigrok_file;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use buffered_fake::{BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider};
 pub use demo_capture_source::DemoCaptureSource;
+#[cfg(not(target_arch = "wasm32"))]
+pub use demo_capture_source::{
+    DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,
+    DeterministicTrigger, DeterministicTriggerCount, DeterministicTriggerCountMode,
+    DeterministicTriggerLogic, DeterministicTriggerPredicate, DeterministicTriggerStage,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use dsl_file::{
     DeferredDslFileSource, DslCaptureReader, DslChunkedCaptureReader, DslFileCaptureDataSource,
@@ -22,8 +34,9 @@ pub use dsl_file::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use dslogic_u3pro16::{
-    DsLogicCapturePlan, DsLogicTriggerHeader, DsLogicU3Pro16, DsLogicU3Pro16Source, LinkSpeed,
-    RusbTransport, UsbError, UsbTransport, u3pro16_buffered_plan, u3pro16_streaming_plan,
+    DsLogicCapturePlan, DsLogicTriggerHeader, DsLogicU3Pro16, DsLogicU3Pro16BufferedProvider,
+    DsLogicU3Pro16Source, DsLogicU3Pro16StreamingProvider, LinkSpeed, RusbTransport, UsbError,
+    UsbTransport, u3pro16_buffered_plan, u3pro16_streaming_plan,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use logic_analyzer::{

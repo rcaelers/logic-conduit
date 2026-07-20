@@ -1,12 +1,7 @@
 //! Concrete, UI-independent logic-analyzer processing nodes.
 
-pub mod live_capture;
 pub mod nodes;
 
-pub use live_capture::{
-    AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult,
-    CaptureAnalysisChannel, CaptureAnalysisSource, LogicCaptureEvent, PreparedAcquisition,
-};
 pub use nodes::decoders::{
     CsPolarity, ParallelDecoder, ParallelDecoderMetrics, ParallelDecoderMetricsSnapshot,
     ParallelInputStrategy, SpiDecoder, SpiMode, StrobeMode,
@@ -29,16 +24,16 @@ std::cfg_select! {
             CaptureExportWarning, DerivedExportSupport, IgnoreCaptureExportProgress,
             RawCaptureExportFormat, TriggerMetadataSupport, export_finalized_capture,
         };
-        pub use live_capture::{
+        pub use nodes::sources::{
             BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider,
             DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,
             DeterministicTrigger, DeterministicTriggerCount, DeterministicTriggerCountMode,
             DeterministicTriggerLogic, DeterministicTriggerPredicate, DeterministicTriggerStage,
-            DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider,
         };
         pub use nodes::sources::{
             CaptureMode, ClockEdge, ClockSource, DeferredDslFileSource, DsLogicCapturePlan,
-            DsLogicTriggerHeader, DsLogicU3Pro16, DsLogicU3Pro16Source, DslCaptureReader,
+            DsLogicTriggerHeader, DsLogicU3Pro16, DsLogicU3Pro16BufferedProvider,
+            DsLogicU3Pro16Source, DsLogicU3Pro16StreamingProvider, DslCaptureReader,
             DslChunkedCaptureReader,
             DslFileCaptureDataSource, DslFileSource, LinkSpeed, LogicAnalyzer,
             LogicAnalyzerError, LogicAnalyzerInfo, LogicAnalyzerResult, LogicAnalyzerSource,

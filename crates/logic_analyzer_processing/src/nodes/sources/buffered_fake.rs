@@ -5,14 +5,10 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use signal_processing::{
+    AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult,
     CaptureAcquisitionPhase, CaptureBufferPool, CaptureChannelId, CaptureChunk, CaptureCompletion,
     CaptureDataDelivery, CaptureProgress, CaptureProviderCapabilities, CaptureSessionId,
-    CaptureSessionState, CaptureSettingCombination, SimpleTriggerCondition,
-};
-
-use super::implementation::{
-    AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult,
-    PreparedAcquisition,
+    CaptureSessionState, CaptureSettingCombination, PreparedAcquisition, SimpleTriggerCondition,
 };
 
 #[derive(Clone, Debug)]

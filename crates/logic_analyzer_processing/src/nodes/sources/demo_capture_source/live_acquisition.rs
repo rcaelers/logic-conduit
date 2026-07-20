@@ -4,13 +4,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
 use signal_processing::{
-    CaptureAcquisitionPhase, CaptureBufferPool, CaptureChannelId, CaptureChunk, CaptureCompletion,
-    CaptureProgress, CaptureSessionId, CaptureSessionState, SimpleTriggerCondition,
-};
-
-use super::implementation::{
     AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult,
-    PreparedAcquisition,
+    CaptureAcquisitionPhase, CaptureBufferPool, CaptureChannelId, CaptureChunk, CaptureCompletion,
+    CaptureProgress, CaptureSessionId, CaptureSessionState, PreparedAcquisition,
+    SimpleTriggerCondition,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -719,9 +716,9 @@ mod tests {
     use tempfile::tempdir;
 
     use signal_processing::{
-        CaptureChannelId, CaptureCursorItem, CaptureEvent, CaptureQueueLimits,
-        CaptureQueueReceiveError, CaptureSessionId, CaptureSessionState, CaptureStoreCursor,
-        CaptureStoreDescriptor, NativeCaptureStore, NativeCaptureStoreConfig,
+        AcquisitionContext, AcquisitionError, CaptureChannelId, CaptureCursorItem, CaptureEvent,
+        CaptureQueueLimits, CaptureQueueReceiveError, CaptureSessionId, CaptureSessionState,
+        CaptureStoreCursor, CaptureStoreDescriptor, NativeCaptureStore, NativeCaptureStoreConfig,
         NativeFinalizedCapture, bounded_capture_event_queue, bounded_capture_queue,
     };
 
@@ -730,7 +727,6 @@ mod tests {
         DeterministicTriggerCount, DeterministicTriggerCountMode, DeterministicTriggerLogic,
         DeterministicTriggerPredicate, DeterministicTriggerStage,
     };
-    use crate::live_capture::{AcquisitionContext, AcquisitionError};
 
     const TIMEOUT: Duration = Duration::from_secs(2);
 

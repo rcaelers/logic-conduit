@@ -5,19 +5,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
 use signal_processing::{
+    AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult,
     CaptureAcquisitionPhase, CaptureChannelId, CaptureChunk, CaptureCompletion, CaptureProgress,
-    CaptureSessionId, CaptureSessionState,
+    CaptureSessionId, CaptureSessionState, PreparedAcquisition,
 };
 
-use super::implementation::{
-    AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult,
-    PreparedAcquisition,
-};
-use super::u3pro16_common_native::{CanonicalTransferAssembler, map_analyzer_error};
-use crate::nodes::sources::{
-    DsLogicCapturePlan, DsLogicU3Pro16, LogicAnalyzer, LogicCaptureConfig, RusbTransport,
-    UsbTransport,
-};
+use super::super::logic_analyzer::{LogicAnalyzer, LogicCaptureConfig};
+use super::common::{CanonicalTransferAssembler, map_analyzer_error};
+use super::implementation::{DsLogicCapturePlan, DsLogicU3Pro16, RusbTransport, UsbTransport};
 
 pub struct DsLogicU3Pro16BufferedProvider<T: UsbTransport = RusbTransport> {
     analyzer: DsLogicU3Pro16<T>,
