@@ -19,20 +19,10 @@ use egui::Color32;
 
 use node_graph::{NodeTypeRegistry, SocketDef, SocketShape};
 
-use super::binary_decoder::BinaryDecoder;
-use super::buffer::Buffer;
-use super::counter::Counter;
-use super::demo_capture_source::DemoCaptureSource;
-use super::formatter::StringFormatter;
-use super::i2c_decoder::I2cDecoder;
-use super::logic_gate::LogicGate;
-use super::spi_decoder::SpiDecoder;
-use super::sr_flip_flop::SrFlipFlop;
-use super::tgck_recorder::TgckRecorder;
-use super::uart_decoder::UartDecoder;
-use super::uart_demo_source::UartDemoSource;
-use super::viewer::Viewer;
-use super::word_matcher::WordMatcher;
+use super::decoders::{BinaryDecoder, I2cDecoder, SpiDecoder, UartDecoder};
+use super::logic::{Buffer, Counter, LogicGate, SrFlipFlop, StringFormatter, WordMatcher};
+use super::sinks::{TgckRecorder, Viewer};
+use super::sources::{DemoCaptureSource, UartDemoSource};
 
 // ── Stream socket types (`docs/APP_DESIGN.md`) ───────────────────────────────────────────────
 
@@ -178,13 +168,13 @@ pub fn build_registry() -> NodeTypeRegistry {
 pub(crate) mod test_graphs_tests {
     use node_graph::NodeDef;
 
-    use super::super::binary_decoder::{self, BinaryDecoderState};
-    use super::super::file_source::DslFileSource;
-    use super::super::file_writer::FileWriter;
-    use super::super::spi_decoder::SpiDecoderState;
-    use super::super::uart_decoder::{self, UartDecoderState};
-    use super::super::uart_demo_source::UartDemoSourceState;
-    use super::super::word_matcher::{WordMatcherState, default_match_op, default_trigger_at};
+    use super::super::decoders::{
+        BinaryDecoderState, SpiDecoderState, UartDecoderState, default_baud_preset,
+        default_display_format, default_input_strategy,
+    };
+    use super::super::logic::{WordMatcherState, default_match_op, default_trigger_at};
+    use super::super::sinks::FileWriter;
+    use super::super::sources::{DslFileSource, UartDemoSourceState};
     use super::*;
 
     fn output_index(
@@ -253,7 +243,7 @@ pub(crate) mod test_graphs_tests {
             spi,
             serde_json::to_value(SpiDecoderState {
                 metadata: crate::nodes::SpiDecoderMetadata::current(),
-                display_format: crate::nodes::uart_decoder::default_display_format(),
+                display_format: default_display_format(),
                 word_size: IntValue::new(8, 1, 64),
                 cpol: EnumValue::new(0, &["0", "1"]),
                 cpha: EnumValue::new(0, &["0", "1"]),
@@ -392,7 +382,7 @@ pub(crate) mod test_graphs_tests {
             spi,
             serde_json::to_value(SpiDecoderState {
                 metadata: crate::nodes::SpiDecoderMetadata::current(),
-                display_format: crate::nodes::uart_decoder::default_display_format(),
+                display_format: default_display_format(),
                 word_size: IntValue::new(24, 1, 32),
                 cpol: EnumValue::new(0, &["0", "1"]),
                 cpha: EnumValue::new(0, &["0", "1"]),
@@ -415,7 +405,7 @@ pub(crate) mod test_graphs_tests {
         widget.set_node_state(start, matcher_state("0x600081"));
         widget.set_node_state(stop, matcher_state("0x600000"));
         let mut decoder_state = BinaryDecoderState {
-            display_format: uart_decoder::default_display_format(),
+            display_format: default_display_format(),
             sample_on: EnumValue::new(
                 0,
                 &[
@@ -426,7 +416,7 @@ pub(crate) mod test_graphs_tests {
                     "Low level",
                 ],
             ),
-            input_strategy: binary_decoder::default_input_strategy(),
+            input_strategy: default_input_strategy(),
             word_size: IntValue::new(1, 1, 8),
             endianness: EnumValue::new(0, &["Little", "Big"]),
             cs_polarity: EnumValue::new(0, &["Disabled", "Active low", "Active high"]),
@@ -516,8 +506,8 @@ pub(crate) mod test_graphs_tests {
         widget.set_node_state(
             uart,
             serde_json::to_value(UartDecoderState {
-                display_format: uart_decoder::default_display_format(),
-                baud_preset: uart_decoder::default_baud_preset(),
+                display_format: default_display_format(),
+                baud_preset: default_baud_preset(),
                 baud_rate: IntValue::new(115_200, 300, 100_000_000),
                 data_bits: IntValue::new(8, 5, 9),
                 parity: EnumValue::new(0, &["None", "Odd", "Even", "Mark", "Space"]),

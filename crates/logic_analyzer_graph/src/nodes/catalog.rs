@@ -2,19 +2,13 @@
 
 use std::collections::HashMap;
 
-use super::binary_decoder::BinaryDecoderBuilder;
-use super::buffer::BufferBuilder;
-use super::counter::CounterBuilder;
-use super::demo_capture_source::DemoCaptureSourceBuilder;
-use super::formatter::FormatterBuilder;
-use super::logic_gate::LogicGateBuilder;
-use super::spi_decoder::SpiDecoderBuilder;
-use super::sr_flip_flop::SrFlipFlopBuilder;
-use super::tgck_recorder::TgckRecorderBuilder;
-use super::uart_decoder::UartDecoderBuilder;
-use super::uart_demo_source::UartDemoSourceBuilder;
-use super::viewer::ViewerBuilder;
-use super::word_matcher::WordMatcherBuilder;
+use super::decoders::{BinaryDecoderBuilder, SpiDecoderBuilder, UartDecoderBuilder};
+use super::logic::{
+    BufferBuilder, CounterBuilder, FormatterBuilder, LogicGateBuilder, SrFlipFlopBuilder,
+    WordMatcherBuilder,
+};
+use super::sinks::{TgckRecorderBuilder, ViewerBuilder};
+use super::sources::{DemoCaptureSourceBuilder, UartDemoSourceBuilder};
 use crate::RuntimeBuilder;
 
 pub(crate) fn standard_builders() -> HashMap<String, Box<dyn RuntimeBuilder>> {

@@ -14,7 +14,7 @@ use super::{
     AcquisitionContext, AcquisitionError, AcquisitionOutcome, AcquisitionResult,
     PreparedAcquisition,
 };
-use crate::nodes::{
+use crate::nodes::sources::{
     DsLogicCapturePlan, DsLogicU3Pro16, LogicAnalyzer, LogicCaptureConfig, RusbTransport,
     UsbTransport,
 };

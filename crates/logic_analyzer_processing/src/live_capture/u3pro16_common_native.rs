@@ -5,7 +5,7 @@ use std::sync::Arc;
 use signal_processing::CaptureBytes;
 
 use super::{AcquisitionError, AcquisitionResult};
-use crate::nodes::{LogicAnalyzerError, LogicChunk, LogicEncoding};
+use crate::nodes::sources::{LogicAnalyzerError, LogicChunk, LogicEncoding};
 
 pub(crate) struct CanonicalTransfer {
     pub(crate) bytes: CaptureBytes,

@@ -16,7 +16,7 @@ pub use nodes::logic::{
     WordMatcher,
 };
 pub use nodes::sinks::TgckRecorder;
-pub use nodes::{DemoCaptureSource, UartDemoSource};
+pub use nodes::sources::{DemoCaptureSource, UartDemoSource};
 
 std::cfg_select! {
     target_arch = "wasm32" => {}
@@ -36,7 +36,7 @@ std::cfg_select! {
             DeterministicTriggerLogic, DeterministicTriggerPredicate, DeterministicTriggerStage,
             DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider,
         };
-        pub use nodes::{
+        pub use nodes::sources::{
             CaptureMode, ClockEdge, ClockSource, DeferredDslFileSource, DsLogicCapturePlan,
             DsLogicTriggerHeader, DsLogicU3Pro16, DsLogicU3Pro16Source, DslCaptureReader,
             DslChunkedCaptureReader,

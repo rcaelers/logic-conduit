@@ -11,7 +11,7 @@ Primary code locations:
 - `crates/widgets/logic_analyzer_viewer/src/draw/derived.rs`;
 - `crates/widgets/logic_analyzer_viewer/src/cursor.rs`;
 - `crates/widgets/logic_analyzer_viewer/src/channel.rs`;
-- `crates/logic_analyzer_graph/src/nodes/viewer/builder.rs`.
+- `crates/logic_analyzer_graph/src/nodes/sinks/viewer/builder.rs`.
 
 Related documents:
 

@@ -197,8 +197,8 @@ mod tests {
     use node_graph::NodeDef;
     use signal_processing::SimpleTriggerCondition::{Falling, High, Ignore};
 
+    use super::super::trigger;
     use super::{DEMO_CAPTURE_CHANNELS, DemoCaptureSource, DemoCaptureSourceState};
-    use crate::nodes::demo_capture_source::trigger;
 
     #[test]
     fn current_state_round_trips_every_trigger_condition_without_a_warning() {

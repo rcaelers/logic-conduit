@@ -2,14 +2,14 @@ use std::collections::HashMap;
 
 use node_graph::{NodeDef, NodeTypeRegistry};
 
-use super::csv_writer::{CsvWriter, CsvWriterBuilder};
-use super::dslogic_u3pro16::{DsLogicU3Pro16, DsLogicU3Pro16Builder};
-use super::file_source::{DslFileSource, DslFileSourceState};
-use super::file_source_builder::FileSourceBuilder;
-use super::file_writer::FileWriter;
-use super::file_writer_builder::FileWriterBuilder;
-use super::sigrok_file_source::{SigrokFileSource, SigrokFileSourceBuilder, SigrokFileSourceState};
-use super::text_file_writer::{TextFileWriter, TextFileWriterBuilder};
+use super::sinks::{
+    CsvWriter, CsvWriterBuilder, FileWriter, FileWriterBuilder, TextFileWriter,
+    TextFileWriterBuilder,
+};
+use super::sources::{
+    DsLogicU3Pro16, DsLogicU3Pro16Builder, DslFileSource, DslFileSourceState, FileSourceBuilder,
+    SigrokFileSource, SigrokFileSourceBuilder, SigrokFileSourceState,
+};
 use crate::RuntimeBuilder;
 
 pub(crate) fn register_nodes(registry: &mut NodeTypeRegistry) {

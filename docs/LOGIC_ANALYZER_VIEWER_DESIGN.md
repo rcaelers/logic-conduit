@@ -13,7 +13,7 @@ Implementation:
 - Index build/query engine: [crates/signal_processing/src/waveform_index/](../crates/signal_processing/src/waveform_index)
   (`builder.rs`, `growing.rs`, `query.rs`, `storage.rs`, `reader.rs`, `types.rs`)
 - Finite archive capture store: [crates/signal_processing/src/archive_capture_store/](../crates/signal_processing/src/archive_capture_store)
-- Capture reader / data source: [crates/logic_analyzer_processing/src/nodes/dsl_file.rs](../crates/logic_analyzer_processing/src/nodes/dsl_file.rs)
+- Capture reader / data source: [crates/logic_analyzer_processing/src/nodes/sources/dsl_file.rs](../crates/logic_analyzer_processing/src/nodes/sources/dsl_file.rs)
   (`DslCaptureReader`, `DslFileCaptureDataSource`)
 - Common capture types / traits: [crates/signal_processing/src/capture.rs](../crates/signal_processing/src/capture.rs)
 - Derived-lane store and summary index:

@@ -523,8 +523,8 @@ mod tests {
     use node_graph::NodeDef;
     use signal_processing::SimpleTriggerCondition::{Falling, High, Ignore};
 
+    use super::super::trigger;
     use super::{DsLogicU3Pro16, U3PRO16_CHANNELS, U3Pro16State, u3_max_stream_rate};
-    use crate::nodes::dslogic_u3pro16::trigger;
 
     #[test]
     fn streaming_rate_limit_uses_highest_enabled_input_not_population_count() {

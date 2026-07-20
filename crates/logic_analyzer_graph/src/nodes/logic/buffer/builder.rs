@@ -11,7 +11,7 @@ use signal_processing::{
 
 use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, nodes, parse_state};
 
-/// Maps a `BufferState.kind` selection (see `nodes::buffer::KIND_LABELS`) to
+/// Maps a `BufferState.kind` selection to
 /// the concrete `PortKind` it names. Falls back to `Signal` for state that
 /// fails to parse — matches `nodes::BufferState::state()`'s default index.
 fn selected_kind(state: &Value) -> PortKind {

@@ -37,6 +37,9 @@
       }
     }
   ],
+  "extensions": {
+    "logic_analyzer_ui.sampling_overlay": 1
+  },
   "frames": [],
   "next_frame_id": 0,
   "next_id": 2,
@@ -153,7 +156,7 @@
           ]
         },
         "recording_start": {
-          "value": "Immediate",
+          "value": "Trigger",
           "variants": [
             "Immediate",
             "Trigger"
@@ -212,7 +215,25 @@
           "min": 0,
           "value": 50
         },
-        "trigger_program": null,
+        "trigger_program": {
+          "format_version": 1,
+          "schema_id": "dsl.dslogic-u3pro16.trigger",
+          "schema_revision": 1,
+          "stages": [
+            {
+              "count": null,
+              "inverted": false,
+              "logic": "and",
+              "predicates": [
+                {
+                  "channel": "u3pro16:input:0",
+                  "condition": "falling",
+                  "kind": "digital"
+                }
+              ]
+            }
+          ]
+        },
         "trigger_timeout_action": {
           "value": "Disabled",
           "variants": [
@@ -254,18 +275,30 @@
       "kind": "Regular",
       "muted": false,
       "outputs": [
+        {},
         {
+          "def_index": 1
+        },
+        {
+          "def_index": 2,
           "show_in_view": true
         },
         {
-          "def_index": 1
+          "def_index": 3,
+          "show_in_view": true
+        },
+        {
+          "def_index": 4
+        },
+        {
+          "def_index": 5
         }
       ],
       "pos": {
         "x": 1140.02734375,
         "y": 152.109375
       },
-      "selected": true,
+      "selected": false,
       "state": {
         "bit_order": {
           "value": "MSB first",
@@ -296,9 +329,21 @@
             "Disabled"
           ]
         },
+        "display_format": {
+          "value": "Hex + ASCII",
+          "variants": [
+            "Hex",
+            "Binary",
+            "Octal",
+            "Decimal",
+            "ASCII",
+            "Hex + ASCII"
+          ]
+        },
         "has_miso": {
           "value": false
         },
+        "schema_version": 1,
         "word_size": {
           "max": 64,
           "min": 1,

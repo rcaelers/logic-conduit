@@ -2102,11 +2102,11 @@ mod tests {
         }
 
         fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::DemoCaptureSourceBuilder.accepted_kinds(socket, state)
+            crate::nodes::sources::DemoCaptureSourceBuilder.accepted_kinds(socket, state)
         }
 
         fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::DemoCaptureSourceBuilder.offered_kinds(socket, state)
+            crate::nodes::sources::DemoCaptureSourceBuilder.offered_kinds(socket, state)
         }
 
         fn input_port(
@@ -2116,15 +2116,20 @@ mod tests {
             state: &Value,
             kind: PortKind,
         ) -> Option<String> {
-            crate::nodes::DemoCaptureSourceBuilder.input_port(socket, member_index, state, kind)
+            crate::nodes::sources::DemoCaptureSourceBuilder.input_port(
+                socket,
+                member_index,
+                state,
+                kind,
+            )
         }
 
         fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
-            crate::nodes::DemoCaptureSourceBuilder.output_port(socket, state, kind)
+            crate::nodes::sources::DemoCaptureSourceBuilder.output_port(socket, state, kind)
         }
 
         fn viewer_channel_origin(&self, socket: &Socket, state: &Value) -> Option<usize> {
-            crate::nodes::DemoCaptureSourceBuilder.viewer_channel_origin(socket, state)
+            crate::nodes::sources::DemoCaptureSourceBuilder.viewer_channel_origin(socket, state)
         }
 
         fn live_capture_feature(
@@ -2163,7 +2168,7 @@ mod tests {
         }
 
         fn input_required(&self, socket: &Socket, state: &Value) -> bool {
-            crate::nodes::DemoCaptureSourceBuilder.input_required(socket, state)
+            crate::nodes::sources::DemoCaptureSourceBuilder.input_required(socket, state)
         }
 
         fn build(
@@ -2173,7 +2178,7 @@ mod tests {
             resolved: &ResolvedInputs,
             ctx: &mut CompileCtx,
         ) -> Result<Box<dyn ProcessNode>, String> {
-            crate::nodes::DemoCaptureSourceBuilder.build(name, state, resolved, ctx)
+            crate::nodes::sources::DemoCaptureSourceBuilder.build(name, state, resolved, ctx)
         }
     }
 
@@ -2183,11 +2188,11 @@ mod tests {
         }
 
         fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::DemoCaptureSourceBuilder.accepted_kinds(socket, state)
+            crate::nodes::sources::DemoCaptureSourceBuilder.accepted_kinds(socket, state)
         }
 
         fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::DemoCaptureSourceBuilder.offered_kinds(socket, state)
+            crate::nodes::sources::DemoCaptureSourceBuilder.offered_kinds(socket, state)
         }
 
         fn input_port(
@@ -2197,15 +2202,20 @@ mod tests {
             state: &Value,
             kind: PortKind,
         ) -> Option<String> {
-            crate::nodes::DemoCaptureSourceBuilder.input_port(socket, member_index, state, kind)
+            crate::nodes::sources::DemoCaptureSourceBuilder.input_port(
+                socket,
+                member_index,
+                state,
+                kind,
+            )
         }
 
         fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
-            crate::nodes::DemoCaptureSourceBuilder.output_port(socket, state, kind)
+            crate::nodes::sources::DemoCaptureSourceBuilder.output_port(socket, state, kind)
         }
 
         fn viewer_channel_origin(&self, socket: &Socket, state: &Value) -> Option<usize> {
-            crate::nodes::DemoCaptureSourceBuilder.viewer_channel_origin(socket, state)
+            crate::nodes::sources::DemoCaptureSourceBuilder.viewer_channel_origin(socket, state)
         }
 
         fn live_capture_feature(
@@ -2244,7 +2254,7 @@ mod tests {
         }
 
         fn input_required(&self, socket: &Socket, state: &Value) -> bool {
-            crate::nodes::DemoCaptureSourceBuilder.input_required(socket, state)
+            crate::nodes::sources::DemoCaptureSourceBuilder.input_required(socket, state)
         }
 
         fn build(
@@ -2254,7 +2264,7 @@ mod tests {
             resolved: &ResolvedInputs,
             ctx: &mut CompileCtx,
         ) -> Result<Box<dyn ProcessNode>, String> {
-            crate::nodes::DemoCaptureSourceBuilder.build(name, state, resolved, ctx)
+            crate::nodes::sources::DemoCaptureSourceBuilder.build(name, state, resolved, ctx)
         }
     }
 
@@ -2264,11 +2274,11 @@ mod tests {
         }
 
         fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::DemoCaptureSourceBuilder.accepted_kinds(socket, state)
+            crate::nodes::sources::DemoCaptureSourceBuilder.accepted_kinds(socket, state)
         }
 
         fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::DemoCaptureSourceBuilder.offered_kinds(socket, state)
+            crate::nodes::sources::DemoCaptureSourceBuilder.offered_kinds(socket, state)
         }
 
         fn input_port(
@@ -2278,15 +2288,20 @@ mod tests {
             state: &Value,
             kind: PortKind,
         ) -> Option<String> {
-            crate::nodes::DemoCaptureSourceBuilder.input_port(socket, member_index, state, kind)
+            crate::nodes::sources::DemoCaptureSourceBuilder.input_port(
+                socket,
+                member_index,
+                state,
+                kind,
+            )
         }
 
         fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
-            crate::nodes::DemoCaptureSourceBuilder.output_port(socket, state, kind)
+            crate::nodes::sources::DemoCaptureSourceBuilder.output_port(socket, state, kind)
         }
 
         fn viewer_channel_origin(&self, socket: &Socket, state: &Value) -> Option<usize> {
-            crate::nodes::DemoCaptureSourceBuilder.viewer_channel_origin(socket, state)
+            crate::nodes::sources::DemoCaptureSourceBuilder.viewer_channel_origin(socket, state)
         }
 
         fn live_capture_feature(
@@ -2298,7 +2313,7 @@ mod tests {
         }
 
         fn input_required(&self, socket: &Socket, state: &Value) -> bool {
-            crate::nodes::DemoCaptureSourceBuilder.input_required(socket, state)
+            crate::nodes::sources::DemoCaptureSourceBuilder.input_required(socket, state)
         }
 
         fn build(
@@ -2315,11 +2330,11 @@ mod tests {
 
     impl RuntimeBuilder for ThrottledBinaryBuilder {
         fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::BinaryDecoderBuilder.accepted_kinds(socket, state)
+            crate::nodes::decoders::BinaryDecoderBuilder.accepted_kinds(socket, state)
         }
 
         fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::BinaryDecoderBuilder.offered_kinds(socket, state)
+            crate::nodes::decoders::BinaryDecoderBuilder.offered_kinds(socket, state)
         }
 
         fn input_port(
@@ -2329,23 +2344,28 @@ mod tests {
             state: &Value,
             kind: PortKind,
         ) -> Option<String> {
-            crate::nodes::BinaryDecoderBuilder.input_port(socket, member_index, state, kind)
+            crate::nodes::decoders::BinaryDecoderBuilder.input_port(
+                socket,
+                member_index,
+                state,
+                kind,
+            )
         }
 
         fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
-            crate::nodes::BinaryDecoderBuilder.output_port(socket, state, kind)
+            crate::nodes::decoders::BinaryDecoderBuilder.output_port(socket, state, kind)
         }
 
         fn word_display_format(&self, socket: &Socket, state: &Value) -> Option<String> {
-            crate::nodes::BinaryDecoderBuilder.word_display_format(socket, state)
+            crate::nodes::decoders::BinaryDecoderBuilder.word_display_format(socket, state)
         }
 
         fn sampling_overlay(&self, state: &Value) -> Option<SamplingOverlayDescriptor> {
-            crate::nodes::BinaryDecoderBuilder.sampling_overlay(state)
+            crate::nodes::decoders::BinaryDecoderBuilder.sampling_overlay(state)
         }
 
         fn input_required(&self, socket: &Socket, state: &Value) -> bool {
-            crate::nodes::BinaryDecoderBuilder.input_required(socket, state)
+            crate::nodes::decoders::BinaryDecoderBuilder.input_required(socket, state)
         }
 
         fn build(
@@ -2355,7 +2375,8 @@ mod tests {
             resolved: &ResolvedInputs,
             ctx: &mut CompileCtx,
         ) -> Result<Box<dyn ProcessNode>, String> {
-            let inner = crate::nodes::BinaryDecoderBuilder.build(name, state, resolved, ctx)?;
+            let inner =
+                crate::nodes::decoders::BinaryDecoderBuilder.build(name, state, resolved, ctx)?;
             Ok(Box::new(ThrottledProcess {
                 inner,
                 delay: self.delay,
@@ -3810,7 +3831,7 @@ mod tests {
     fn file_source_with_wired_filename_builds_deferred_source() {
         use signal_processing::TextSample;
 
-        use crate::nodes::FileSourceBuilder;
+        use crate::nodes::sources::FileSourceBuilder;
 
         let builder = FileSourceBuilder;
         let state = serde_json::to_value(nodes::DslFileSourceState {

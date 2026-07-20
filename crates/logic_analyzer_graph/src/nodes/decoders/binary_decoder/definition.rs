@@ -9,7 +9,7 @@ use crate::nodes::registry::{COLOR_DECODERS, Signal, Words};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BinaryDecoderState {
-    #[serde(default = "crate::nodes::uart_decoder::default_display_format")]
+    #[serde(default = "crate::nodes::decoders::default_display_format")]
     pub display_format: EnumValue,
     pub sample_on: EnumValue,
     #[serde(default = "default_input_strategy")]
@@ -52,7 +52,7 @@ impl NodeDef for BinaryDecoder {
 
     fn state() -> Self::State {
         BinaryDecoderState {
-            display_format: crate::nodes::uart_decoder::default_display_format(),
+            display_format: crate::nodes::decoders::default_display_format(),
             sample_on: EnumValue::new(
                 0,
                 &[

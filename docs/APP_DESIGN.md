@@ -91,8 +91,9 @@ never share a shape.
 
 ## Node set (`crates/logic_analyzer_graph/src/nodes/`)
 
-Each executable feature directory groups a `node_graph::NodeDef` in `definition.rs` with its
-`RuntimeBuilder` in `builder.rs` and optional presentation metadata. Placement rule: the node body
+The `sources`, `decoders`, `logic`, and `sinks` directories mirror the processing-node families.
+Each executable feature directory within them groups a `node_graph::NodeDef` in `definition.rs`
+with its `RuntimeBuilder` in `builder.rs` and optional presentation metadata. Placement rule: the node body
 carries sockets and the controls someone tweaks while reading the graph (matcher pattern,
 gate op, template); everything else goes to the properties panel (SPI CPOL/CPHA/bit order,
 writer options, device settings).

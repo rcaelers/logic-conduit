@@ -1950,14 +1950,14 @@ mod tests {
 
     fn packet_fixture() -> PacketFixture {
         serde_json::from_str(include_str!(
-            "../../test_data/dslogic_u3pro16/buffered_packet.json"
+            "../../../test_data/dslogic_u3pro16/buffered_packet.json"
         ))
         .unwrap()
     }
 
     fn advanced_trigger_packet_fixture() -> AdvancedTriggerPacketFixture {
         serde_json::from_str(include_str!(
-            "../../test_data/dslogic_u3pro16/advanced_trigger_packet.json"
+            "../../../test_data/dslogic_u3pro16/advanced_trigger_packet.json"
         ))
         .unwrap()
     }
