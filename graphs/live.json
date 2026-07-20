@@ -108,7 +108,7 @@
         "x": 673.3984375,
         "y": 153.0390625
       },
-      "selected": false,
+      "selected": true,
       "state": {
         "channels": {
           "enabled": [
@@ -137,10 +137,8 @@
             "Falling"
           ]
         },
-        "duration_ms": {
-          "max": 60000,
-          "min": 1,
-          "value": 1000
+        "duration": {
+          "nanoseconds": 1000000000
         },
         "ext_clock": {
           "value": false
@@ -200,7 +198,7 @@
             "1 GHz"
           ]
         },
-        "schema_version": 3,
+        "schema_version": 4,
         "summary": {
           "text": "16 ch @ 125 MHz · 1.0 V"
         },
