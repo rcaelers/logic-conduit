@@ -1,3 +1,5 @@
+//! Deterministic UART waveform generator used by tests.
+
 use signal_processing::{
     InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, Sample, WorkError, WorkResult,
 };
@@ -6,7 +8,7 @@ use signal_processing::{
 ///
 /// Emits an idle-high 8N1 RX edge stream for a fixed byte string, then shuts
 /// down. Protocol decoding still happens downstream through `UartDecoder`.
-pub struct UartDemoSource {
+pub struct SyntheticUartSource {
     name: String,
     message: Vec<u8>,
     baud: u64,
@@ -14,10 +16,10 @@ pub struct UartDemoSource {
     emitted: bool,
 }
 
-impl UartDemoSource {
+impl SyntheticUartSource {
     pub fn new(message: impl Into<Vec<u8>>, baud: u64) -> Self {
         Self {
-            name: "uart_demo_source".to_string(),
+            name: "synthetic_uart_source".to_string(),
             message: message.into(),
             baud: baud.max(1),
             first_start_ns: 60_000,
@@ -62,7 +64,7 @@ impl UartDemoSource {
     }
 }
 
-impl ProcessNode for UartDemoSource {
+impl ProcessNode for SyntheticUartSource {
     fn name(&self) -> &str {
         &self.name
     }
@@ -105,7 +107,7 @@ mod tests {
 
     #[test]
     fn hello_edges_are_idle_high_and_finite() {
-        let source = UartDemoSource::new(b"HELLO\n".to_vec(), 115_200);
+        let source = SyntheticUartSource::new(b"HELLO\n".to_vec(), 115_200);
         let samples = source.samples();
         assert_eq!(samples.first(), Some(&Sample::new(true, 0)));
         assert!(samples.iter().any(|sample| !sample.value));

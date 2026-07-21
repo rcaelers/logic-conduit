@@ -175,8 +175,8 @@ mod tests {
     fn source_only_graph_is_available_for_raw_capture() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         graph
-            .add_node_at(nodes::DemoLiveCaptureSource::name(), egui::Pos2::ZERO)
-            .expect("demo capture source is registered");
+            .add_node_at(nodes::TestLiveCaptureSource::name(), egui::Pos2::ZERO)
+            .expect("test capture source is registered");
 
         assert!(matches!(
             capture_availability(graph.graph(), &BuilderRegistry::standard()),
@@ -188,8 +188,8 @@ mod tests {
     fn preloaded_demo_capture_is_not_a_live_capture_source() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         graph
-            .add_node_at(nodes::DemoCaptureSource::name(), egui::Pos2::ZERO)
-            .expect("demo capture source is registered");
+            .add_node_at(nodes::TestCaptureSource::name(), egui::Pos2::ZERO)
+            .expect("test capture source is registered");
 
         assert!(matches!(
             capture_availability(graph.graph(), &BuilderRegistry::standard()),

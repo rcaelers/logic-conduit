@@ -22,7 +22,8 @@ use node_graph::{NodeTypeRegistry, SocketDef, SocketShape};
 use super::decoders::{BinaryDecoder, I2cDecoder, SpiDecoder, UartDecoder};
 use super::logic::{Buffer, Counter, LogicGate, SrFlipFlop, StringFormatter, WordMatcher};
 use super::sinks::{TgckRecorder, Viewer};
-use super::sources::{DemoCaptureSource, UartDemoSource};
+#[cfg(any(test, feature = "test-support"))]
+use super::sources::{TestCaptureSource, TestUartSource};
 
 // ── Stream socket types (`docs/APP_DESIGN.md`) ───────────────────────────────────────────────
 
@@ -145,8 +146,11 @@ pub(crate) const COLOR_OUTPUT: Color32 = Color32::from_rgb(160, 80, 60);
 pub fn build_registry() -> NodeTypeRegistry {
     let mut registry = NodeTypeRegistry::new();
     super::registry_platform::register_nodes(&mut registry);
-    registry.register::<DemoCaptureSource>();
-    registry.register::<UartDemoSource>();
+    #[cfg(any(test, feature = "test-support"))]
+    {
+        registry.register::<TestCaptureSource>();
+        registry.register::<TestUartSource>();
+    }
     registry.register::<SpiDecoder>();
     registry.register::<UartDecoder>();
     registry.register::<I2cDecoder>();
@@ -174,7 +178,7 @@ pub(crate) mod test_graphs_tests {
     };
     use super::super::logic::{WordMatcherState, default_match_op, default_trigger_at};
     use super::super::sinks::FileWriter;
-    use super::super::sources::{DslFileSource, UartDemoSourceState};
+    use super::super::sources::{DslFileSource, SigrokFileSource, TestUartSourceState};
     use super::*;
 
     fn output_index(
@@ -229,7 +233,12 @@ pub(crate) mod test_graphs_tests {
                 .unwrap_or_else(|| panic!("unknown node type '{name}'"))
         };
 
-        let source = add(widget, DemoCaptureSource::name(), 40.0, 300.0);
+        let source = add(widget, SigrokFileSource::name(), 40.0, 300.0);
+        let mut source_state = SigrokFileSource::state();
+        source_state.channels.value = 11;
+        source_state.demo_data = true;
+        widget.set_node_state(source, serde_json::to_value(source_state).unwrap());
+        widget.graph_mut().nodes.get_mut(&source).unwrap().title = SigrokFileSource::name().into();
         let spi = add(widget, SpiDecoder::name(), 360.0, 80.0);
         let start = add(widget, WordMatcher::name(), 680.0, 40.0);
         let stop = add(widget, WordMatcher::name(), 680.0, 230.0);
@@ -331,10 +340,10 @@ pub(crate) mod test_graphs_tests {
     ) -> node_graph::NodeId {
         use egui::Pos2;
 
-        use super::super::sources::DemoLiveCaptureSource;
+        use super::super::sources::TestLiveCaptureSource;
 
         let source = widget
-            .add_node_at(DemoLiveCaptureSource::name(), Pos2::new(40.0, 80.0))
+            .add_node_at(TestLiveCaptureSource::name(), Pos2::new(40.0, 80.0))
             .expect("demo source is registered");
         let decoder = widget
             .add_node_at(BinaryDecoder::name(), Pos2::new(360.0, 80.0))
@@ -493,13 +502,13 @@ pub(crate) mod test_graphs_tests {
                 .unwrap_or_else(|| panic!("unknown node type '{name}'"))
         };
 
-        let source = add(widget, UartDemoSource::name(), 80.0, 220.0);
+        let source = add(widget, TestUartSource::name(), 80.0, 220.0);
         let uart = add(widget, UartDecoder::name(), 420.0, 180.0);
         let viewer = add(widget, Viewer::name(), 760.0, 230.0);
 
         widget.set_node_state(
             source,
-            serde_json::to_value(UartDemoSourceState {
+            serde_json::to_value(TestUartSourceState {
                 message: StringValue::new("HELLO\n"),
                 baud_rate: IntValue::new(115_200, 300, 100_000_000),
             })

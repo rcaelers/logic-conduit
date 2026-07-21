@@ -1,9 +1,9 @@
-//! Runtime builder for `UART Demo Source` — generates a fixed UART byte sequence
+//! Runtime builder for `Test UART Source` — generates a fixed UART byte sequence
 //! in-memory. Available on every target (no file/USB access needed).
 
 use serde_json::Value;
 
-use logic_analyzer_processing::UartDemoSource;
+use logic_analyzer_processing::SyntheticUartSource;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample};
 
@@ -11,9 +11,9 @@ use crate::{
     CapturePresentation, CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state,
 };
 
-pub(crate) struct UartDemoSourceBuilder;
+pub(crate) struct TestUartSourceBuilder;
 
-impl RuntimeBuilder for UartDemoSourceBuilder {
+impl RuntimeBuilder for TestUartSourceBuilder {
     fn is_source(&self) -> bool {
         true
     }
@@ -45,8 +45,8 @@ impl RuntimeBuilder for UartDemoSourceBuilder {
         _resolved: &ResolvedInputs,
         _ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
-        let state: super::definition::UartDemoSourceState = parse_state(state)?;
-        let source = UartDemoSource::new(
+        let state: super::definition::TestUartSourceState = parse_state(state)?;
+        let source = SyntheticUartSource::new(
             state.message.value.into_bytes(),
             state.baud_rate.value.max(1) as u64,
         )

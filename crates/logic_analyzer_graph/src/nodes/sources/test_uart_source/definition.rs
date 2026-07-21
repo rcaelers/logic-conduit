@@ -1,4 +1,4 @@
-//! `UART Demo Source` graph-node definition.
+//! Test-only UART signal-source graph-node definition.
 
 use egui::Color32;
 use serde::{Deserialize, Serialize};
@@ -8,17 +8,17 @@ use node_graph::{InputDef, IntValue, NodeDef, OutputDef, StringValue};
 use crate::nodes::registry::{COLOR_SOURCES, Signal};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UartDemoSourceState {
+pub struct TestUartSourceState {
     pub message: StringValue,
     pub baud_rate: IntValue,
 }
 
-pub struct UartDemoSource;
-impl NodeDef for UartDemoSource {
-    type State = UartDemoSourceState;
+pub struct TestUartSource;
+impl NodeDef for TestUartSource {
+    type State = TestUartSourceState;
 
     fn name() -> &'static str {
-        "UART Demo Source"
+        "Test UART Source"
     }
     fn category() -> &'static str {
         "Sources"
@@ -39,7 +39,7 @@ impl NodeDef for UartDemoSource {
     }
 
     fn state() -> Self::State {
-        UartDemoSourceState {
+        TestUartSourceState {
             message: StringValue::new("HELLO\n"),
             baud_rate: IntValue::new(115_200, 300, 100_000_000),
         }

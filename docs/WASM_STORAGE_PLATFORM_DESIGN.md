@@ -94,8 +94,11 @@ Compiler IR and live-run state have the same fields and variants on every platfo
 describes storage requirements such as exact-history retention, persistence settings, cache
 budgets, and indexing. Backend construction resolves platform capabilities.
 
-Nodes that fundamentally require native resources, including file readers, file writers, and USB
-devices, are selected as complete node modules and registry entries.
+Graph-node definitions and their serialized options are identical on native and wasm. Concrete
+builders select complete platform implementations: native file readers, writers, and USB devices
+use their resources, while wasm file sources generate the deterministic synthetic capture, wasm writers
+discard their input streams, and the wasm U3Pro16 source generates synthetic capture data. The
+generic compiler and viewer see the same node and port contracts on both targets.
 
 ## Permitted target gates
 

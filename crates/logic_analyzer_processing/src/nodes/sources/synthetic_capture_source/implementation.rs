@@ -1,4 +1,4 @@
-//! Small deterministic mixed-protocol capture used by the web demo.
+//! Small deterministic mixed-protocol capture used by platform stand-ins.
 
 use signal_processing::{
     InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, Sample, SampleBlock, WorkError,
@@ -16,17 +16,27 @@ const CYCLE_COUNT: usize = 12;
 /// example: D0..D7 are Ch 0..7, SPI uses CS=8/CLK=7/MOSI=6/MISO=5, and the
 /// parallel strobe is Ch 10. Twelve activity groups span a one-minute
 /// timeline. SPI markers drive the graph's latch and parallel enable gate.
-pub struct DemoCaptureSource {
+pub struct SyntheticCaptureSource {
     name: String,
+    channel_count: usize,
     emitted: bool,
 }
 
-impl DemoCaptureSource {
+impl SyntheticCaptureSource {
     pub fn new() -> Self {
         Self {
-            name: "demo_capture_source".to_owned(),
+            name: "synthetic_capture_source".to_owned(),
+            channel_count: CHANNEL_COUNT,
             emitted: false,
         }
+    }
+
+    /// Uses the demo waveform for an arbitrary capture width. Channels past
+    /// the authored demo lanes repeat deterministic waveforms, which keeps
+    /// browser-only stand-ins useful for wide file and hardware sources.
+    pub fn with_channel_count(mut self, channel_count: usize) -> Self {
+        self.channel_count = channel_count.clamp(1, 32);
+        self
     }
 
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
@@ -42,15 +52,22 @@ impl DemoCaptureSource {
             .map(|channel| edges(channel))
             .collect()
     }
+
+    pub fn preview_channels_with_count(channel_count: usize) -> Vec<Vec<Sample>> {
+        let channels = demo_channels();
+        (0..channel_count.clamp(1, 32))
+            .map(|channel| edges(&channels[channel % CHANNEL_COUNT]))
+            .collect()
+    }
 }
 
-impl Default for DemoCaptureSource {
+impl Default for SyntheticCaptureSource {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ProcessNode for DemoCaptureSource {
+impl ProcessNode for SyntheticCaptureSource {
     fn name(&self) -> &str {
         &self.name
     }
@@ -64,22 +81,22 @@ impl ProcessNode for DemoCaptureSource {
     }
 
     fn num_outputs(&self) -> usize {
-        CHANNEL_COUNT * 2
+        self.channel_count * 2
     }
 
     fn output_schema(&self) -> Vec<PortSchema> {
         let mut schema = Vec::with_capacity(self.num_outputs());
-        for channel in 0..CHANNEL_COUNT {
+        for channel in 0..self.channel_count {
             schema.push(PortSchema::new::<Sample>(
                 format!("ch{channel}"),
                 channel,
                 PortDirection::Output,
             ));
         }
-        for channel in 0..CHANNEL_COUNT {
+        for channel in 0..self.channel_count {
             schema.push(PortSchema::new::<SampleBlock>(
                 format!("block{channel}"),
-                CHANNEL_COUNT + channel,
+                self.channel_count + channel,
                 PortDirection::Output,
             ));
         }
@@ -92,12 +109,13 @@ impl ProcessNode for DemoCaptureSource {
         }
 
         let channels = demo_channels();
-        for (channel, values) in channels.iter().enumerate() {
+        for channel in 0..self.channel_count {
+            let values = &channels[channel % CHANNEL_COUNT];
             if let Some(output) = outputs.get(channel).and_then(|port| port.get::<Sample>()) {
                 output.send_batch(edges(values))?;
             }
             if let Some(output) = outputs
-                .get(CHANNEL_COUNT + channel)
+                .get(self.channel_count + channel)
                 .and_then(|port| port.get::<SampleBlock>())
             {
                 output.send(SampleBlock::new(

@@ -2247,7 +2247,7 @@ mod tests {
     fn development_registration_discovers_and_completes_a_capture() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         let source = graph
-            .add_node_at(nodes::DemoLiveCaptureSource::name(), egui::Pos2::ZERO)
+            .add_node_at(nodes::TestLiveCaptureSource::name(), egui::Pos2::ZERO)
             .unwrap();
         let feature = compiler::discover_live_capture_feature(
             graph.graph(),
@@ -2273,7 +2273,7 @@ mod tests {
     fn raw_only_capture_completes_after_its_analysis_attachment_is_dropped() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         graph
-            .add_node_at(nodes::DemoLiveCaptureSource::name(), egui::Pos2::ZERO)
+            .add_node_at(nodes::TestLiveCaptureSource::name(), egui::Pos2::ZERO)
             .unwrap();
         let feature = compiler::discover_live_capture_feature(
             graph.graph(),
@@ -2312,7 +2312,7 @@ mod tests {
     fn starting_a_new_capture_discards_the_previous_store_and_index() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         graph
-            .add_node_at(nodes::DemoLiveCaptureSource::name(), egui::Pos2::ZERO)
+            .add_node_at(nodes::TestLiveCaptureSource::name(), egui::Pos2::ZERO)
             .unwrap();
         let builders = compiler::BuilderRegistry::standard();
         let feature = compiler::discover_live_capture_feature(graph.graph(), &builders)
@@ -2650,9 +2650,9 @@ mod tests {
     fn capture_now_bypasses_one_session_trigger_without_mutating_requested_policy() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         let source = graph
-            .add_node_at(nodes::DemoLiveCaptureSource::name(), egui::Pos2::ZERO)
+            .add_node_at(nodes::TestLiveCaptureSource::name(), egui::Pos2::ZERO)
             .unwrap();
-        let mut state = serde_json::from_value::<nodes::DemoCaptureSourceState>(
+        let mut state = serde_json::from_value::<nodes::TestCaptureSourceState>(
             graph.graph().nodes[&source].state.clone(),
         )
         .unwrap();

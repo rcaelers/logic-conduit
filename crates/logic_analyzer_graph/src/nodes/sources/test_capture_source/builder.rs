@@ -1,8 +1,8 @@
-//! Runtime builder for the in-memory mixed-protocol demo capture.
+//! Runtime builder for the in-memory mixed-protocol test capture.
 
 use serde_json::Value;
 
-use logic_analyzer_processing::DemoCaptureSource;
+use logic_analyzer_processing::SyntheticCaptureSource;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock};
 
@@ -11,9 +11,9 @@ use crate::{
     RuntimeBuilder,
 };
 
-pub(crate) struct DemoCaptureSourceBuilder;
+pub(crate) struct TestCaptureSourceBuilder;
 
-impl RuntimeBuilder for DemoCaptureSourceBuilder {
+impl RuntimeBuilder for TestCaptureSourceBuilder {
     fn is_source(&self) -> bool {
         true
     }
@@ -51,7 +51,7 @@ impl RuntimeBuilder for DemoCaptureSourceBuilder {
     }
 
     fn capture_presentation(&self, _state: &Value) -> Result<Option<CapturePresentation>, String> {
-        let channels = DemoCaptureSource::preview_channels();
+        let channels = SyntheticCaptureSource::preview_channels();
         let signals = (0..=8)
             .chain(std::iter::once(10))
             .map(|index| {
@@ -89,6 +89,6 @@ impl RuntimeBuilder for DemoCaptureSourceBuilder {
         _resolved: &ResolvedInputs,
         _ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
-        Ok(Box::new(DemoCaptureSource::new().with_name(name)))
+        Ok(Box::new(SyntheticCaptureSource::new().with_name(name)))
     }
 }

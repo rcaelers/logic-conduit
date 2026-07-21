@@ -11,7 +11,7 @@ use signal_processing::{
 };
 
 use super::buffered_fake::{BufferedFakeConfig, BufferedFakeProvider};
-use super::demo_capture_source::{DeterministicFakeConfig, DeterministicFakeProvider};
+use super::synthetic_capture_source::{DeterministicFakeConfig, DeterministicFakeProvider};
 
 const TIMEOUT: Duration = Duration::from_secs(2);
 

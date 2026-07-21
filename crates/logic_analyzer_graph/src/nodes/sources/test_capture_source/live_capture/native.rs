@@ -1,3 +1,5 @@
+//! Native deterministic acquisition provider adapter for tests.
+
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -17,7 +19,7 @@ use signal_processing::{
     TriggerPlacementCapability, TriggerPredicate, TriggerProgram, TriggerTimeoutAction,
 };
 
-use super::super::definition::DemoCaptureSourceState;
+use super::super::definition::TestCaptureSourceState;
 use crate::{CaptureGraphSourceFactory, LiveCaptureFeature, SimpleTriggerChannel};
 
 const CHUNK_SAMPLES: u64 = 4_096;
@@ -48,7 +50,7 @@ impl CaptureGraphSourceFactory for DemoCaptureGraphSourceFactory {
     }
 }
 
-struct DemoLiveCaptureFeature {
+struct TestLiveCaptureFeature {
     channels: Arc<[CaptureChannelId]>,
     channel_names: Arc<[String]>,
     simple_trigger_channels: Arc<[SimpleTriggerChannel]>,
@@ -58,7 +60,7 @@ struct DemoLiveCaptureFeature {
     config: DeterministicFakeConfig,
 }
 
-impl LiveCaptureFeature for DemoLiveCaptureFeature {
+impl LiveCaptureFeature for TestLiveCaptureFeature {
     fn channels(&self) -> &[CaptureChannelId] {
         &self.channels
     }
@@ -109,7 +111,7 @@ impl LiveCaptureFeature for DemoLiveCaptureFeature {
     }
 }
 
-impl DemoLiveCaptureFeature {
+impl TestLiveCaptureFeature {
     fn prepare_mode(
         self: Box<Self>,
         mut context: AcquisitionContext,
@@ -149,7 +151,7 @@ fn lower_trigger(program: Option<&TriggerProgram>) -> Result<Option<Deterministi
                                 .as_str()
                                 .strip_prefix("demo:")
                                 .and_then(|channel| channel.parse::<usize>().ok())
-                                .ok_or_else(|| format!("unknown demo capture channel {channel}"))?;
+                                .ok_or_else(|| format!("unknown test capture channel {channel}"))?;
                             Ok(DeterministicTriggerPredicate {
                                 channel,
                                 condition: *condition,
@@ -188,8 +190,8 @@ fn lower_trigger(program: Option<&TriggerProgram>) -> Result<Option<Deterministi
 }
 
 pub(crate) fn feature(state: &Value) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
-    let state = serde_json::from_value::<DemoCaptureSourceState>(state.clone())
-        .map_err(|error| format!("invalid demo capture state: {error}"))?;
+    let state = serde_json::from_value::<TestCaptureSourceState>(state.clone())
+        .map_err(|error| format!("invalid test capture state: {error}"))?;
     let channels: Arc<[CaptureChannelId]> = super::super::trigger::channel_ids().into();
     let channel_names: Arc<[String]> = (0..11)
         .map(|channel| format!("D{channel}"))
@@ -299,7 +301,7 @@ pub(crate) fn feature(state: &Value) -> Result<Option<Box<dyn LiveCaptureFeature
         capture_window_samples: Some(config.total_samples()),
         policy,
     };
-    Ok(Some(Box::new(DemoLiveCaptureFeature {
+    Ok(Some(Box::new(TestLiveCaptureFeature {
         channels,
         channel_names,
         simple_trigger_channels,
@@ -355,7 +357,7 @@ mod tests {
 
     #[test]
     fn advanced_program_lowers_and_executes_identically_after_state_json_reload() {
-        let mut state = DemoCaptureSourceState::default();
+        let mut state = TestCaptureSourceState::default();
         state.set_trigger_program(Some(advanced_program())).unwrap();
         let trigger = lower_trigger(state.trigger_program()).unwrap();
         let before = DeterministicFakeConfig::new(
@@ -368,7 +370,7 @@ mod tests {
         .unwrap()
         .first_trigger_sample();
 
-        let restored: DemoCaptureSourceState =
+        let restored: TestCaptureSourceState =
             serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
         let after = DeterministicFakeConfig::new(
             super::super::super::trigger::channel_ids(),

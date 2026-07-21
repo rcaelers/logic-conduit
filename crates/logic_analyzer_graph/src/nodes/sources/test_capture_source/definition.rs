@@ -1,4 +1,4 @@
-//! `Demo Capture Source` graph-node definition.
+//! Test-only capture-source graph-node definitions.
 
 use egui::Color32;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -9,18 +9,18 @@ use signal_processing::{SimpleTriggerCondition, TriggerProgram};
 
 use crate::nodes::registry::{COLOR_SOURCES, Signal};
 
-pub(crate) const DEMO_CAPTURE_CHANNELS: usize = 11;
+pub(crate) const TEST_CAPTURE_CHANNELS: usize = 11;
 const DEMO_CAPTURE_STATE_VERSION: u16 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct DemoCaptureSourceState {
+pub struct TestCaptureSourceState {
     schema_version: u16,
     trigger_program: Option<TriggerProgram>,
     #[serde(skip)]
     compatibility_warning: Option<String>,
 }
 
-impl Default for DemoCaptureSourceState {
+impl Default for TestCaptureSourceState {
     fn default() -> Self {
         Self {
             schema_version: DEMO_CAPTURE_STATE_VERSION,
@@ -30,7 +30,7 @@ impl Default for DemoCaptureSourceState {
     }
 }
 
-impl DemoCaptureSourceState {
+impl TestCaptureSourceState {
     pub fn trigger_program(&self) -> Option<&TriggerProgram> {
         self.trigger_program.as_ref()
     }
@@ -54,7 +54,7 @@ impl DemoCaptureSourceState {
     }
 }
 
-impl<'de> Deserialize<'de> for DemoCaptureSourceState {
+impl<'de> Deserialize<'de> for TestCaptureSourceState {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -62,13 +62,13 @@ impl<'de> Deserialize<'de> for DemoCaptureSourceState {
         let value = Value::deserialize(deserializer)?;
         let Some(object) = value.as_object() else {
             return Err(serde::de::Error::custom(
-                "demo capture state must be an object",
+                "test capture state must be an object",
             ));
         };
         if object.is_empty() {
             return Ok(Self {
                 compatibility_warning: Some(
-                    "Updated legacy demo capture settings; trigger inputs defaulted to Ignore"
+                    "Updated legacy test capture settings; trigger inputs defaulted to Ignore"
                         .to_owned(),
                 ),
                 ..Self::default()
@@ -82,7 +82,7 @@ impl<'de> Deserialize<'de> for DemoCaptureSourceState {
         let mut warnings = Vec::new();
         if saved_version != Some(DEMO_CAPTURE_STATE_VERSION) {
             warnings.push(format!(
-                "updated demo capture settings from schema {} to {}",
+                "updated test capture settings from schema {} to {}",
                 saved_version
                     .map(|version| version.to_string())
                     .unwrap_or_else(|| "unknown".to_owned()),
@@ -120,8 +120,8 @@ impl<'de> Deserialize<'de> for DemoCaptureSourceState {
             }
         } else {
             let saved_conditions = object.get("trigger_conditions").and_then(Value::as_array);
-            let mut trigger_conditions = Vec::with_capacity(DEMO_CAPTURE_CHANNELS);
-            for channel in 0..DEMO_CAPTURE_CHANNELS {
+            let mut trigger_conditions = Vec::with_capacity(TEST_CAPTURE_CHANNELS);
+            for channel in 0..TEST_CAPTURE_CHANNELS {
                 let condition = saved_conditions
                     .and_then(|conditions| conditions.get(channel))
                     .cloned()
@@ -136,10 +136,10 @@ impl<'de> Deserialize<'de> for DemoCaptureSourceState {
                     }
                 }
             }
-            if saved_conditions.is_some_and(|conditions| conditions.len() != DEMO_CAPTURE_CHANNELS)
+            if saved_conditions.is_some_and(|conditions| conditions.len() != TEST_CAPTURE_CHANNELS)
             {
                 warnings.push(format!(
-                    "normalized trigger input count to {DEMO_CAPTURE_CHANNELS}"
+                    "normalized trigger input count to {TEST_CAPTURE_CHANNELS}"
                 ));
             }
             super::trigger::program_from_conditions(&trigger_conditions)
@@ -156,25 +156,25 @@ impl<'de> Deserialize<'de> for DemoCaptureSourceState {
     }
 }
 
-pub struct DemoCaptureSource;
+pub struct TestCaptureSource;
 
-pub struct DemoLiveCaptureSource;
+pub struct TestLiveCaptureSource;
 
-fn outputs() -> Vec<OutputDef<DemoCaptureSourceState>> {
-    (0..DEMO_CAPTURE_CHANNELS)
+fn outputs() -> Vec<OutputDef<TestCaptureSourceState>> {
+    (0..TEST_CAPTURE_CHANNELS)
         .map(|channel| OutputDef::new::<Signal>(format!("Ch {channel}")).view_selectable(false))
         .collect()
 }
 
-fn badge(state: &DemoCaptureSourceState) -> Option<NodeBadge> {
+fn badge(state: &TestCaptureSourceState) -> Option<NodeBadge> {
     state.compatibility_warning.as_ref().map(NodeBadge::warning)
 }
 
-impl NodeDef for DemoCaptureSource {
-    type State = DemoCaptureSourceState;
+impl NodeDef for TestCaptureSource {
+    type State = TestCaptureSourceState;
 
     fn name() -> &'static str {
-        "Demo Capture Source"
+        "Test Capture Source"
     }
 
     fn category() -> &'static str {
@@ -194,7 +194,7 @@ impl NodeDef for DemoCaptureSource {
     }
 
     fn state() -> Self::State {
-        DemoCaptureSourceState::default()
+        TestCaptureSourceState::default()
     }
 
     fn badge(state: &Self::State) -> Option<NodeBadge> {
@@ -202,11 +202,11 @@ impl NodeDef for DemoCaptureSource {
     }
 }
 
-impl NodeDef for DemoLiveCaptureSource {
-    type State = DemoCaptureSourceState;
+impl NodeDef for TestLiveCaptureSource {
+    type State = TestCaptureSourceState;
 
     fn name() -> &'static str {
-        "Demo Live Capture Source"
+        "Test Live Capture Source"
     }
 
     fn category() -> &'static str {
@@ -226,7 +226,7 @@ impl NodeDef for DemoLiveCaptureSource {
     }
 
     fn state() -> Self::State {
-        DemoCaptureSourceState::default()
+        TestCaptureSourceState::default()
     }
 
     fn badge(state: &Self::State) -> Option<NodeBadge> {
@@ -240,10 +240,10 @@ mod tests {
     use signal_processing::SimpleTriggerCondition::{Falling, High, Ignore};
     use signal_processing::{SimpleTriggerCondition, TriggerPredicate, TriggerProgram};
 
-    use super::{DEMO_CAPTURE_CHANNELS, DemoCaptureSource, DemoCaptureSourceState};
+    use super::{TEST_CAPTURE_CHANNELS, TestCaptureSource, TestCaptureSourceState};
 
     fn conditions(program: Option<&TriggerProgram>) -> Vec<SimpleTriggerCondition> {
-        let mut conditions = [Ignore; DEMO_CAPTURE_CHANNELS];
+        let mut conditions = [Ignore; TEST_CAPTURE_CHANNELS];
         if let Some(stage) = program.and_then(|program| program.stages.first()) {
             for predicate in &stage.predicates {
                 let TriggerPredicate::Digital { channel, condition } = predicate else {
@@ -253,7 +253,7 @@ mod tests {
                     .as_str()
                     .strip_prefix("demo:")
                     .and_then(|value| value.parse::<usize>().ok())
-                    .filter(|index| *index < DEMO_CAPTURE_CHANNELS)
+                    .filter(|index| *index < TEST_CAPTURE_CHANNELS)
                 {
                     conditions[index] = *condition;
                 }
@@ -264,24 +264,24 @@ mod tests {
 
     #[test]
     fn current_state_round_trips_every_trigger_condition_without_a_warning() {
-        let mut state = DemoCaptureSourceState::default();
+        let mut state = TestCaptureSourceState::default();
         state.set_trigger_condition(2, High).unwrap();
         state.set_trigger_condition(9, Falling).unwrap();
         let saved = serde_json::to_value(&state).unwrap();
-        let restored: DemoCaptureSourceState = serde_json::from_value(saved).unwrap();
+        let restored: TestCaptureSourceState = serde_json::from_value(saved).unwrap();
         assert_eq!(restored, state);
-        assert!(DemoCaptureSource::badge(&restored).is_none());
+        assert!(TestCaptureSource::badge(&restored).is_none());
     }
 
     #[test]
     fn legacy_empty_state_migrates_explicitly_and_reports_a_warning() {
-        let restored: DemoCaptureSourceState =
+        let restored: TestCaptureSourceState =
             serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(
             conditions(restored.trigger_program()),
-            [Ignore; DEMO_CAPTURE_CHANNELS]
+            [Ignore; TEST_CAPTURE_CHANNELS]
         );
-        let warning = DemoCaptureSource::badge(&restored).unwrap();
+        let warning = TestCaptureSource::badge(&restored).unwrap();
         assert!(warning.text.contains("legacy"));
 
         let saved = serde_json::to_value(restored).unwrap();
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn malformed_trigger_entries_are_normalized_with_a_diagnostic() {
-        let restored: DemoCaptureSourceState = serde_json::from_value(serde_json::json!({
+        let restored: TestCaptureSourceState = serde_json::from_value(serde_json::json!({
             "schema_version": 0,
             "trigger_conditions": ["high", "future_condition"]
         }))
@@ -300,34 +300,34 @@ mod tests {
         let restored_conditions = conditions(restored.trigger_program());
         assert_eq!(restored_conditions[0], High);
         assert_eq!(restored_conditions[1], Ignore);
-        let warning = DemoCaptureSource::badge(&restored).unwrap();
+        let warning = TestCaptureSource::badge(&restored).unwrap();
         assert!(warning.text.contains("trigger input 1"));
         assert!(warning.text.contains("schema 0"));
     }
 
     #[test]
     fn incompatible_saved_program_resets_visibly_instead_of_disappearing_silently() {
-        let mut state = DemoCaptureSourceState::default();
+        let mut state = TestCaptureSourceState::default();
         state.set_trigger_condition(4, Falling).unwrap();
         let mut saved = serde_json::to_value(state).unwrap();
         saved["trigger_program"]["schema_revision"] = serde_json::json!(99);
 
-        let restored: DemoCaptureSourceState = serde_json::from_value(saved).unwrap();
+        let restored: TestCaptureSourceState = serde_json::from_value(saved).unwrap();
 
         assert!(restored.trigger_program().is_none());
-        let warning = DemoCaptureSource::badge(&restored).unwrap();
+        let warning = TestCaptureSource::badge(&restored).unwrap();
         assert!(warning.text.contains("reset incompatible trigger program"));
     }
 
     #[test]
     fn malformed_saved_program_resets_with_a_visible_warning() {
-        let mut saved = serde_json::to_value(DemoCaptureSourceState::default()).unwrap();
+        let mut saved = serde_json::to_value(TestCaptureSourceState::default()).unwrap();
         saved["trigger_program"] = serde_json::json!({ "stages": "not-an-array" });
 
-        let restored: DemoCaptureSourceState = serde_json::from_value(saved).unwrap();
+        let restored: TestCaptureSourceState = serde_json::from_value(saved).unwrap();
 
         assert!(restored.trigger_program().is_none());
-        let warning = DemoCaptureSource::badge(&restored).unwrap();
+        let warning = TestCaptureSource::badge(&restored).unwrap();
         assert!(warning.text.contains("reset malformed trigger program"));
     }
 }

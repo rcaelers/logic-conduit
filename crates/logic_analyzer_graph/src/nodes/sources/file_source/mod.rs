@@ -1,7 +1,6 @@
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", path = "builder_wasm.rs")]
 mod builder;
 mod definition;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use builder::FileSourceBuilder;
 pub use definition::{DslFileSource, DslFileSourceState};

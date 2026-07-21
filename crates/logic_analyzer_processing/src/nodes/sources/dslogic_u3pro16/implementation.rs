@@ -17,7 +17,10 @@ use signal_processing::TriggerCountMode;
 use super::super::logic_analyzer::{
     CaptureMode, ClockEdge, ClockSource, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
     LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
-    LogicEncodingRequest, LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic,
+    LogicEncodingRequest,
+};
+use super::super::logic_trigger::{
+    LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic,
 };
 
 const VID: u16 = 0x2a0e;

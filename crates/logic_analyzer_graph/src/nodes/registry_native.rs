@@ -1,19 +1,24 @@
 use std::collections::HashMap;
 
-use node_graph::{NodeDef, NodeTypeRegistry};
+#[cfg(any(test, feature = "test-support"))]
+use node_graph::NodeDef;
+use node_graph::NodeTypeRegistry;
 
 use super::sinks::{
     CsvWriter, CsvWriterBuilder, FileWriter, FileWriterBuilder, TextFileWriter,
     TextFileWriterBuilder,
 };
 use super::sources::{
-    DemoLiveCaptureSource, DemoLiveCaptureSourceBuilder, DsLogicU3Pro16, DsLogicU3Pro16Builder,
-    DslFileSource, FileSourceBuilder, SigrokFileSource, SigrokFileSourceBuilder,
+    DsLogicU3Pro16, DsLogicU3Pro16Builder, DslFileSource, FileSourceBuilder, SigrokFileSource,
+    SigrokFileSourceBuilder,
 };
+#[cfg(any(test, feature = "test-support"))]
+use super::sources::{TestLiveCaptureSource, TestLiveCaptureSourceBuilder};
 use crate::RuntimeBuilder;
 
 pub(crate) fn register_nodes(registry: &mut NodeTypeRegistry) {
-    registry.register::<DemoLiveCaptureSource>();
+    #[cfg(any(test, feature = "test-support"))]
+    registry.register::<TestLiveCaptureSource>();
     registry.register::<DslFileSource>();
     registry.register::<DsLogicU3Pro16>();
     registry.register::<SigrokFileSource>();
@@ -23,9 +28,10 @@ pub(crate) fn register_nodes(registry: &mut NodeTypeRegistry) {
 }
 
 pub(crate) fn register_builders(builders: &mut HashMap<String, Box<dyn RuntimeBuilder>>) {
+    #[cfg(any(test, feature = "test-support"))]
     builders.insert(
-        DemoLiveCaptureSource::name().into(),
-        Box::new(DemoLiveCaptureSourceBuilder),
+        TestLiveCaptureSource::name().into(),
+        Box::new(TestLiveCaptureSourceBuilder),
     );
     builders.insert("DSL File Source".into(), Box::new(FileSourceBuilder));
     builders.insert("DSLogic U3Pro16".into(), Box::new(DsLogicU3Pro16Builder));

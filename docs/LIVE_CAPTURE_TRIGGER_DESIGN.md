@@ -81,10 +81,8 @@ The UI-independent live-capture foundation is also present:
   layout and timebase before provider ownership is consumed; the same factory creates independent
   live and finalized-session cursor sources, and generic code does not infer ports from node names,
   channel labels, or protocols;
-- the native Demo Capture Source exposes the deterministic provider through this development
-  feature, persists one portable condition per input with explicit legacy-state migration and a
-  visible compatibility warning, while its complete wasm feature module reports no live
-  capability;
+- feature-gated test capture sources expose the deterministic provider through the same contracts
+  without contributing node definitions or builders to production catalogs;
 - the native application capture coordinator prepares, starts, supervises, stops, aborts,
   force-triggers, applies finite completion and trigger-timeout actions, and finalizes capture off
   the UI thread, retaining the previous completed temporary session until a new session completes
@@ -160,8 +158,8 @@ The UI-independent live-capture foundation is also present:
   of newly summarized chunks.
 
 The native fakes, U3Pro16 buffered and streaming providers, and application coordinator are
-selected as complete platform modules. The streaming fake is reachable through the existing
-development/demo node and both fakes are used by conformance composition. Native capture sessions
+selected as complete platform modules. Feature-gated test sources and both fakes are used by
+conformance composition. Native capture sessions
 use checksummed commit records, interruption-safe bounded reclamation, explicit pinning, and a
 single replaceable working repository. Finalized captures expose pinned, cancellable background
 save without routing format logic through the UI. The existing `LogicAnalyzerSource` direct graph-

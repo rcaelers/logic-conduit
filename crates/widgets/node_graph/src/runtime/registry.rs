@@ -672,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn output_view_selectability_is_definition_owned_across_restore() {
+    fn output_presentation_is_definition_owned_across_restore() {
         let runtime = create_node::<IntSourceNode>(NodeId(0), Pos2::ZERO);
         let mut node = runtime.node;
         assert!(!node.outputs[0].view_selectable);

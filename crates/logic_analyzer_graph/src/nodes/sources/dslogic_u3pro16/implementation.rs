@@ -11,7 +11,7 @@ use signal_processing::{
 };
 
 use super::definition::{U3Pro16State, capture_duration_limit_ns, channel_rate_validation_error};
-use super::trigger;
+use super::trigger_lowering;
 use crate::{LiveCaptureEdit, parse_state};
 
 fn selected_sample_rate_hz(state: &U3Pro16State) -> Result<u64, String> {
@@ -74,7 +74,7 @@ pub(crate) fn capture_config(state: &U3Pro16State) -> Result<LogicCaptureConfig,
             .unwrap_or(50),
         threshold_volts: Some(state.threshold.value),
         trigger: if state.recording_start.selected() == "Trigger" {
-            trigger::lower_program(state)?
+            trigger_lowering::lower_program(state)?
         } else {
             LogicTrigger::default()
         },

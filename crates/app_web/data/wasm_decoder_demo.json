@@ -455,11 +455,28 @@
       },
       "selected": false,
       "state": {
-        "schema_version": 2,
-        "trigger_program": null
+        "channels": {
+          "max": 32,
+          "min": 1,
+          "value": 11
+        },
+        "demo_data": true,
+        "file": {
+          "dialog_title": "Select sigrok capture",
+          "filters": [
+            {
+              "extensions": [
+                "sr"
+              ],
+              "name": "Sigrok captures"
+            }
+          ],
+          "save": false,
+          "value": ""
+        }
       },
-      "title": "Demo",
-      "type_name": "Demo Capture Source"
+      "title": "Sigrok File Source",
+      "type_name": "Sigrok File Source"
     },
     "1": {
       "collapsed": false,

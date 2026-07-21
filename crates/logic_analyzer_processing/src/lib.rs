@@ -10,8 +10,11 @@ pub use nodes::logic::{
     BufferNode, GateOp, LogicGate, MatchOp, SrLatch, TextFormatter, TriggerAt, TriggerCounter,
     WordMatcher,
 };
-pub use nodes::sinks::TgckRecorder;
-pub use nodes::sources::{DemoCaptureSource, UartDemoSource};
+pub use nodes::sinks::{DiscardTextWriter, DiscardWordWriter, TgckRecorder};
+pub use nodes::sources::{
+    LogicTrigger, LogicTriggerStage, SyntheticCaptureSource, SyntheticUartSource, TriggerCondition,
+    TriggerLogic,
+};
 
 std::cfg_select! {
     target_arch = "wasm32" => {}
@@ -37,10 +40,10 @@ std::cfg_select! {
             DslChunkedCaptureReader,
             DslFileCaptureDataSource, DslFileSource, LinkSpeed, LogicAnalyzer,
             LogicAnalyzerError, LogicAnalyzerInfo, LogicAnalyzerResult, LogicAnalyzerSource,
-            LogicCaptureConfig, LogicChunk, LogicEncoding, LogicEncodingRequest, LogicTrigger,
-            LogicTriggerStage, RusbTransport, SigrokCaptureReader, SigrokChunkedCaptureReader,
-            SigrokFileCaptureDataSource, SigrokFileSource, TriggerCondition, TriggerLogic,
-            UsbError, UsbTransport, open_dsl_chunked_capture, open_dsl_chunked_capture_with_progress,
+            LogicCaptureConfig, LogicChunk, LogicEncoding, LogicEncodingRequest, RusbTransport,
+            SigrokCaptureReader, SigrokChunkedCaptureReader, SigrokFileCaptureDataSource,
+            SigrokFileSource, UsbError, UsbTransport, open_dsl_chunked_capture,
+            open_dsl_chunked_capture_with_progress,
             open_sigrok_chunked_capture, u3pro16_buffered_plan, u3pro16_streaming_plan,
         };
         pub use nodes::sinks::{

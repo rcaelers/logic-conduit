@@ -29,15 +29,16 @@ pub(crate) use registry::test_graphs_tests;
 pub use registry::{
     Number, Signal, Text, TextOpenPath, TextSavePath, Trigger, Words, build_registry,
 };
-#[cfg(not(target_arch = "wasm32"))]
-pub use sinks::{CsvWriter, CsvWriterState, TextFileWriter};
-pub use sinks::{FileWriter, FileWriterState, TgckRecorder, Viewer, ViewerState};
-#[cfg(not(target_arch = "wasm32"))]
-pub use sources::{
-    CaptureDurationValue, DsLogicU3Pro16, SigrokFileSource, SigrokFileSourceState, U3Pro16Metadata,
-    U3Pro16State,
+pub use sinks::{
+    CsvWriter, CsvWriterState, FileWriter, FileWriterState, TextFileWriter, TgckRecorder, Viewer,
+    ViewerState,
 };
 pub use sources::{
-    DemoCaptureSource, DemoCaptureSourceState, DemoLiveCaptureSource, DslFileSource,
-    DslFileSourceState, UartDemoSource, UartDemoSourceState,
+    CaptureDurationValue, DsLogicU3Pro16, DslFileSource, DslFileSourceState, SigrokFileSource,
+    SigrokFileSourceState, U3Pro16Metadata, U3Pro16State,
+};
+#[cfg(any(test, feature = "test-support"))]
+pub use sources::{
+    TestCaptureSource, TestCaptureSourceState, TestLiveCaptureSource, TestUartSource,
+    TestUartSourceState,
 };

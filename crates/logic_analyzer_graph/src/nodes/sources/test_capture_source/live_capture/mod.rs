@@ -1,3 +1,5 @@
+//! Test-only live-capture platform facade.
+
 mod implementation;
 
 #[path = "native.rs"]

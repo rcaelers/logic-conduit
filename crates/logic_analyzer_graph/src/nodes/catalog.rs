@@ -8,7 +8,8 @@ use super::logic::{
     WordMatcherBuilder,
 };
 use super::sinks::{TgckRecorderBuilder, ViewerBuilder};
-use super::sources::{DemoCaptureSourceBuilder, UartDemoSourceBuilder};
+#[cfg(any(test, feature = "test-support"))]
+use super::sources::{TestCaptureSourceBuilder, TestUartSourceBuilder};
 use crate::RuntimeBuilder;
 
 pub(crate) fn standard_builders() -> HashMap<String, Box<dyn RuntimeBuilder>> {
@@ -16,11 +17,14 @@ pub(crate) fn standard_builders() -> HashMap<String, Box<dyn RuntimeBuilder>> {
 
     super::registry_platform::register_builders(&mut builders);
 
-    builders.insert(
-        "Demo Capture Source".into(),
-        Box::new(DemoCaptureSourceBuilder),
-    );
-    builders.insert("UART Demo Source".into(), Box::new(UartDemoSourceBuilder));
+    #[cfg(any(test, feature = "test-support"))]
+    {
+        builders.insert(
+            "Test Capture Source".into(),
+            Box::new(TestCaptureSourceBuilder),
+        );
+        builders.insert("Test UART Source".into(), Box::new(TestUartSourceBuilder));
+    }
     builders.insert("SPI Decoder".into(), Box::new(SpiDecoderBuilder));
     builders.insert("UART Decoder".into(), Box::new(UartDecoderBuilder));
     builders.insert("Binary Decoder".into(), Box::new(BinaryDecoderBuilder));

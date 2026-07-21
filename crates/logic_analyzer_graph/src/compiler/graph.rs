@@ -2181,11 +2181,11 @@ mod tests {
         }
 
         fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.accepted_kinds(socket, state)
+            crate::nodes::sources::TestCaptureSourceBuilder.accepted_kinds(socket, state)
         }
 
         fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.offered_kinds(socket, state)
+            crate::nodes::sources::TestCaptureSourceBuilder.offered_kinds(socket, state)
         }
 
         fn input_port(
@@ -2195,7 +2195,7 @@ mod tests {
             state: &Value,
             kind: PortKind,
         ) -> Option<String> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.input_port(
+            crate::nodes::sources::TestCaptureSourceBuilder.input_port(
                 socket,
                 member_index,
                 state,
@@ -2204,11 +2204,11 @@ mod tests {
         }
 
         fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.output_port(socket, state, kind)
+            crate::nodes::sources::TestCaptureSourceBuilder.output_port(socket, state, kind)
         }
 
         fn viewer_channel_origin(&self, socket: &Socket, state: &Value) -> Option<usize> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.viewer_channel_origin(socket, state)
+            crate::nodes::sources::TestCaptureSourceBuilder.viewer_channel_origin(socket, state)
         }
 
         fn live_capture_feature(
@@ -2247,7 +2247,7 @@ mod tests {
         }
 
         fn input_required(&self, socket: &Socket, state: &Value) -> bool {
-            crate::nodes::sources::DemoCaptureSourceBuilder.input_required(socket, state)
+            crate::nodes::sources::TestCaptureSourceBuilder.input_required(socket, state)
         }
 
         fn build(
@@ -2257,7 +2257,7 @@ mod tests {
             resolved: &ResolvedInputs,
             ctx: &mut CompileCtx,
         ) -> Result<Box<dyn ProcessNode>, String> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.build(name, state, resolved, ctx)
+            crate::nodes::sources::TestCaptureSourceBuilder.build(name, state, resolved, ctx)
         }
     }
 
@@ -2267,11 +2267,11 @@ mod tests {
         }
 
         fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.accepted_kinds(socket, state)
+            crate::nodes::sources::TestCaptureSourceBuilder.accepted_kinds(socket, state)
         }
 
         fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.offered_kinds(socket, state)
+            crate::nodes::sources::TestCaptureSourceBuilder.offered_kinds(socket, state)
         }
 
         fn input_port(
@@ -2281,7 +2281,7 @@ mod tests {
             state: &Value,
             kind: PortKind,
         ) -> Option<String> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.input_port(
+            crate::nodes::sources::TestCaptureSourceBuilder.input_port(
                 socket,
                 member_index,
                 state,
@@ -2290,11 +2290,11 @@ mod tests {
         }
 
         fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.output_port(socket, state, kind)
+            crate::nodes::sources::TestCaptureSourceBuilder.output_port(socket, state, kind)
         }
 
         fn viewer_channel_origin(&self, socket: &Socket, state: &Value) -> Option<usize> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.viewer_channel_origin(socket, state)
+            crate::nodes::sources::TestCaptureSourceBuilder.viewer_channel_origin(socket, state)
         }
 
         fn live_capture_feature(
@@ -2333,7 +2333,7 @@ mod tests {
         }
 
         fn input_required(&self, socket: &Socket, state: &Value) -> bool {
-            crate::nodes::sources::DemoCaptureSourceBuilder.input_required(socket, state)
+            crate::nodes::sources::TestCaptureSourceBuilder.input_required(socket, state)
         }
 
         fn build(
@@ -2343,7 +2343,7 @@ mod tests {
             resolved: &ResolvedInputs,
             ctx: &mut CompileCtx,
         ) -> Result<Box<dyn ProcessNode>, String> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.build(name, state, resolved, ctx)
+            crate::nodes::sources::TestCaptureSourceBuilder.build(name, state, resolved, ctx)
         }
     }
 
@@ -2353,11 +2353,11 @@ mod tests {
         }
 
         fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.accepted_kinds(socket, state)
+            crate::nodes::sources::TestCaptureSourceBuilder.accepted_kinds(socket, state)
         }
 
         fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.offered_kinds(socket, state)
+            crate::nodes::sources::TestCaptureSourceBuilder.offered_kinds(socket, state)
         }
 
         fn input_port(
@@ -2367,7 +2367,7 @@ mod tests {
             state: &Value,
             kind: PortKind,
         ) -> Option<String> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.input_port(
+            crate::nodes::sources::TestCaptureSourceBuilder.input_port(
                 socket,
                 member_index,
                 state,
@@ -2376,11 +2376,11 @@ mod tests {
         }
 
         fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.output_port(socket, state, kind)
+            crate::nodes::sources::TestCaptureSourceBuilder.output_port(socket, state, kind)
         }
 
         fn viewer_channel_origin(&self, socket: &Socket, state: &Value) -> Option<usize> {
-            crate::nodes::sources::DemoCaptureSourceBuilder.viewer_channel_origin(socket, state)
+            crate::nodes::sources::TestCaptureSourceBuilder.viewer_channel_origin(socket, state)
         }
 
         fn live_capture_feature(
@@ -2392,7 +2392,7 @@ mod tests {
         }
 
         fn input_required(&self, socket: &Socket, state: &Value) -> bool {
-            crate::nodes::sources::DemoCaptureSourceBuilder.input_required(socket, state)
+            crate::nodes::sources::TestCaptureSourceBuilder.input_required(socket, state)
         }
 
         fn build(
@@ -2669,7 +2669,7 @@ mod tests {
         let provider_build_calls = Arc::new(AtomicUsize::new(0));
         let mut reference_registry = BuilderRegistry::standard();
         reference_registry.insert(
-            nodes::DemoCaptureSource::name(),
+            nodes::TestCaptureSource::name(),
             Box::new(InstrumentedCaptureBuilder {
                 discovery_calls: Arc::clone(&discovery_calls),
                 provider_build_calls: Arc::clone(&provider_build_calls),
@@ -2850,7 +2850,7 @@ mod tests {
     fn development_capture_feature_is_discovered_without_node_name_matching() {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let source = widget
-            .add_node_at(nodes::DemoLiveCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(nodes::TestLiveCaptureSource::name(), Pos2::ZERO)
             .unwrap();
         let feature = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
             .unwrap()
@@ -2954,12 +2954,12 @@ mod tests {
         let mut node_types = nodes::build_registry();
         let mut builders = BuilderRegistry::standard();
         crate::PluginContext::new(&mut node_types, &mut builders).register_builder(
-            nodes::DemoCaptureSource::name(),
+            nodes::TestCaptureSource::name(),
             Box::new(TriggerOnlyPluginBuilder),
         );
         let mut widget = NodeGraphWidget::new(node_types);
         let source = widget
-            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(nodes::TestCaptureSource::name(), Pos2::ZERO)
             .unwrap();
 
         let configuration = discover_trigger_configuration(widget.graph(), &builders)
@@ -2978,11 +2978,11 @@ mod tests {
     }
 
     #[test]
-    fn advanced_demo_graph_edit_executes_identically_after_json_reload() {
+    fn advanced_test_graph_edit_executes_identically_after_json_reload() {
         let builders = BuilderRegistry::standard();
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let source = widget
-            .add_node_at(nodes::DemoLiveCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(nodes::TestLiveCaptureSource::name(), Pos2::ZERO)
             .unwrap();
         let configuration = discover_trigger_configuration(widget.graph(), &builders)
             .unwrap()
@@ -3060,7 +3060,7 @@ mod tests {
     fn legacy_development_capture_state_migrates_with_a_visible_warning() {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let source = widget
-            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(nodes::TestCaptureSource::name(), Pos2::ZERO)
             .unwrap();
         let mut graph = widget.graph().clone();
         graph.nodes.get_mut(&source).unwrap().state = serde_json::json!({});
@@ -3078,10 +3078,10 @@ mod tests {
     fn discovery_rejects_multiple_live_capture_features() {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let first = widget
-            .add_node_at(nodes::DemoLiveCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(nodes::TestLiveCaptureSource::name(), Pos2::ZERO)
             .unwrap();
         let second = widget
-            .add_node_at(nodes::DemoLiveCaptureSource::name(), Pos2::new(100.0, 0.0))
+            .add_node_at(nodes::TestLiveCaptureSource::name(), Pos2::new(100.0, 0.0))
             .unwrap();
 
         let error = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
@@ -3096,7 +3096,7 @@ mod tests {
         let mut widget = uart_demo_widget();
         widget
             .add_node_at(
-                nodes::DemoLiveCaptureSource::name(),
+                nodes::TestLiveCaptureSource::name(),
                 Pos2::new(1_000.0, 0.0),
             )
             .unwrap();
@@ -3140,8 +3140,8 @@ mod tests {
     fn source_only_widget() -> NodeGraphWidget {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         widget
-            .add_node_at(nodes::UartDemoSource::name(), egui::Pos2::ZERO)
-            .expect("UART Demo Source is registered");
+            .add_node_at(nodes::TestUartSource::name(), egui::Pos2::ZERO)
+            .expect("Test UART Source is registered");
         widget
     }
 
@@ -3472,7 +3472,7 @@ mod tests {
     }
 
     #[test]
-    fn uart_demo_graph_lowers() {
+    fn test_uart_graph_lowers() {
         let widget = uart_demo_widget();
         let compiled = lower(widget.graph(), &BuilderRegistry::standard())
             .unwrap_or_else(|errors| panic!("lower failed: {errors:?}"));
@@ -3484,7 +3484,7 @@ mod tests {
             compiled
                 .nodes
                 .iter()
-                .any(|n| n.builder == "UART Demo Source")
+                .any(|n| n.builder == "Test UART Source")
         );
         assert!(compiled.nodes.iter().any(|n| n.builder == "UART Decoder"));
 
@@ -3533,7 +3533,7 @@ mod tests {
                 .1
         };
 
-        assert_eq!(items_for("Demo Capture Source"), 60_000);
+        assert_eq!(items_for("Sigrok File Source"), 60_000);
         assert_eq!(items_for("SPI Decoder"), 60);
         assert_eq!(items_for("Binary Decoder"), 96);
 
@@ -3678,7 +3678,7 @@ mod tests {
     #[test]
     fn duplicate_and_renamed_decoders_keep_distinct_explicit_groups() {
         let mut widget = uart_demo_widget();
-        let source = node_by_def(&widget, "UART Demo Source");
+        let source = node_by_def(&widget, "Test UART Source");
         let first_decoder = node_by_def(&widget, "UART Decoder");
         let viewer = node_by_def(&widget, "Viewer");
         let second_decoder = widget
@@ -3838,12 +3838,12 @@ mod tests {
         let mut node_types = nodes::build_registry();
         let mut builders = BuilderRegistry::standard();
         crate::PluginContext::new(&mut node_types, &mut builders).register_builder(
-            nodes::DemoCaptureSource::name(),
+            nodes::TestCaptureSource::name(),
             Box::new(BufferedPluginBuilder),
         );
         let mut widget = NodeGraphWidget::new(node_types);
         let source = widget
-            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(nodes::TestCaptureSource::name(), Pos2::ZERO)
             .unwrap();
 
         let feature = discover_live_capture_feature(widget.graph(), &builders)
@@ -3877,12 +3877,12 @@ mod tests {
         let mut node_types = nodes::build_registry();
         let mut builders = BuilderRegistry::standard();
         crate::PluginContext::new(&mut node_types, &mut builders).register_builder(
-            nodes::DemoCaptureSource::name(),
+            nodes::TestCaptureSource::name(),
             Box::new(BufferedPluginBuilder),
         );
         let mut widget = NodeGraphWidget::new(node_types);
         let source = widget
-            .add_node_at(nodes::DemoCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(nodes::TestCaptureSource::name(), Pos2::ZERO)
             .unwrap();
         let program = TriggerProgram::new(
             TriggerIdentifier::new("plugin.vendor-neutral.engine").unwrap(),
@@ -4056,7 +4056,7 @@ mod tests {
 
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let source = widget
-            .add_node_at(nodes::UartDemoSource::name(), Pos2::new(0.0, 0.0))
+            .add_node_at(nodes::TestUartSource::name(), Pos2::new(0.0, 0.0))
             .unwrap();
         let buf = widget
             .add_node_at(nodes::Buffer::name(), Pos2::new(200.0, 0.0))
@@ -4065,7 +4065,7 @@ mod tests {
             .add_node_at(nodes::Viewer::name(), Pos2::new(400.0, 0.0))
             .unwrap();
 
-        // UartDemoSource offers `Sample` ("Signal"); set the buffer to
+        // TestUartSource offers `Sample` ("Signal"); set the buffer to
         // "Trigger" — no common kind on the source -> buffer edge, must be
         // a compile error (regardless of what the buffer -> viewer edge
         // downstream negotiates to).
@@ -4106,7 +4106,7 @@ mod tests {
 
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let source = widget
-            .add_node_at(nodes::UartDemoSource::name(), Pos2::new(0.0, 0.0))
+            .add_node_at(nodes::TestUartSource::name(), Pos2::new(0.0, 0.0))
             .unwrap();
         let buf = widget
             .add_node_at(nodes::Buffer::name(), Pos2::new(200.0, 0.0))
@@ -4155,7 +4155,7 @@ mod tests {
 
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let source = widget
-            .add_node_at("UART Demo Source", Pos2::new(0.0, 0.0))
+            .add_node_at("Test UART Source", Pos2::new(0.0, 0.0))
             .unwrap();
         let matcher = widget
             .add_node_at("Word Matcher", Pos2::new(200.0, 0.0))
@@ -4206,7 +4206,7 @@ mod tests {
         // error should point at the source, and its downstream branch
         // should vanish from the compiled graph rather than dangling.
         let mut widget = uart_demo_widget();
-        let source = node_by_def(&widget, "UART Demo Source");
+        let source = node_by_def(&widget, "Test UART Source");
         widget.graph_mut().nodes.get_mut(&source).unwrap().muted = true;
 
         let errors = lower(widget.graph(), &BuilderRegistry::standard()).unwrap_err();

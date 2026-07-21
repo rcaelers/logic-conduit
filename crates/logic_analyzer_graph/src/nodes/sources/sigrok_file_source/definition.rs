@@ -11,6 +11,8 @@ use crate::nodes::registry::{COLOR_SOURCES, Signal, TextOpenPath};
 pub struct SigrokFileSourceState {
     pub file: FileValue,
     pub channels: IntValue,
+    #[serde(default)]
+    pub demo_data: bool,
 }
 
 pub struct SigrokFileSource;
@@ -41,6 +43,7 @@ impl NodeDef for SigrokFileSource {
         SigrokFileSourceState {
             file: FileValue::with_filter("", "Select sigrok capture", "Sigrok captures", &["sr"]),
             channels: IntValue::new(8, 1, 32),
+            demo_data: false,
         }
     }
     fn on_update(state: &mut Self::State, _inputs: &mut [Socket], outputs: &mut [Socket]) {

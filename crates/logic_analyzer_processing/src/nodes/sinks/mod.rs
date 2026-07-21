@@ -1,5 +1,6 @@
 //! Sink processing nodes that persist data.
 
+mod discard_writer;
 mod tgck_recorder;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -13,6 +14,7 @@ mod text_file_writer;
 pub use binary_file_writer::{BinaryFileWriter, WriteWidth};
 #[cfg(not(target_arch = "wasm32"))]
 pub use csv_word_writer::{CsvValueFormat, CsvWordWriter};
+pub use discard_writer::{DiscardTextWriter, DiscardWordWriter};
 #[cfg(not(target_arch = "wasm32"))]
 pub use text_file_writer::TextFileWriter;
 pub use tgck_recorder::{TgckRecord, TgckRecorder};

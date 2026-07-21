@@ -95,7 +95,7 @@ traces, decoded-word boxes, and trigger markers.
 
 | Category | Nodes |
 |---|---|
-| Sources | DSL File Source · DSLogic U3Pro16 (live USB capture) · UART Demo Source |
+| Sources | DSL File Source · Sigrok File Source · DSLogic U3Pro16 (live USB capture) |
 | Decoders | SPI Decoder · UART Decoder · Binary Decoder (parallel bus, SDR/DDR) · I2C Decoder (placeholder — editable but not yet runnable) |
 | Logic | Word Matcher · SR Flip-Flop · Logic Gate (NOT/AND/OR/XOR/…) · Counter · String Formatter · Buffer |
 | Sinks | File Writer · Text File Writer · TGCK Recorder · Viewer |

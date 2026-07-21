@@ -1,14 +1,16 @@
+//! Test-capture state editing.
+
 use serde_json::Value;
 
-use super::definition::DemoCaptureSourceState;
+use super::definition::TestCaptureSourceState;
 use crate::LiveCaptureEdit;
 
 pub(crate) fn apply_live_capture_edit(
     state: &Value,
     edit: &LiveCaptureEdit,
 ) -> Result<Value, String> {
-    let mut state = serde_json::from_value::<DemoCaptureSourceState>(state.clone())
-        .map_err(|error| format!("invalid demo capture state: {error}"))?;
+    let mut state = serde_json::from_value::<TestCaptureSourceState>(state.clone())
+        .map_err(|error| format!("invalid test capture state: {error}"))?;
     match edit {
         LiveCaptureEdit::SetSimpleTrigger {
             channel_id,
@@ -18,7 +20,7 @@ pub(crate) fn apply_live_capture_edit(
                 .as_str()
                 .strip_prefix("demo:")
                 .and_then(|channel| channel.parse::<usize>().ok())
-                .ok_or_else(|| format!("unknown demo capture channel {channel_id}"))?;
+                .ok_or_else(|| format!("unknown test capture channel {channel_id}"))?;
             state.set_trigger_condition(channel, *condition)?;
         }
         LiveCaptureEdit::SetTriggerProgram { program } => {

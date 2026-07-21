@@ -17,4 +17,4 @@ pub use sources::{
     UsbTransport, open_dsl_chunked_capture, open_dsl_chunked_capture_with_progress,
     open_sigrok_chunked_capture, u3pro16_buffered_plan, u3pro16_streaming_plan,
 };
-pub use sources::{DemoCaptureSource, UartDemoSource};
+pub use sources::{SyntheticCaptureSource, SyntheticUartSource};

@@ -1,3 +1,5 @@
+//! Shared test live-capture feature implementation.
+
 use serde_json::Value;
 
 use crate::LiveCaptureFeature;

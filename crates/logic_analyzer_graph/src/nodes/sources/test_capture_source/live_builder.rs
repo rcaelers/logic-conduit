@@ -1,17 +1,17 @@
-//! Native deterministic live-capture builder used for capture development and tests.
+//! Native deterministic live-capture builder used by tests.
 
 use serde_json::Value;
 
 use node_graph::Socket;
 use signal_processing::{ProcessNode, SimpleTriggerCondition, TriggerPredicate, TriggerProgram};
 
-use super::builder::DemoCaptureSourceBuilder;
+use super::builder::TestCaptureSourceBuilder;
 use crate::{
     CapturePresentation, CompileCtx, LiveCaptureEdit, LiveCaptureFeature, PortKind, ResolvedInputs,
     RuntimeBuilder, SimpleTriggerChannel, TriggerConfigurationFeature,
 };
 
-pub(crate) struct DemoLiveCaptureSourceBuilder;
+pub(crate) struct TestLiveCaptureSourceBuilder;
 
 pub(crate) fn conditions(
     program: Option<&TriggerProgram>,
@@ -39,7 +39,7 @@ pub(crate) fn conditions(
 }
 
 fn configuration(
-    state: &super::definition::DemoCaptureSourceState,
+    state: &super::definition::TestCaptureSourceState,
 ) -> Result<TriggerConfigurationFeature, String> {
     let conditions = conditions(state.trigger_program())?;
     let channels = super::trigger::channel_ids()
@@ -63,17 +63,17 @@ fn configuration(
     )
 }
 
-impl RuntimeBuilder for DemoLiveCaptureSourceBuilder {
+impl RuntimeBuilder for TestLiveCaptureSourceBuilder {
     fn is_source(&self) -> bool {
         true
     }
 
     fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-        DemoCaptureSourceBuilder.accepted_kinds(socket, state)
+        TestCaptureSourceBuilder.accepted_kinds(socket, state)
     }
 
     fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-        DemoCaptureSourceBuilder.offered_kinds(socket, state)
+        TestCaptureSourceBuilder.offered_kinds(socket, state)
     }
 
     fn input_port(
@@ -83,19 +83,19 @@ impl RuntimeBuilder for DemoLiveCaptureSourceBuilder {
         state: &Value,
         kind: PortKind,
     ) -> Option<String> {
-        DemoCaptureSourceBuilder.input_port(socket, member_index, state, kind)
+        TestCaptureSourceBuilder.input_port(socket, member_index, state, kind)
     }
 
     fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
-        DemoCaptureSourceBuilder.output_port(socket, state, kind)
+        TestCaptureSourceBuilder.output_port(socket, state, kind)
     }
 
     fn viewer_channel_origin(&self, socket: &Socket, state: &Value) -> Option<usize> {
-        DemoCaptureSourceBuilder.viewer_channel_origin(socket, state)
+        TestCaptureSourceBuilder.viewer_channel_origin(socket, state)
     }
 
     fn capture_presentation(&self, state: &Value) -> Result<Option<CapturePresentation>, String> {
-        DemoCaptureSourceBuilder.capture_presentation(state)
+        TestCaptureSourceBuilder.capture_presentation(state)
     }
 
     fn live_capture_feature(
@@ -110,8 +110,8 @@ impl RuntimeBuilder for DemoLiveCaptureSourceBuilder {
         state: &Value,
     ) -> Result<Option<TriggerConfigurationFeature>, String> {
         let state =
-            serde_json::from_value::<super::definition::DemoCaptureSourceState>(state.clone())
-                .map_err(|error| format!("invalid demo capture state: {error}"))?;
+            serde_json::from_value::<super::definition::TestCaptureSourceState>(state.clone())
+                .map_err(|error| format!("invalid test capture state: {error}"))?;
         configuration(&state).map(Some)
     }
 
@@ -124,7 +124,7 @@ impl RuntimeBuilder for DemoLiveCaptureSourceBuilder {
     }
 
     fn input_required(&self, socket: &Socket, state: &Value) -> bool {
-        DemoCaptureSourceBuilder.input_required(socket, state)
+        TestCaptureSourceBuilder.input_required(socket, state)
     }
 
     fn build(
@@ -134,6 +134,6 @@ impl RuntimeBuilder for DemoLiveCaptureSourceBuilder {
         resolved: &ResolvedInputs,
         ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
-        DemoCaptureSourceBuilder.build(name, state, resolved, ctx)
+        TestCaptureSourceBuilder.build(name, state, resolved, ctx)
     }
 }

@@ -215,7 +215,7 @@ node performs at most one send per output per `work()` call.
 
 | Category | Nodes |
 |---|---|
-| Sources | `DslFileSource` (file replay; per channel `d{i}` edges + `b{i}` blocks), `DsLogicU3Pro16Source` (live USB capture; `LogicAnalyzerSource<DsLogicU3Pro16>` behind the driver-neutral `LogicAnalyzer`/`LogicCaptureConfig` interface — see [DSLOGIC_U3PRO16_PROTOCOL.md](DSLOGIC_U3PRO16_PROTOCOL.md)), `UartDemoSource` (synthetic; the wasm demo) |
+| Sources | `DslFileSource` (file replay; per channel `d{i}` edges + `b{i}` blocks), `SigrokFileSource` (native file replay and the explicit embedded synthetic-capture mode), `DsLogicU3Pro16Source` (live USB capture; `LogicAnalyzerSource<DsLogicU3Pro16>` behind the driver-neutral `LogicAnalyzer`/`LogicCaptureConfig` interface — see [DSLOGIC_U3PRO16_PROTOCOL.md](DSLOGIC_U3PRO16_PROTOCOL.md)) |
 | Decoders | `SpiDecoder` (modes 0–3, 1–64-bit words, MSB/LSB, CS polarity; two `Word` outputs mosi/miso), `ParallelDecoder` (strobe SDR/DDR/level, 1–64 data bits, optional CS/Enable, multi-cycle word assembly with endianness), `UartDecoder` (single-line, derived bit clock, parity/framing error triggers) |
 | Logic / control | `WordMatcher` (pattern & mask, comparison ops, trigger at word start/end), `SrLatch`, `LogicGate` (NOT/AND/NAND/OR/NOR/XOR/XNOR over variadic inputs), `TriggerCounter`, `TextFormatter` (template substitution, up to 4 inputs merged in timestamp order), `BufferNode` (explicit decoupling) |
 | Sinks | `BinaryFileWriter` (filename-level–driven file rollover; never blocks on `Filename`), `TextFileWriter`, `TgckRecorder` (per-capture line-boundary CSV), `ViewerSink` (pushes lanes into the shared `DerivedLanes` store; see [LOGIC_ANALYZER_VIEWER_DESIGN.md](LOGIC_ANALYZER_VIEWER_DESIGN.md)) |

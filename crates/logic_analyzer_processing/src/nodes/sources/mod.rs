@@ -1,7 +1,7 @@
 //! Concrete capture source nodes, formats, and device adapters.
 
-mod demo_capture_source;
-mod uart_demo_source;
+mod synthetic_capture_source;
+mod synthetic_uart_source;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod buffered_fake;
@@ -15,18 +15,12 @@ mod dsl_file;
 mod dslogic_u3pro16;
 #[cfg(not(target_arch = "wasm32"))]
 mod logic_analyzer;
+mod logic_trigger;
 #[cfg(not(target_arch = "wasm32"))]
 mod sigrok_file;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use buffered_fake::{BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider};
-pub use demo_capture_source::DemoCaptureSource;
-#[cfg(not(target_arch = "wasm32"))]
-pub use demo_capture_source::{
-    DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,
-    DeterministicTrigger, DeterministicTriggerCount, DeterministicTriggerCountMode,
-    DeterministicTriggerLogic, DeterministicTriggerPredicate, DeterministicTriggerStage,
-};
 #[cfg(not(target_arch = "wasm32"))]
 pub use dsl_file::{
     DeferredDslFileSource, DslCaptureReader, DslChunkedCaptureReader, DslFileCaptureDataSource,
@@ -42,11 +36,19 @@ pub use dslogic_u3pro16::{
 pub use logic_analyzer::{
     CaptureMode, ClockEdge, ClockSource, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
     LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
-    LogicEncodingRequest, LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic,
+    LogicEncodingRequest,
 };
+pub use logic_trigger::{LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic};
 #[cfg(not(target_arch = "wasm32"))]
 pub use sigrok_file::{
     SigrokCaptureReader, SigrokChunkedCaptureReader, SigrokFileCaptureDataSource, SigrokFileSource,
     open_sigrok_chunked_capture,
 };
-pub use uart_demo_source::UartDemoSource;
+pub use synthetic_capture_source::SyntheticCaptureSource;
+#[cfg(not(target_arch = "wasm32"))]
+pub use synthetic_capture_source::{
+    DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,
+    DeterministicTrigger, DeterministicTriggerCount, DeterministicTriggerCountMode,
+    DeterministicTriggerLogic, DeterministicTriggerPredicate, DeterministicTriggerStage,
+};
+pub use synthetic_uart_source::SyntheticUartSource;

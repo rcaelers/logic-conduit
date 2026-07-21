@@ -1,9 +1,11 @@
+//! Trigger contract for the deterministic test capture.
+
 use signal_processing::{
     CaptureChannelId, SimpleTriggerCondition, TriggerCountCapabilities, TriggerCountMode,
     TriggerEditorSchema, TriggerIdentifier, TriggerLogicOperator, TriggerProgram,
 };
 
-use super::definition::DEMO_CAPTURE_CHANNELS;
+use super::definition::TEST_CAPTURE_CHANNELS;
 
 const SCHEMA_ID: &str = "dsl.demo-capture.trigger";
 
@@ -12,7 +14,7 @@ pub(crate) fn schema() -> TriggerEditorSchema {
         TriggerIdentifier::new(SCHEMA_ID).expect("static trigger schema ID is valid"),
         1,
         4,
-        DEMO_CAPTURE_CHANNELS,
+        TEST_CAPTURE_CHANNELS,
         vec![
             TriggerLogicOperator::And,
             TriggerLogicOperator::Or,
@@ -43,7 +45,7 @@ pub(crate) fn schema() -> TriggerEditorSchema {
 }
 
 pub(crate) fn channel_ids() -> Vec<CaptureChannelId> {
-    (0..DEMO_CAPTURE_CHANNELS)
+    (0..TEST_CAPTURE_CHANNELS)
         .map(|channel| CaptureChannelId::new(format!("demo:{channel}")))
         .collect()
 }
@@ -70,7 +72,7 @@ pub(crate) fn set_condition(
 ) -> Result<Option<TriggerProgram>, String> {
     let channels = channel_ids();
     let channel = channels.get(channel).ok_or_else(|| {
-        format!("demo capture channel {channel} is outside 0..{DEMO_CAPTURE_CHANNELS}")
+        format!("test capture channel {channel} is outside 0..{TEST_CAPTURE_CHANNELS}")
     })?;
     schema()
         .with_simple_condition(program, &channels, channel, condition)
