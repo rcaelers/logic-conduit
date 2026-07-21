@@ -5,10 +5,11 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{ClassType, define_class, msg_send, sel};
 use objc2_app_kit::{NSApp, NSImage, NSMenu, NSMenuItem, NSWindow};
-use objc2_foundation::{MainThreadMarker, NSObject, ns_string};
+use objc2_foundation::{MainThreadMarker, NSObject, NSString, ns_string};
 
 use logic_analyzer_ui::{
-    NativeMenuCommand, application_input_bindings, dispatch_native_menu_command,
+    APPLICATION_NAME, NativeMenuCommand, application_input_bindings,
+    dispatch_native_menu_command,
 };
 
 thread_local! {
@@ -388,24 +389,40 @@ pub(crate) fn install(recent_files: &[PathBuf]) {
     pipeline_menu_item.setSubmenu(Some(&pipeline_menu));
     menu_bar.addItem(&pipeline_menu_item);
 
-    if let Some(application_menu) = menu_bar.itemAtIndex(0).and_then(|item| item.submenu()) {
-        for index in 0..application_menu.numberOfItems() {
-            let Some(item) = application_menu.itemAtIndex(index) else {
-                continue;
-            };
-            if item.keyEquivalent().to_string() == "q" {
-                item.setKeyEquivalent(&shortcut("quit"));
-                unsafe {
-                    item.setTarget(Some(&handler as &AnyObject));
-                    item.setAction(Some(sel!(quitApplication:)));
+    if let Some(application_menu_item) = menu_bar.itemAtIndex(0) {
+        let application_name = NSString::from_str(APPLICATION_NAME);
+        application_menu_item.setTitle(&application_name);
+        if let Some(application_menu) = application_menu_item.submenu() {
+            application_menu.setTitle(&application_name);
+            for index in 0..application_menu.numberOfItems() {
+                let Some(item) = application_menu.itemAtIndex(index) else {
+                    continue;
+                };
+                if item.keyEquivalent().to_string() == "q" {
+                    item.setTitle(&NSString::from_str(&format!(
+                        "Quit {APPLICATION_NAME}"
+                    )));
+                    item.setKeyEquivalent(&shortcut("quit"));
+                    unsafe {
+                        item.setTarget(Some(&handler as &AnyObject));
+                        item.setAction(Some(sel!(quitApplication:)));
+                    }
                 }
-            }
-            // Point the standard "About …" item at our in-app window
-            // instead of the Cocoa about panel.
-            if item.action() == Some(sel!(orderFrontStandardAboutPanel:)) {
-                unsafe {
-                    item.setTarget(Some(&handler as &AnyObject));
-                    item.setAction(Some(sel!(showAbout:)));
+                // Point the standard "About …" item at our in-app window
+                // instead of the Cocoa about panel.
+                if item.action() == Some(sel!(orderFrontStandardAboutPanel:)) {
+                    item.setTitle(&NSString::from_str(&format!(
+                        "About {APPLICATION_NAME}"
+                    )));
+                    unsafe {
+                        item.setTarget(Some(&handler as &AnyObject));
+                        item.setAction(Some(sel!(showAbout:)));
+                    }
+                }
+                if item.action() == Some(sel!(hide:)) {
+                    item.setTitle(&NSString::from_str(&format!(
+                        "Hide {APPLICATION_NAME}"
+                    )));
                 }
             }
         }
