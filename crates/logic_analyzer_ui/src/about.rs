@@ -1,6 +1,8 @@
 //! The About window: an animated logic-analyzer waveform banner above the
 //! usual name/version/copyright block.
 
+use crate::product::APPLICATION_NAME;
+
 const BANNER_HEIGHT: f32 = 132.0;
 const WINDOW_WIDTH: f32 = 460.0;
 const CORNER_RADIUS: u8 = 10;
@@ -128,11 +130,7 @@ impl AboutWindow {
             })
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.label(
-                        egui::RichText::new("DSL Pipeline Editor")
-                            .size(24.0)
-                            .strong(),
-                    );
+                    ui.label(egui::RichText::new(APPLICATION_NAME).size(24.0).strong());
                     ui.add_space(2.0);
                     ui.label(
                         egui::RichText::new("Node-graph pipelines for logic analysis")

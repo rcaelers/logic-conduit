@@ -28,7 +28,7 @@ thread_local! {
 
 define_class!(
     #[unsafe(super(NSObject))]
-    #[name = "DslPipelineMenuHandler"]
+    #[name = "LogicConduitMenuHandler"]
     struct MenuHandler;
 
     impl MenuHandler {
@@ -418,4 +418,3 @@ pub(crate) fn install(recent_files: &[PathBuf]) {
     // binding still needs this — nothing else owns it.
     std::mem::forget(handler);
 }
-

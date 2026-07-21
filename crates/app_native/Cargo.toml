@@ -5,7 +5,7 @@ edition = "2024"
 authors = ["Rob Caelers <rob.caelers@gmail.com>"]
 
 [[bin]]
-name = "dsl-ui"
+name = "logic-conduit"
 path = "src/main.rs"
 
 [dependencies]

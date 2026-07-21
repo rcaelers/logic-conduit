@@ -3,19 +3,25 @@ use std::path::PathBuf;
 
 use node_graph::NodeId;
 
+use crate::product::APPLICATION_ID;
+
+fn application_directory(parent: PathBuf) -> PathBuf {
+    parent.join(APPLICATION_ID)
+}
+
 fn application_cache_directory() -> PathBuf {
     std::cfg_select! {
         target_os = "macos" => {
             std::env::var_os("HOME")
                 .map(PathBuf::from)
-                .map(|home| home.join("Library").join("Caches").join("dsl"))
-                .unwrap_or_else(|| std::env::temp_dir().join("dsl"))
+                .map(|home| application_directory(home.join("Library").join("Caches")))
+                .unwrap_or_else(|| application_directory(std::env::temp_dir()))
         }
         target_os = "windows" => {
             std::env::var_os("LOCALAPPDATA")
                 .map(PathBuf::from)
-                .map(|local| local.join("dsl"))
-                .unwrap_or_else(|| std::env::temp_dir().join("dsl"))
+                .map(application_directory)
+                .unwrap_or_else(|| application_directory(std::env::temp_dir()))
         }
         _ => {
             std::env::var_os("XDG_CACHE_HOME")
@@ -25,8 +31,8 @@ fn application_cache_directory() -> PathBuf {
                         .map(PathBuf::from)
                         .map(|home| home.join(".cache"))
                 })
-                .map(|cache| cache.join("dsl"))
-                .unwrap_or_else(|| std::env::temp_dir().join("dsl"))
+                .map(application_directory)
+                .unwrap_or_else(|| application_directory(std::env::temp_dir()))
         }
     }
 }
@@ -237,7 +243,17 @@ impl PlatformState {
 
 #[cfg(test)]
 mod tests {
-    use super::PersistedState;
+    use super::{PersistedState, application_directory};
+
+    #[test]
+    fn cache_uses_the_logic_conduit_directory_for_new_installations() {
+        let parent = tempfile::tempdir().unwrap();
+
+        assert_eq!(
+            application_directory(parent.path().to_owned()),
+            parent.path().join("logic-conduit")
+        );
+    }
 
     #[test]
     fn legacy_state_without_panel_tree_still_loads() {

@@ -2,6 +2,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use super::implementation::{ApplicationConfig, embedded_defaults};
+use crate::product::APPLICATION_ID;
 
 const CONFIG_FILE: &str = "application.json";
 
@@ -10,7 +11,11 @@ pub(crate) fn load() -> ApplicationConfig {
 }
 
 fn path() -> Option<PathBuf> {
-    dirs::config_dir().map(|directory| directory.join("dsl").join(CONFIG_FILE))
+    dirs::config_dir().map(|directory| path_in(&directory))
+}
+
+fn path_in(directory: &Path) -> PathBuf {
+    directory.join(APPLICATION_ID).join(CONFIG_FILE)
 }
 
 fn load_path(path: &Path) -> ApplicationConfig {
@@ -33,7 +38,7 @@ fn load_path(path: &Path) -> ApplicationConfig {
 mod tests {
     use logic_analyzer_viewer::ColorProfile;
 
-    use super::{load_path, path};
+    use super::{load_path, path_in};
 
     #[test]
     fn missing_disk_config_uses_embedded_defaults() {
@@ -69,7 +74,8 @@ mod tests {
 
     #[test]
     fn standardized_path_has_application_directory_and_file_name() {
-        let path = path().expect("this test environment has a user config directory");
-        assert!(path.ends_with(std::path::Path::new("dsl/application.json")));
+        let directory = tempfile::tempdir().unwrap();
+        let path = path_in(directory.path());
+        assert!(path.ends_with(std::path::Path::new("logic-conduit/application.json")));
     }
 }

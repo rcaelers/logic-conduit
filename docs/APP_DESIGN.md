@@ -37,13 +37,13 @@ One window, split by a draggable horizontal splitter:
   registry (`compiler::BuilderRegistry::standard()`), runs plugin registration hooks, and
   installs a platform symbol font (menu glyphs).
 - Graphs are saved/loaded as the editor's JSON document (`⌘O` / `⌘S` / `⇧⌘S`); the binary
-  accepts a graph file argument (`dsl-ui graphs/spi_controlled_decode.json`). Example graphs live in
+  accepts a graph file argument (`logic-conduit graphs/spi_controlled_decode.json`). Example graphs live in
   [graphs/](../graphs).
 - Every frame, the app asks the graph integration for an opaque pre-run capture presentation.
   Concrete source builders supply an indexed-capture factory, an in-memory preview, or a channel
   layout. The app and viewer do not identify node types or know what DSL and Sigrok paths mean.
   Runtime processing nodes remain compiler-owned and are created only when a run starts.
-- `logic-analyzer-app-native` binary (named `dsl-ui`): clap CLI,
+- `logic-analyzer-app-native` binary (named `logic-conduit`): clap CLI,
   `tracing_subscriber` with `RUST_LOG` env filter,
   and an eframe native window.
 - `logic-analyzer-app-web` exports the wasm-bindgen `WebHandle` used by the browser shell.

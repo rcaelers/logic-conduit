@@ -5,6 +5,7 @@ mod application_config;
 mod demo_signals;
 mod input_binding_config;
 mod live_capture;
+mod product;
 mod toast;
 
 use std::sync::OnceLock;
@@ -15,6 +16,7 @@ pub use app_platform::{
     NativeMenuCommand, dispatch_native_menu_command, set_recent_files_listener,
 };
 use input_bindings::InputBindings;
+pub use product::{APPLICATION_ID, APPLICATION_NAME};
 
 pub fn application_input_bindings() -> &'static InputBindings {
     static BINDINGS: OnceLock<InputBindings> = OnceLock::new();

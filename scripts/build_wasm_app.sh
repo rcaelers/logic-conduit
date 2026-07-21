@@ -22,7 +22,7 @@ mkdir -p "${OUT_DIR}/pkg"
 cp "${ROOT_DIR}"/crates/app_web/web/* "${OUT_DIR}/"
 
 wasm-bindgen \
-  "${ROOT_DIR}/target/wasm32-unknown-unknown/release/logic_analyzer_app.wasm" \
+  "${ROOT_DIR}/target/wasm32-unknown-unknown/release/logic_conduit.wasm" \
   --target web \
   --out-dir "${OUT_DIR}/pkg"
 

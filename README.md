@@ -1,6 +1,6 @@
-# DSL Pipeline Editor
+# LogicConduit
 
-A desktop application for decoding and analyzing DSLogic logic-analyzer captures. You draw
+A desktop application for capturing, decoding, and analyzing digital signals. You draw
 a decode pipeline as a node graph — sources, protocol decoders, logic, file writers, a
 waveform viewer — press **Run**, and watch the results appear live in the built-in logic
 analyzer view. Graphs run on a streaming, thread-per-node engine and can be edited while
@@ -24,10 +24,10 @@ they run.
 
 ```bash
 # Build and start the editor (release mode recommended)
-cargo run --release --bin dsl-ui
+cargo run --release --bin logic-conduit
 
 # Or open a graph directly
-cargo run --release --bin dsl-ui -- graphs/spi_controlled_decode.json
+cargo run --release --bin logic-conduit -- graphs/spi_controlled_decode.json
 ```
 
 The editor starts with an empty graph. Use **File ▸ Load** (`⌘O`/`Ctrl+O`) to open a saved
@@ -108,11 +108,11 @@ and write each start/stop window to its own file — see
 ## Command line & logging
 
 ```bash
-cargo run --release --bin dsl-ui -- <graph.json>   # open a graph at startup
+cargo run --release --bin logic-conduit -- <graph.json>   # open a graph at startup
 
 # Logging via RUST_LOG (per-module filtering)
-RUST_LOG=info cargo run --release --bin dsl-ui
-RUST_LOG=info,logic_analyzer_processing::nodes::decoders::spi_decoder=debug cargo run --release --bin dsl-ui
+RUST_LOG=info cargo run --release --bin logic-conduit
+RUST_LOG=info,logic_analyzer_processing::nodes::decoders::spi_decoder=debug cargo run --release --bin logic-conduit
 ```
 
 If a pipeline appears stuck, the built-in watchdog logs which node is blocked on which
@@ -168,7 +168,7 @@ Loadable pipeline examples live in [graphs/](graphs). They include file-backed
 SPI processing and direct DSLogic U3Pro16 capture graphs:
 
 ```bash
-cargo run --release --bin dsl-ui -- graphs/spi_controlled_decode.json
+cargo run --release --bin logic-conduit -- graphs/spi_controlled_decode.json
 ```
 
 The sole standalone Rust example is `ccd_viewer`, a native framebuffer utility

@@ -1,7 +1,9 @@
 use clap::Parser;
 
-const DSL_LOG_TARGETS: &[&str] = &[
-    "dsl_ui",
+use logic_analyzer_ui::{APPLICATION_ID, APPLICATION_NAME};
+
+const APPLICATION_LOG_TARGETS: &[&str] = &[
+    "logic_conduit",
     "logic_analyzer_ui",
     "logic_analyzer_graph",
     "logic_analyzer_processing",
@@ -13,10 +15,9 @@ const DSL_LOG_TARGETS: &[&str] = &[
     "signal_processing",
 ];
 
-/// Expands the public `dsl` logging namespace to the workspace's local
-/// tracing targets. Individual crates keep their natural tracing targets;
-/// this application boundary owns the user-facing filter alias.
-fn expand_dsl_log_directives(directives: &str) -> String {
+/// Expands the public `logic_conduit` logging namespace to the workspace's
+/// local tracing targets.
+fn expand_application_log_directives(directives: &str) -> String {
     directives
         .split(',')
         .flat_map(|directive| {
@@ -24,14 +25,15 @@ fn expand_dsl_log_directives(directives: &str) -> String {
             let Some((target, filter)) = directive.split_once('=') else {
                 return vec![directive.to_owned()];
             };
-            if target == "dsl" {
-                return DSL_LOG_TARGETS
+            if target == "logic_conduit" {
+                return APPLICATION_LOG_TARGETS
                     .iter()
                     .map(|target| format!("{target}={filter}"))
                     .collect();
             }
-            if let Some(target) = target.strip_prefix("dsl.")
-                && DSL_LOG_TARGETS.contains(&target)
+            let subsystem = target.strip_prefix("logic_conduit.");
+            if let Some(target) = subsystem
+                && APPLICATION_LOG_TARGETS.contains(&target)
             {
                 return vec![format!("{target}={filter}")];
             }
@@ -45,7 +47,7 @@ fn application_env_filter() -> tracing_subscriber::EnvFilter {
     let Ok(directives) = std::env::var("RUST_LOG") else {
         return tracing_subscriber::EnvFilter::from_default_env();
     };
-    let directives = expand_dsl_log_directives(&directives);
+    let directives = expand_application_log_directives(&directives);
     tracing_subscriber::EnvFilter::try_new(directives).unwrap_or_else(|error| {
         eprintln!("invalid RUST_LOG filter: {error}");
         tracing_subscriber::EnvFilter::from_default_env()
@@ -56,7 +58,7 @@ fn application_env_filter() -> tracing_subscriber::EnvFilter {
 use crate::macos_menu;
 
 #[derive(Parser)]
-#[command(version, about = "DSL Pipeline Editor")]
+#[command(version, about = APPLICATION_NAME)]
 struct Args {
     /// Graph JSON file to load at startup
     file: Option<std::path::PathBuf>,
@@ -70,18 +72,18 @@ pub(crate) fn run() -> MainResult {
         .init();
 
     let args = Args::parse();
-
     #[cfg(target_os = "macos")]
     macos_menu::disable_automatic_window_tabbing();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_app_id(APPLICATION_ID)
             .with_inner_size([2100.0, 1350.0])
-            .with_title("DSL Pipeline Editor"),
+            .with_title(APPLICATION_NAME),
         ..Default::default()
     };
     eframe::run_native(
-        "DSL Pipeline Editor",
+        APPLICATION_NAME,
         options,
         Box::new(move |cc| {
             let app = logic_analyzer_ui::App::new_with_plugins_and_file(
@@ -101,32 +103,34 @@ pub(crate) fn run() -> MainResult {
 
 #[cfg(test)]
 mod logging_tests {
-    use super::expand_dsl_log_directives;
+    use super::expand_application_log_directives;
 
     #[test]
-    fn expands_the_dsl_root_filter_to_workspace_targets() {
-        let directives = expand_dsl_log_directives("dsl=debug");
+    fn expands_the_application_root_filter_to_workspace_targets() {
+        let directives = expand_application_log_directives("logic_conduit=debug");
 
         assert!(directives.contains("logic_analyzer_processing=debug"));
         assert!(directives.contains("signal_processing=debug"));
-        assert!(!directives.contains("dsl=debug"));
     }
 
     #[test]
-    fn expands_a_dsl_subsystem_filter_to_its_local_target() {
+    fn expands_an_application_subsystem_filter_to_its_local_target() {
         assert_eq!(
-            expand_dsl_log_directives("dsl.logic_analyzer_processing=debug"),
+            expand_application_log_directives(
+                "logic_conduit.logic_analyzer_processing=debug"
+            ),
             "logic_analyzer_processing=debug"
         );
     }
 
     #[test]
-    fn retains_non_dsl_directives() {
+    fn retains_non_application_directives() {
         assert_eq!(
-            expand_dsl_log_directives("warn,eframe=info,dsl=debug"),
-            "warn,eframe=info,dsl_ui=debug,logic_analyzer_ui=debug,logic_analyzer_graph=debug,logic_analyzer_processing=debug,logic_analyzer_viewer=debug,node_graph=debug,panel_layout=debug,trigger_editor=debug,input_bindings=debug,signal_processing=debug"
+            expand_application_log_directives("warn,eframe=info,logic_conduit=debug"),
+            "warn,eframe=info,logic_conduit=debug,logic_analyzer_ui=debug,logic_analyzer_graph=debug,logic_analyzer_processing=debug,logic_analyzer_viewer=debug,node_graph=debug,panel_layout=debug,trigger_editor=debug,input_bindings=debug,signal_processing=debug"
         );
     }
+
 }
 
 #[cfg(test)]
@@ -135,13 +139,14 @@ mod tests {
 
     #[test]
     fn accepts_optional_startup_file() {
-        let empty = Args::try_parse_from(["dsl-ui"]).unwrap();
+        let empty = Args::try_parse_from(["logic-conduit"]).unwrap();
         assert!(empty.file.is_none());
 
-        let with_file = Args::try_parse_from(["dsl-ui", "pipeline.json"]).unwrap();
+        let with_file = Args::try_parse_from(["logic-conduit", "pipeline.json"]).unwrap();
         assert_eq!(
             with_file.file.as_deref(),
             Some(std::path::Path::new("pipeline.json"))
         );
     }
+
 }

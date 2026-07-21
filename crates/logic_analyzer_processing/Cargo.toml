@@ -4,7 +4,7 @@ version.workspace = true
 edition = "2024"
 authors = ["Rob Caelers <rob.caelers@gmail.com>"]
 description = "Concrete logic-analyzer capture sources, processors, decoders, and sinks"
-repository = "https://github.com/rcaelers/dsl_loader"
+repository = "https://github.com/rcaelers/logic-conduit"
 license = "MIT"
 
 [lib]

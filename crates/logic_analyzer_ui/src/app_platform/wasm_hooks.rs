@@ -1,6 +1,7 @@
 use logic_analyzer_graph as compiler;
 
 use crate::app::App;
+use crate::product::APPLICATION_NAME;
 
 impl App {
     pub(crate) fn platform_clear_capture_caches(
@@ -86,7 +87,7 @@ impl App {
                 }
             });
             ui.menu_button("Help", |ui| {
-                if ui.button("About DSL Pipeline Editor").clicked() {
+                if ui.button(format!("About {APPLICATION_NAME}")).clicked() {
                     self.about.open();
                     ui.close();
                 }

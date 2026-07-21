@@ -8,6 +8,8 @@ use crate::app_platform::{FileCommand, GuardedAction, derived_cache_directory};
 #[cfg(target_os = "macos")]
 use crate::app_platform::{NativeMenuCommand, notify_recent_files_changed};
 use crate::live_capture::{CaptureCoordinatorContract, CaptureRawExportFormat};
+#[cfg(not(target_os = "macos"))]
+use crate::product::APPLICATION_NAME;
 
 impl App {
     pub(crate) fn platform_clear_capture_caches(
@@ -711,7 +713,7 @@ impl App {
                 }
             });
             ui.menu_button("Help", |ui| {
-                if ui.button("About DSL Pipeline Editor").clicked() {
+                if ui.button(format!("About {APPLICATION_NAME}")).clicked() {
                     self.about.open();
                     ui.close();
                 }
