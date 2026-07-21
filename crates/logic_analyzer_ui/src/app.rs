@@ -1572,13 +1572,25 @@ impl App {
     fn status_actions(
         &self,
         boundary_interaction: Option<BoundaryInteraction>,
+        boundary_break_available: bool,
         over_panel_title: bool,
         viewer_context: Option<&str>,
         graph_context: Option<&str>,
         modifiers: egui::Modifiers,
     ) -> Vec<StatusAction> {
-        let contexts = if boundary_interaction == Some(BoundaryInteraction::Dragging) {
-            vec!["panel_boundary.dragging", "global"]
+        let contexts = if matches!(
+            boundary_interaction,
+            Some(BoundaryInteraction::Dragging | BoundaryInteraction::DraggingWithParallelBoundary)
+        ) {
+            let mut contexts = Vec::new();
+            if boundary_break_available {
+                contexts.push("panel_boundary.dragging.break");
+            }
+            if boundary_interaction == Some(BoundaryInteraction::DraggingWithParallelBoundary) {
+                contexts.push("panel_boundary.dragging.extend");
+            }
+            contexts.extend(["panel_boundary.dragging", "global"]);
+            contexts
         } else if let Some(graph_context) = self.node_graph.active_input_context() {
             vec![graph_context, "global"]
         } else if boundary_interaction == Some(BoundaryInteraction::Hovered) {
@@ -1592,11 +1604,14 @@ impl App {
         } else {
             vec!["global"]
         };
-        self.input_bindings
+        let mut actions: Vec<_> = self
+            .input_bindings
             .status_bindings(&contexts, modifiers)
             .into_iter()
-            .filter_map(StatusAction::from_binding)
-            .collect()
+            .filter_map(|binding| StatusAction::from_binding(binding, modifiers))
+            .collect();
+        actions.sort_by_key(|action| action.input.sort_group());
+        actions
     }
 }
 
@@ -1619,7 +1634,21 @@ enum StatusInput {
         button: MouseButtonHint,
         gesture: Option<PointerGesture>,
     },
+    Modifier {
+        key: String,
+        active: bool,
+    },
     Key(String),
+}
+
+impl StatusInput {
+    fn sort_group(&self) -> u8 {
+        match self {
+            Self::Mouse { .. } => 0,
+            Self::Modifier { .. } => 1,
+            Self::Key(_) => 2,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1629,7 +1658,44 @@ struct StatusAction {
 }
 
 impl StatusAction {
-    fn from_binding(binding: &input_bindings::Binding) -> Option<Self> {
+    fn from_binding(
+        binding: &input_bindings::Binding,
+        active_modifiers: egui::Modifiers,
+    ) -> Option<Self> {
+        if binding.status_modifier_only {
+            let (key, active) = if binding.modifiers.control {
+                ("Ctrl", active_modifiers.ctrl)
+            } else if binding.modifiers.shift {
+                ("Shift", active_modifiers.shift)
+            } else if binding.modifiers.alt {
+                (
+                    if cfg!(target_os = "macos") {
+                        "Option"
+                    } else {
+                        "Alt"
+                    },
+                    active_modifiers.alt,
+                )
+            } else if binding.modifiers.command {
+                (
+                    if cfg!(target_os = "macos") {
+                        "Command"
+                    } else {
+                        "Ctrl"
+                    },
+                    active_modifiers.command,
+                )
+            } else {
+                return None;
+            };
+            return Some(Self {
+                input: StatusInput::Modifier {
+                    key: key.to_owned(),
+                    active,
+                },
+                label: binding.label.clone(),
+            });
+        }
         let input = match &binding.trigger {
             Trigger::Pointer { button, gesture } => StatusInput::Mouse {
                 button: match button {
@@ -1667,8 +1733,42 @@ fn key_name(key: &str) -> String {
 fn status_input_badge(ui: &mut egui::Ui, input: &StatusInput) {
     match input {
         StatusInput::Mouse { button, gesture } => draw_mouse_badge(ui, *button, *gesture),
+        StatusInput::Modifier { key, active } => draw_modifier_badge(ui, key, *active),
         StatusInput::Key(key) => draw_key_badge(ui, key),
     }
+}
+
+fn draw_modifier_badge(ui: &mut egui::Ui, key: &str, active: bool) {
+    let width = (key.chars().count() as f32 * 7.0 + 10.0).max(22.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 20.0), egui::Sense::hover());
+    if active {
+        ui.painter()
+            .rect_filled(rect, 4.0, egui::Color32::from_rgb(72, 92, 118));
+    }
+    ui.painter().rect_stroke(
+        rect,
+        4.0,
+        egui::Stroke::new(
+            1.2,
+            if active {
+                egui::Color32::from_rgb(150, 190, 235)
+            } else {
+                egui::Color32::from_rgb(145, 145, 145)
+            },
+        ),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        key,
+        egui::FontId::proportional(11.0),
+        if active {
+            egui::Color32::WHITE
+        } else {
+            egui::Color32::from_rgb(200, 200, 200)
+        },
+    );
 }
 
 fn draw_mouse_badge(ui: &mut egui::Ui, button: MouseButtonHint, gesture: Option<PointerGesture>) {
@@ -1937,6 +2037,7 @@ impl eframe::App for App {
         });
         let status_actions = self.status_actions(
             layout_response.boundary_interaction,
+            layout_response.boundary_break_available,
             over_panel_title,
             viewer
                 .filter(|viewer| pointer_pos.is_some_and(|pos| viewer.body_rect.contains(pos)))
@@ -1968,8 +2069,8 @@ mod font_tests {
     use node_graph::{GraphState, NodeId};
 
     use super::{
-        SavedViewerRow, install_fonts, load_symbol_fonts, save_panel_layout, save_sampling_overlay,
-        save_viewer_lane_order, saved_panel_layout, saved_sampling_overlay,
+        SavedViewerRow, StatusAction, install_fonts, load_symbol_fonts, save_panel_layout,
+        save_sampling_overlay, save_viewer_lane_order, saved_panel_layout, saved_sampling_overlay,
         saved_viewer_lane_order,
     };
 
@@ -2076,7 +2177,75 @@ mod font_tests {
             .into_iter()
             .map(|binding| binding.label.as_str())
             .collect();
-        assert_eq!(resizing, ["Finish Resize"]);
+        assert_eq!(resizing, ["Finish Resize", "Snap to Grid / Boundaries"]);
+
+        let snapping_panels: Vec<_> = bindings
+            .status_bindings(&["panel_boundary.dragging"], egui::Modifiers::CTRL)
+            .into_iter()
+            .map(|binding| binding.label.as_str())
+            .collect();
+        assert_eq!(
+            snapping_panels,
+            ["Finish Resize", "Snap to Grid / Boundaries"]
+        );
+
+        let extending_panels: Vec<_> = bindings
+            .status_bindings(
+                &["panel_boundary.dragging.extend", "panel_boundary.dragging"],
+                egui::Modifiers::NONE,
+            )
+            .into_iter()
+            .map(|binding| binding.label.as_str())
+            .collect();
+        assert_eq!(
+            extending_panels,
+            ["Extend", "Finish Resize", "Snap to Grid / Boundaries"]
+        );
+
+        let mut rendered_extending_panels: Vec<_> = bindings
+            .status_bindings(
+                &["panel_boundary.dragging.extend", "panel_boundary.dragging"],
+                egui::Modifiers::NONE,
+            )
+            .into_iter()
+            .filter_map(|binding| StatusAction::from_binding(binding, egui::Modifiers::NONE))
+            .collect();
+        rendered_extending_panels.sort_by_key(|action| action.input.sort_group());
+        let rendered_labels: Vec<_> = rendered_extending_panels
+            .iter()
+            .map(|action| action.label.as_str())
+            .collect();
+        assert_eq!(
+            rendered_labels,
+            ["Finish Resize", "Extend", "Snap to Grid / Boundaries"]
+        );
+
+        let mut rendered_breaking_panels: Vec<_> = bindings
+            .status_bindings(
+                &[
+                    "panel_boundary.dragging.break",
+                    "panel_boundary.dragging.extend",
+                    "panel_boundary.dragging",
+                ],
+                egui::Modifiers::NONE,
+            )
+            .into_iter()
+            .filter_map(|binding| StatusAction::from_binding(binding, egui::Modifiers::NONE))
+            .collect();
+        rendered_breaking_panels.sort_by_key(|action| action.input.sort_group());
+        let rendered_labels: Vec<_> = rendered_breaking_panels
+            .iter()
+            .map(|action| action.label.as_str())
+            .collect();
+        assert_eq!(
+            rendered_labels,
+            [
+                "Finish Resize",
+                "Break",
+                "Extend",
+                "Snap to Grid / Boundaries",
+            ]
+        );
 
         let title_bar: Vec<_> = bindings
             .status_bindings(&["panel_title"], egui::Modifiers::NONE)
@@ -2090,7 +2259,10 @@ mod font_tests {
             .into_iter()
             .map(|binding| binding.label.as_str())
             .collect();
-        assert_eq!(dragging, ["Confirm", "Cancel", "X Axis", "Y Axis"]);
+        assert_eq!(
+            dragging,
+            ["Confirm", "Cancel", "Snap to Grid", "X Axis", "Y Axis"]
+        );
 
         let snapping: Vec<_> = bindings
             .status_bindings(&["node_graph.drag_node"], egui::Modifiers::CTRL)

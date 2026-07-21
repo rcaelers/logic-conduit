@@ -101,6 +101,10 @@ pub struct Binding {
     pub menu: bool,
     #[serde(default = "default_true")]
     pub status: bool,
+    /// Keep this modifier-enhanced action visible in status hints even while
+    /// its modifier is not held, and render only the modifier as its input.
+    #[serde(default)]
+    pub status_modifier_only: bool,
 }
 
 fn default_true() -> bool {
@@ -433,7 +437,7 @@ impl InputBindings {
         for context in contexts {
             for binding in &self.bindings {
                 if binding.context == *context
-                    && binding.matches_modifiers(modifiers)
+                    && (binding.matches_modifiers(modifiers) || binding.status_modifier_only)
                     && seen.insert(binding.action.as_str())
                     && seen_triggers.insert(TriggerIdentity::from_binding(binding))
                     && binding.status
@@ -723,6 +727,31 @@ mod tests {
             .map(|binding| binding.label.as_str())
             .collect();
         assert_eq!(labels, ["Confirm", "Snap"]);
+    }
+
+    #[test]
+    fn modifier_only_status_hint_is_visible_without_activating_the_action() {
+        let manager = InputBindings::from_json(
+            r#"{"bindings":[
+              {"context":"drag","action":"snap","label":"Snap","input":"pointer","button":"primary","gesture":"drag","modifiers":{"control":true},"status_modifier_only":true}
+            ]}"#,
+        )
+        .unwrap();
+
+        let labels: Vec<_> = manager
+            .status_bindings(&["drag"], Modifiers::NONE)
+            .into_iter()
+            .map(|binding| binding.label.as_str())
+            .collect();
+        assert_eq!(labels, ["Snap"]);
+        assert_eq!(
+            manager.pointer_trigger(&["drag"], "snap", Modifiers::NONE),
+            None
+        );
+        assert_eq!(
+            manager.pointer_trigger(&["drag"], "snap", Modifiers::CTRL),
+            Some((PointerButton::Primary, PointerGesture::Drag))
+        );
     }
 
     #[test]

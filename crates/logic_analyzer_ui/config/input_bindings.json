@@ -29,7 +29,10 @@
 
     { "context": "panel_boundary", "action": "resize", "label": "Resize Panels", "input": "pointer", "button": "primary", "gesture": "drag" },
     { "context": "panel_boundary", "action": "options", "label": "Panel Options", "input": "pointer", "button": "secondary", "gesture": "click" },
-    { "context": "panel_boundary.dragging", "action": "finish_resize", "label": "Finish Resize", "input": "pointer", "button": "primary", "gesture": "release" },
+    { "context": "panel_boundary.dragging", "action": "finish_resize", "label": "Finish Resize", "input": "pointer", "button": "primary", "gesture": "release", "any_modifiers": true },
+    { "context": "panel_boundary.dragging", "action": "snap", "label": "Snap to Grid / Boundaries", "input": "pointer", "button": "primary", "gesture": "drag", "modifiers": { "control": true }, "status_modifier_only": true },
+    { "context": "panel_boundary.dragging.extend", "action": "extend", "label": "Extend", "input": "pointer", "button": "primary", "gesture": "drag", "modifiers": { "shift": true }, "status_modifier_only": true },
+    { "context": "panel_boundary.dragging.break", "action": "break", "label": "Break", "input": "pointer", "button": "primary", "gesture": "drag", "modifiers": { "alt": true }, "status_modifier_only": true },
     { "context": "panel_title", "action": "toggle_maximize", "label": "Maximize / Restore Area", "input": "pointer", "button": "primary", "gesture": "double_click" },
     { "context": "panel_title", "action": "options", "label": "Area Options", "input": "pointer", "button": "secondary", "gesture": "click" },
 
@@ -71,7 +74,7 @@
     { "context": "node_graph.drag_node", "action": "cancel_move", "label": "Cancel", "input": "pointer", "button": "secondary", "gesture": "press", "any_modifiers": true },
     { "context": "node_graph.drag_node", "action": "constrain_x", "label": "X Axis", "input": "key", "key": "x", "any_modifiers": true },
     { "context": "node_graph.drag_node", "action": "constrain_y", "label": "Y Axis", "input": "key", "key": "y", "any_modifiers": true },
-    { "context": "node_graph.drag_node", "action": "snap_to_grid", "label": "Snap to Grid", "input": "pointer", "button": "primary", "gesture": "drag", "modifiers": { "control": true } },
+    { "context": "node_graph.drag_node", "action": "snap_to_grid", "label": "Snap to Grid", "input": "pointer", "button": "primary", "gesture": "drag", "modifiers": { "control": true }, "status_modifier_only": true },
     { "context": "node_graph.drag_wire", "action": "drag_link", "label": "Drag Node-link", "input": "pointer", "button": "primary", "gesture": "drag", "any_modifiers": true },
     { "context": "node_graph.drag_wire", "action": "confirm_link", "label": "Confirm Link", "input": "pointer", "button": "primary", "gesture": "release", "any_modifiers": true },
     { "context": "node_graph.drag_wire", "action": "cancel_link", "label": "Cancel", "input": "pointer", "button": "secondary", "gesture": "press", "any_modifiers": true }

@@ -16,6 +16,10 @@ use serde::{Deserialize, Serialize};
 use input_bindings::MenuShortcut;
 use widget_support::menu_item_layout_job;
 
+const BOUNDARY_SNAP_GRID: f32 = 16.0;
+const BOUNDARY_ALIGNMENT_DISTANCE: f32 = 10.0;
+const BOUNDARY_EXTEND_DISTANCE: f32 = 12.0;
+
 #[derive(Debug, Clone, Copy)]
 pub struct PanelSpec<'a> {
     pub id: &'a str,
@@ -264,6 +268,7 @@ pub struct PanelLayoutResponse {
     pub panels: Vec<PanelGeometry>,
     pub footer_rect: Rect,
     pub boundary_interaction: Option<BoundaryInteraction>,
+    pub boundary_break_available: bool,
 }
 
 impl PanelLayoutResponse {
@@ -287,6 +292,7 @@ impl PanelLayoutResponse {
 pub enum BoundaryInteraction {
     Hovered,
     Dragging,
+    DraggingWithParallelBoundary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -563,6 +569,8 @@ impl PanelLayout {
         let mut geometries = base_geometries.clone();
         let mut actions = Vec::new();
         let mut boundary_interaction = None;
+        let mut extended_boundary_guide = None;
+        let mut boundary_break_available = false;
         if self.split_placement.is_some() {
             if let Some(preview_action) =
                 self.split_action_at_pointer(ui, &base_geometries, root_rect)
@@ -572,7 +580,12 @@ impl PanelLayout {
             }
             self.paint_boundaries(ui, &boundaries);
         } else {
-            (actions, boundary_interaction) = self.handle_boundaries(ui, &boundaries);
+            (
+                actions,
+                boundary_interaction,
+                extended_boundary_guide,
+                boundary_break_available,
+            ) = self.handle_boundaries(ui, &boundaries, root_rect);
             if actions
                 .iter()
                 .any(|action| matches!(action, LayoutAction::SetFraction { .. }))
@@ -620,6 +633,9 @@ impl PanelLayout {
         for action in actions {
             self.apply_action(action, specs);
         }
+        if let Some((axis, coordinate)) = extended_boundary_guide {
+            paint_extended_boundary_guide(ui, axis, root_rect, coordinate);
+        }
 
         // Keep boundary geometry alive through the complete pass. egui's
         // context-menu state is tied to the stable split IDs, not this vector.
@@ -628,6 +644,7 @@ impl PanelLayout {
             panels: geometries,
             footer_rect,
             boundary_interaction,
+            boundary_break_available,
         }
     }
 
@@ -701,10 +718,20 @@ impl PanelLayout {
         &mut self,
         ui: &mut Ui,
         boundaries: &[BoundaryGeometry],
-    ) -> (Vec<LayoutAction>, Option<BoundaryInteraction>) {
+        root_rect: Rect,
+    ) -> (
+        Vec<LayoutAction>,
+        Option<BoundaryInteraction>,
+        Option<(SplitAxis, f32)>,
+        bool,
+    ) {
         let mut actions = Vec::new();
         let mut interaction = None;
+        let mut extended_boundary_guide = None;
+        let mut break_available = false;
         for boundary in boundaries {
+            let break_candidate =
+                boundary_break_candidate(self.state.root.as_ref(), boundary.id, boundaries);
             let response = ui.interact(
                 boundary.rect,
                 ui.id().with(("panel-splitter", boundary.id)),
@@ -717,17 +744,53 @@ impl PanelLayout {
                 });
             }
             if response.dragged() {
-                interaction = Some(BoundaryInteraction::Dragging);
+                break_available = break_candidate.is_some();
+                interaction = Some(
+                    if boundary
+                        .nearest_parallel_boundary(boundaries, BOUNDARY_EXTEND_DISTANCE)
+                        .is_some()
+                    {
+                        BoundaryInteraction::DraggingWithParallelBoundary
+                    } else {
+                        BoundaryInteraction::Dragging
+                    },
+                );
             } else if response.hovered() && interaction.is_none() {
                 interaction = Some(BoundaryInteraction::Hovered);
             }
             if response.dragged()
                 && let Some(pointer) = ui.input(|input| input.pointer.interact_pos())
             {
-                actions.push(LayoutAction::SetFraction {
-                    split_id: boundary.id,
-                    fraction: boundary.fraction_at(pointer),
-                });
+                let modifiers = ui.input(|input| input.modifiers);
+                if modifiers.alt
+                    && let Some(candidate) = break_candidate
+                {
+                    actions.push(LayoutAction::BreakSplit {
+                        split_id: boundary.id,
+                        band: if axis_coordinate(candidate.axis, pointer) < candidate.coordinate {
+                            SplitSide::First
+                        } else {
+                            SplitSide::Second
+                        },
+                        crossing_fraction: candidate.crossing_fraction,
+                    });
+                }
+                let resize_actions = boundary.resize_actions(
+                    pointer,
+                    boundaries,
+                    root_rect,
+                    modifiers.ctrl,
+                    modifiers.shift && !modifiers.alt,
+                );
+                if modifiers.shift
+                    && !modifiers.alt
+                    && resize_actions.len() > 1
+                    && let Some(LayoutAction::SetFraction { fraction, .. }) = resize_actions.first()
+                {
+                    extended_boundary_guide =
+                        Some((boundary.axis, boundary.coordinate_for_fraction(*fraction)));
+                }
+                actions.extend(resize_actions);
             }
             if response.secondary_clicked() {
                 self.boundary_context = Some(BoundaryContext {
@@ -785,7 +848,12 @@ impl PanelLayout {
                     .rect_filled(visual, 0.0, self.style.splitter_drag_fill);
             }
         }
-        (actions, interaction)
+        (
+            actions,
+            interaction,
+            extended_boundary_guide,
+            break_available,
+        )
     }
 
     fn handle_split_placement(
@@ -1229,6 +1297,13 @@ impl PanelLayout {
                 }
                 join_split(self.state.root.as_mut(), split_id, keep);
             }
+            LayoutAction::BreakSplit {
+                split_id,
+                band,
+                crossing_fraction,
+            } => {
+                break_split(self.state.root.as_mut(), split_id, band, crossing_fraction);
+            }
             LayoutAction::Split {
                 panel_id,
                 axis,
@@ -1419,7 +1494,147 @@ struct BoundaryGeometry {
 
 impl BoundaryGeometry {
     fn fraction_at(&self, pointer: egui::Pos2) -> f32 {
-        fraction_in_rect(self.axis, self.parent_rect, pointer)
+        self.fraction_for_coordinate(axis_coordinate(self.axis, pointer))
+    }
+
+    fn snapped_fraction_at(
+        &self,
+        pointer: egui::Pos2,
+        boundaries: &[BoundaryGeometry],
+        root_rect: Rect,
+    ) -> f32 {
+        self.snapped_fraction_at_excluding(pointer, boundaries, root_rect, None)
+    }
+
+    fn snapped_fraction_at_excluding(
+        &self,
+        pointer: egui::Pos2,
+        boundaries: &[BoundaryGeometry],
+        root_rect: Rect,
+        excluded_boundary: Option<u64>,
+    ) -> f32 {
+        self.fraction_for_coordinate(self.snapped_coordinate_at(
+            pointer,
+            boundaries,
+            root_rect,
+            excluded_boundary,
+        ))
+    }
+
+    fn snapped_coordinate_at(
+        &self,
+        pointer: egui::Pos2,
+        boundaries: &[BoundaryGeometry],
+        root_rect: Rect,
+        excluded_boundary: Option<u64>,
+    ) -> f32 {
+        let coordinate = axis_coordinate(self.axis, pointer);
+        self.nearest_parallel_boundary_to_excluding(
+            boundaries,
+            BOUNDARY_ALIGNMENT_DISTANCE,
+            coordinate,
+            excluded_boundary,
+        )
+        .map(BoundaryGeometry::coordinate)
+        .unwrap_or_else(|| {
+            let origin = axis_min(self.axis, root_rect);
+            origin + ((coordinate - origin) / BOUNDARY_SNAP_GRID).round() * BOUNDARY_SNAP_GRID
+        })
+    }
+
+    fn nearest_parallel_boundary<'a>(
+        &self,
+        boundaries: &'a [BoundaryGeometry],
+        maximum_distance: f32,
+    ) -> Option<&'a BoundaryGeometry> {
+        self.nearest_parallel_boundary_to_excluding(
+            boundaries,
+            maximum_distance,
+            self.coordinate(),
+            None,
+        )
+    }
+
+    fn nearest_parallel_boundary_to_excluding<'a>(
+        &self,
+        boundaries: &'a [BoundaryGeometry],
+        maximum_distance: f32,
+        coordinate: f32,
+        excluded_boundary: Option<u64>,
+    ) -> Option<&'a BoundaryGeometry> {
+        boundaries
+            .iter()
+            .filter(|candidate| {
+                candidate.id != self.id
+                    && Some(candidate.id) != excluded_boundary
+                    && candidate.axis == self.axis
+            })
+            .min_by(|left, right| {
+                (coordinate - left.coordinate())
+                    .abs()
+                    .total_cmp(&(coordinate - right.coordinate()).abs())
+            })
+            .filter(|candidate| (coordinate - candidate.coordinate()).abs() <= maximum_distance)
+    }
+
+    fn resize_actions(
+        &self,
+        pointer: egui::Pos2,
+        boundaries: &[BoundaryGeometry],
+        root_rect: Rect,
+        snap: bool,
+        extend: bool,
+    ) -> Vec<LayoutAction> {
+        let parallel = extend
+            .then(|| self.nearest_parallel_boundary(boundaries, BOUNDARY_EXTEND_DISTANCE))
+            .flatten();
+        let target_fraction = if snap {
+            if let Some(parallel) = parallel {
+                self.snapped_fraction_at_excluding(
+                    pointer,
+                    boundaries,
+                    root_rect,
+                    Some(parallel.id),
+                )
+            } else {
+                self.snapped_fraction_at(pointer, boundaries, root_rect)
+            }
+        } else {
+            self.fraction_at(pointer)
+        };
+        let mut actions = vec![LayoutAction::SetFraction {
+            split_id: self.id,
+            fraction: target_fraction,
+        }];
+        if let Some(parallel) = parallel {
+            let coordinate = self.coordinate_for_fraction(target_fraction);
+            actions.push(LayoutAction::SetFraction {
+                split_id: parallel.id,
+                fraction: parallel.fraction_for_coordinate(coordinate),
+            });
+        }
+        actions
+    }
+
+    fn coordinate(&self) -> f32 {
+        axis_coordinate(self.axis, self.rect.center())
+    }
+
+    fn fraction_for_coordinate(&self, coordinate: f32) -> f32 {
+        let parent_extent = axis_extent(self.axis, self.parent_rect);
+        let splitter_extent = axis_extent(self.axis, self.rect);
+        let usable = (parent_extent - splitter_extent).max(1.0);
+        ((coordinate - axis_min(self.axis, self.parent_rect) - splitter_extent * 0.5) / usable)
+            .clamp(0.1, 0.9)
+    }
+
+    fn coordinate_for_fraction(&self, fraction: f32) -> f32 {
+        let parent_extent = axis_extent(self.axis, self.parent_rect);
+        let splitter_extent = axis_extent(self.axis, self.rect);
+        let usable = (parent_extent - splitter_extent).max(1.0);
+        axis_min(self.axis, self.parent_rect)
+            + splitter_extent * 0.5
+            + usable * fraction.clamp(0.1, 0.9)
     }
 
     fn visual_rect(&self, thickness: f32) -> Rect {
@@ -1435,6 +1650,107 @@ impl BoundaryGeometry {
     }
 }
 
+#[derive(Clone, Copy)]
+struct BoundaryBreakCandidate {
+    axis: SplitAxis,
+    coordinate: f32,
+    crossing_fraction: f32,
+}
+
+fn boundary_break_candidate(
+    root: Option<&LayoutNode>,
+    split_id: u64,
+    boundaries: &[BoundaryGeometry],
+) -> Option<BoundaryBreakCandidate> {
+    let (axis, first_id, second_id) = breakable_child_splits(root?, split_id)?;
+    let first = boundaries.iter().find(|boundary| boundary.id == first_id)?;
+    let second = boundaries
+        .iter()
+        .find(|boundary| boundary.id == second_id)?;
+    let coordinate = (first.coordinate() + second.coordinate()) * 0.5;
+    if (first.coordinate() - second.coordinate()).abs() > BOUNDARY_EXTEND_DISTANCE {
+        return None;
+    }
+    Some(BoundaryBreakCandidate {
+        axis,
+        coordinate,
+        crossing_fraction: first.fraction_for_coordinate(coordinate),
+    })
+}
+
+fn breakable_child_splits(node: &LayoutNode, split_id: u64) -> Option<(SplitAxis, u64, u64)> {
+    match node {
+        LayoutNode::Split {
+            id,
+            axis,
+            first,
+            second,
+            ..
+        } if *id == split_id => {
+            let LayoutNode::Split {
+                id: first_id,
+                axis: first_axis,
+                ..
+            } = first.as_ref()
+            else {
+                return None;
+            };
+            let LayoutNode::Split {
+                id: second_id,
+                axis: second_axis,
+                ..
+            } = second.as_ref()
+            else {
+                return None;
+            };
+            (*first_axis == *second_axis && *first_axis != *axis).then_some((
+                *first_axis,
+                *first_id,
+                *second_id,
+            ))
+        }
+        LayoutNode::Split { first, second, .. } => breakable_child_splits(first, split_id)
+            .or_else(|| breakable_child_splits(second, split_id)),
+        LayoutNode::Panel { .. } => None,
+    }
+}
+
+fn paint_extended_boundary_guide(ui: &Ui, axis: SplitAxis, root_rect: Rect, coordinate: f32) {
+    let points = match axis {
+        SplitAxis::Horizontal => [
+            egui::pos2(root_rect.left(), coordinate),
+            egui::pos2(root_rect.right(), coordinate),
+        ],
+        SplitAxis::Vertical => [
+            egui::pos2(coordinate, root_rect.top()),
+            egui::pos2(coordinate, root_rect.bottom()),
+        ],
+    };
+    ui.painter()
+        .line_segment(points, Stroke::new(2.0, Color32::from_rgb(185, 185, 185)));
+}
+
+fn axis_coordinate(axis: SplitAxis, position: egui::Pos2) -> f32 {
+    match axis {
+        SplitAxis::Horizontal => position.y,
+        SplitAxis::Vertical => position.x,
+    }
+}
+
+fn axis_min(axis: SplitAxis, rect: Rect) -> f32 {
+    match axis {
+        SplitAxis::Horizontal => rect.top(),
+        SplitAxis::Vertical => rect.left(),
+    }
+}
+
+fn axis_extent(axis: SplitAxis, rect: Rect) -> f32 {
+    match axis {
+        SplitAxis::Horizontal => rect.height(),
+        SplitAxis::Vertical => rect.width(),
+    }
+}
+
 #[derive(Debug, Clone)]
 enum LayoutAction {
     SetFraction {
@@ -1444,6 +1760,11 @@ enum LayoutAction {
     Join {
         split_id: u64,
         keep: SplitSide,
+    },
+    BreakSplit {
+        split_id: u64,
+        band: SplitSide,
+        crossing_fraction: f32,
     },
     Split {
         panel_id: String,
@@ -1898,6 +2219,85 @@ fn set_split_fraction(node: Option<&mut LayoutNode>, split_id: u64, fraction: f3
             }
         }
         _ => false,
+    }
+}
+
+fn break_split(
+    node: Option<&mut LayoutNode>,
+    split_id: u64,
+    dragged_band: SplitSide,
+    crossing_fraction: f32,
+) -> bool {
+    let Some(node) = node else {
+        return false;
+    };
+    if !matches!(node, LayoutNode::Split { id, .. } if *id == split_id) {
+        return match node {
+            LayoutNode::Split { first, second, .. } => {
+                break_split(Some(first), split_id, dragged_band, crossing_fraction)
+                    || break_split(Some(second), split_id, dragged_band, crossing_fraction)
+            }
+            LayoutNode::Panel { .. } => false,
+        };
+    }
+    let snapshot = node.clone();
+    match snapshot {
+        LayoutNode::Split {
+            id,
+            axis: outer_axis,
+            fraction: outer_fraction,
+            first,
+            second,
+        } if id == split_id => {
+            let LayoutNode::Split {
+                id: first_child_id,
+                axis: inner_axis,
+                first: first_first,
+                second: first_second,
+                ..
+            } = *first
+            else {
+                return false;
+            };
+            let LayoutNode::Split {
+                id: second_child_id,
+                axis: second_axis,
+                first: second_first,
+                second: second_second,
+                ..
+            } = *second
+            else {
+                return false;
+            };
+            if inner_axis == outer_axis || second_axis != inner_axis {
+                return false;
+            }
+            let (first_band_id, second_band_id) = match dragged_band {
+                SplitSide::First => (id, second_child_id),
+                SplitSide::Second => (second_child_id, id),
+            };
+            *node = LayoutNode::Split {
+                id: first_child_id,
+                axis: inner_axis,
+                fraction: crossing_fraction.clamp(0.1, 0.9),
+                first: Box::new(LayoutNode::Split {
+                    id: first_band_id,
+                    axis: outer_axis,
+                    fraction: outer_fraction,
+                    first: first_first,
+                    second: second_first,
+                }),
+                second: Box::new(LayoutNode::Split {
+                    id: second_band_id,
+                    axis: outer_axis,
+                    fraction: outer_fraction,
+                    first: first_second,
+                    second: second_second,
+                }),
+            };
+            true
+        }
+        LayoutNode::Split { .. } | LayoutNode::Panel { .. } => false,
     }
 }
 
@@ -2425,6 +2825,172 @@ mod tests {
         layout.apply_panel_action("graph", PanelAction::RestoreMaximized);
         let (restored, _) = layout.geometries(rect, &specs());
         assert_eq!(restored.len(), 2);
+    }
+
+    #[test]
+    fn control_drag_aligns_a_boundary_with_a_parallel_neighbour() {
+        let root = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let dragged = BoundaryGeometry {
+            id: 2,
+            axis: SplitAxis::Horizontal,
+            rect: Rect::from_min_size(egui::pos2(600.0, 398.0), egui::vec2(200.0, 4.0)),
+            parent_rect: Rect::from_min_size(egui::pos2(600.0, 0.0), egui::vec2(200.0, 600.0)),
+        };
+        let neighbour = BoundaryGeometry {
+            id: 1,
+            axis: SplitAxis::Horizontal,
+            rect: Rect::from_min_size(egui::pos2(0.0, 298.0), egui::vec2(600.0, 4.0)),
+            parent_rect: Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 600.0)),
+        };
+        let boundaries = [dragged.clone(), neighbour];
+
+        let fraction = dragged.snapped_fraction_at(egui::pos2(700.0, 307.0), &boundaries, root);
+        let (_, splitter, _) = split_rects(
+            dragged.parent_rect,
+            SplitAxis::Horizontal,
+            fraction,
+            egui::Vec2::ZERO,
+            egui::Vec2::ZERO,
+            4.0,
+        );
+
+        assert_eq!(splitter.center().y, 300.0);
+    }
+
+    #[test]
+    fn control_drag_uses_the_layout_grid_away_from_neighbour_boundaries() {
+        let root = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let dragged = BoundaryGeometry {
+            id: 2,
+            axis: SplitAxis::Horizontal,
+            rect: Rect::from_min_size(egui::pos2(600.0, 398.0), egui::vec2(200.0, 4.0)),
+            parent_rect: Rect::from_min_size(egui::pos2(600.0, 0.0), egui::vec2(200.0, 600.0)),
+        };
+
+        let fraction = dragged.snapped_fraction_at(
+            egui::pos2(700.0, 333.0),
+            std::slice::from_ref(&dragged),
+            root,
+        );
+        let (_, splitter, _) = split_rects(
+            dragged.parent_rect,
+            SplitAxis::Horizontal,
+            fraction,
+            egui::Vec2::ZERO,
+            egui::Vec2::ZERO,
+            4.0,
+        );
+
+        assert_eq!(splitter.center().y, 336.0);
+    }
+
+    #[test]
+    fn shift_drag_lines_up_nearby_parallel_boundaries() {
+        let root = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let dragged = BoundaryGeometry {
+            id: 1,
+            axis: SplitAxis::Horizontal,
+            rect: Rect::from_min_size(egui::pos2(0.0, 298.0), egui::vec2(400.0, 4.0)),
+            parent_rect: Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 600.0)),
+        };
+        let neighbour = BoundaryGeometry {
+            id: 2,
+            axis: SplitAxis::Horizontal,
+            rect: Rect::from_min_size(egui::pos2(400.0, 306.0), egui::vec2(400.0, 4.0)),
+            parent_rect: Rect::from_min_size(egui::pos2(400.0, 0.0), egui::vec2(400.0, 600.0)),
+        };
+        let boundaries = [dragged.clone(), neighbour.clone()];
+
+        let actions =
+            dragged.resize_actions(egui::pos2(200.0, 350.0), &boundaries, root, false, true);
+        let fractions: Vec<_> = actions
+            .iter()
+            .map(|action| match action {
+                LayoutAction::SetFraction { split_id, fraction } => (*split_id, *fraction),
+                _ => panic!("resize emitted a non-resize action"),
+            })
+            .collect();
+
+        assert_eq!(fractions.len(), 2);
+        assert_eq!(fractions[0].0, dragged.id);
+        assert_eq!(fractions[1].0, neighbour.id);
+        assert!((dragged.coordinate_for_fraction(fractions[0].1) - 350.0).abs() < 0.001);
+        assert!((neighbour.coordinate_for_fraction(fractions[1].1) - 350.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn option_break_transposes_an_aligned_grid_and_keeps_the_dragged_segment_id() {
+        let panel = |id: &str| LayoutNode::Panel {
+            panel: PanelState {
+                id: id.to_owned(),
+                content: id.to_owned(),
+                title_bar_position: TitleBarPosition::Top,
+            },
+        };
+        let mut root = LayoutNode::Split {
+            id: 1,
+            axis: SplitAxis::Vertical,
+            fraction: 0.4,
+            first: Box::new(LayoutNode::Split {
+                id: 2,
+                axis: SplitAxis::Horizontal,
+                fraction: 0.5,
+                first: Box::new(panel("top-left")),
+                second: Box::new(panel("bottom-left")),
+            }),
+            second: Box::new(LayoutNode::Split {
+                id: 3,
+                axis: SplitAxis::Horizontal,
+                fraction: 0.5,
+                first: Box::new(panel("top-right")),
+                second: Box::new(panel("bottom-right")),
+            }),
+        };
+
+        assert!(break_split(Some(&mut root), 1, SplitSide::First, 0.5));
+
+        let LayoutNode::Split {
+            id,
+            axis,
+            first,
+            second,
+            ..
+        } = root
+        else {
+            panic!("broken grid root is not a split");
+        };
+        assert_eq!((id, axis), (2, SplitAxis::Horizontal));
+        assert!(matches!(
+            first.as_ref(),
+            LayoutNode::Split {
+                id: 1,
+                axis: SplitAxis::Vertical,
+                ..
+            }
+        ));
+        assert!(matches!(
+            second.as_ref(),
+            LayoutNode::Split {
+                id: 3,
+                axis: SplitAxis::Vertical,
+                ..
+            }
+        ));
+        let rebuilt = LayoutNode::Split {
+            id,
+            axis,
+            fraction: 0.5,
+            first,
+            second,
+        };
+        let contents: Vec<_> = all_panels(Some(&rebuilt))
+            .into_iter()
+            .map(|panel| panel.content.as_str())
+            .collect();
+        assert_eq!(
+            contents,
+            ["top-left", "top-right", "bottom-left", "bottom-right"]
+        );
     }
 
     #[test]
