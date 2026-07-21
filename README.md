@@ -191,7 +191,7 @@ for inspecting captured CCD image data rather than a processing pipeline.
 
 ## Development
 
-This project was developed collaboratively with AI assistance (Claude/GitHub Copilot).
+This project was developed collaboratively with AI assistance (Codex/Claude/GitHub Copilot).
 
 ## License
 
