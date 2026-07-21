@@ -114,17 +114,7 @@ impl App {
     }
 
     pub(crate) fn platform_save(&mut self, storage: &mut dyn eframe::Storage) {
-        let analyzer_split = self
-            .panel_layout
-            .split_fraction("logic_analyzer", "node_graph")
-            .unwrap_or(0.42);
-        self.platform.save(
-            storage,
-            analyzer_split,
-            self.panel_layout.state().clone(),
-            self.node_graph.ui_prefs(),
-            self.decoder_panels.state().clone(),
-        );
+        self.platform.save(storage, self.node_graph.ui_prefs());
     }
 
     pub(crate) fn platform_before_ui(&mut self, _ui: &mut egui::Ui) {
@@ -209,6 +199,7 @@ impl App {
                 self.error_badges.clear();
                 self.restore_sampling_overlay_setting();
                 self.restore_viewer_lane_order_setting();
+                self.restore_panel_layout_setting();
                 self.platform.current_file = Some(path.clone());
                 self.mark_graph_saved();
                 self.push_recent_file(path.clone());
@@ -242,6 +233,7 @@ impl App {
         self.node_graph.new_graph();
         self.restore_sampling_overlay_setting();
         self.restore_viewer_lane_order_setting();
+        self.restore_panel_layout_setting();
         self.platform.derived_cache_nodes.clear();
         self.platform.current_file = None;
         self.mark_graph_saved();
@@ -313,6 +305,11 @@ impl App {
     }
 
     fn save_to_file(&mut self, path: PathBuf) -> bool {
+        if let Err(error) = self.sync_panel_layout_setting() {
+            self.toasts
+                .error(format!("Could not save the panel layout: {error}"));
+            return false;
+        }
         match self.node_graph.save_to_path(&path) {
             Ok(()) => {
                 self.platform.current_file = Some(path.clone());
@@ -355,6 +352,11 @@ impl App {
     }
 
     fn mark_graph_saved(&mut self) {
+        if let Err(error) = self.sync_panel_layout_setting() {
+            self.toasts
+                .error(format!("Could not save the panel layout: {error}"));
+            return;
+        }
         match self.node_graph.snapshot_value() {
             Ok(graph) => self.platform.saved_graph = graph,
             Err(error) => self.toasts.error(error),
@@ -362,6 +364,9 @@ impl App {
     }
 
     fn has_unsaved_changes(&mut self) -> bool {
+        if self.sync_panel_layout_setting().is_err() {
+            return true;
+        }
         self.node_graph
             .snapshot_value()
             .map_or(true, |graph| graph != self.platform.saved_graph)

@@ -160,19 +160,13 @@ impl PlatformState {
     pub(crate) fn restore(
         cc: &eframe::CreationContext,
         widget: &mut node_graph::NodeGraphWidget,
-    ) -> (
-        Self,
-        Option<panel_layout::PanelLayoutState>,
-        f32,
-        crate::decoder_panel::DecoderPanelsState,
-    ) {
+    ) -> Self {
         let persisted = cc
             .storage
             .and_then(|storage| eframe::get_value::<PersistedState>(storage, eframe::APP_KEY));
-        let (panel_layout, analyzer_split, decoder_panels) = persisted
-            .as_ref()
-            .map(|state| state.ui.clone().restore(widget))
-            .unwrap_or_else(|| (None, 0.42, Default::default()));
+        if let Some(state) = persisted.as_ref() {
+            state.ui.clone().restore(widget);
+        }
         let recent_files = persisted
             .map(|state| normalize_recent_files(state.recent_files))
             .unwrap_or_default();
@@ -193,24 +187,19 @@ impl PlatformState {
             );
             receiver
         };
-        (
-            Self {
-                current_file: None,
-                saved_graph,
-                pending_guarded_action: None,
-                allow_close: false,
-                recent_files,
-                confirm_clear_recent: false,
-                confirm_clear_derived_caches: false,
-                derived_cache_nodes: HashSet::new(),
-                capture_presentation_identity: None,
-                #[cfg(target_os = "macos")]
-                native_menu_commands,
-            },
-            panel_layout,
-            analyzer_split,
-            decoder_panels,
-        )
+        Self {
+            current_file: None,
+            saved_graph,
+            pending_guarded_action: None,
+            allow_close: false,
+            recent_files,
+            confirm_clear_recent: false,
+            confirm_clear_derived_caches: false,
+            derived_cache_nodes: HashSet::new(),
+            capture_presentation_identity: None,
+            #[cfg(target_os = "macos")]
+            native_menu_commands,
+        }
     }
 
     pub(crate) fn recent_files(&self) -> &[PathBuf] {
@@ -226,18 +215,10 @@ impl PlatformState {
     pub(crate) fn save(
         &self,
         storage: &mut dyn eframe::Storage,
-        analyzer_split: f32,
-        panel_layout: panel_layout::PanelLayoutState,
         graph_ui_prefs: node_graph::GraphUiPrefs,
-        decoder_panels: crate::decoder_panel::DecoderPanelsState,
     ) {
         let state = PersistedState {
-            ui: super::PersistedUiState::capture(
-                analyzer_split,
-                panel_layout,
-                graph_ui_prefs,
-                decoder_panels,
-            ),
+            ui: super::PersistedUiState::capture(graph_ui_prefs),
             recent_files: self.recent_files.clone(),
         };
         eframe::set_value(storage, eframe::APP_KEY, &state);
@@ -259,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_state_without_panel_tree_still_loads() {
+    fn legacy_panel_layout_fields_are_ignored() {
         let legacy = serde_json::json!({
             "analyzer_split": 0.37,
             "graph_ui_prefs": {
@@ -270,7 +251,6 @@ mod tests {
             "recent_files": [],
         });
         let restored: PersistedState = serde_json::from_value(legacy).unwrap();
-        assert_eq!(restored.ui.analyzer_split, 0.37);
-        assert!(restored.ui.panel_layout.is_none());
+        assert_eq!(restored.ui.graph_ui_prefs.panel_width, 320.0);
     }
 }

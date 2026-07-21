@@ -23,6 +23,14 @@ use crate::toast::Toasts;
 
 const SAMPLING_OVERLAY_EXTENSION: &str = "logic_analyzer_ui.sampling_overlay";
 const VIEWER_LANE_ORDER_EXTENSION: &str = "logic_analyzer_ui.viewer_lane_order";
+const PANEL_LAYOUT_EXTENSION: &str = "logic_analyzer_ui.panel_layout";
+
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+struct SavedPanelLayout {
+    layout: panel_layout::PanelLayoutState,
+    #[serde(default)]
+    decoder_panels: crate::decoder_panel::DecoderPanelsState,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 enum SavedViewerRow {
@@ -89,6 +97,24 @@ fn save_viewer_lane_order(
     } else {
         graph.set_extension(VIEWER_LANE_ORDER_EXTENSION, order)
     }
+}
+
+fn saved_panel_layout(graph: &GraphState) -> Result<Option<SavedPanelLayout>, serde_json::Error> {
+    graph.extension(PANEL_LAYOUT_EXTENSION)
+}
+
+fn save_panel_layout(
+    graph: &mut GraphState,
+    layout: panel_layout::PanelLayoutState,
+    decoder_panels: crate::decoder_panel::DecoderPanelsState,
+) -> Result<(), serde_json::Error> {
+    graph.set_extension(
+        PANEL_LAYOUT_EXTENSION,
+        SavedPanelLayout {
+            layout,
+            decoder_panels,
+        },
+    )
 }
 
 pub struct App {
@@ -276,6 +302,7 @@ impl App {
         app.node_graph.set_graph(graph);
         app.restore_sampling_overlay_setting();
         app.restore_viewer_lane_order_setting();
+        app.restore_panel_layout_setting();
         app
     }
 
@@ -328,8 +355,7 @@ impl App {
         ));
         let mut widget = NodeGraphWidget::new(registry);
         widget.set_input_bindings(input_bindings.clone());
-        let (platform, panel_layout_state, analyzer_split, decoder_panels_state) =
-            crate::app_platform::PlatformState::restore(cc, &mut widget);
+        let platform = crate::app_platform::PlatformState::restore(cc, &mut widget);
         let mut logic_analyzer = LogicAnalyzerViewer::new();
         logic_analyzer.set_input_bindings(input_bindings.clone());
         let application_config = crate::application_config::load();
@@ -352,15 +378,7 @@ impl App {
             node_graph: widget,
             logic_analyzer,
             input_bindings,
-            panel_layout: panel_layout_state.map_or_else(
-                || {
-                    PanelLayout::new([
-                        ("logic_analyzer", analyzer_split),
-                        ("node_graph", 1.0 - analyzer_split),
-                    ])
-                },
-                PanelLayout::from_state,
-            ),
+            panel_layout: Self::default_panel_layout(),
             builders,
             capture,
             capture_availability,
@@ -384,8 +402,42 @@ impl App {
             sampling_overlay_candidates: Vec::new(),
             selected_sampling_overlay: None,
             viewer_lane_order: Vec::new(),
-            decoder_panels: DecoderPanels::from_state(decoder_panels_state),
+            decoder_panels: DecoderPanels::default(),
         }
+    }
+
+    fn default_panel_layout() -> PanelLayout {
+        PanelLayout::new([
+            ("logic_analyzer", DEFAULT_ANALYZER_SPLIT),
+            ("node_graph", 1.0 - DEFAULT_ANALYZER_SPLIT),
+        ])
+    }
+
+    pub(crate) fn restore_panel_layout_setting(&mut self) {
+        match saved_panel_layout(self.node_graph.graph()) {
+            Ok(Some(saved)) => {
+                self.panel_layout = PanelLayout::from_state(saved.layout);
+                self.decoder_panels = DecoderPanels::from_state(saved.decoder_panels);
+            }
+            Ok(None) => {
+                self.panel_layout = Self::default_panel_layout();
+                self.decoder_panels = DecoderPanels::default();
+            }
+            Err(error) => {
+                self.panel_layout = Self::default_panel_layout();
+                self.decoder_panels = DecoderPanels::default();
+                self.toasts
+                    .error(format!("Could not restore the saved panel layout: {error}"));
+            }
+        }
+    }
+
+    pub(crate) fn sync_panel_layout_setting(&mut self) -> Result<(), serde_json::Error> {
+        save_panel_layout(
+            self.node_graph.graph_mut(),
+            self.panel_layout.state().clone(),
+            self.decoder_panels.state().clone(),
+        )
     }
 
     pub(crate) fn restore_viewer_lane_order_setting(&mut self) {
@@ -1512,21 +1564,9 @@ impl App {
         );
     }
 
-    /// Ensures the requested number of decoder panels for a host-provided demo layout.
-    pub fn ensure_decoder_panel_count(&mut self, count: usize) {
-        self.panel_layout.ensure_right_column_content_count(
-            "decoder",
-            count,
-            &VIEW_PANEL_ORDER,
-            RIGHT_COLUMN_LAYOUT_FRACTION,
-        );
-    }
-
     pub(crate) fn reset_panel_layout(&mut self) {
-        self.panel_layout = PanelLayout::new([
-            ("logic_analyzer", DEFAULT_ANALYZER_SPLIT),
-            ("node_graph", 1.0 - DEFAULT_ANALYZER_SPLIT),
-        ]);
+        self.panel_layout = Self::default_panel_layout();
+        self.decoder_panels = DecoderPanels::default();
     }
 
     fn status_actions(
@@ -1928,8 +1968,9 @@ mod font_tests {
     use node_graph::{GraphState, NodeId};
 
     use super::{
-        SavedViewerRow, install_fonts, load_symbol_fonts, save_sampling_overlay,
-        save_viewer_lane_order, saved_sampling_overlay, saved_viewer_lane_order,
+        SavedViewerRow, install_fonts, load_symbol_fonts, save_panel_layout, save_sampling_overlay,
+        save_viewer_lane_order, saved_panel_layout, saved_sampling_overlay,
+        saved_viewer_lane_order,
     };
 
     #[test]
@@ -1975,6 +2016,46 @@ mod font_tests {
 
         save_viewer_lane_order(&mut restored, &[]).unwrap();
         assert!(saved_viewer_lane_order(&restored).unwrap().is_empty());
+    }
+
+    #[test]
+    fn panel_layout_round_trips_with_the_graph_document() {
+        let mut graph = GraphState::default();
+        let mut layout =
+            panel_layout::PanelLayout::new([("logic_analyzer", 0.42), ("node_graph", 0.58)]);
+        layout.ensure_right_column_content_count(
+            "decoder",
+            2,
+            &["watches", "triggers", "decoder"],
+            0.82,
+        );
+        let expected_layout = serde_json::to_value(layout.state()).unwrap();
+
+        save_panel_layout(
+            &mut graph,
+            layout.state().clone(),
+            crate::decoder_panel::DecoderPanelsState::default(),
+        )
+        .unwrap();
+
+        let json = serde_json::to_string(&graph).unwrap();
+        let restored: GraphState = serde_json::from_str(&json).unwrap();
+        let saved = saved_panel_layout(&restored).unwrap().unwrap();
+        assert_eq!(serde_json::to_value(saved.layout).unwrap(), expected_layout);
+    }
+
+    #[test]
+    fn wasm_demo_contains_its_decoder_panel_layout() {
+        let graph: GraphState =
+            serde_json::from_str(include_str!("../../app_web/data/wasm_decoder_demo.json"))
+                .unwrap();
+        let saved = saved_panel_layout(&graph).unwrap().unwrap();
+        let value = serde_json::to_value(saved).unwrap();
+
+        assert_eq!(
+            value["decoder_panels"]["panels"].as_object().unwrap().len(),
+            2
+        );
     }
 
     #[test]

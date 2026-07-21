@@ -25,16 +25,11 @@ impl App {
     pub(crate) fn platform_logic(&mut self, _ctx: &egui::Context) {}
 
     pub(crate) fn platform_save(&mut self, storage: &mut dyn eframe::Storage) {
-        let analyzer_split = self
-            .panel_layout
-            .split_fraction("logic_analyzer", "node_graph")
-            .unwrap_or(0.50);
-        let state = super::PersistedUiState::capture(
-            analyzer_split,
-            self.panel_layout.state().clone(),
-            self.node_graph.ui_prefs(),
-            self.decoder_panels.state().clone(),
-        );
+        if let Err(error) = self.sync_panel_layout_setting() {
+            self.toasts
+                .error(format!("Could not update the graph panel layout: {error}"));
+        }
+        let state = super::PersistedUiState::capture(self.node_graph.ui_prefs());
         eframe::set_value(storage, eframe::APP_KEY, &state);
     }
 
