@@ -12,14 +12,6 @@ use logic_analyzer_viewer::{
 struct SpiLaneRenderer;
 
 impl ViewerLaneRenderer for SpiLaneRenderer {
-    fn row_height(&self, group: &ViewerLaneGroup, base_height: f32) -> f32 {
-        if group.tracks.len() > 1 {
-            base_height * 3.0
-        } else {
-            base_height
-        }
-    }
-
     fn annotation_visual(
         &self,
         track: &ViewerLaneTrackId,
@@ -107,9 +99,41 @@ mod tests {
     fn detail_outputs_form_one_group_per_spi_direction() {
         assert!(spi_output_presentation(0).is_none());
         assert!(spi_output_presentation(1).is_none());
-        assert_eq!(spi_output_presentation(2).unwrap().group_key, "mosi");
-        assert_eq!(spi_output_presentation(3).unwrap().track_key, "data");
+        let mosi_bits = spi_output_presentation(2).unwrap();
+        let mosi_data = spi_output_presentation(3).unwrap();
+        assert_eq!(mosi_bits.group_key, "mosi");
+        assert_eq!(mosi_data.track_key, "data");
+        assert_eq!(mosi_bits.relative_height, 1.0);
+        assert_eq!(mosi_data.relative_height, 1.0);
         assert_eq!(spi_output_presentation(4).unwrap().group_key, "miso");
         assert_eq!(spi_output_presentation(5).unwrap().track_key, "data");
+    }
+
+    #[test]
+    fn bits_and_data_each_use_one_standard_lane_height() {
+        let renderer: Arc<dyn ViewerLaneRenderer> = Arc::new(SpiLaneRenderer);
+        let group = ViewerLaneGroup {
+            id: logic_analyzer_viewer::ViewerLaneGroupId::new("spi"),
+            label: "SPI".to_owned(),
+            badge: ViewerLaneBadge::new("O", Color32::WHITE),
+            tracks: vec![
+                logic_analyzer_viewer::ViewerLaneTrack::new(
+                    "bits",
+                    DerivedLaneId::new("bits"),
+                    1.0,
+                ),
+                logic_analyzer_viewer::ViewerLaneTrack::new(
+                    "data",
+                    DerivedLaneId::new("data"),
+                    1.0,
+                ),
+            ],
+            renderer: Arc::clone(&renderer),
+        };
+
+        assert_eq!(renderer.row_height(&group, 30.0), 60.0);
+        let rects = group.track_rects(0.0, 60.0);
+        assert_eq!(rects[0].2, 30.0);
+        assert_eq!(rects[1].2, 30.0);
     }
 }
