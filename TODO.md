@@ -72,6 +72,26 @@ Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN
 
 ## Capture sources
 
+### Consolidate wasm stand-ins behind processing platform facades
+
+- Make `logic_analyzer_graph` compile the same concrete node definitions and runtime builders on
+  native and wasm. It must describe node state, ports, and presentation contracts without knowing
+  that a wasm runtime is synthetic or that a native runtime uses USB/filesystem resources.
+- Move selection of real versus synthetic source and sink implementations into whole-file
+  platform facades owned by `logic_analyzer_processing`. The U3Pro16 facade selects the USB-backed
+  implementation natively and a synthetic implementation on wasm; file-source facades select
+  native readers or deterministic in-memory captures; writer facades select filesystem writers or
+  discard sinks.
+- Prefer a platform-neutral factory or wrapper with one constructor/configuration surface. Use a
+  type re-export alias only where the native and wasm implementations genuinely satisfy the same
+  API; do not force hardware-only control methods onto synthetic implementations merely to make an
+  alias compile.
+- Pass synthetic capture presentation and runtime capabilities back through explicit processing
+  metadata/contracts. Remove `builder_wasm.rs`, synthetic-presentation helpers, and target-specific
+  builder registration from `logic_analyzer_graph` once the processing facade owns those choices.
+- Keep target selection in one processing `platform` boundary per capability and add native/wasm
+  catalog, port-schema, state-option, and lowering-parity tests.
+
 - Implement the dependency-ordered delivery plan in
   [Live Capture and Trigger Control](docs/LIVE_CAPTURE_TRIGGER_DESIGN.md). Continue with Phase 13 and do
   not begin a later phase until the preceding completion gate passes:
