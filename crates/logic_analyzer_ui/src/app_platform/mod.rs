@@ -7,6 +7,7 @@ mod implementation;
 #[path = "wasm.rs"]
 mod implementation;
 
+mod bundled_font;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "native_font.rs"]
 mod font;

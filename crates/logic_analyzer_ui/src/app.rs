@@ -1897,8 +1897,9 @@ fn capture_outcome_name(outcome: signal_processing::CaptureSessionOutcome) -> &'
     }
 }
 
-/// Adds the platform's native symbol fonts as fallbacks for menu icon glyphs
-/// that egui's bundled fonts don't cover.
+/// Adds symbol-font fallbacks for menu and control glyphs that egui's default
+/// fonts don't cover. Bundled Noto faces take priority so native and WASM use
+/// consistent symbol metrics; native platform fonts remain last-resort fallbacks.
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     for (index, font_data) in load_symbol_fonts().into_iter().enumerate() {
@@ -1909,6 +1910,11 @@ fn install_fonts(ctx: &egui::Context) {
         fonts
             .families
             .get_mut(&egui::FontFamily::Proportional)
+            .unwrap()
+            .push(font_name.clone());
+        fonts
+            .families
+            .get_mut(&egui::FontFamily::Monospace)
             .unwrap()
             .push(font_name);
     }
@@ -2286,7 +2292,7 @@ mod font_tests {
     fn menu_icon_glyphs_are_available() {
         assert!(
             !load_symbol_fonts().is_empty(),
-            "missing platform symbol font; expected Apple Symbols on macOS, Segoe UI Symbol on Windows, or Noto Sans Symbols, Symbols 2, and Math on Linux"
+            "missing bundled symbol font"
         );
         let ctx = egui::Context::default();
         install_fonts(&ctx);
@@ -2302,7 +2308,9 @@ mod font_tests {
         ctx.begin_pass(Default::default());
         let font_id = egui::FontId::proportional(14.0);
         ctx.fonts_mut(|fonts| {
-            const MENU_GLYPHS: &[char] = &['⇧', '⌘', '⌥', '⇪', '⏎', '↶', '↷', '⌧', '⎘', '⧉', '▣'];
+            const MENU_GLYPHS: &[char] = &[
+                '⇧', '⌘', '⌥', '⇪', '⏎', '↶', '↷', '⌧', '⎘', '⧉', '▣', '▼', '▾',
+            ];
             for c in MENU_GLYPHS {
                 assert!(
                     fonts.has_glyph(&font_id, *c),

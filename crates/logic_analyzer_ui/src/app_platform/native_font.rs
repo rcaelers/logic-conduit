@@ -1,9 +1,12 @@
 pub(crate) fn load_symbol_fonts() -> Vec<egui::FontData> {
-    symbol_font_paths()
-        .iter()
-        .filter_map(|path| std::fs::read(path).ok())
-        .map(egui::FontData::from_owned)
-        .collect()
+    let mut fonts = super::bundled_font::load_bundled_symbol_fonts();
+    fonts.extend(
+        symbol_font_paths()
+            .iter()
+            .filter_map(|path| std::fs::read(path).ok())
+            .map(egui::FontData::from_owned),
+    );
+    fonts
 }
 
 #[cfg(target_os = "macos")]
