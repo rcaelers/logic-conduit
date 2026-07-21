@@ -498,11 +498,25 @@ impl App {
     }
 
     fn handle_node_context_action(&mut self, node_id: NodeId, action_id: &str) {
-        if action_id != "sampling_overlay"
-            || !self
-                .sampling_overlay_candidates
-                .iter()
-                .any(|candidate| candidate.node_id() == node_id)
+        if action_id != "sampling_overlay" {
+            return;
+        }
+        let current_run_candidates = self
+            .run
+            .as_ref()
+            .map(|run| run.sampling_overlays().to_vec())
+            .or_else(|| {
+                self.capture_analysis
+                    .as_ref()
+                    .map(|run| run.sampling_overlays().to_vec())
+            });
+        if let Some(candidates) = current_run_candidates {
+            self.sampling_overlay_candidates = candidates;
+        }
+        if !self
+            .sampling_overlay_candidates
+            .iter()
+            .any(|candidate| candidate.node_id() == node_id)
         {
             return;
         }
@@ -1824,6 +1838,12 @@ impl eframe::App for App {
                     }
                     if let Some((node_id, action_id)) = self.node_graph.take_node_context_action() {
                         self.handle_node_context_action(node_id, &action_id);
+                        // The analyzer panel can already have been painted earlier in this
+                        // frame. A completed run no longer schedules periodic frames, so
+                        // explicitly draw the newly selected sampling overlay on a later frame.
+                        panel_ui
+                            .ctx()
+                            .request_repaint_after(std::time::Duration::from_millis(16));
                     }
                     self.platform_after_graph();
                 }

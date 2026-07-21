@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 /// Thread-safe boolean activity timeline used by processing nodes to expose
@@ -6,6 +7,7 @@ use std::sync::{Arc, RwLock};
 #[derive(Debug, Clone, Default)]
 pub struct SamplingActivity {
     transitions: Arc<RwLock<Vec<(u64, bool)>>>,
+    observed: Arc<AtomicBool>,
 }
 
 impl SamplingActivity {
@@ -33,6 +35,15 @@ impl SamplingActivity {
             .is_some_and(|(_, active)| *active)
     }
 
+    /// Whether the runtime has evaluated this activity at least once.
+    ///
+    /// An unobserved activity is unknown rather than inactive. Presentation
+    /// consumers can therefore show unqualified sampling points before a run
+    /// while still respecting an evaluated, always-inactive condition.
+    pub fn has_observations(&self) -> bool {
+        self.observed.load(Ordering::Acquire)
+    }
+
     fn record_transitions(&self, transitions: impl IntoIterator<Item = (u64, bool)>) {
         let mut stored = self.transitions.write().unwrap();
         for (time, active) in transitions {
@@ -56,6 +67,7 @@ impl SamplingActivity {
                 stored.push((time, active));
             }
         }
+        self.observed.store(true, Ordering::Release);
     }
 }
 
@@ -104,5 +116,16 @@ mod tests {
             &*activity.transitions.read().unwrap(),
             &[(10, true), (25, false)]
         );
+    }
+
+    #[test]
+    fn empty_evaluation_is_observed_but_inactive() {
+        let activity = SamplingActivity::default();
+        assert!(!activity.has_observations());
+
+        activity.record_intervals([]);
+
+        assert!(activity.has_observations());
+        assert!(!activity.is_active_at(10));
     }
 }

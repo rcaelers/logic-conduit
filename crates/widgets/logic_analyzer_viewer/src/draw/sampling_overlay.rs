@@ -119,7 +119,7 @@ fn sampling_is_active(channels: &[LogicChannel], overlay: &SamplingOverlay, time
     overlay
         .activities
         .iter()
-        .all(|activity| activity.is_active_at(time_ns))
+        .all(|activity| !activity.has_observations() || activity.is_active_at(time_ns))
         && overlay.qualifiers.iter().all(|qualifier| {
             channels
                 .iter()
@@ -332,6 +332,19 @@ mod tests {
         assert!(!sampling_is_active(&[gate.clone()], &overlay, 1.0));
         assert!(!sampling_is_active(&[gate.clone()], &overlay, 2.0));
         assert!(sampling_is_active(&[gate], &overlay, 3.0));
+    }
+
+    #[test]
+    fn unevaluated_runtime_gate_does_not_hide_pre_run_sampling_points() {
+        let overlay = SamplingOverlay {
+            clock_channel: 0,
+            sampled_channels: vec![1],
+            edge: SamplingEdge::Rising,
+            qualifiers: Vec::new(),
+            activities: vec![SamplingActivity::default()],
+        };
+
+        assert!(sampling_is_active(&[], &overlay, 1.0));
     }
 
     #[test]

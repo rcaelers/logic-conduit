@@ -3530,6 +3530,36 @@ mod tests {
     }
 
     #[test]
+    fn binary_sampling_activity_reaches_the_ui_candidate_after_a_run() {
+        let widget = binary_decoder_demo_widget();
+        let mut ctx = CompileCtx::default();
+        let mut run = start_live(widget.graph(), &BuilderRegistry::standard(), &mut ctx).unwrap();
+        let overlays = ctx.take_sampling_overlays();
+        let binary_sampling = overlays
+            .iter()
+            .find(|candidate| candidate.node_title == "Parallel Decoder")
+            .expect("parallel decoder should expose sampling points");
+        let enable = binary_sampling
+            .overlay
+            .activities
+            .first()
+            .expect("parallel decoder should publish its derived enable activity");
+
+        run.wait();
+
+        assert!(enable.is_active_at(800_000_000));
+        assert!(!enable.is_active_at(1_200_000_000));
+        let completed_enable = run
+            .sampling_overlays()
+            .iter()
+            .find(|candidate| candidate.node_title == "Parallel Decoder")
+            .and_then(|candidate| candidate.overlay.activities.first())
+            .expect("completed run should retain the parallel enable activity");
+        assert!(completed_enable.is_active_at(800_000_000));
+        assert!(!completed_enable.is_active_at(1_200_000_000));
+    }
+
+    #[test]
     fn binary_decoder_demo_latch_follows_every_start_stop_pair() {
         let widget = binary_decoder_demo_widget();
         let mut ctx = CompileCtx::default();
