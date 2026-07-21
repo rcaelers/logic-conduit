@@ -28,7 +28,9 @@ impl WebHandle {
                     let graph: node_graph::GraphState =
                         serde_json::from_str(include_str!("../data/wasm_decoder_demo.json"))
                             .expect("web application demo graph is valid");
-                    Ok(Box::new(logic_analyzer_ui::App::new_with_graph(cc, graph)))
+                    let mut app = logic_analyzer_ui::App::new_with_graph(cc, graph);
+                    app.ensure_decoder_panel_count(2);
+                    Ok(Box::new(app))
                 }),
             )
             .await

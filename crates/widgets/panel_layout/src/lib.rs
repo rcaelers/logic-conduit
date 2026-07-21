@@ -452,6 +452,42 @@ impl PanelLayout {
         {
             return false;
         }
+        self.add_right_column_content(content_id, ordered_contents, existing_layout_fraction)
+    }
+
+    /// Ensures that at least `count` panels with `content_id` are present.
+    /// Additional instances are placed in the same ordered right-side column.
+    pub fn ensure_right_column_content_count(
+        &mut self,
+        content_id: &str,
+        count: usize,
+        ordered_contents: &[&str],
+        existing_layout_fraction: f32,
+    ) -> bool {
+        if !ordered_contents.contains(&content_id) {
+            return false;
+        }
+        let existing = all_panels(self.state.root.as_ref())
+            .into_iter()
+            .filter(|panel| panel.content == content_id)
+            .count();
+        let mut changed = false;
+        for _ in existing..count {
+            changed |= self.add_right_column_content(
+                content_id,
+                ordered_contents,
+                existing_layout_fraction,
+            );
+        }
+        changed
+    }
+
+    fn add_right_column_content(
+        &mut self,
+        content_id: &str,
+        ordered_contents: &[&str],
+        existing_layout_fraction: f32,
+    ) -> bool {
         self.restore_maximized();
 
         let existing_column = match self.state.root.as_ref() {
@@ -2336,6 +2372,30 @@ mod tests {
             assert_eq!(column_contents, ["watches", "triggers", "decoder"]);
             assert_eq!(all_panels(layout.state.root.as_ref()).len(), 5);
         }
+    }
+
+    #[test]
+    fn right_column_can_contain_multiple_instances_of_one_content() {
+        let mut layout = PanelLayout::new([("viewer", 0.5), ("graph", 0.5)]);
+
+        assert!(layout.ensure_right_column_content_count(
+            "decoder",
+            2,
+            &["watches", "triggers", "decoder"],
+            0.75,
+        ));
+        assert!(!layout.ensure_right_column_content_count(
+            "decoder",
+            2,
+            &["watches", "triggers", "decoder"],
+            0.75,
+        ));
+
+        let decoder_count = all_panels(layout.state.root.as_ref())
+            .into_iter()
+            .filter(|panel| panel.content == "decoder")
+            .count();
+        assert_eq!(decoder_count, 2);
     }
 
     #[test]

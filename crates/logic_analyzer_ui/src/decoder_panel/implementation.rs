@@ -140,12 +140,23 @@ impl DecoderPanels {
             return;
         }
 
+        let selected_elsewhere = self
+            .state
+            .panels
+            .iter()
+            .filter(|(other_panel_id, _)| other_panel_id.as_str() != panel_id)
+            .filter_map(|(_, state)| state.selected_source.clone())
+            .collect::<HashSet<_>>();
         let state = self.state.panels.entry(panel_id.to_owned()).or_default();
         if !sources
             .iter()
             .any(|source| Some(&source.id) == state.selected_source.as_ref())
         {
-            state.selected_source = sources.first().map(|source| source.id.clone());
+            state.selected_source = sources
+                .iter()
+                .find(|source| !selected_elsewhere.contains(&source.id))
+                .or_else(|| sources.first())
+                .map(|source| source.id.clone());
             state.hidden_columns.clear();
         }
         let selected_id = state.selected_source.clone().unwrap_or_default();

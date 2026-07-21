@@ -66,13 +66,9 @@ const MAX_RECENT_FILES: usize = 10;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PersistedState {
-    analyzer_split: f32,
-    #[serde(default)]
-    panel_layout: Option<panel_layout::PanelLayoutState>,
-    graph_ui_prefs: node_graph::GraphUiPrefs,
+    #[serde(flatten)]
+    ui: super::PersistedUiState,
     recent_files: Vec<PathBuf>,
-    #[serde(default)]
-    decoder_panels: crate::decoder_panel::DecoderPanelsState,
 }
 
 fn normalize_recent_files(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
@@ -173,19 +169,10 @@ impl PlatformState {
         let persisted = cc
             .storage
             .and_then(|storage| eframe::get_value::<PersistedState>(storage, eframe::APP_KEY));
-        if let Some(persisted) = &persisted {
-            widget.set_ui_prefs(persisted.graph_ui_prefs.clone());
-        }
-        let analyzer_split = persisted
+        let (panel_layout, analyzer_split, decoder_panels) = persisted
             .as_ref()
-            .map_or(0.42, |state| state.analyzer_split);
-        let panel_layout = persisted
-            .as_ref()
-            .and_then(|state| state.panel_layout.clone());
-        let decoder_panels = persisted
-            .as_ref()
-            .map(|state| state.decoder_panels.clone())
-            .unwrap_or_default();
+            .map(|state| state.ui.clone().restore(widget))
+            .unwrap_or_else(|| (None, 0.42, Default::default()));
         let recent_files = persisted
             .map(|state| normalize_recent_files(state.recent_files))
             .unwrap_or_default();
@@ -245,11 +232,13 @@ impl PlatformState {
         decoder_panels: crate::decoder_panel::DecoderPanelsState,
     ) {
         let state = PersistedState {
-            analyzer_split,
-            panel_layout: Some(panel_layout),
-            graph_ui_prefs,
+            ui: super::PersistedUiState::capture(
+                analyzer_split,
+                panel_layout,
+                graph_ui_prefs,
+                decoder_panels,
+            ),
             recent_files: self.recent_files.clone(),
-            decoder_panels,
         };
         eframe::set_value(storage, eframe::APP_KEY, &state);
     }
@@ -281,7 +270,7 @@ mod tests {
             "recent_files": [],
         });
         let restored: PersistedState = serde_json::from_value(legacy).unwrap();
-        assert_eq!(restored.analyzer_split, 0.37);
-        assert!(restored.panel_layout.is_none());
+        assert_eq!(restored.ui.analyzer_split, 0.37);
+        assert!(restored.ui.panel_layout.is_none());
     }
 }

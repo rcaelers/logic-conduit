@@ -20,6 +20,7 @@ mod hooks;
 #[cfg(target_arch = "wasm32")]
 #[path = "wasm_hooks.rs"]
 mod hooks;
+mod ui_persistence;
 
 pub(crate) use font::load_symbol_fonts;
 pub(crate) use implementation::PlatformState;
@@ -33,3 +34,4 @@ pub(crate) use implementation::{
 pub use implementation::{
     NativeMenuCommand, dispatch_native_menu_command, set_recent_files_listener,
 };
+pub(crate) use ui_persistence::PersistedUiState;

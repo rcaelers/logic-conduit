@@ -1512,6 +1512,16 @@ impl App {
         );
     }
 
+    /// Ensures the requested number of decoder panels for a host-provided demo layout.
+    pub fn ensure_decoder_panel_count(&mut self, count: usize) {
+        self.panel_layout.ensure_right_column_content_count(
+            "decoder",
+            count,
+            &VIEW_PANEL_ORDER,
+            RIGHT_COLUMN_LAYOUT_FRACTION,
+        );
+    }
+
     pub(crate) fn reset_panel_layout(&mut self) {
         self.panel_layout = PanelLayout::new([
             ("logic_analyzer", DEFAULT_ANALYZER_SPLIT),
@@ -1552,7 +1562,7 @@ impl App {
 
 const STATUS_BAR_HEIGHT: f32 = 28.0;
 const DEFAULT_ANALYZER_SPLIT: f32 = 0.42;
-const RIGHT_COLUMN_LAYOUT_FRACTION: f32 = 0.75;
+const RIGHT_COLUMN_LAYOUT_FRACTION: f32 = 0.82;
 const VIEW_PANEL_ORDER: [&str; 3] = ["watches", "triggers", "decoder"];
 
 #[derive(Clone, Copy)]

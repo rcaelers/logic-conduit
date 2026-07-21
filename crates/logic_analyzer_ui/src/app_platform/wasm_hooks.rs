@@ -24,10 +24,18 @@ impl App {
 
     pub(crate) fn platform_logic(&mut self, _ctx: &egui::Context) {}
 
-    pub(crate) fn platform_save(&mut self, _storage: &mut dyn eframe::Storage) {
-        // Browser persistence is host-owned, but keep the serializable panel state reachable
-        // through the same platform hook as native persistence.
-        let _ = self.decoder_panels.state();
+    pub(crate) fn platform_save(&mut self, storage: &mut dyn eframe::Storage) {
+        let analyzer_split = self
+            .panel_layout
+            .split_fraction("logic_analyzer", "node_graph")
+            .unwrap_or(0.50);
+        let state = super::PersistedUiState::capture(
+            analyzer_split,
+            self.panel_layout.state().clone(),
+            self.node_graph.ui_prefs(),
+            self.decoder_panels.state().clone(),
+        );
+        eframe::set_value(storage, eframe::APP_KEY, &state);
     }
 
     pub(crate) fn platform_before_ui(&mut self, ui: &mut egui::Ui) {
