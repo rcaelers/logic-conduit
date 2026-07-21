@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <clipPath id="ngv7"><rect x="10" y="10" width="80" height="80" rx="10"/></clipPath>
+  </defs>
+  <g transform="translate(100,100) scale(8.24)">
+    <rect width="100" height="100" rx="22" fill="#1c1c1c"/>
+
+    <rect x="10" y="10" width="80" height="80" rx="10" fill="#3a3a3a"/>
+    <rect x="10" y="10" width="80" height="22" fill="#5c74a8" clip-path="url(#ngv7)"/>
+
+    <path d="M22 39H30V44H44V39H78" fill="none" stroke="#7ed17e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M22 56H45V51H55V56H78" fill="none" stroke="#5b9bd5" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M22 68H34V63H44V68H58V63H78" fill="none" stroke="#e0a94e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <circle cx="10" cy="50" r="4.5" fill="#4fc3a1"/>
+    <polygon points="90,38 96,44 90,50 84,44" fill="#e0a94e"/>
+    <polygon points="90,62 96,68 90,74 84,68" fill="#e0a94e"/>
+  </g>
+</svg>

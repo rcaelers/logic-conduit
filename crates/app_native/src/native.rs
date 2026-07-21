@@ -66,6 +66,13 @@ struct Args {
 
 pub(crate) type MainResult = eframe::Result;
 
+fn application_icon() -> egui::IconData {
+    eframe::icon_data::from_png_bytes(include_bytes!(
+        "../../../resources/icons/LogicConduit.iconset/icon_256x256.png"
+    ))
+    .expect("embedded LogicConduit application icon is valid PNG")
+}
+
 pub(crate) fn run() -> MainResult {
     tracing_subscriber::fmt()
         .with_env_filter(application_env_filter())
@@ -78,6 +85,7 @@ pub(crate) fn run() -> MainResult {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_app_id(APPLICATION_ID)
+            .with_icon(application_icon())
             .with_inner_size([2100.0, 1350.0])
             .with_title(APPLICATION_NAME),
         ..Default::default()
@@ -136,6 +144,13 @@ mod logging_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_application_icon_is_available() {
+        let icon = application_icon();
+        assert_eq!((icon.width, icon.height), (256, 256));
+        assert_eq!(icon.rgba.len(), 256 * 256 * 4);
+    }
 
     #[test]
     fn accepts_optional_startup_file() {
