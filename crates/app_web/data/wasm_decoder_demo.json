@@ -263,6 +263,30 @@
         "index": 8,
         "node": 8
       }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 6
+      },
+      "to": {
+        "direction": "Input",
+        "index": 1,
+        "node": 9
+      }
+    },
+    {
+      "from": {
+        "direction": "Output",
+        "index": 0,
+        "node": 8
+      },
+      "to": {
+        "direction": "Input",
+        "index": 0,
+        "node": 9
+      }
     }
   ],
   "extensions": {
@@ -402,7 +426,7 @@
   },
   "frames": [],
   "next_frame_id": 0,
-  "next_id": 9,
+  "next_id": 10,
   "nodes": {
     "0": {
       "collapsed": false,
@@ -413,7 +437,12 @@
         255
       ],
       "id": 0,
-      "inputs": [],
+      "inputs": [
+        {},
+        {
+          "def_index": 1
+        }
+      ],
       "kind": "Regular",
       "muted": false,
       "outputs": [
@@ -447,6 +476,69 @@
         },
         {
           "def_index": 10
+        },
+        {
+          "def_index": 11
+        },
+        {
+          "def_index": 12
+        },
+        {
+          "def_index": 13
+        },
+        {
+          "def_index": 14
+        },
+        {
+          "def_index": 15
+        },
+        {
+          "def_index": 16
+        },
+        {
+          "def_index": 17
+        },
+        {
+          "def_index": 18
+        },
+        {
+          "def_index": 19
+        },
+        {
+          "def_index": 20
+        },
+        {
+          "def_index": 21
+        },
+        {
+          "def_index": 22
+        },
+        {
+          "def_index": 23
+        },
+        {
+          "def_index": 24
+        },
+        {
+          "def_index": 25
+        },
+        {
+          "def_index": 26
+        },
+        {
+          "def_index": 27
+        },
+        {
+          "def_index": 28
+        },
+        {
+          "def_index": 29
+        },
+        {
+          "def_index": 30
+        },
+        {
+          "def_index": 31
         }
       ],
       "pos": {
@@ -956,6 +1048,51 @@
       },
       "title": "Parallel Decoder",
       "type_name": "Binary Decoder"
+    },
+    "9": {
+      "collapsed": false,
+      "header_color": [
+        160,
+        80,
+        60,
+        255
+      ],
+      "id": 9,
+      "inputs": [
+        {},
+        {
+          "def_index": 1
+        }
+      ],
+      "kind": "Regular",
+      "muted": false,
+      "outputs": [],
+      "pos": {
+        "x": 1834.65625,
+        "y": 188.68359375
+      },
+      "selected": true,
+      "state": {
+        "filename": {
+          "dialog_title": "Save capture as",
+          "filters": [],
+          "save": true,
+          "value": ""
+        },
+        "index_csv": {
+          "value": true
+        },
+        "write_width": {
+          "value": "U8 (low byte)",
+          "variants": [
+            "U8 (low byte)",
+            "U16 LE",
+            "U32 LE"
+          ]
+        }
+      },
+      "title": "File Writer",
+      "type_name": "File Writer"
     }
   }
 }
