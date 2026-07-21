@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use logic_analyzer_processing::{
+use logic_analyzer_processing::nodes::sources::{
     CaptureMode, ClockEdge, ClockSource, LogicCaptureConfig, LogicEncodingRequest, LogicTrigger,
 };
 use signal_processing::{
@@ -188,7 +188,7 @@ pub(crate) fn apply_live_capture_edit(
 
 #[cfg(test)]
 mod tests {
-    use logic_analyzer_processing::{
+    use logic_analyzer_processing::nodes::sources::{
         CaptureMode, ClockEdge, ClockSource, LogicEncodingRequest, TriggerCondition,
     };
     use signal_processing::SimpleTriggerCondition;

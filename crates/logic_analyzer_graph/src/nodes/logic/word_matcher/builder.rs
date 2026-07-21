@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::{MatchOp, TriggerAt, WordMatcher};
+use logic_analyzer_processing::nodes::logic::{MatchOp, TriggerAt, WordMatcher};
 use node_graph::Socket;
 use signal_processing::{ConfigValue, NodeConfig, ProcessNode, Sample, Trigger, Word};
 

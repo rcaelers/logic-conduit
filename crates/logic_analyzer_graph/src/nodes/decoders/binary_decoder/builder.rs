@@ -3,8 +3,9 @@
 use serde_json::Value;
 
 use logic_analyzer_processing::nodes::decoders::{
-    CsPolarity, Endianness, ParallelDecoder, ParallelInputStrategy, StrobeMode,
+    ParallelDecoder, ParallelInputStrategy, StrobeMode,
 };
+use logic_analyzer_processing::types::{CsPolarity, Endianness};
 use logic_analyzer_viewer::SamplingEdge;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock, Word};

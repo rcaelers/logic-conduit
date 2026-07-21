@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::DsLogicU3Pro16;
+use logic_analyzer_processing::nodes::sources::DsLogicU3Pro16;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock, ViewerRetention};
 

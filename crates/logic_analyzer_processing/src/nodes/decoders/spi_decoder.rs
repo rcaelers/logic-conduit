@@ -28,7 +28,20 @@ use signal_processing::{
     SamplingActivity, Word, WorkError, WorkResult,
 };
 
-use super::types::{BitOrder, CsPolarity, SpiMode};
+use crate::types::{BitOrder, CsPolarity};
+
+/// SPI clock polarity and phase mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpiMode {
+    /// CPOL=0, CPHA=0: clock idle low, sample on the rising edge.
+    Mode0,
+    /// CPOL=0, CPHA=1: clock idle low, sample on the falling edge.
+    Mode1,
+    /// CPOL=1, CPHA=0: clock idle high, sample on the falling edge.
+    Mode2,
+    /// CPOL=1, CPHA=1: clock idle high, sample on the rising edge.
+    Mode3,
+}
 
 /// SPI decoder node
 ///

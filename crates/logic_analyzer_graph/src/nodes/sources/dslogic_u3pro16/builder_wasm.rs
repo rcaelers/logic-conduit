@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::SyntheticCaptureSource;
+use logic_analyzer_processing::nodes::sources::SyntheticCaptureSource;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock, ViewerRetention};
 

@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::{DeferredDslFileSource, DslFileSource};
+use logic_analyzer_processing::nodes::sources::{DeferredDslFileSource, DslFileSource};
 use node_graph::Socket;
 use signal_processing::{
     CaptureIndexBuildProgress, CaptureIndexFactory, DEFAULT_VIEWER_MAX_ENTRIES, IndexSampler,
@@ -27,8 +27,9 @@ impl CaptureIndexFactory for DslCaptureIndexFactory {
         self: Box<Self>,
         progress: &mut dyn FnMut(CaptureIndexBuildProgress),
     ) -> signal_processing::Result<Box<dyn signal_processing::CaptureIndex + Send>> {
-        let source = logic_analyzer_processing::DslFileCaptureDataSource::open(&self.path)
-            .map_err(|error| signal_processing::Error::ParseError(error.to_string()))?;
+        let source =
+            logic_analyzer_processing::nodes::sources::DslFileCaptureDataSource::open(&self.path)
+                .map_err(|error| signal_processing::Error::ParseError(error.to_string()))?;
         IndexSampler::open_data_source_with_progress(source, |value| {
             progress(CaptureIndexBuildProgress {
                 completed: value.completed_roots,
@@ -52,7 +53,7 @@ impl RuntimeBuilder for FileSourceBuilder {
         match socket.def_index {
             // A wired File socket delivers the filename at run start (the
             // deferred source below); the trade-off is documented on
-            // `logic_analyzer_processing::DeferredDslFileSource`.
+            // `logic_analyzer_processing::nodes::sources::DeferredDslFileSource`.
             0 => vec![PortKind::of::<TextSample>()],
             _ => vec![],
         }

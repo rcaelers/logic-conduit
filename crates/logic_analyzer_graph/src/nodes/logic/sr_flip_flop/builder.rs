@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::SrLatch;
+use logic_analyzer_processing::nodes::logic::SrLatch;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, Trigger};
 

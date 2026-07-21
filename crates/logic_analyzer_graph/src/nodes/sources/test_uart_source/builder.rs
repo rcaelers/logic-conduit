@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::SyntheticUartSource;
+use logic_analyzer_processing::nodes::sources::SyntheticUartSource;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample};
 

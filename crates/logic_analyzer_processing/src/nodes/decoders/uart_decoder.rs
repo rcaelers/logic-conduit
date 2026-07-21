@@ -14,7 +14,7 @@ use signal_processing::{
     WorkError, WorkResult,
 };
 
-use super::types::BitOrder;
+use crate::types::BitOrder;
 
 /// UART parity mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

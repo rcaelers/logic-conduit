@@ -1,53 +1,15 @@
 //! Concrete, UI-independent logic-analyzer processing nodes.
 
 pub mod nodes;
+pub mod types;
 
-pub use nodes::decoders::{
-    CsPolarity, ParallelDecoder, ParallelDecoderMetrics, ParallelDecoderMetricsSnapshot,
-    ParallelInputStrategy, SpiDecoder, SpiMode, StrobeMode,
-};
-pub use nodes::logic::{
-    BufferNode, GateOp, LogicGate, MatchOp, SrLatch, TextFormatter, TriggerAt, TriggerCounter,
-    WordMatcher,
-};
-pub use nodes::sinks::{DiscardTextWriter, DiscardWordWriter, TgckRecorder};
-pub use nodes::sources::{
-    LogicTrigger, LogicTriggerStage, SyntheticCaptureSource, SyntheticUartSource, TriggerCondition,
-    TriggerLogic,
-};
+#[cfg(not(target_arch = "wasm32"))]
+mod capture_export;
 
-std::cfg_select! {
-    target_arch = "wasm32" => {}
-    _ => {
-        mod capture_export;
-
-        pub use capture_export::{
-            CaptureExportError, CaptureExportFormatDescriptor, CaptureExportObserver,
-            CaptureExportProgress, CaptureExportReport, CaptureExportRequest,
-            CaptureExportWarning, DerivedExportSupport, IgnoreCaptureExportProgress,
-            RawCaptureExportFormat, TriggerMetadataSupport, export_finalized_capture,
-        };
-        pub use nodes::sources::{
-            BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider,
-            DeterministicFakeConfig, DeterministicFakeController, DeterministicFakeProvider,
-            DeterministicTrigger, DeterministicTriggerCount, DeterministicTriggerCountMode,
-            DeterministicTriggerLogic, DeterministicTriggerPredicate, DeterministicTriggerStage,
-        };
-        pub use nodes::sources::{
-            CaptureMode, ClockEdge, ClockSource, DeferredDslFileSource, DsLogicCapturePlan,
-            DsLogicTriggerHeader, DsLogicU3Pro16, DsLogicU3Pro16BufferedProvider,
-            DsLogicU3Pro16Source, DsLogicU3Pro16StreamingProvider, DslCaptureReader,
-            DslChunkedCaptureReader,
-            DslFileCaptureDataSource, DslFileSource, LinkSpeed, LogicAnalyzer,
-            LogicAnalyzerError, LogicAnalyzerInfo, LogicAnalyzerResult, LogicAnalyzerSource,
-            LogicCaptureConfig, LogicChunk, LogicEncoding, LogicEncodingRequest, RusbTransport,
-            SigrokCaptureReader, SigrokChunkedCaptureReader, SigrokFileCaptureDataSource,
-            SigrokFileSource, UsbError, UsbTransport, open_dsl_chunked_capture,
-            open_dsl_chunked_capture_with_progress,
-            open_sigrok_chunked_capture, u3pro16_buffered_plan, u3pro16_streaming_plan,
-        };
-        pub use nodes::sinks::{
-            BinaryFileWriter, CsvValueFormat, CsvWordWriter, TextFileWriter, WriteWidth,
-        };
-    }
-}
+#[cfg(not(target_arch = "wasm32"))]
+pub use capture_export::{
+    CaptureExportError, CaptureExportFormatDescriptor, CaptureExportObserver,
+    CaptureExportProgress, CaptureExportReport, CaptureExportRequest, CaptureExportWarning,
+    DerivedExportSupport, IgnoreCaptureExportProgress, RawCaptureExportFormat,
+    TriggerMetadataSupport, export_finalized_capture,
+};

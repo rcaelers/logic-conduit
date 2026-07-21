@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use logic_analyzer_processing::{DsLogicU3Pro16, LinkSpeed, UsbError, UsbTransport};
+use logic_analyzer_processing::nodes::sources::{
+    DsLogicU3Pro16, LinkSpeed, UsbError, UsbTransport,
+};
 
 struct ExternalTransport;
 

@@ -273,13 +273,7 @@ fn write_dsl(
                     samples_in_block += 1;
                     samples_written += 1;
                     if samples_in_block == samples_per_block {
-                        write_dsl_block(
-                            archive,
-                            options,
-                            block,
-                            samples_in_block,
-                            &channel_data,
-                        )?;
+                        write_dsl_block(archive, options, block, samples_in_block, &channel_data)?;
                         block += 1;
                         samples_in_block = 0;
                         channel_data.iter_mut().for_each(|data| data.fill(0));
@@ -299,13 +293,7 @@ fn write_dsl(
         }
     }
     if samples_in_block != 0 {
-        write_dsl_block(
-            archive,
-            options,
-            block,
-            samples_in_block,
-            &channel_data,
-        )?;
+        write_dsl_block(archive, options, block, samples_in_block, &channel_data)?;
         observer.on_progress(CaptureExportProgress {
             samples_written,
             total_samples,
@@ -370,9 +358,11 @@ fn write_sigrok_v2(
                 }
                 archive.start_file(format!("logic-1-{entry}"), options)?;
                 write_sigrok_chunk(archive, &chunk, channel_count, unitsize, observer)?;
-                samples_written = samples_written.checked_add(chunk.sample_count()).ok_or_else(|| {
-                    CaptureExportError::InconsistentCapture("sample count overflow".into())
-                })?;
+                samples_written = samples_written
+                    .checked_add(chunk.sample_count())
+                    .ok_or_else(|| {
+                        CaptureExportError::InconsistentCapture("sample count overflow".into())
+                    })?;
                 entry += 1;
                 observer.on_progress(CaptureExportProgress {
                     samples_written,
@@ -398,7 +388,10 @@ fn write_sigrok_chunk(
     observer: &dyn CaptureExportObserver,
 ) -> Result<(), CaptureExportError> {
     if channel_count.is_multiple_of(8)
-        && let CaptureChunkPayload::PackedLsbFirst { bytes, bit_offset: 0 } = chunk.payload()
+        && let CaptureChunkPayload::PackedLsbFirst {
+            bytes,
+            bit_offset: 0,
+        } = chunk.payload()
     {
         let byte_count = usize::try_from(chunk.sample_count())
             .ok()
@@ -485,9 +478,8 @@ mod tests {
         NativeCaptureStore, NativeCaptureStoreConfig,
     };
 
-    use crate::{DslCaptureReader, SigrokCaptureReader};
-
     use super::*;
+    use crate::nodes::sources::{DslCaptureReader, SigrokCaptureReader};
 
     const LEVELS: [[bool; 3]; 10] = [
         [false, true, true],
@@ -518,11 +510,9 @@ mod tests {
             CaptureChannelId::new("physical:12"),
         ]);
         let descriptor = CaptureStoreDescriptor::new(session_id, Arc::clone(&channels)).unwrap();
-        let (store, mut writer) = NativeCaptureStore::create(NativeCaptureStoreConfig::new(
-            directory,
-            descriptor,
-        ))
-        .unwrap();
+        let (store, mut writer) =
+            NativeCaptureStore::create(NativeCaptureStoreConfig::new(directory, descriptor))
+                .unwrap();
         store
             .write_timeline_metadata(
                 CaptureTimelineMetadata::new(
@@ -588,10 +578,7 @@ mod tests {
         assert_eq!(reader.header().total_samples, 10);
         for sample in 0..10 {
             for (channel, expected) in LEVELS[sample as usize].iter().enumerate() {
-                assert_eq!(
-                    reader.read_sample(channel, sample).unwrap(),
-                    *expected
-                );
+                assert_eq!(reader.read_sample(channel, sample).unwrap(), *expected);
             }
         }
     }
@@ -627,10 +614,7 @@ mod tests {
         assert_eq!(reader.metadata().total_samples, 10);
         for sample in 0..10 {
             for (channel, expected) in LEVELS[sample as usize].iter().enumerate() {
-                assert_eq!(
-                    reader.read_sample(channel, sample).unwrap(),
-                    *expected
-                );
+                assert_eq!(reader.read_sample(channel, sample).unwrap(), *expected);
             }
         }
     }

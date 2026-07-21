@@ -9,7 +9,9 @@ use signal_processing::{
 };
 
 #[derive(Clone, Debug)]
-pub struct TestDeterministicFakeConfig(logic_analyzer_processing::DeterministicFakeConfig);
+pub struct TestDeterministicFakeConfig(
+    logic_analyzer_processing::nodes::sources::DeterministicFakeConfig,
+);
 
 impl TestDeterministicFakeConfig {
     pub fn new(
@@ -17,8 +19,12 @@ impl TestDeterministicFakeConfig {
         chunk_sample_counts: impl Into<Arc<[u64]>>,
         seed: u64,
     ) -> AcquisitionResult<Self> {
-        logic_analyzer_processing::DeterministicFakeConfig::new(channels, chunk_sample_counts, seed)
-            .map(Self)
+        logic_analyzer_processing::nodes::sources::DeterministicFakeConfig::new(
+            channels,
+            chunk_sample_counts,
+            seed,
+        )
+        .map(Self)
     }
 
     pub fn with_simple_trigger(
@@ -38,7 +44,9 @@ impl TestDeterministicFakeConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct TestDeterministicFakeController(logic_analyzer_processing::DeterministicFakeController);
+pub struct TestDeterministicFakeController(
+    logic_analyzer_processing::nodes::sources::DeterministicFakeController,
+);
 
 impl TestDeterministicFakeController {
     pub fn grant_chunks(&self, chunks: usize) {
@@ -46,14 +54,18 @@ impl TestDeterministicFakeController {
     }
 }
 
-pub struct TestDeterministicFakeProvider(logic_analyzer_processing::DeterministicFakeProvider);
+pub struct TestDeterministicFakeProvider(
+    logic_analyzer_processing::nodes::sources::DeterministicFakeProvider,
+);
 
 impl TestDeterministicFakeProvider {
     pub fn manually_paced(
         config: TestDeterministicFakeConfig,
     ) -> (Self, TestDeterministicFakeController) {
         let (provider, controller) =
-            logic_analyzer_processing::DeterministicFakeProvider::manually_paced(config.0);
+            logic_analyzer_processing::nodes::sources::DeterministicFakeProvider::manually_paced(
+                config.0,
+            );
         (Self(provider), TestDeterministicFakeController(controller))
     }
 
@@ -66,7 +78,7 @@ impl TestDeterministicFakeProvider {
 }
 
 #[derive(Clone, Debug)]
-pub struct TestBufferedFakeConfig(logic_analyzer_processing::BufferedFakeConfig);
+pub struct TestBufferedFakeConfig(logic_analyzer_processing::nodes::sources::BufferedFakeConfig);
 
 impl TestBufferedFakeConfig {
     pub fn new(
@@ -76,7 +88,7 @@ impl TestBufferedFakeConfig {
         upload_chunk_samples: u64,
         seed: u64,
     ) -> AcquisitionResult<Self> {
-        logic_analyzer_processing::BufferedFakeConfig::new(
+        logic_analyzer_processing::nodes::sources::BufferedFakeConfig::new(
             channels,
             sample_rate_hz,
             total_samples,
@@ -103,7 +115,9 @@ impl TestBufferedFakeConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct TestBufferedFakeController(logic_analyzer_processing::BufferedFakeController);
+pub struct TestBufferedFakeController(
+    logic_analyzer_processing::nodes::sources::BufferedFakeController,
+);
 
 impl TestBufferedFakeController {
     pub fn wait_until_upload(&self, timeout: Duration) -> bool {
@@ -115,12 +129,16 @@ impl TestBufferedFakeController {
     }
 }
 
-pub struct TestBufferedFakeProvider(logic_analyzer_processing::BufferedFakeProvider);
+pub struct TestBufferedFakeProvider(
+    logic_analyzer_processing::nodes::sources::BufferedFakeProvider,
+);
 
 impl TestBufferedFakeProvider {
     pub fn manually_uploaded(config: TestBufferedFakeConfig) -> (Self, TestBufferedFakeController) {
         let (provider, controller) =
-            logic_analyzer_processing::BufferedFakeProvider::manually_uploaded(config.0);
+            logic_analyzer_processing::nodes::sources::BufferedFakeProvider::manually_uploaded(
+                config.0,
+            );
         (Self(provider), TestBufferedFakeController(controller))
     }
 

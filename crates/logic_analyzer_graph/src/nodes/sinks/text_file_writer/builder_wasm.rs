@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::DiscardTextWriter;
+use logic_analyzer_processing::nodes::sinks::DiscardTextWriter;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, TextSample};
 

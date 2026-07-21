@@ -1,11 +1,11 @@
 //! Runtime builder for `TGCK Recorder` — pure edge/word correlation, no file I/O (see
-//! `logic_analyzer_processing::TgckRecorder`'s doc comment). Its `Rows`/`Filename` outputs need a
+//! `logic_analyzer_processing::nodes::sinks::TgckRecorder`'s doc comment). Its `Rows`/`Filename` outputs need a
 //! `Text File Writer` downstream to actually persist anything; available on
 //! every target.
 
 use serde_json::Value;
 
-use logic_analyzer_processing::TgckRecorder;
+use logic_analyzer_processing::nodes::sinks::TgckRecorder;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, TextSample, Word};
 

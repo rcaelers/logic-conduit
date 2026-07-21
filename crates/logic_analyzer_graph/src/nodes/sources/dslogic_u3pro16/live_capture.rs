@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use logic_analyzer_processing::{
+use logic_analyzer_processing::nodes::sources::{
     DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider, LinkSpeed, LogicCaptureConfig,
     u3pro16_buffered_plan, u3pro16_streaming_plan,
 };

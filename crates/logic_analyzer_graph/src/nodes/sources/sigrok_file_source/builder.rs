@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::{SigrokFileSource, SyntheticCaptureSource};
+use logic_analyzer_processing::nodes::sources::{SigrokFileSource, SyntheticCaptureSource};
 use node_graph::Socket;
 use signal_processing::{
     CaptureIndexBuildProgress, CaptureIndexFactory, IndexSampler, ProcessNode, Sample, SampleBlock,
@@ -26,8 +26,10 @@ impl CaptureIndexFactory for SigrokCaptureIndexFactory {
         self: Box<Self>,
         progress: &mut dyn FnMut(CaptureIndexBuildProgress),
     ) -> signal_processing::Result<Box<dyn signal_processing::CaptureIndex + Send>> {
-        let source = logic_analyzer_processing::SigrokFileCaptureDataSource::open(&self.path)
-            .map_err(|error| signal_processing::Error::ParseError(error.to_string()))?;
+        let source = logic_analyzer_processing::nodes::sources::SigrokFileCaptureDataSource::open(
+            &self.path,
+        )
+        .map_err(|error| signal_processing::Error::ParseError(error.to_string()))?;
         IndexSampler::open_data_source_with_progress(source, |value| {
             progress(CaptureIndexBuildProgress {
                 completed: value.completed_roots,

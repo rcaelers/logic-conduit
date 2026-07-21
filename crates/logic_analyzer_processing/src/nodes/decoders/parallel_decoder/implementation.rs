@@ -23,7 +23,9 @@ use signal_processing::ProtocolKind;
 use signal_processing::Receiver;
 use signal_processing::{Sample, SampleBlock};
 
-use crate::nodes::decoders::{CsPolarity, Endianness, ParallelInputStrategy, StrobeMode};
+use crate::types::{CsPolarity, Endianness};
+
+use super::types::{ParallelInputStrategy, StrobeMode};
 
 #[derive(Clone)]
 pub struct ParallelDecoderMetrics {

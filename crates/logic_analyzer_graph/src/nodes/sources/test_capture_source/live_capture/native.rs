@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use logic_analyzer_processing::{
+use logic_analyzer_processing::nodes::sources::{
     DeterministicFakeConfig, DeterministicFakeProvider, DeterministicTrigger,
     DeterministicTriggerCount, DeterministicTriggerCountMode, DeterministicTriggerLogic,
     DeterministicTriggerPredicate, DeterministicTriggerStage,
