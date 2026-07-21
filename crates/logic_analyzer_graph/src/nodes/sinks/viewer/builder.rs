@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use logic_analyzer_viewer::{
     DerivedLaneId, ViewerLaneBadge, ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneRenderer,
-    ViewerLaneTrack,
+    ViewerLaneTrack, ViewerLaneTrackId,
 };
 use node_graph::Socket;
 use signal_processing::{
@@ -16,6 +16,7 @@ use signal_processing::{
     ViewerSink, Word,
 };
 
+use crate::decoder_table::{DecoderTableColumn, DecoderTableSource};
 use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 pub(crate) struct ViewerBuilder;
@@ -27,6 +28,13 @@ struct PendingGroup {
     badge: ViewerLaneBadge,
     renderer: Arc<dyn ViewerLaneRenderer>,
     tracks: Vec<(usize, ViewerLaneTrack)>,
+}
+
+struct PendingTable {
+    source_node: node_graph::NodeId,
+    key: String,
+    label: String,
+    columns: Vec<(usize, DecoderTableColumn)>,
 }
 
 impl RuntimeBuilder for ViewerBuilder {
@@ -74,11 +82,12 @@ impl RuntimeBuilder for ViewerBuilder {
             .with_name(name)
             .with_retention(ctx.viewer_retention());
         // `DerivedLanes` uses a lane name as its stable identity. Nodes of
-        // the same type share the default title (e.g. two UART Decoders),
+        // the same type can share a default title,
         // so make only colliding labels distinct instead of silently merging
         // their output into one row.
         let mut lane_name_counts: HashMap<String, usize> = HashMap::new();
         let mut pending_groups: Vec<PendingGroup> = Vec::new();
+        let mut pending_tables: Vec<PendingTable> = Vec::new();
         for (member, input) in resolved.members(0) {
             let lane_name = if prefix.is_empty() {
                 input.source.clone()
@@ -158,10 +167,33 @@ impl RuntimeBuilder for ViewerBuilder {
                 };
                 ctx.viewer_lanes().register(ViewerLaneGroup::singleton(
                     ViewerLaneGroupId::new(format!("{name}:lane:{member}")),
-                    lane_name,
+                    lane_name.clone(),
                     badge,
                     lane_id,
                 ));
+            }
+            if let Some(table) = &input.decoder_table_column {
+                let column = DecoderTableColumn {
+                    key: table.column_key.clone(),
+                    label: table.label.clone(),
+                    lane: DerivedLaneId::new(lane_name.clone()),
+                    track: ViewerLaneTrackId::new(table.track_key.clone()),
+                    row_anchor: table.row_anchor,
+                    cell_mode: table.cell_mode.clone(),
+                    renderer: Arc::clone(&table.renderer),
+                };
+                if let Some(source) = pending_tables.iter_mut().find(|source| {
+                    source.source_node == input.source_node && source.key == table.source_key
+                }) {
+                    source.columns.push((table.order, column));
+                } else {
+                    pending_tables.push(PendingTable {
+                        source_node: input.source_node,
+                        key: table.source_key.clone(),
+                        label: input.source_node_title.clone(),
+                        columns: vec![(table.order, column)],
+                    });
+                }
             }
         }
         for mut pending in pending_groups {
@@ -175,6 +207,18 @@ impl RuntimeBuilder for ViewerBuilder {
                 badge: pending.badge,
                 tracks: pending.tracks.into_iter().map(|(_, track)| track).collect(),
                 renderer: pending.renderer,
+            });
+        }
+        for mut pending in pending_tables {
+            pending.columns.sort_by_key(|(order, _)| *order);
+            ctx.decoder_tables().register(DecoderTableSource {
+                id: format!("{name}:node:{}:{}", pending.source_node.0, pending.key),
+                label: pending.label,
+                columns: pending
+                    .columns
+                    .into_iter()
+                    .map(|(_, column)| column)
+                    .collect(),
             });
         }
         Ok(Box::new(sink))

@@ -123,6 +123,7 @@ impl App {
             analyzer_split,
             self.panel_layout.state().clone(),
             self.node_graph.ui_prefs(),
+            self.decoder_panels.state().clone(),
         );
     }
 

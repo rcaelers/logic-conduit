@@ -13,6 +13,7 @@ use trigger_editor::{TriggerEditor, TriggerEditorChannel};
 
 use crate::about::AboutWindow;
 use crate::app_platform::load_symbol_fonts;
+use crate::decoder_panel::DecoderPanels;
 use crate::demo_signals;
 use crate::live_capture::{
     CaptureAnalysisAttachment, CaptureAvailability, CaptureCoordinator, CaptureCoordinatorContract,
@@ -124,6 +125,7 @@ pub struct App {
     pub(crate) sampling_overlay_candidates: Vec<compiler::SamplingOverlayCandidate>,
     pub(crate) selected_sampling_overlay: Option<NodeId>,
     viewer_lane_order: Vec<SavedViewerRow>,
+    pub(crate) decoder_panels: DecoderPanels,
 }
 
 impl App {
@@ -326,7 +328,7 @@ impl App {
         ));
         let mut widget = NodeGraphWidget::new(registry);
         widget.set_input_bindings(input_bindings.clone());
-        let (platform, panel_layout_state, analyzer_split) =
+        let (platform, panel_layout_state, analyzer_split, decoder_panels_state) =
             crate::app_platform::PlatformState::restore(cc, &mut widget);
         let mut logic_analyzer = LogicAnalyzerViewer::new();
         logic_analyzer.set_input_bindings(input_bindings.clone());
@@ -382,6 +384,7 @@ impl App {
             sampling_overlay_candidates: Vec::new(),
             selected_sampling_overlay: None,
             viewer_lane_order: Vec::new(),
+            decoder_panels: DecoderPanels::from_state(decoder_panels_state),
         }
     }
 
@@ -606,6 +609,8 @@ impl App {
             .set_derived_lanes(ctx.derived_lanes().clone());
         self.logic_analyzer
             .set_viewer_lanes(ctx.viewer_lanes().clone());
+        self.decoder_panels
+            .set_run_data(ctx.derived_lanes().clone(), ctx.decoder_tables().clone());
 
         let started = match replay {
             Some(CaptureReplayAttachment {
@@ -822,6 +827,8 @@ impl App {
             .set_derived_lanes(ctx.derived_lanes().clone());
         self.logic_analyzer
             .set_viewer_lanes(ctx.viewer_lanes().clone());
+        self.decoder_panels
+            .set_run_data(ctx.derived_lanes().clone(), ctx.decoder_tables().clone());
         let source = compiler::LiveAnalysisSource {
             source_node: attachment.source_node,
             process: attachment.process,
@@ -1760,6 +1767,7 @@ fn install_fonts(ctx: &egui::Context) {
 
 impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.decoder_panels.filter_raw_input(raw_input);
         self.node_graph.filter_modal_raw_input(raw_input);
         self.platform_raw_input_hook(ctx, raw_input);
     }
@@ -1856,9 +1864,10 @@ impl eframe::App for App {
                     ..
                 } => self.show_trigger_panel(panel_ui),
                 PanelSlot::Body {
+                    panel_id,
                     content_id: "decoder",
                     ..
-                } => Self::show_placeholder_panel(panel_ui, "Decoder"),
+                } => self.decoder_panels.show(panel_id, panel_ui),
                 PanelSlot::TitleBar { .. } | PanelSlot::Body { .. } => {}
             },
         );

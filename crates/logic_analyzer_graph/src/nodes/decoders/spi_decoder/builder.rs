@@ -7,6 +7,7 @@ use logic_analyzer_viewer::{SamplingEdge, ViewerOutputPresentation};
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, Word};
 
+use crate::decoder_table::DecoderTableColumnPresentation;
 use crate::{
     CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, SamplingOverlayDescriptor,
     SamplingQualifierDescriptor, parse_state,
@@ -34,6 +35,14 @@ impl RuntimeBuilder for SpiDecoderBuilder {
         _state: &Value,
     ) -> Option<ViewerOutputPresentation> {
         super::presentation::spi_output_presentation(socket.def_index)
+    }
+
+    fn decoder_table_column(
+        &self,
+        socket: &Socket,
+        _state: &Value,
+    ) -> Option<DecoderTableColumnPresentation> {
+        super::presentation::spi_table_column(socket.def_index)
     }
 
     fn word_display_format(&self, socket: &Socket, state: &Value) -> Option<String> {

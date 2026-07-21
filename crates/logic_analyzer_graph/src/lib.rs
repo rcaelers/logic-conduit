@@ -6,6 +6,7 @@
 //! window integration belong in `logic-analyzer-ui`.
 
 mod compiler;
+mod decoder_table;
 pub mod nodes;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -32,6 +33,10 @@ pub use compiler::{
     discover_live_capture_feature, discover_trigger_configuration, lower,
     sampling_overlay_candidates, start_app_run, start_app_run_with_source_overrides, start_live,
     start_live_analysis,
+};
+pub use decoder_table::{
+    DecoderTableCellMode, DecoderTableColumn, DecoderTableColumnPresentation, DecoderTableRegistry,
+    DecoderTableSource,
 };
 #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
 #[doc(hidden)]

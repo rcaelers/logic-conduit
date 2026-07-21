@@ -1,5 +1,6 @@
 mod builder;
 mod definition;
+mod presentation;
 
 pub(crate) use builder::BinaryDecoderBuilder;
 #[cfg(test)]

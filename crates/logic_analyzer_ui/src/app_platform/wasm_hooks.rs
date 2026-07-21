@@ -24,7 +24,11 @@ impl App {
 
     pub(crate) fn platform_logic(&mut self, _ctx: &egui::Context) {}
 
-    pub(crate) fn platform_save(&mut self, _storage: &mut dyn eframe::Storage) {}
+    pub(crate) fn platform_save(&mut self, _storage: &mut dyn eframe::Storage) {
+        // Browser persistence is host-owned, but keep the serializable panel state reachable
+        // through the same platform hook as native persistence.
+        let _ = self.decoder_panels.state();
+    }
 
     pub(crate) fn platform_before_ui(&mut self, ui: &mut egui::Ui) {
         let shortcut = |action| {

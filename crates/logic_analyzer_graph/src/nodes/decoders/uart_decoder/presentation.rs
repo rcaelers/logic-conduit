@@ -9,6 +9,8 @@ use logic_analyzer_viewer::{
     ViewerLaneTrackId, ViewerOutputPresentation,
 };
 
+use crate::decoder_table::{DecoderTableCellMode, DecoderTableColumnPresentation};
+
 const START: u64 = u64::MAX;
 const STOP: u64 = u64::MAX - 1;
 const ERROR: u64 = u64::MAX - 2;
@@ -68,6 +70,38 @@ pub(crate) fn uart_output_presentation(def_index: usize) -> Option<ViewerOutputP
         )),
         _ => None,
     }
+}
+
+pub(crate) fn uart_table_column(def_index: usize) -> Option<DecoderTableColumnPresentation> {
+    let (column_key, label, order, row_anchor, mode, track_key) = match def_index {
+        2 => (
+            "bits",
+            "Bits",
+            0,
+            false,
+            DecoderTableCellMode::Joined(String::new()),
+            "bits",
+        ),
+        3 => (
+            "frame",
+            "Data",
+            1,
+            true,
+            DecoderTableCellMode::Single,
+            "frame",
+        ),
+        _ => return None,
+    };
+    Some(DecoderTableColumnPresentation::new(
+        "decoder",
+        column_key,
+        label,
+        order,
+        row_anchor,
+        mode,
+        track_key,
+        Arc::new(UartLaneRenderer),
+    ))
 }
 
 #[cfg(test)]

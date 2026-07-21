@@ -9,6 +9,7 @@ use logic_analyzer_viewer::SamplingEdge;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock, Word};
 
+use crate::decoder_table::DecoderTableColumnPresentation;
 use crate::{
     CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, SamplingOverlayDescriptor,
     SamplingQualifierDescriptor, parse_state,
@@ -30,6 +31,14 @@ impl BinaryDecoderBuilder {
 }
 
 impl RuntimeBuilder for BinaryDecoderBuilder {
+    fn decoder_table_column(
+        &self,
+        socket: &Socket,
+        _state: &Value,
+    ) -> Option<DecoderTableColumnPresentation> {
+        super::presentation::binary_table_column(socket.def_index)
+    }
+
     fn sampling_overlay(&self, state: &Value) -> Option<SamplingOverlayDescriptor> {
         let state = Self::parsed(state).ok()?;
         let edge = match state.sample_on.selected() {

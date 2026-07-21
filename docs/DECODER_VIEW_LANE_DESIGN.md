@@ -251,12 +251,36 @@ wasm use the same presentation contract. Storage capability differences remain b
 existing derived-word-store platform boundary; renderer code does not add target-gated fields,
 variants, or match arms.
 
+### Decoder tables
+
+Decoder table panels consume a second protocol-neutral presentation registry built alongside the
+lane registry. Concrete decoder output adapters explicitly assign viewer-connected word outputs
+to a table source, provide stable column keys, labels and ordering, identify row-anchor columns,
+and choose whether overlapping annotations are displayed as one value or as a joined sequence.
+The decoder-table contract and registry live in `logic_analyzer_graph`, which owns concrete node
+presentation metadata and graph lowering. The generic Viewer sink namespaces each source by
+producer node and resolves its columns to the same derived-lane identities used by the waveform
+viewer. `logic_analyzer_viewer` owns only lane and waveform presentation; it has no decoder-table
+types or registry.
+
+Each physical Decoder panel keeps independent source, visible-column, and number-format settings.
+Its source selector lists the registered decoder table sources. Rows use the first available
+explicit anchor column for sequence number and start/end time; other cells contain annotations
+whose starts fall within that anchor interval. The panel supports the lane's configured number
+format plus Hex, ASCII, and Hex + ASCII overrides, and delegates final semantic labels to the
+column's existing lane renderer. Thus protocol sentinels and bit labels remain owned by their
+concrete adapters.
+
+The application and table widget never identify SPI, UART, Binary Decoder, output labels, or
+protocol values. A decoder or plugin becomes tabular only by supplying the explicit generic
+metadata. Only outputs connected to a Viewer appear as columns.
+
 ### Validation invariants
 
 The implementation preserves these invariants:
 
 1. `logic_analyzer_viewer` contains no concrete node names, protocol labels, or protocol sentinel
-   values.
+   values, and exposes no decoder-table contracts.
 2. `node_graph` and generic lowering never inspect presentation keys or renderer types.
 3. Every visible derived row has an explicit group; default singleton groups are explicit too.
 4. Every group track refers to a registered payload lane of a compatible generic family.
@@ -267,3 +291,4 @@ The implementation preserves these invariants:
 8. Derived-lane locks are not held across indexed storage queries or renderer-controlled work.
 9. Native and wasm compile against the same group and renderer APIs.
 10. Plugins can register a concrete renderer without editing generic crates.
+11. Decoder table discovery never relies on node names, output labels, or renderer types.

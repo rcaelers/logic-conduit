@@ -7,6 +7,7 @@ use logic_analyzer_viewer::ViewerOutputPresentation;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, Trigger, Word};
 
+use crate::decoder_table::DecoderTableColumnPresentation;
 use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 pub(crate) struct UartDecoderBuilder;
@@ -18,6 +19,14 @@ impl RuntimeBuilder for UartDecoderBuilder {
         _state: &Value,
     ) -> Option<ViewerOutputPresentation> {
         super::presentation::uart_output_presentation(socket.def_index)
+    }
+
+    fn decoder_table_column(
+        &self,
+        socket: &Socket,
+        _state: &Value,
+    ) -> Option<DecoderTableColumnPresentation> {
+        super::presentation::uart_table_column(socket.def_index)
     }
 
     fn word_display_format(&self, socket: &Socket, state: &Value) -> Option<String> {

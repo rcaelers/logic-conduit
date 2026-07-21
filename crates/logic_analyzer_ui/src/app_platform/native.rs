@@ -71,6 +71,8 @@ struct PersistedState {
     panel_layout: Option<panel_layout::PanelLayoutState>,
     graph_ui_prefs: node_graph::GraphUiPrefs,
     recent_files: Vec<PathBuf>,
+    #[serde(default)]
+    decoder_panels: crate::decoder_panel::DecoderPanelsState,
 }
 
 fn normalize_recent_files(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
@@ -162,7 +164,12 @@ impl PlatformState {
     pub(crate) fn restore(
         cc: &eframe::CreationContext,
         widget: &mut node_graph::NodeGraphWidget,
-    ) -> (Self, Option<panel_layout::PanelLayoutState>, f32) {
+    ) -> (
+        Self,
+        Option<panel_layout::PanelLayoutState>,
+        f32,
+        crate::decoder_panel::DecoderPanelsState,
+    ) {
         let persisted = cc
             .storage
             .and_then(|storage| eframe::get_value::<PersistedState>(storage, eframe::APP_KEY));
@@ -175,6 +182,10 @@ impl PlatformState {
         let panel_layout = persisted
             .as_ref()
             .and_then(|state| state.panel_layout.clone());
+        let decoder_panels = persisted
+            .as_ref()
+            .map(|state| state.decoder_panels.clone())
+            .unwrap_or_default();
         let recent_files = persisted
             .map(|state| normalize_recent_files(state.recent_files))
             .unwrap_or_default();
@@ -211,6 +222,7 @@ impl PlatformState {
             },
             panel_layout,
             analyzer_split,
+            decoder_panels,
         )
     }
 
@@ -230,12 +242,14 @@ impl PlatformState {
         analyzer_split: f32,
         panel_layout: panel_layout::PanelLayoutState,
         graph_ui_prefs: node_graph::GraphUiPrefs,
+        decoder_panels: crate::decoder_panel::DecoderPanelsState,
     ) {
         let state = PersistedState {
             analyzer_split,
             panel_layout: Some(panel_layout),
             graph_ui_prefs,
             recent_files: self.recent_files.clone(),
+            decoder_panels,
         };
         eframe::set_value(storage, eframe::APP_KEY, &state);
     }

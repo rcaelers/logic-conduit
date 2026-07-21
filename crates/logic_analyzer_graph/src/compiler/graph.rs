@@ -38,6 +38,7 @@ use signal_processing::{
 use super::cache_platform;
 use super::errors::{ApplyError, CompileError};
 use super::port_kind::PortKind;
+use crate::decoder_table::{DecoderTableColumnPresentation, DecoderTableRegistry};
 
 /// Shared resources handed to builders. A fresh `DerivedLanes` store per
 /// run makes stale viewer lanes vanish atomically on re-run.
@@ -45,6 +46,7 @@ use super::port_kind::PortKind;
 pub struct CompileCtx {
     derived_lanes: DerivedLanes,
     viewer_lanes: ViewerLaneRegistry,
+    decoder_tables: DecoderTableRegistry,
     /// Storage policy selected by the graph's source. Finite sources retain
     /// their complete timeline; continuous sources can explicitly choose a
     /// bounded rolling window.
@@ -64,6 +66,10 @@ impl CompileCtx {
 
     pub fn viewer_lanes(&self) -> &ViewerLaneRegistry {
         &self.viewer_lanes
+    }
+
+    pub fn decoder_tables(&self) -> &DecoderTableRegistry {
+        &self.decoder_tables
     }
 
     pub fn viewer_retention(&self) -> ViewerRetention {
@@ -143,6 +149,7 @@ pub struct ResolvedInput {
     pub source_node_title: String,
     pub word_display_format: Option<String>,
     pub viewer_presentation: Option<ViewerOutputPresentation>,
+    pub decoder_table_column: Option<DecoderTableColumnPresentation>,
     /// Displayed capture channel from which this edge originates. Concrete
     /// source builders provide it explicitly; generic lowering never parses
     /// runtime port names or display labels.
@@ -445,6 +452,14 @@ pub trait RuntimeBuilder {
         _socket: &Socket,
         _state: &Value,
     ) -> Option<ViewerOutputPresentation> {
+        None
+    }
+    /// Optional protocol-neutral table column for this output when connected to a Viewer.
+    fn decoder_table_column(
+        &self,
+        _socket: &Socket,
+        _state: &Value,
+    ) -> Option<DecoderTableColumnPresentation> {
         None
     }
     /// Raw capture channel represented by this output, when it corresponds
@@ -1197,6 +1212,8 @@ pub fn lower(
                     .word_display_format(from_socket, &from_node.state),
                 viewer_presentation: from_builder
                     .viewer_output_presentation(from_socket, &from_node.state),
+                decoder_table_column: from_builder
+                    .decoder_table_column(from_socket, &from_node.state),
                 capture_channel: from_builder.viewer_channel_origin(from_socket, &from_node.state),
             },
         );
@@ -1642,6 +1659,7 @@ pub struct LiveRun {
     names: HashMap<NodeId, String>,
     lanes: DerivedLanes,
     viewer_lanes: ViewerLaneRegistry,
+    decoder_tables: DecoderTableRegistry,
     /// Set by [`Self::stop`]: the wind-down has been signalled but node
     /// threads may still be finishing their current `work()` call.
     stop_requested: bool,
@@ -1761,6 +1779,7 @@ fn start_live_inner(
         names,
         lanes: ctx.derived_lanes.clone(),
         viewer_lanes: ctx.viewer_lanes.clone(),
+        decoder_tables: ctx.decoder_tables.clone(),
         stop_requested: false,
         cache_pruned,
         persistent_cache_directory: ctx.persistent_cache_directory.clone(),
@@ -1807,6 +1826,7 @@ impl LiveRun {
         let mut ctx = CompileCtx {
             derived_lanes: self.lanes.clone(),
             viewer_lanes: self.viewer_lanes.clone(),
+            decoder_tables: self.decoder_tables.clone(),
             viewer_retention: new.viewer_retention,
             viewer_word_caches: Vec::new(),
             persistent_cache_directory: self.persistent_cache_directory.clone(),
@@ -3981,6 +4001,7 @@ mod tests {
                 source_node_title: "Formatter".into(),
                 word_display_format: None,
                 viewer_presentation: None,
+                decoder_table_column: None,
                 capture_channel: None,
             },
         );

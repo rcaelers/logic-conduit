@@ -6,7 +6,12 @@ impl PlatformState {
     pub(crate) fn restore(
         _cc: &eframe::CreationContext,
         _widget: &mut node_graph::NodeGraphWidget,
-    ) -> (Self, Option<panel_layout::PanelLayoutState>, f32) {
+    ) -> (
+        Self,
+        Option<panel_layout::PanelLayoutState>,
+        f32,
+        crate::decoder_panel::DecoderPanelsState,
+    ) {
         (
             Self {
                 capture_presentation_identity: None,
@@ -15,6 +20,7 @@ impl PlatformState {
             // Four additional 30px waveform rows on a typical browser
             // viewport, so all demo-derived lanes remain visible after Run.
             0.50,
+            crate::decoder_panel::DecoderPanelsState::default(),
         )
     }
 

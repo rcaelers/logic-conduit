@@ -25,3 +25,16 @@ fn generic_viewer_sources_contain_no_uart_contracts() {
         );
     }
 }
+
+#[test]
+fn generic_viewer_exposes_no_decoder_table_contracts() {
+    let sources = [include_str!("lib.rs"), include_str!("lanes.rs")];
+    let forbidden = ["DecoderTable", "ViewerTable"];
+
+    for token in forbidden {
+        assert!(
+            sources.iter().all(|source| !source.contains(token)),
+            "generic viewer source contains decoder-table contract {token:?}"
+        );
+    }
+}
