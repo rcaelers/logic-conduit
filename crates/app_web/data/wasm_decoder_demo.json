@@ -266,6 +266,76 @@
     }
   ],
   "extensions": {
+    "logic_analyzer_ui.panel_layout": {
+      "layout": {
+        "root": {
+          "kind": "split",
+          "id": 3,
+          "axis": "vertical",
+          "fraction": 0.82,
+          "first": {
+            "kind": "split",
+            "id": 1,
+            "axis": "horizontal",
+            "fraction": 0.42,
+            "first": {
+              "kind": "panel",
+              "panel": {
+                "id": "logic_analyzer",
+                "content": "logic_analyzer",
+                "title_bar_position": "top"
+              }
+            },
+            "second": {
+              "kind": "panel",
+              "panel": {
+                "id": "node_graph",
+                "content": "node_graph",
+                "title_bar_position": "top"
+              }
+            }
+          },
+          "second": {
+            "kind": "split",
+            "id": 5,
+            "axis": "horizontal",
+            "fraction": 0.34790966,
+            "first": {
+              "kind": "panel",
+              "panel": {
+                "id": "panel-2",
+                "content": "decoder",
+                "title_bar_position": "top"
+              }
+            },
+            "second": {
+              "kind": "panel",
+              "panel": {
+                "id": "panel-4",
+                "content": "decoder",
+                "title_bar_position": "top"
+              }
+            }
+          }
+        },
+        "maximized": null,
+        "next_id": 6
+      },
+      "decoder_panels": {
+        "panels": {
+          "panel-2": {
+            "selected_source": "n4294967295_auto_view:node:1:decoder",
+            "hidden_columns": [],
+            "format": "lane"
+          },
+          "panel-4": {
+            "selected_source": "n4294967295_auto_view:node:8:decoder",
+            "hidden_columns": [],
+            "format": "lane"
+          }
+        }
+      }
+    },
     "logic_analyzer_ui.sampling_overlay": 1,
     "logic_analyzer_ui.viewer_lane_order": [
       {
