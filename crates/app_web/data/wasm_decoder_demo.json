@@ -267,71 +267,71 @@
   ],
   "extensions": {
     "logic_analyzer_ui.panel_layout": {
-      "layout": {
-        "root": {
-          "kind": "split",
-          "id": 3,
-          "axis": "vertical",
-          "fraction": 0.82,
-          "first": {
-            "kind": "split",
-            "id": 1,
-            "axis": "horizontal",
-            "fraction": 0.42,
-            "first": {
-              "kind": "panel",
-              "panel": {
-                "id": "logic_analyzer",
-                "content": "logic_analyzer",
-                "title_bar_position": "top"
-              }
-            },
-            "second": {
-              "kind": "panel",
-              "panel": {
-                "id": "node_graph",
-                "content": "node_graph",
-                "title_bar_position": "top"
-              }
-            }
-          },
-          "second": {
-            "kind": "split",
-            "id": 5,
-            "axis": "horizontal",
-            "fraction": 0.34790966,
-            "first": {
-              "kind": "panel",
-              "panel": {
-                "id": "panel-2",
-                "content": "decoder",
-                "title_bar_position": "top"
-              }
-            },
-            "second": {
-              "kind": "panel",
-              "panel": {
-                "id": "panel-4",
-                "content": "decoder",
-                "title_bar_position": "top"
-              }
-            }
-          }
-        },
-        "maximized": null,
-        "next_id": 6
-      },
       "decoder_panels": {
         "panels": {
           "panel-2": {
-            "selected_source": "n4294967295_auto_view:node:1:decoder",
+            "format": "lane",
             "hidden_columns": [],
-            "format": "lane"
+            "selected_source": "n4294967295_auto_view:node:1:decoder"
           },
           "panel-4": {
-            "selected_source": "n4294967295_auto_view:node:8:decoder",
+            "format": "lane",
             "hidden_columns": [],
-            "format": "lane"
+            "selected_source": "n4294967295_auto_view:node:8:decoder"
+          }
+        }
+      },
+      "layout": {
+        "maximized": null,
+        "next_id": 6,
+        "root": {
+          "axis": "vertical",
+          "first": {
+            "axis": "horizontal",
+            "first": {
+              "kind": "panel",
+              "panel": {
+                "content": "logic_analyzer",
+                "id": "logic_analyzer",
+                "title_bar_position": "top"
+              }
+            },
+            "fraction": 0.43513190746307373,
+            "id": 1,
+            "kind": "split",
+            "second": {
+              "kind": "panel",
+              "panel": {
+                "content": "node_graph",
+                "id": "node_graph",
+                "title_bar_position": "top"
+              }
+            }
+          },
+          "fraction": 0.8199999928474426,
+          "id": 3,
+          "kind": "split",
+          "second": {
+            "axis": "horizontal",
+            "first": {
+              "kind": "panel",
+              "panel": {
+                "content": "decoder",
+                "id": "panel-2",
+                "title_bar_position": "top"
+              }
+            },
+            "fraction": 0.3479096591472626,
+            "id": 5,
+            "kind": "split",
+            "second": {
+              "kind": "panel",
+              "panel": {
+                "content": "decoder",
+                "id": "panel-4",
+                "title_bar_position": "top"
+              }
+            }
           }
         }
       }
@@ -369,22 +369,28 @@
         "Channel": 10
       },
       {
-        "Derived": "n4294967295_auto_view:node:1:miso"
-      },
-      {
         "Derived": "n4294967295_auto_view:node:1:mosi"
       },
       {
-        "Derived": "n4294967295_auto_view:lane:4"
+        "Derived": "n4294967295_auto_view:lane:2"
       },
       {
-        "Derived": "n4294967295_auto_view:lane:5"
+        "Derived": "n4294967295_auto_view:lane:3"
+      },
+      {
+        "Derived": "n4294967295_auto_view:lane:4"
       },
       {
         "Derived": "n4294967295_auto_view:lane:6"
       },
       {
         "Derived": "n4294967295_auto_view:lane:7"
+      },
+      {
+        "Derived": "n4294967295_auto_view:lane:5"
+      },
+      {
+        "Derived": "n4294967295_auto_view:node:1:miso"
       },
       {
         "Derived": "n4294967295_auto_view:lane:8"
@@ -492,12 +498,10 @@
           "show_in_view": true
         },
         {
-          "def_index": 4,
-          "show_in_view": true
+          "def_index": 4
         },
         {
-          "def_index": 5,
-          "show_in_view": true
+          "def_index": 5
         }
       ],
       "pos": {

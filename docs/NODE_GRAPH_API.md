@@ -133,6 +133,8 @@ impl NodeDef for Counter {
 | `.variadic(max)` | Growing group: members "{label} 1…N" plus a trailing placeholder; connecting the placeholder adds a member. No inline controls |
 | `OutputDef::new::<T>(label)` / `::control::<T>(…)` | Same for outputs (outputs never resolve; they keep their concrete type) |
 | `OutputDef::view_selectable(false)` | Omits an output from the generic View-panel lane selector when the host already presents it through another explicit contract |
+| `OutputDef::editor_visible(false)` | Keeps an output available to compilation and generic viewer selection without drawing its unused socket row; an existing connection still reveals it |
+| `OutputDef::view_indicator_sources(indices)` | Makes this output's node-editor eye summarize whether any listed output is selected in the viewer |
 
 ### Props and the panel
 

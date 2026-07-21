@@ -63,7 +63,7 @@ fn compute_node_layout(graph: &GraphState, node_id: NodeId, node: &Node) -> Node
             .enumerate()
             .filter(|(index, socket)| {
                 socket_is_laid_out(
-                    socket.visible,
+                    socket.visible && socket.editor_visible,
                     socket.hidden,
                     graph.is_input_connected(SocketId {
                         node: node_id,
@@ -79,7 +79,7 @@ fn compute_node_layout(graph: &GraphState, node_id: NodeId, node: &Node) -> Node
             .enumerate()
             .filter(|(index, socket)| {
                 socket_is_laid_out(
-                    socket.visible,
+                    socket.visible && socket.editor_visible,
                     socket.hidden,
                     graph.is_output_connected(SocketId {
                         node: node_id,
@@ -103,7 +103,7 @@ fn compute_node_layout(graph: &GraphState, node_id: NodeId, node: &Node) -> Node
         let mut input_row = 0usize;
         for (index, socket) in node.inputs.iter().enumerate() {
             if !socket_is_laid_out(
-                socket.visible,
+                socket.visible && socket.editor_visible,
                 socket.hidden,
                 graph.is_input_connected(SocketId {
                     node: node_id,
@@ -127,7 +127,7 @@ fn compute_node_layout(graph: &GraphState, node_id: NodeId, node: &Node) -> Node
         let mut output_row = 0usize;
         for (index, socket) in node.outputs.iter().enumerate() {
             if !socket_is_laid_out(
-                socket.visible,
+                socket.visible && socket.editor_visible,
                 socket.hidden,
                 graph.is_output_connected(SocketId {
                     node: node_id,
@@ -167,7 +167,7 @@ fn compute_node_layout(graph: &GraphState, node_id: NodeId, node: &Node) -> Node
     let mut vis_row = 0usize;
     for (i, s) in node.outputs.iter().enumerate() {
         if !socket_is_laid_out(
-            s.visible,
+            s.visible && s.editor_visible,
             s.hidden,
             graph.is_output_connected(SocketId {
                 node: node_id,
@@ -447,7 +447,7 @@ impl NodeWidget {
                     graph,
                     node_id,
                     i,
-                    sock.view_selectable && sock.show_in_view,
+                    output_view_indicator_active(node, i),
                     socket_pos,
                     view.zoom,
                 );
@@ -496,7 +496,7 @@ impl NodeWidget {
                 graph,
                 node_id,
                 i,
-                sock.view_selectable && sock.show_in_view,
+                output_view_indicator_active(node, i),
                 sp,
                 view.zoom,
             );
@@ -877,6 +877,20 @@ fn draw_view_indicator_for_output(
     draw_view_indicator(painter, center, scale);
 }
 
+fn output_view_indicator_active(node: &Node, output_index: usize) -> bool {
+    let Some(output) = node.outputs.get(output_index) else {
+        return false;
+    };
+    if output.view_indicator_sources.is_empty() {
+        return output.visible && output.view_selectable && output.show_in_view;
+    }
+    output
+        .view_indicator_sources
+        .iter()
+        .filter_map(|source| node.outputs.get(*source))
+        .any(|source| source.visible && source.view_selectable && source.show_in_view)
+}
+
 fn draw_view_indicator(painter: &Painter, center: Pos2, scale: f32) {
     let half_width = 6.0 * scale;
     let half_height = 3.7 * scale;
@@ -908,7 +922,10 @@ fn socket_outline_color(color: Color32) -> Color32 {
 
 #[cfg(test)]
 mod tests {
-    use super::socket_is_laid_out;
+    use egui::Pos2;
+
+    use super::{output_view_indicator_active, socket_is_laid_out};
+    use crate::model::{Node, NodeId, NodeKind};
 
     #[test]
     fn connected_sockets_remain_visible_despite_definition_or_user_hiding() {
@@ -916,5 +933,25 @@ mod tests {
         assert!(socket_is_laid_out(true, true, true));
         assert!(!socket_is_laid_out(false, false, false));
         assert!(!socket_is_laid_out(true, true, false));
+    }
+
+    #[test]
+    fn summarized_view_indicator_is_active_when_any_source_is_selected() {
+        let mut node = Node::new_reroute(NodeId(1), Pos2::ZERO);
+        node.kind = NodeKind::Regular;
+        let mut summary = node.outputs[0].clone();
+        summary.view_selectable = false;
+        summary.view_indicator_sources = vec![1, 2];
+        let mut first = node.outputs[0].clone();
+        first.view_selectable = true;
+        let mut second = first.clone();
+        second.show_in_view = true;
+        node.outputs = vec![summary, first, second];
+
+        assert!(output_view_indicator_active(&node, 0));
+        node.outputs[2].visible = false;
+        assert!(!output_view_indicator_active(&node, 0));
+        node.outputs[1].show_in_view = true;
+        assert!(output_view_indicator_active(&node, 0));
     }
 }

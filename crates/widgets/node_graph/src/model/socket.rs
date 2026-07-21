@@ -58,6 +58,10 @@ pub struct Socket {
     /// Controlled by `on_update` — set false to suppress the socket entirely.
     #[serde(default = "default_true", skip_serializing)]
     pub visible: bool,
+    /// Definition-owned node-editor presentation. Unlike `visible`, this does
+    /// not remove the output from generic viewer selection or compilation.
+    #[serde(default = "default_true", skip_serializing)]
+    pub editor_visible: bool,
     /// Set true by the user via "Hide Unused"; never touched by `on_update`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub hidden: bool,
@@ -66,6 +70,10 @@ pub struct Socket {
     /// Definition-owned eligibility for the generic View-panel lane selector.
     #[serde(default = "default_true", skip_serializing)]
     pub view_selectable: bool,
+    /// Definition-owned output indices whose viewer selection is summarized
+    /// by this socket's eye. Empty means this output summarizes itself.
+    #[serde(default, skip_serializing)]
+    pub view_indicator_sources: Vec<usize>,
     /// User-toggled from the graph widget's generic View panel (outputs
     /// only): show this output as a logic analyzer lane without an explicit
     /// wire to a `Viewer` node. The compiler synthesizes the connection.
@@ -156,9 +164,11 @@ mod tests {
             def_index: 0,
             variadic: None,
             visible: true,
+            editor_visible: true,
             hidden: false,
             has_control: false,
             view_selectable: true,
+            view_indicator_sources: Vec::new(),
             show_in_view: false,
         }
     }

@@ -1044,9 +1044,11 @@ fn with_auto_view_sink(graph: &GraphState) -> GraphState {
                 placeholder: false,
             }),
             visible: true,
+            editor_visible: true,
             hidden: false,
             has_control: false,
             view_selectable: false,
+            view_indicator_sources: Vec::new(),
             show_in_view: false,
         })
         .collect();
@@ -3979,9 +3981,11 @@ mod tests {
             def_index: 0,
             variadic: None,
             visible: true,
+            editor_visible: true,
             hidden: false,
             has_control: true,
             view_selectable: false,
+            view_indicator_sources: Vec::new(),
             show_in_view: false,
         };
         assert_eq!(

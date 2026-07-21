@@ -27,9 +27,11 @@ fn input_socket<S>(def_index: usize, input: &InputDef<S>) -> Socket {
             placeholder: true,
         }),
         visible: true,
+        editor_visible: true,
         hidden: false,
         has_control: input.control.is_some() && input.variadic_max.is_none(),
         view_selectable: false,
+        view_indicator_sources: Vec::new(),
         show_in_view: false,
     }
 }
@@ -45,9 +47,11 @@ fn output_socket<S>(def_index: usize, output: &OutputDef<S>) -> Socket {
         def_index,
         variadic: None,
         visible: true,
+        editor_visible: output.editor_visible,
         hidden: false,
         has_control: output.control.is_some(),
         view_selectable: output.view_selectable,
+        view_indicator_sources: output.view_indicator_sources.clone(),
         show_in_view: false,
     }
 }
@@ -655,7 +659,12 @@ mod tests {
             vec![]
         }
         fn outputs() -> Vec<OutputDef<IntSourceState>> {
-            vec![OutputDef::new::<IntSocket>("Out").view_selectable(false)]
+            vec![
+                OutputDef::new::<IntSocket>("Out")
+                    .view_selectable(false)
+                    .editor_visible(false)
+                    .view_indicator_sources([1, 2]),
+            ]
         }
         fn state() -> IntSourceState {
             IntSourceState
@@ -667,12 +676,18 @@ mod tests {
         let runtime = create_node::<IntSourceNode>(NodeId(0), Pos2::ZERO);
         let mut node = runtime.node;
         assert!(!node.outputs[0].view_selectable);
+        assert!(!node.outputs[0].editor_visible);
+        assert_eq!(node.outputs[0].view_indicator_sources, [1, 2]);
 
         node.outputs[0].view_selectable = true;
+        node.outputs[0].editor_visible = true;
+        node.outputs[0].view_indicator_sources.clear();
         node.outputs[0].show_in_view = true;
         restore_node::<IntSourceNode>(&mut node);
 
         assert!(!node.outputs[0].view_selectable);
+        assert!(!node.outputs[0].editor_visible);
+        assert_eq!(node.outputs[0].view_indicator_sources, [1, 2]);
         assert!(node.outputs[0].show_in_view);
     }
 
@@ -699,9 +714,11 @@ mod tests {
             def_index: 0,
             variadic: None,
             visible: true,
+            editor_visible: true,
             hidden: false,
             has_control: false,
             view_selectable: true,
+            view_indicator_sources: Vec::new(),
             show_in_view: false,
         };
         let matches = registry.connectable_types(&float_output, SocketDirection::Output);
@@ -722,9 +739,11 @@ mod tests {
             def_index: 0,
             variadic: None,
             visible: true,
+            editor_visible: true,
             hidden: false,
             has_control: false,
             view_selectable: true,
+            view_indicator_sources: Vec::new(),
             show_in_view: false,
         };
         let matches = registry.connectable_types(&any_output, SocketDirection::Output);

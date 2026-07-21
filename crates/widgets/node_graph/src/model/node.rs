@@ -172,9 +172,11 @@ impl Node {
             def_index: 0,
             variadic: None,
             visible: true,
+            editor_visible: true,
             hidden: false,
             has_control: false,
             view_selectable: false,
+            view_indicator_sources: Vec::new(),
             show_in_view: false,
         };
         let output = input.clone();

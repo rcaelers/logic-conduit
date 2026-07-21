@@ -109,6 +109,8 @@ pub struct OutputDef<S> {
     pub(crate) identity: SocketTypeIdentity,
     pub(crate) control: Option<Box<dyn ControlBinding<S>>>,
     pub(crate) view_selectable: bool,
+    pub(crate) editor_visible: bool,
+    pub(crate) view_indicator_sources: Vec<usize>,
 }
 
 impl<S: 'static> OutputDef<S> {
@@ -121,6 +123,8 @@ impl<S: 'static> OutputDef<S> {
             identity: SocketTypeIdentity::of::<T>(),
             control: None,
             view_selectable: true,
+            editor_visible: true,
+            view_indicator_sources: Vec::new(),
         }
     }
 
@@ -137,6 +141,8 @@ impl<S: 'static> OutputDef<S> {
             identity: SocketTypeIdentity::of::<T>(),
             control: Some(Box::new(ControlBindingRenderer { label, accessor })),
             view_selectable: true,
+            editor_visible: true,
+            view_indicator_sources: Vec::new(),
         }
     }
 
@@ -145,6 +151,20 @@ impl<S: 'static> OutputDef<S> {
     /// through another explicit contract.
     pub fn view_selectable(mut self, selectable: bool) -> Self {
         self.view_selectable = selectable;
+        self
+    }
+
+    /// Controls whether this output has a socket row in the node editor.
+    /// Connected outputs remain visible so existing wires stay editable.
+    pub fn editor_visible(mut self, visible: bool) -> Self {
+        self.editor_visible = visible;
+        self
+    }
+
+    /// Makes this output's viewer eye summarize the selected viewer state of
+    /// other outputs. Indices refer to this node's output definitions.
+    pub fn view_indicator_sources(mut self, sources: impl IntoIterator<Item = usize>) -> Self {
+        self.view_indicator_sources = sources.into_iter().collect();
         self
     }
 }

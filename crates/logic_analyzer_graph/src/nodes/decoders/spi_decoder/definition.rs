@@ -66,12 +66,16 @@ impl NodeDef for SpiDecoder {
 
     fn outputs() -> Vec<OutputDef<Self::State>> {
         vec![
-            OutputDef::new::<Words>("MOSI Words"),
-            OutputDef::new::<Words>("MISO Words"),
-            OutputDef::new::<Words>("MOSI Bits"),
-            OutputDef::new::<Words>("MOSI Data"),
-            OutputDef::new::<Words>("MISO Bits"),
-            OutputDef::new::<Words>("MISO Data"),
+            OutputDef::new::<Words>("MOSI Words")
+                .view_selectable(false)
+                .view_indicator_sources([2, 3]),
+            OutputDef::new::<Words>("MISO Words")
+                .view_selectable(false)
+                .view_indicator_sources([4, 5]),
+            OutputDef::new::<Words>("MOSI Bits").editor_visible(false),
+            OutputDef::new::<Words>("MOSI Data").editor_visible(false),
+            OutputDef::new::<Words>("MISO Bits").editor_visible(false),
+            OutputDef::new::<Words>("MISO Data").editor_visible(false),
         ]
     }
 
@@ -139,14 +143,11 @@ impl NodeDef for SpiDecoder {
                     .to_owned(),
             );
         }
-        // Preserve the original word outputs for saved graphs and downstream
-        // processing, but present new captures through the compound Bits/Data
-        // lanes in the node and View panels.
-        if let Some(mosi_words) = outputs.get_mut(0) {
-            mosi_words.visible = false;
-        }
+        // The node editor exposes the connectable word outputs. Bits/Data
+        // remain available to the generic View panel and compiler through
+        // definition-owned presentation metadata.
         if let Some(miso_words) = outputs.get_mut(1) {
-            miso_words.visible = false;
+            miso_words.visible = state.has_miso.value;
         }
         if let Some(miso) = inputs.get_mut(2) {
             miso.visible = state.has_miso.value;
@@ -178,6 +179,25 @@ mod tests {
 
         let state: SpiDecoderState = serde_json::from_value(value).unwrap();
         assert_eq!(state.display_format.selected(), "Hex");
+    }
+
+    #[test]
+    fn node_editor_shows_words_and_summarizes_detail_lane_visibility() {
+        let mut widget = node_graph::NodeGraphWidget::new(crate::nodes::build_registry());
+        let node_id = widget
+            .add_node_at(SpiDecoder::name(), egui::Pos2::ZERO)
+            .unwrap();
+        let node = &widget.graph().nodes[&node_id];
+
+        assert!(node.outputs[0].editor_visible);
+        assert!(node.outputs[1].editor_visible);
+        assert!(!node.outputs[0].view_selectable);
+        assert_eq!(node.outputs[0].view_indicator_sources, [2, 3]);
+        assert_eq!(node.outputs[1].view_indicator_sources, [4, 5]);
+        for output in &node.outputs[2..] {
+            assert!(!output.editor_visible);
+            assert!(output.view_selectable);
+        }
     }
 
     #[test]

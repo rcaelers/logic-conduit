@@ -406,10 +406,10 @@ query-window size. In-memory channels (no sampler) measure from their `transitio
 
 ### Cursors
 
-DSView-style vertical time cursors are added by double-clicking the ruler, dragged by their
+DSView-style vertical time cursors are added by double-clicking the time canvas, dragged by their
 flag or line, and numbered with freed numbers reused so a cursor's color (derived from its
 number) stays stable while others come and go. Cursor drag/hover suppresses view panning and
-ruler double-click suppresses fit-to-capture for the same event.
+cursor creation suppresses fit-to-capture for the same event.
 
 ### Interaction summary
 
@@ -418,8 +418,8 @@ ruler double-click suppresses fit-to-capture for the same event.
 | Drag (primary button, not on a cursor/label) | Pan the view |
 | Scroll X | Pan the view |
 | Scroll Y | Zoom, pivoted on the pointer's sample position |
-| Double-click (not on ruler or a row label) / `F` | Fit whole capture to view |
-| Double-click ruler | Add a time cursor |
+| `Home` / `F` | Fit whole capture to view |
+| Double-click time canvas | Add a time cursor |
 | Drag a cursor flag/line | Move that cursor |
 | Double-click a row label | Rename the row |
 | Drag a row label | Reorder rows |

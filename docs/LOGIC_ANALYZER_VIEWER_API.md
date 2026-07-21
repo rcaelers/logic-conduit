@@ -123,8 +123,8 @@ while the runtime lane store is locked.
 |---|---|
 | Drag waveform area | Pan |
 | Scroll X / Scroll Y | Pan / zoom (pivoted on the pointer's time position) |
-| Double-click waveform / `F` | Fit the whole capture |
-| Double-click ruler | Add a time cursor (drag its flag/line to move; numbered, stable colors) |
+| `Home` / `F` | Fit the whole capture |
+| Double-click time canvas | Add a time cursor (drag its flag/line to move; numbered, stable colors) |
 | Double-click row label | Rename the row (viewer-local; underlying data untouched) |
 | Drag row label | Reorder rows |
 | Hover a waveform | Pulse measurement tooltip (width/period/duty), exact at any zoom |
