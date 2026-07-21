@@ -117,7 +117,7 @@ pub(crate) struct AnalyzerLayout {
 }
 
 /// A vertical time marker (DSView-style "cursor"), added by double-clicking
-/// the ruler and moved by dragging its flag or line.
+/// the time canvas and moved by dragging its flag or line.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TimeCursor {
     /// Display number (1-based). Freed numbers are reused, so a cursor's
@@ -128,13 +128,13 @@ pub(crate) struct TimeCursor {
 }
 
 /// Per-frame outcome of cursor interaction, used to keep cursor drags from
-/// also panning the view and ruler double-clicks from also fitting it.
+/// also panning the view and cursor-creation double-clicks from fitting it.
 #[derive(Default, Clone, Copy)]
 pub(crate) struct CursorInput {
     /// Cursor being dragged or hovered, for highlighting.
     pub(crate) active: Option<usize>,
     pub(crate) blocks_pan: bool,
-    pub(crate) ruler_double_click: bool,
+    pub(crate) add_cursor_double_click: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -530,7 +530,7 @@ impl LogicAnalyzerViewer {
 
     /// One-line hint of available controls, for a status bar (Phase 4.1).
     pub fn status_hint(&self) -> &'static str {
-        "Drag Pan · Scroll Zoom · Double-click ruler to add a cursor · Home Fit"
+        "Drag Pan · Scroll Zoom · Double-click view to add a cursor · Home Fit"
     }
 
     pub fn show(&mut self, ui: &mut Ui) {
@@ -549,8 +549,8 @@ impl LogicAnalyzerViewer {
         self.hovered_input_context = response
             .hover_pos()
             .map(|pointer| {
-                if layout.ruler_rect.contains(pointer) {
-                    "logic_analyzer.ruler"
+                if layout.ruler_rect.contains(pointer) || layout.wave_rect.contains(pointer) {
+                    "logic_analyzer.timeline"
                 } else if layout.labels_rect.contains(pointer) {
                     "logic_analyzer.channel"
                 } else {
@@ -577,7 +577,7 @@ impl LogicAnalyzerViewer {
             .input_bindings
             .pointer_button(&["logic_analyzer"], "fit_pointer")
             .is_some_and(|button| response.double_clicked_by(button))
-            && !cursor_input.ruler_double_click
+            && !cursor_input.add_cursor_double_click
             && !row_rename_started)
             || (response.hovered()
                 && self.input_bindings.consume_shortcut_ctx(

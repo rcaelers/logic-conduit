@@ -15,7 +15,7 @@
     { "context": "logic_analyzer", "action": "fit", "label": "Fit", "input": "key", "key": "home" },
     { "context": "logic_analyzer", "action": "fit_alternate", "label": "Fit", "input": "key", "key": "f", "status": false },
     { "context": "logic_analyzer", "action": "fit_pointer", "label": "Fit", "input": "pointer", "button": "primary", "gesture": "double_click", "status": false },
-    { "context": "logic_analyzer.ruler", "action": "add_cursor", "label": "Add Cursor", "input": "pointer", "button": "primary", "gesture": "double_click" },
+    { "context": "logic_analyzer.timeline", "action": "add_cursor", "label": "Add Cursor", "input": "pointer", "button": "primary", "gesture": "double_click" },
     { "context": "logic_analyzer.ruler", "action": "drag_cursor", "label": "Move Cursor", "input": "pointer", "button": "primary", "gesture": "drag", "status": false },
     { "context": "logic_analyzer.ruler", "action": "remove_cursor", "label": "Remove Cursor", "input": "pointer", "button": "primary", "gesture": "click", "status": false },
     { "context": "logic_analyzer.cursor", "action": "drag_cursor", "label": "Move Cursor", "input": "pointer", "button": "primary", "gesture": "drag" },

@@ -17,7 +17,7 @@ impl LogicAnalyzerViewer {
     /// Drives cursor add / hover / drag / delete for one frame.
     ///
     /// Runs before pan/zoom handling so an active cursor drag can suppress
-    /// panning, and before the fit-on-double-click check so a ruler
+    /// panning, and before the fit-on-double-click check so a time-canvas
     /// double-click means "add cursor" instead.
     pub(crate) fn handle_cursor_input(
         &mut self,
@@ -52,16 +52,16 @@ impl LogicAnalyzerViewer {
             return state;
         }
 
-        // Double-click in the ruler adds a cursor; double-click elsewhere
-        // keeps its fit-to-capture meaning.
+        // Double-click anywhere in the time canvas adds a cursor. The label
+        // column is excluded because it has no meaningful time coordinate.
         let add_cursor_button = self
             .input_bindings
-            .pointer_button(&["logic_analyzer.ruler", "logic_analyzer"], "add_cursor");
+            .pointer_button(&["logic_analyzer.timeline", "logic_analyzer"], "add_cursor");
         if add_cursor_button.is_some_and(|button| response.double_clicked_by(button))
             && let Some(pointer) = pointer
-            && ruler_rect.contains(pointer)
+            && ruler_rect.union(wave_rect).contains(pointer)
         {
-            state.ruler_double_click = true;
+            state.add_cursor_double_click = true;
             let time_us = self.x_to_time(wave_rect, pointer.x);
             let number = next_cursor_number(&self.cursors);
             self.cursors.push(TimeCursor { number, time_us });
