@@ -446,16 +446,28 @@
       "kind": "Regular",
       "muted": false,
       "outputs": [
+        {},
         {
+          "def_index": 1
+        },
+        {
+          "def_index": 2,
           "show_in_view": true
         },
         {
-          "def_index": 1
+          "def_index": 3,
+          "show_in_view": true
+        },
+        {
+          "def_index": 4
+        },
+        {
+          "def_index": 5
         }
       ],
       "pos": {
-        "x": 330.0,
-        "y": 120.0
+        "x": 276.171875,
+        "y": 64.88671875
       },
       "selected": false,
       "state": {
@@ -488,9 +500,21 @@
             "Disabled"
           ]
         },
+        "display_format": {
+          "value": "Hex",
+          "variants": [
+            "Hex",
+            "Binary",
+            "Octal",
+            "Decimal",
+            "ASCII",
+            "Hex + ASCII"
+          ]
+        },
         "has_miso": {
           "value": false
         },
+        "schema_version": 1,
         "word_size": {
           "max": 32,
           "min": 1,
@@ -706,13 +730,15 @@
       "kind": "Regular",
       "muted": false,
       "outputs": [
-        {}
+        {
+          "show_in_view": true
+        }
       ],
       "pos": {
         "x": 1160.0,
         "y": 40.0
       },
-      "selected": false,
+      "selected": true,
       "state": {
         "template": {
           "value": "output/capture_{n:04}.bin"
@@ -820,7 +846,7 @@
         "x": 1459.62890625,
         "y": 354.41015625
       },
-      "selected": true,
+      "selected": false,
       "state": {
         "cs_polarity": {
           "value": "Disabled",
