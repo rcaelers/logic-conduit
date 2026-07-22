@@ -466,10 +466,18 @@ impl LogicAnalyzerViewer {
             return false;
         };
         let lanes = store.read();
-        group
+        let has_legacy_lane = group
             .tracks
             .iter()
-            .any(|track| lanes.iter().any(|lane| lane.name == track.lane.as_str()))
+            .any(|track| lanes.iter().any(|lane| lane.name == track.lane.as_str()));
+        drop(lanes);
+        has_legacy_lane
+            || store.opaque_lanes().iter().any(|lane| {
+                group
+                    .tracks
+                    .iter()
+                    .any(|track| lane.name() == track.lane.as_str())
+            })
     }
 
     fn ensure_default_viewer_groups(&self) {

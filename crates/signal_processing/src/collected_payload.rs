@@ -24,6 +24,38 @@ pub trait CollectedLaneIngestor: Send {
     fn is_finished(&self) -> bool;
 }
 
+/// Bounded visible-window request supplied to an adapter-owned retained query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CollectedLaneSnapshotRequest {
+    pub start_time_ns: u64,
+    pub end_time_ns: u64,
+    pub max_items: usize,
+}
+
+/// Type-erased immutable result of a bounded retained-data query.
+#[derive(Clone)]
+pub struct OpaqueCollectedLaneSnapshot {
+    value: Arc<dyn Any + Send + Sync>,
+}
+
+impl OpaqueCollectedLaneSnapshot {
+    pub fn new<T: Send + Sync + 'static>(value: Arc<T>) -> Self {
+        Self { value }
+    }
+
+    pub fn value<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        Arc::downcast::<T>(Arc::clone(&self.value)).ok()
+    }
+}
+
+impl std::fmt::Debug for OpaqueCollectedLaneSnapshot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OpaqueCollectedLaneSnapshot")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Type-erased, adapter-owned retained-data query.
 ///
 /// A collector publishes this after it has created the lane's storage. Data
@@ -31,17 +63,16 @@ pub trait CollectedLaneIngestor: Send {
 /// query type registered by that payload owner. The generic collector and
 /// storage registry never inspect the concrete query value.
 pub trait CollectedLaneQuery: Send + Sync {
-    fn as_any(&self) -> &dyn Any;
     fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
-}
 
-impl<T: Any + Send + Sync> CollectedLaneQuery for T {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
-        self
+    /// Produces an immutable, bounded snapshot for a visible window. The
+    /// default declares that this query is panel-only and has no waveform
+    /// representation.
+    fn snapshot(
+        &self,
+        _request: CollectedLaneSnapshotRequest,
+    ) -> Option<OpaqueCollectedLaneSnapshot> {
+        None
     }
 }
 
@@ -264,6 +295,27 @@ mod collected_payload_tests {
     #[derive(Clone)]
     struct Second;
 
+    struct TestQuery(Vec<u64>);
+
+    impl CollectedLaneQuery for TestQuery {
+        fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+            self
+        }
+
+        fn snapshot(
+            &self,
+            request: CollectedLaneSnapshotRequest,
+        ) -> Option<OpaqueCollectedLaneSnapshot> {
+            Some(OpaqueCollectedLaneSnapshot::new(Arc::new(
+                self.0
+                    .iter()
+                    .copied()
+                    .take(request.max_items)
+                    .collect::<Vec<_>>(),
+            )))
+        }
+    }
+
     struct FailingAdapter;
 
     impl CollectedPayloadAdapter for FailingAdapter {
@@ -332,9 +384,16 @@ mod collected_payload_tests {
             DerivedDataRetention::Unlimited,
         );
 
-        request.publish_query(Arc::new(vec![1_u64, 2, 3]));
+        request.publish_query(Arc::new(TestQuery(vec![1_u64, 2, 3])));
 
-        let query = lanes.opaque_lanes()[0].query::<Vec<u64>>().unwrap();
-        assert_eq!(query.as_slice(), &[1, 2, 3]);
+        let snapshot = lanes.opaque_lanes()[0]
+            .snapshot(CollectedLaneSnapshotRequest {
+                start_time_ns: 0,
+                end_time_ns: 1,
+                max_items: 2,
+            })
+            .unwrap();
+        let values = snapshot.value::<Vec<u64>>().unwrap();
+        assert_eq!(values.as_slice(), &[1, 2]);
     }
 }

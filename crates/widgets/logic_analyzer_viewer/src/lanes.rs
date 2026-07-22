@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use egui::{Color32, Painter, Rect, Stroke};
 
-use signal_processing::OpaqueCollectedLane;
+use signal_processing::OpaqueCollectedLaneSnapshot;
 
 /// Explicit identity of one payload in [`signal_processing::DerivedLanes`].
 ///
@@ -83,23 +83,6 @@ impl ViewerLaneTrack {
     }
 }
 
-/// Bounded semantic snapshot prepared for one track in the visible window.
-/// Renderer/plugin code receives values only from exact sparse frames;
-/// dense frames are represented as activity and require no value formatting.
-#[derive(Debug, Clone)]
-pub struct ViewerLaneTrackFrame {
-    pub track: ViewerLaneTrackId,
-    pub annotation_values: Vec<u64>,
-    pub dense: bool,
-}
-
-/// Per-row frame assembled while the runtime lane store is locked and used
-/// only after that lock has been released.
-#[derive(Debug, Clone, Default)]
-pub struct ViewerLaneFrame {
-    pub tracks: Vec<ViewerLaneTrackFrame>,
-}
-
 /// Fully resolved visual properties for one annotation box.
 #[derive(Debug, Clone)]
 pub struct AnnotationVisual {
@@ -144,14 +127,15 @@ pub trait ViewerLaneRenderer: Send + Sync {
         default
     }
 
-    /// Draws an adapter-owned opaque lane. Returning `true` means the
-    /// renderer handled the track; returning `false` allows the built-in
-    /// retained-lane fallback to proceed. The viewer invokes this only after
-    /// releasing all derived-data locks.
+    /// Draws an adapter-owned opaque lane from an immutable, bounded
+    /// snapshot. Returning `true` means the renderer handled the track;
+    /// returning `false` allows the built-in retained-lane fallback to
+    /// proceed. The viewer invokes this only after releasing all
+    /// derived-data locks.
     fn draw_opaque_lane(
         &self,
         _track: &ViewerLaneTrack,
-        _query: &OpaqueCollectedLane,
+        _snapshot: Option<&OpaqueCollectedLaneSnapshot>,
         _context: OpaqueLaneDrawContext<'_>,
     ) -> bool {
         false

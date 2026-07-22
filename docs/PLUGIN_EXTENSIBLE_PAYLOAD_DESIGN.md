@@ -20,13 +20,18 @@ registered query type. Built-in payloads are registered through this same path w
 their existing digital, indexed-word, marker, and value storage representations behind their
 adapters.
 
-The retained-data path is currently closed. `DerivedDataCollector` selects storage and draining
-behavior through the built-in `CollectedDataKind` variants, and `DerivedLaneData` contains the
-corresponding built-in storage representations. The waveform viewer has a renderer extension
-point for those built-in lane representations, but cannot retain or query an arbitrary plugin
-payload.
+`CollectedLaneQuery` supplies an immutable snapshot only when its payload has waveform
+semantics. The request is bounded by a visible time window and item limit. The viewer passes the
+returned `OpaqueCollectedLaneSnapshot` to the payload's renderer only after it has released
+retained-data locks; the renderer downcasts the snapshot only to its own registered type. An
+opaque lane is sufficient to activate an explicitly registered viewer row, so a payload does not
+need a parallel `DerivedLaneData` entry merely to be visualized.
 
-## Proposed future: collected-payload adapters
+`DerivedLaneData`, `CollectedDataKind`, and `LaneBuffer` remain the implementation of the
+built-in fallback lanes. They are not part of the collected-payload contract and are being
+replaced incrementally by adapter-owned query and snapshot storage.
+
+## Collected-payload adapters
 
 A payload is *collectable* only when its owner registers explicit timeline and storage semantics.
 This is intentionally narrower than being a `PortValue`: a payload such as a configuration command
@@ -88,10 +93,11 @@ downcasts the `InputPort` only to `Receiver<T>`, and owns all append state. The 
 only schedules ingestors and applies backpressure and retention policy. The ingestor publishes its
 query handle while it is created, allowing subscribers to appear after data has been collected.
 
-`CollectedLaneQuery` exposes timeline extent, bounded visible-window snapshots, optional activity
-summaries, and optional boundary snapping. Snapshots are immutable and type-erased at the generic
-boundary. Plugin-owned presentation adapters receive only the snapshot type registered with their
-payload; the generic viewer never gives them access to mutable collector state.
+`CollectedLaneQuery` exposes bounded visible-window snapshots. Snapshots are immutable and
+type-erased at the generic boundary. Plugin-owned presentation adapters receive only the snapshot
+type registered with their payload; the generic viewer never gives them access to mutable
+collector state. Timeline extent, activity summaries, and boundary snapping are added as explicit
+capabilities rather than inferred from a payload type.
 
 ### Presentation and panels
 

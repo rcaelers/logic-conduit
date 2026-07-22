@@ -2,16 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, vec2};
 
-use signal_processing::{DerivedLaneData, LaneSummary};
+use signal_processing::{CollectedLaneSnapshotRequest, DerivedLaneData, LaneSummary};
 
 use super::derived::{DerivedRowGeometry, default_annotation_visual, visible_annotation_range};
 use crate::cursor::{cursor_color, cursor_flag_geometry, cursor_flag_label};
 use crate::format::{badge_text_color, format_time, nice_step};
 use crate::indexed_annotations::IndexedAnnotationSamples;
-use crate::lanes::{
-    AnnotationVisual, OpaqueLaneDrawContext, ViewerLaneFrame, ViewerLaneGroup,
-    ViewerLaneTrackFrame, ViewerLaneTrackId,
-};
+use crate::lanes::{AnnotationVisual, OpaqueLaneDrawContext, ViewerLaneGroup, ViewerLaneTrackId};
 use crate::types::{AnalyzerLayout, RowKey};
 use crate::viewer::LogicAnalyzerViewer;
 
@@ -246,8 +243,8 @@ impl LogicAnalyzerViewer {
                     else {
                         continue;
                     };
-                    let (_frame, annotation_visuals) =
-                        self.prepare_viewer_lane_frame(&group, wave_rect);
+                    let annotation_visuals =
+                        self.prepare_builtin_annotation_visuals(&group, wave_rect);
                     let empty_visuals = HashMap::new();
                     let opaque_lanes = store.opaque_lanes();
                     let (visible_start_ns, visible_end_ns) = self.visible_window_ns();
@@ -256,9 +253,17 @@ impl LogicAnalyzerViewer {
                         if let Some(query) = opaque_lanes
                             .iter()
                             .find(|lane| lane.name() == track.lane.as_str())
-                            && group.renderer.draw_opaque_lane(
+                        {
+                            let snapshot = query.snapshot(CollectedLaneSnapshotRequest {
+                                start_time_ns: visible_start_ns,
+                                end_time_ns: visible_end_ns,
+                                max_items: (wave_rect.width().max(1.0) as usize)
+                                    .saturating_mul(2)
+                                    .max(32),
+                            });
+                            if group.renderer.draw_opaque_lane(
                                 &track,
-                                query,
+                                snapshot.as_ref(),
                                 OpaqueLaneDrawContext {
                                     painter: &clip,
                                     wave_rect,
@@ -267,9 +272,9 @@ impl LogicAnalyzerViewer {
                                     visible_start_ns,
                                     visible_end_ns,
                                 },
-                            )
-                        {
-                            continue;
+                            ) {
+                                continue;
+                            }
                         }
                         let lanes = store.read();
                         let Some(lane) = lanes.iter().find(|lane| lane.name == track.lane.as_str())
@@ -377,22 +382,19 @@ impl LogicAnalyzerViewer {
         }
     }
 
-    /// Captures the bounded semantic inputs a concrete renderer may inspect,
-    /// releases `DerivedLanes`, and only then invokes renderer/plugin code.
-    fn prepare_viewer_lane_frame(
+    /// Prepares visual overrides for the legacy built-in annotation fallback.
+    /// Plugin-owned rows receive their own opaque snapshots directly through
+    /// [`ViewerLaneRenderer::draw_opaque_lane`].
+    fn prepare_builtin_annotation_visuals(
         &self,
         group: &ViewerLaneGroup,
         wave_rect: Rect,
-    ) -> (
-        ViewerLaneFrame,
-        HashMap<ViewerLaneTrackId, HashMap<u64, AnnotationVisual>>,
-    ) {
+    ) -> HashMap<ViewerLaneTrackId, HashMap<u64, AnnotationVisual>> {
         let exact_limit = (wave_rect.width().max(1.0) as usize)
             .saturating_mul(2)
             .max(32);
         let (start_ns, end_ns) = self.visible_window_ns();
-        let mut frame = ViewerLaneFrame::default();
-        let mut formats = HashMap::<ViewerLaneTrackId, Option<String>>::new();
+        let mut annotation_values = Vec::<(ViewerLaneTrackId, Vec<u64>, Option<String>)>::new();
 
         if let Some(store) = &self.derived {
             let lanes = store.read();
@@ -400,72 +402,58 @@ impl LogicAnalyzerViewer {
                 let Some(lane) = lanes.iter().find(|lane| lane.name == track.lane.as_str()) else {
                     continue;
                 };
-                let (values, dense) = match &lane.data {
+                let values = match &lane.data {
                     DerivedLaneData::Annotations(annotations) => {
                         let (first, last) = visible_annotation_range(annotations, start_ns, end_ns);
                         let visible = &annotations[first..last];
                         if visible.len() > exact_limit {
-                            (Vec::new(), true)
+                            continue;
                         } else {
-                            (
-                                visible.iter().map(|annotation| annotation.value).collect(),
-                                false,
-                            )
+                            visible.iter().map(|annotation| annotation.value).collect()
                         }
                     }
-                    DerivedLaneData::IndexedAnnotations(_) => self
-                        .indexed_annotation_cache
-                        .get(&lane.name)
-                        .map_or((Vec::new(), true), |cached| match cached.samples() {
-                            IndexedAnnotationSamples::Exact { annotations, .. } => (
-                                annotations
-                                    .iter()
-                                    .map(|annotation| annotation.value)
-                                    .collect(),
-                                false,
-                            ),
+                    DerivedLaneData::IndexedAnnotations(_) => {
+                        let Some(cached) = self.indexed_annotation_cache.get(&lane.name) else {
+                            continue;
+                        };
+                        match cached.samples() {
+                            IndexedAnnotationSamples::Exact { annotations, .. } => annotations
+                                .iter()
+                                .map(|annotation| annotation.value)
+                                .collect(),
                             IndexedAnnotationSamples::Presence(_)
-                            | IndexedAnnotationSamples::Error => (Vec::new(), true),
-                        }),
+                            | IndexedAnnotationSamples::Error => continue,
+                        }
+                    }
                     DerivedLaneData::Digital(_)
                     | DerivedLaneData::Markers(_)
                     | DerivedLaneData::Values(_) => continue,
                 };
-                formats.insert(track.id.clone(), lane.word_display_format.clone());
-                frame.tracks.push(ViewerLaneTrackFrame {
-                    track: track.id.clone(),
-                    annotation_values: values,
-                    dense,
-                });
+                annotation_values.push((
+                    track.id.clone(),
+                    values,
+                    lane.word_display_format.clone(),
+                ));
             }
         }
 
         let mut visuals = HashMap::new();
-        for track_frame in &frame.tracks {
-            if track_frame.dense {
-                continue;
-            }
-            let format = formats
-                .get(&track_frame.track)
-                .and_then(|format| format.as_deref());
+        for (track, values, format) in annotation_values {
+            let format = format.as_deref();
             let mut seen = HashSet::new();
-            let track_visuals = track_frame
-                .annotation_values
+            let track_visuals = values
                 .iter()
                 .copied()
                 .filter(|value| seen.insert(*value))
                 .map(|value| {
                     let default = default_annotation_visual(value, format);
-                    let visual =
-                        group
-                            .renderer
-                            .annotation_visual(&track_frame.track, value, default);
+                    let visual = group.renderer.annotation_visual(&track, value, default);
                     (value, visual)
                 })
                 .collect();
-            visuals.insert(track_frame.track.clone(), track_visuals);
+            visuals.insert(track, track_visuals);
         }
-        (frame, visuals)
+        visuals
     }
 
     fn draw_cursors(
@@ -638,10 +626,13 @@ impl LogicAnalyzerViewer {
 
 #[cfg(test)]
 mod frame_tests {
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
-    use signal_processing::{Annotation, CaptureMetadata, DerivedLaneData, DerivedLanes};
+    use signal_processing::{
+        Annotation, CaptureMetadata, CollectedLaneQuery, CollectedLaneSnapshotRequest,
+        CollectedPayloadRegistry, DerivedLaneData, DerivedLanes, OpaqueCollectedLaneSnapshot,
+    };
 
     use super::*;
     use crate::lanes::{
@@ -667,6 +658,50 @@ mod frame_tests {
                 .register("renderer lock probe", DerivedLaneData::Markers(Vec::new()));
             self.calls.fetch_add(1, Ordering::Relaxed);
             default
+        }
+    }
+
+    struct SnapshotQuery {
+        requested: Mutex<Option<CollectedLaneSnapshotRequest>>,
+    }
+
+    impl CollectedLaneQuery for SnapshotQuery {
+        fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+            self
+        }
+
+        fn snapshot(
+            &self,
+            request: CollectedLaneSnapshotRequest,
+        ) -> Option<OpaqueCollectedLaneSnapshot> {
+            *self.requested.lock().unwrap() = Some(request);
+            Some(OpaqueCollectedLaneSnapshot::new(Arc::new(vec![7_u8, 9])))
+        }
+    }
+
+    struct OpaqueSnapshotRenderer {
+        lanes: DerivedLanes,
+        values: Mutex<Vec<u8>>,
+    }
+
+    impl ViewerLaneRenderer for OpaqueSnapshotRenderer {
+        fn draw_opaque_lane(
+            &self,
+            _track: &ViewerLaneTrack,
+            snapshot: Option<&OpaqueCollectedLaneSnapshot>,
+            _context: OpaqueLaneDrawContext<'_>,
+        ) -> bool {
+            let values = snapshot
+                .and_then(|snapshot| snapshot.value::<Vec<u8>>())
+                .expect("opaque renderer receives its registered snapshot");
+            self.values.lock().unwrap().extend(values.iter().copied());
+            // Taking this write lock proves that generic rendering released
+            // its retained-lane lock before calling plugin code.
+            self.lanes.register(
+                "opaque renderer lock probe",
+                DerivedLaneData::Markers(Vec::new()),
+            );
+            true
         }
     }
 
@@ -735,13 +770,11 @@ mod frame_tests {
         let mut viewer = LogicAnalyzerViewer::new();
         viewer.set_derived_lanes(lanes.clone());
 
-        let (frame, visuals) = viewer.prepare_viewer_lane_frame(
+        let visuals = viewer.prepare_builtin_annotation_visuals(
             &group(renderer.clone()),
             Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 30.0)),
         );
 
-        assert_eq!(frame.tracks[0].annotation_values, [1, 2]);
-        assert!(!frame.tracks[0].dense);
         assert_eq!(renderer.calls.load(Ordering::Relaxed), 2);
         assert_eq!(visuals[&ViewerLaneTrackId::new("words")].len(), 2);
         assert!(
@@ -774,14 +807,90 @@ mod frame_tests {
         let mut viewer = LogicAnalyzerViewer::new();
         viewer.set_derived_lanes(lanes);
 
-        let (frame, visuals) = viewer.prepare_viewer_lane_frame(
+        let visuals = viewer.prepare_builtin_annotation_visuals(
             &group(renderer.clone()),
             Rect::from_min_size(Pos2::ZERO, egui::vec2(10.0, 30.0)),
         );
 
-        assert!(frame.tracks[0].dense);
-        assert!(frame.tracks[0].annotation_values.is_empty());
         assert!(visuals.is_empty());
         assert_eq!(renderer.calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn opaque_lane_renderer_receives_a_bounded_snapshot_after_locks_release() {
+        let lanes = DerivedLanes::new();
+        let mut payloads = CollectedPayloadRegistry::new();
+        payloads
+            .register::<u8>("org.example.camera-frame/v1")
+            .unwrap();
+        let query = Arc::new(SnapshotQuery {
+            requested: Mutex::new(None),
+        });
+        lanes.publish_opaque_lane(
+            "camera.frames",
+            payloads.descriptor::<u8>().unwrap().clone(),
+            Arc::clone(&query),
+        );
+        let renderer = Arc::new(OpaqueSnapshotRenderer {
+            lanes: lanes.clone(),
+            values: Mutex::new(Vec::new()),
+        });
+        let presentations = crate::lanes::WaveformPresentationRegistry::new();
+        presentations.set_implicit_groups(false);
+        presentations.register(ViewerLaneGroup {
+            id: ViewerLaneGroupId::new("camera"),
+            label: "Camera".to_owned(),
+            badge: ViewerLaneBadge::new("CAM", Color32::WHITE),
+            tracks: vec![ViewerLaneTrack::new(
+                "frames",
+                DerivedLaneId::new("camera.frames"),
+                1.0,
+            )],
+            renderer: renderer.clone(),
+        });
+        let mut viewer = LogicAnalyzerViewer::new();
+        viewer.set_derived_lanes(lanes.clone());
+        viewer.set_waveform_presentations(presentations);
+        viewer.visible_span_us = 100.0;
+        viewer.ensure_row_order();
+
+        let context = egui::Context::default();
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 120.0));
+        context.begin_pass(egui::RawInput {
+            screen_rect: Some(rect),
+            ..Default::default()
+        });
+        let painter = context.layer_painter(egui::LayerId::background());
+        viewer.draw(
+            &painter,
+            AnalyzerLayout {
+                ruler_rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 20.0)),
+                labels_rect: Rect::from_min_max(Pos2::new(0.0, 20.0), Pos2::new(200.0, 120.0)),
+                wave_rect: Rect::from_min_max(Pos2::new(200.0, 20.0), Pos2::new(800.0, 120.0)),
+                row_height: 80.0,
+                trigger_width: 0.0,
+                name_col_width: 120.0,
+                badge_width: 32.0,
+            },
+            None,
+            None,
+        );
+        let _ = context.end_pass();
+
+        assert_eq!(*renderer.values.lock().unwrap(), vec![7, 9]);
+        assert_eq!(
+            *query.requested.lock().unwrap(),
+            Some(CollectedLaneSnapshotRequest {
+                start_time_ns: 0,
+                end_time_ns: 100_000,
+                max_items: 1_200,
+            })
+        );
+        assert!(
+            lanes
+                .read()
+                .iter()
+                .any(|lane| lane.name == "opaque renderer lock probe")
+        );
     }
 }

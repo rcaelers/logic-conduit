@@ -7,8 +7,9 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 use web_time::Instant;
 
 use crate::collected_payload::{
-    CollectedLaneIngestor, CollectedLaneQuery, CollectedLaneRequest, CollectedPayloadAdapter,
-    CollectedPayloadDescriptor, CollectedPayloadRegistrationError, CollectedPayloadRegistry,
+    CollectedLaneIngestor, CollectedLaneQuery, CollectedLaneRequest, CollectedLaneSnapshotRequest,
+    CollectedPayloadAdapter, CollectedPayloadDescriptor, CollectedPayloadRegistrationError,
+    CollectedPayloadRegistry, OpaqueCollectedLaneSnapshot,
 };
 use crate::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 use crate::derived_word_store::{
@@ -365,6 +366,14 @@ impl OpaqueCollectedLane {
 
     pub fn query<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
         Arc::downcast::<T>(Arc::clone(&self.query).into_any()).ok()
+    }
+
+    /// Requests a bounded immutable snapshot for a presentation subscriber.
+    pub fn snapshot(
+        &self,
+        request: CollectedLaneSnapshotRequest,
+    ) -> Option<OpaqueCollectedLaneSnapshot> {
+        self.query.snapshot(request)
     }
 }
 
@@ -1149,6 +1158,12 @@ mod tests {
 
     #[derive(Clone)]
     struct PluginEvent(u64);
+
+    impl CollectedLaneQuery for std::sync::Mutex<Vec<u64>> {
+        fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+            self
+        }
+    }
 
     struct PluginEventIngestor {
         values: Arc<std::sync::Mutex<Vec<u64>>>,
