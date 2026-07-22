@@ -1,9 +1,9 @@
 //! Stable identities for payload types retained as derived data.
 //!
-//! The registry deliberately records identity only. Typed ingestion and query
-//! factories are added once the collector moves beyond its built-in lane
-//! representations; keeping that later contract separate prevents a plugin
-//! from being advertised as collectable before it has storage semantics.
+//! The registry records durable payload identity and its typed ingestion
+//! factory. Graph-level consumers decide separately whether a registered
+//! payload is viewable, so collection and presentation remain independently
+//! extensible.
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -124,6 +124,8 @@ pub enum CollectedPayloadRegistrationError {
     AdapterAlreadyRegistered { stable_id: String },
     #[error("payload type '{type_name}' has no collected-payload identity")]
     PayloadNotRegistered { type_name: String },
+    #[error("collected payload '{stable_id}' has no ingestion adapter")]
+    PayloadHasNoAdapter { stable_id: String },
 }
 
 /// Bidirectional identity registry for collected payload types.

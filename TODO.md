@@ -30,15 +30,6 @@ presentation without editing a generic crate.
   adapter, default badge/group, and renderer. Registration must compose with
   `register_payload::<T>()`; adding a type must not require a match arm in
   `logic_analyzer_graph`, `signal_processing`, or `logic_analyzer_viewer`.
-- Replace the Viewer's hardcoded accepted-kind list and the synthetic socket's type-name list
-  with registry-driven negotiation or a true viewable-payload wildcard. Keep unsupported output
-  types out of the View panel, and report a clear compile error if a saved or explicitly wired
-  graph requests viewing for a payload whose adapter is unavailable.
-- Move the remaining built-in `CollectedDataKind`/`LaneBuffer` implementation behind the
-  registered adapters, then remove the collector's closed representation. The factory constructs
-  the correctly typed runtime `PortSchema` and drains the corresponding `InputPort`, while the
-  generic `DerivedDataCollector` only schedules lanes, applies backpressure/retention policy, and
-  publishes progress.
 - Replace the closed `DerivedLaneData` and `ViewerValueKind` representation with registered lane
   data/query handles. Separate typed append state from immutable UI snapshots so arbitrary
   values do not require conversion to strings or integers. Each adapter supplies timestamp/span

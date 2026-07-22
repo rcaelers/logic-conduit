@@ -11,7 +11,7 @@ use logic_analyzer_viewer::{
     ViewerLaneTrack,
 };
 use node_graph::Socket;
-use signal_processing::{NumberSample, Sample, TextSample, Trigger, Word};
+use signal_processing::{NumberSample, Sample, TextSample, Word};
 
 use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
@@ -61,13 +61,10 @@ impl RuntimeBuilder for ViewerSubscriptionBuilder {
             .collect()
     }
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![
-            PortKind::of::<Sample>(),
-            PortKind::of::<Word>(),
-            PortKind::of::<Trigger>(),
-            PortKind::of::<NumberSample>(),
-            PortKind::of::<TextSample>(),
-        ]
+        // `lower()` supplies the registry's viewable payload kinds for a
+        // data subscription. Keeping this empty prevents a second, fixed
+        // built-in list from becoming the source of truth.
+        Vec::new()
     }
     fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
         vec![]

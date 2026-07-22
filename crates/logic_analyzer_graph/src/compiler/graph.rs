@@ -618,6 +618,7 @@ pub struct DiscoveredCapturePresentation {
 pub struct BuilderRegistry {
     builders: HashMap<String, Box<dyn RuntimeBuilder>>,
     collected_payloads: CollectedPayloadRegistry,
+    viewable_payloads: Vec<PortKind>,
 }
 
 impl BuilderRegistry {
@@ -625,11 +626,27 @@ impl BuilderRegistry {
         let mut registry = Self {
             builders: crate::nodes::standard_builders(),
             collected_payloads: CollectedPayloadRegistry::new(),
+            viewable_payloads: Vec::new(),
         };
         signal_processing::register_builtin_collected_payload_adapters(
             &mut registry.collected_payloads,
         )
         .expect("built-in collected payload adapters must be valid");
+        registry
+            .register_viewable_collected_payload::<signal_processing::Sample>()
+            .expect("built-in digital payload must be viewable");
+        registry
+            .register_viewable_collected_payload::<signal_processing::Word>()
+            .expect("built-in word payload must be viewable");
+        registry
+            .register_viewable_collected_payload::<signal_processing::Trigger>()
+            .expect("built-in trigger payload must be viewable");
+        registry
+            .register_viewable_collected_payload::<signal_processing::NumberSample>()
+            .expect("built-in number payload must be viewable");
+        registry
+            .register_viewable_collected_payload::<signal_processing::TextSample>()
+            .expect("built-in text payload must be viewable");
         registry
     }
 
@@ -672,10 +689,53 @@ impl BuilderRegistry {
         Ok(self)
     }
 
+    /// Marks a registered collected payload as eligible for graph-level data
+    /// subscriptions. A payload remains non-viewable until its owner opts in.
+    pub fn register_viewable_collected_payload<T: PortValue>(
+        &mut self,
+    ) -> Result<&mut Self, CollectedPayloadRegistrationError> {
+        let type_id = std::any::TypeId::of::<T>();
+        let descriptor = self
+            .collected_payloads
+            .descriptor_by_type_id(type_id)
+            .ok_or_else(|| CollectedPayloadRegistrationError::PayloadNotRegistered {
+                type_name: std::any::type_name::<T>().to_owned(),
+            })?;
+        if self
+            .collected_payloads
+            .adapter_by_type_id(type_id)
+            .is_none()
+        {
+            return Err(CollectedPayloadRegistrationError::PayloadHasNoAdapter {
+                stable_id: descriptor.stable_id().to_owned(),
+            });
+        }
+        let kind = PortKind::of::<T>();
+        if !self.viewable_payloads.contains(&kind) {
+            self.viewable_payloads.push(kind);
+        }
+        Ok(self)
+    }
+
+    /// Registers a collected adapter and makes the payload eligible for data
+    /// subscriptions in one explicit plugin-facing operation.
+    pub fn register_viewable_collected_payload_adapter<T: PortValue>(
+        &mut self,
+        stable_id: impl Into<String>,
+        adapter: std::sync::Arc<dyn CollectedPayloadAdapter>,
+    ) -> Result<&mut Self, CollectedPayloadRegistrationError> {
+        self.register_collected_payload_adapter::<T>(stable_id, adapter)?;
+        self.register_viewable_collected_payload::<T>()
+    }
+
     /// Registered retained-payload identities, keyed by runtime `TypeId` and
     /// durable plugin-owned identifiers.
     pub fn collected_payloads(&self) -> &CollectedPayloadRegistry {
         &self.collected_payloads
+    }
+
+    fn viewable_payloads(&self) -> &[PortKind] {
+        &self.viewable_payloads
     }
 
     pub(crate) fn get(&self, def_name: &str) -> Option<&dyn RuntimeBuilder> {
@@ -1371,15 +1431,25 @@ pub fn lower(
             .insert(wire.to.index);
 
         let offered = from_builder.offered_kinds(from_socket, &from_node.state);
-        let accepted = to_builder.accepted_kinds(to_socket, &to_node.state);
+        let data_subscription = to_builder.is_data_subscription();
+        let accepted = if data_subscription {
+            registry.viewable_payloads().to_vec()
+        } else {
+            to_builder.accepted_kinds(to_socket, &to_node.state)
+        };
         let Some(kind) = offered.iter().copied().find(|k| accepted.contains(k)) else {
-            errors.push(CompileError::on(
-                wire.to.node,
+            let message = if data_subscription {
+                format!(
+                    "data subscription cannot display '{}' because its payload is not registered as viewable",
+                    from_socket.name
+                )
+            } else {
                 format!(
                     "'{}' cannot consume what '{}' produces on '{}'",
                     to_socket.name, from_node.title, from_socket.name
-                ),
-            ));
+                )
+            };
+            errors.push(CompileError::on(wire.to.node, message));
             continue;
         };
 
@@ -2358,6 +2428,29 @@ mod tests {
         discover_live_capture_feature_from(graph, builders, |node| retained.contains(&node.id))
     }
     use crate::nodes;
+
+    #[test]
+    fn viewable_payloads_are_registered_with_the_builder_registry() {
+        let mut registry = BuilderRegistry::standard();
+
+        assert!(
+            registry
+                .viewable_payloads()
+                .contains(&PortKind::of::<Sample>())
+        );
+        assert!(
+            registry
+                .viewable_payloads()
+                .contains(&PortKind::of::<Word>())
+        );
+        registry
+            .register_collected_payload::<SampleBlock>("org.example.block/v1")
+            .unwrap();
+        assert!(matches!(
+            registry.register_viewable_collected_payload::<SampleBlock>(),
+            Err(CollectedPayloadRegistrationError::PayloadHasNoAdapter { .. })
+        ));
+    }
 
     fn startup_widget() -> NodeGraphWidget {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());

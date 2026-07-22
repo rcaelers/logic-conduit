@@ -19,8 +19,9 @@ std::cfg_select! {
             use logic_analyzer_processing::nodes::decoders::spi_decoder::{SpiDecoder, SpiMode};
             use logic_analyzer_processing::nodes::sources::dsl_file::DslFileSource;
             use signal_processing::{
-                DerivedLanes, LiveStoreConfig, Pipeline, ProcessNode, CollectedDataKind,
-                DerivedDataRetention, DerivedDataCollector, Watchdog, Word, WorkError,
+                built_in_word_lane_ingestor, CollectedWordLaneOptions, DerivedDataCollector,
+                DerivedDataRetention, DerivedLanes, LiveStoreConfig, Pipeline, ProcessNode,
+                Watchdog, Word, WorkError,
             };
 
             #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -140,13 +141,20 @@ std::cfg_select! {
                             let lanes = DerivedLanes::new();
                             pipeline.add_process(
                                 "viewer",
-                                DerivedDataCollector::new(lanes.clone())
+                                DerivedDataCollector::new()
                                     .with_retention(DerivedDataRetention::MaxEntries(4_000_000))
-                                    .with_word_store_config(LiveStoreConfig {
-                                        directory: scratch.path().join("derived"),
-                                        ..LiveStoreConfig::default()
-                                    })
-                                    .with_lane(CollectedDataKind::Words, "spi"),
+                                    .with_ingestor(built_in_word_lane_ingestor(
+                                        "spi",
+                                        lanes.clone(),
+                                        DerivedDataRetention::MaxEntries(4_000_000),
+                                        CollectedWordLaneOptions::new(
+                                            LiveStoreConfig {
+                                                directory: scratch.path().join("derived"),
+                                                ..LiveStoreConfig::default()
+                                            },
+                                            None,
+                                        ),
+                                    )),
                             )?;
                             pipeline.connect("decoder", "mosi_words", "viewer", "in0")?;
                             Some(lanes)

@@ -24,9 +24,10 @@ std::cfg_select! {
     use logic_analyzer_processing::nodes::sources::dsl_file::DslFileSource;
     use logic_analyzer_processing::types::CsPolarity;
     use signal_processing::{
-        DecodedBlockCacheStats, DerivedLaneData, DerivedLanes, InputPort, LiveStoreConfig,
-        OutputPort, PersistentStoreConfig, Pipeline, PortSchema, ProcessNode, ProtocolKind,
-        CollectedDataKind, DerivedDataRetention, DerivedDataCollector, DerivedDataCollectorMetrics, Word, WorkError,
+        built_in_word_lane_ingestor, CollectedWordLaneOptions, DecodedBlockCacheStats,
+        DerivedLaneData, DerivedLanes, InputPort, LiveStoreConfig, OutputPort,
+        PersistentStoreConfig, Pipeline, PortSchema, ProcessNode, ProtocolKind,
+        DerivedDataRetention, DerivedDataCollector, DerivedDataCollectorMetrics, Word, WorkError,
         WorkResult, configure_decoded_block_cache, decoded_block_cache_stats,
         reset_decoded_block_cache_stats,
     };
@@ -768,11 +769,15 @@ std::cfg_select! {
                 }
                 pipeline.add_process(
                     "sink",
-                    DerivedDataCollector::new(store.clone())
+                    DerivedDataCollector::new()
                         .with_retention(DerivedDataRetention::MaxEntries(args.viewer_max_entries.max(1)))
                         .with_metrics(viewer_metrics.clone())
-                        .with_word_store_config(store_config)
-                        .with_lane(CollectedDataKind::Words, "parallel"),
+                        .with_ingestor(built_in_word_lane_ingestor(
+                            "parallel",
+                            store.clone(),
+                            DerivedDataRetention::MaxEntries(args.viewer_max_entries.max(1)),
+                            CollectedWordLaneOptions::new(store_config, None),
+                        )),
                 )?;
                 viewer_store = Some(store);
                 sink_port = Some("in0");

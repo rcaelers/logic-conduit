@@ -24,7 +24,7 @@ impl DataCollectorBuilder {
         collected_payloads: &CollectedPayloadRegistry,
         ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
-        let mut collector = DerivedDataCollector::new(ctx.derived_lanes().clone())
+        let mut collector = DerivedDataCollector::new()
             .with_name(name)
             .with_retention(ctx.derived_data_retention());
         for (member, lane_name) in lane_names {
