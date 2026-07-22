@@ -6,7 +6,8 @@ use serde_json::Value;
 use logic_analyzer_processing::nodes::sources::dsl_file::DslFileSource;
 use node_graph::Socket;
 use signal_processing::{
-    DEFAULT_VIEWER_MAX_ENTRIES, ProcessNode, Sample, SampleBlock, TextSample, ViewerRetention,
+    DEFAULT_DERIVED_DATA_MAX_ENTRIES, DerivedDataRetention, ProcessNode, Sample, SampleBlock,
+    TextSample,
 };
 
 use crate::{
@@ -20,8 +21,8 @@ impl RuntimeBuilder for FileSourceBuilder {
     fn is_source(&self) -> bool {
         true
     }
-    fn viewer_retention(&self, _state: &Value) -> ViewerRetention {
-        ViewerRetention::MaxEntries(DEFAULT_VIEWER_MAX_ENTRIES)
+    fn derived_data_retention(&self, _state: &Value) -> DerivedDataRetention {
+        DerivedDataRetention::MaxEntries(DEFAULT_DERIVED_DATA_MAX_ENTRIES)
     }
     fn accepted_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
         match socket.def_index {

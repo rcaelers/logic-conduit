@@ -237,7 +237,7 @@ impl LogicAnalyzerViewer {
                         continue;
                     };
                     let Some(group) = self
-                        .viewer_lanes
+                        .waveform_presentations
                         .read()
                         .iter()
                         .find(|group| &group.id == group_id)
@@ -332,10 +332,10 @@ impl LogicAnalyzerViewer {
                             }
                             DerivedLaneData::Values(values) => {
                                 let color = match values.kind {
-                                    signal_processing::ViewerValueKind::Number => {
+                                    signal_processing::CollectedValueKind::Number => {
                                         Color32::from_rgb(95, 145, 210)
                                     }
-                                    signal_processing::ViewerValueKind::Text => {
+                                    signal_processing::CollectedValueKind::Text => {
                                         Color32::from_rgb(215, 150, 170)
                                     }
                                 };

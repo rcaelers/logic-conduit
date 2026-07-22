@@ -22,7 +22,7 @@ compiled and is not inferred while loading a graph.
 
 ## Current lane model
 
-Runtime nodes publish ordinary derived lanes with stable storage keys. `ViewerLaneRegistry`
+Runtime nodes publish ordinary derived lanes with stable storage keys. `WaveformPresentationRegistry`
 explicitly assigns those payloads to displayed groups and tracks. The viewer renders digital,
 annotation, indexed-annotation, and marker payloads using generic drawing and query paths.
 
@@ -61,12 +61,13 @@ discoverable in one directory.
 A run has two stores with the same lifetime:
 
 1. `DerivedLanes` in `signal_processing` contains payloads, summaries, and indexed query handles.
-2. `ViewerLaneRegistry` in `logic_analyzer_viewer` contains immutable row/group presentation
+2. `WaveformPresentationRegistry` in `logic_analyzer_viewer` contains immutable row/group presentation
    objects and explicit references to the payload lanes they present.
 
 `CompileCtx` owns both stores. `logic_analyzer_ui` gives clones to the viewer before compilation,
-just as it currently does for `DerivedLanes`. Compiling Viewer sinks fills both stores. Starting a
-new run swaps both stores, so data and presentation cannot leak across runs.
+just as it currently does for `DerivedLanes`. Compiling data collectors fills the retained store;
+compiling waveform subscriptions fills the presentation registry. Starting a new run swaps both
+stores, so data and presentation cannot leak across runs.
 
 The presentation registry is not placed inside `DerivedLanes`: doing so would make the
 UI-independent `signal_processing` crate depend on egui-facing trait objects.
@@ -102,13 +103,14 @@ lane that belongs to a compound group is not also inserted as an independent row
 ### Registration during graph lowering
 
 `RuntimeBuilder` provides a protocol-neutral hook that returns optional viewer-output presentation
-metadata for one output socket. The UART builder implements the hook by delegating to the UART
-adapter in `viewer_lanes::uart`. Generic lowering carries the opaque metadata, producer node ID,
-and output socket identity in `ResolvedInput`; it never examines their values.
+metadata for one output socket. The UART builder implements the hook through its concrete
+presentation module. Generic lowering carries the opaque metadata, producer node ID, and output
+socket identity in `ResolvedInput`; it never examines their values.
 
-When `ViewerBuilder` creates a payload lane for a resolved input, it wraps the lane's stable
-storage key in an explicit `DerivedLaneId` and associates that ID with the resolved presentation
-metadata. It then groups tracks by the namespaced group key and registers the resulting
+Generic lowering materializes a `DerivedDataCollector` for each waveform subscription. The
+`ViewerSubscriptionBuilder` wraps each retained lane's stable storage key in an explicit
+`DerivedLaneId` and associates that ID with the resolved presentation metadata. It then groups
+tracks by the namespaced group key and registers the resulting
 `ViewerLaneGroup`. Inputs without presentation metadata are registered through the viewer's
 default singleton-group constructor.
 
@@ -253,14 +255,17 @@ variants, or match arms.
 
 ### Decoder tables
 
-Decoder table panels consume a second protocol-neutral presentation registry built alongside the
-lane registry. Concrete decoder output adapters explicitly assign viewer-connected word outputs
-to a table source, provide stable column keys, labels and ordering, identify row-anchor columns,
-and choose whether overlapping annotations are displayed as one value or as a joined sequence.
-The decoder-table contract and registry live in `logic_analyzer_graph`, which owns concrete node
-presentation metadata and graph lowering. The generic Viewer sink namespaces each source by
-producer node and resolves its columns to the same derived-lane identities used by the waveform
-viewer. `logic_analyzer_viewer` owns only lane and waveform presentation; it has no decoder-table
+Decoder table panels consume a protocol-neutral presentation registry alongside the lane
+registry. Concrete decoder output adapters explicitly assign retained word outputs to a table
+source, provide stable column keys, labels and ordering, identify row-anchor columns, and choose
+whether overlapping annotations are displayed as one value or as a joined sequence. The
+decoder-table contract and registry live in `logic_analyzer_graph`, which owns concrete node
+presentation metadata and graph lowering. A presentation-neutral data collector retains typed
+output streams under stable derived-lane identities. The waveform viewer and decoder table are
+peer subscribers that independently resolve those identities; neither subscriber is part of the
+collector and neither knows about the other. Because the retained store outlives production, a
+subscriber or panel may appear after its data was collected and still consume the existing
+history. `logic_analyzer_viewer` owns only lane and waveform presentation; it has no decoder-table
 types or registry.
 
 Each physical Decoder panel keeps independent source, visible-column, and number-format settings.
@@ -273,7 +278,8 @@ concrete adapters.
 
 The application and table widget never identify SPI, UART, Binary Decoder, output labels, or
 protocol values. A decoder or plugin becomes tabular only by supplying the explicit generic
-metadata. Only outputs connected to a Viewer appear as columns.
+metadata. Such outputs are retained independently of whether they are also subscribed to by a
+waveform viewer.
 
 ### Validation invariants
 
@@ -284,7 +290,7 @@ The implementation preserves these invariants:
 2. `node_graph` and generic lowering never inspect presentation keys or renderer types.
 3. Every visible derived row has an explicit group; default singleton groups are explicit too.
 4. Every group track refers to a registered payload lane of a compatible generic family.
-5. A payload lane appears in at most one displayed group for one Viewer sink.
+5. A payload lane appears in at most one displayed group for one waveform subscription.
 6. Group behavior is unchanged by node-title edits, row renames, translated labels, or duplicate
    lane-name suffixes.
 7. Drawing and snapping remain bounded for indexed and dense in-memory lanes.
@@ -292,3 +298,4 @@ The implementation preserves these invariants:
 9. Native and wasm compile against the same group and renderer APIs.
 10. Plugins can register a concrete renderer without editing generic crates.
 11. Decoder table discovery never relies on node names, output labels, or renderer types.
+12. Data collection has no dependency on waveform-viewer or decoder-table presentation types.

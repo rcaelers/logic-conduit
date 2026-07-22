@@ -135,7 +135,7 @@ impl DecoderPanels {
         let sources = self.tables.read().clone();
         if sources.is_empty() {
             ui.centered_and_justified(|ui| {
-                ui.weak("Run a graph with decoder outputs connected to a Viewer");
+                ui.weak("Run a graph with decoder outputs to populate this table");
             });
             return;
         }

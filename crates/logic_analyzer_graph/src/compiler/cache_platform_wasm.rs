@@ -12,7 +12,7 @@ use signal_processing::PersistentStoreConfig;
 use super::errors::CompileError;
 use super::graph::{BuilderRegistry, CompiledGraph};
 
-pub(crate) fn assign_viewer_caches(_compiled: &mut CompiledGraph) {}
+pub(crate) fn assign_derived_word_caches(_compiled: &mut CompiledGraph) {}
 
 pub(crate) fn configure_directory(_compiled: &mut CompiledGraph, _directory: Option<&Path>) {}
 

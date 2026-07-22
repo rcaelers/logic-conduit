@@ -19,8 +19,8 @@ std::cfg_select! {
             use logic_analyzer_processing::nodes::decoders::spi_decoder::{SpiDecoder, SpiMode};
             use logic_analyzer_processing::nodes::sources::dsl_file::DslFileSource;
             use signal_processing::{
-                DerivedLanes, LiveStoreConfig, Pipeline, ProcessNode, ViewerLaneKind,
-                ViewerRetention, ViewerSink, Watchdog, Word, WorkError,
+                DerivedLanes, LiveStoreConfig, Pipeline, ProcessNode, CollectedDataKind,
+                DerivedDataRetention, DerivedDataCollector, Watchdog, Word, WorkError,
             };
 
             #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -140,13 +140,13 @@ std::cfg_select! {
                             let lanes = DerivedLanes::new();
                             pipeline.add_process(
                                 "viewer",
-                                ViewerSink::new(lanes.clone())
-                                    .with_retention(ViewerRetention::MaxEntries(4_000_000))
+                                DerivedDataCollector::new(lanes.clone())
+                                    .with_retention(DerivedDataRetention::MaxEntries(4_000_000))
                                     .with_word_store_config(LiveStoreConfig {
                                         directory: scratch.path().join("derived"),
                                         ..LiveStoreConfig::default()
                                     })
-                                    .with_lane(ViewerLaneKind::Words, "spi"),
+                                    .with_lane(CollectedDataKind::Words, "spi"),
                             )?;
                             pipeline.connect("decoder", "mosi_words", "viewer", "in0")?;
                             Some(lanes)

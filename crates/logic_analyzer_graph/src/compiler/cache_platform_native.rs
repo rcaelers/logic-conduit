@@ -17,45 +17,47 @@ use super::port_kind::PortKind;
 
 const DERIVED_CACHE_ABI_VERSION: u32 = 2;
 
-pub(crate) fn assign_viewer_caches(compiled: &mut CompiledGraph) {
-    let viewer_ids: Vec<_> = compiled
+pub(crate) fn assign_derived_word_caches(compiled: &mut CompiledGraph) {
+    let collector_ids: Vec<_> = compiled
         .nodes
         .iter()
-        .filter(|node| node.builder == "Viewer")
+        .filter(|node| node.data_collector)
         .map(|node| node.id)
         .collect();
     let mut assignments = Vec::new();
-    for viewer_id in viewer_ids {
-        let member_count = compiled_node(compiled, viewer_id).resolved.member_count(0);
+    for collector_id in collector_ids {
+        let member_count = compiled_node(compiled, collector_id)
+            .resolved
+            .member_count(0);
         let mut caches = vec![None; member_count];
         for (member, slot) in caches.iter_mut().enumerate() {
             let input_name = format!("in{member}");
             let Some(edge) = compiled.edges.iter().find(|edge| {
-                edge.to.0 == viewer_id
+                edge.to.0 == collector_id
                     && edge.to.1 == input_name
                     && edge.kind == PortKind::of::<Word>()
             }) else {
                 continue;
             };
-            if let Some(key) = persistent_lane_key(compiled, viewer_id, member, edge) {
+            if let Some(key) = persistent_lane_key(compiled, collector_id, member, edge) {
                 *slot = Some(PersistentStoreConfig::new(PathBuf::new(), key));
             }
         }
-        assignments.push((viewer_id, caches));
+        assignments.push((collector_id, caches));
     }
-    for (viewer_id, caches) in assignments {
+    for (collector_id, caches) in assignments {
         let node = compiled
             .nodes
             .iter_mut()
-            .find(|node| node.id == viewer_id)
-            .expect("viewer node exists");
-        node.viewer_word_caches = caches;
+            .find(|node| node.id == collector_id)
+            .expect("data collector exists");
+        node.derived_word_caches = caches;
     }
 }
 
 pub(crate) fn configure_directory(compiled: &mut CompiledGraph, directory: Option<&Path>) {
     for node in &mut compiled.nodes {
-        for slot in &mut node.viewer_word_caches {
+        for slot in &mut node.derived_word_caches {
             match (slot.as_mut(), directory) {
                 (_, None) => *slot = None,
                 (Some(config), Some(directory)) => config.directory = directory.to_path_buf(),
@@ -73,11 +75,11 @@ pub(crate) fn prepare_execution(
 
     let mut execution = compiled.clone();
     let mut cached_inputs = HashSet::new();
-    for viewer in &compiled.nodes {
-        if viewer.builder != "Viewer" {
+    for collector in &compiled.nodes {
+        if !collector.data_collector {
             continue;
         }
-        for (member, config) in viewer.viewer_word_caches.iter().enumerate() {
+        for (member, config) in collector.derived_word_caches.iter().enumerate() {
             let Some(config) = config else {
                 continue;
             };
@@ -86,7 +88,7 @@ pub(crate) fn prepare_execution(
                 .flatten()
                 .is_some()
             {
-                cached_inputs.insert((viewer.id, format!("in{member}")));
+                cached_inputs.insert((collector.id, format!("in{member}")));
             }
         }
     }
@@ -101,9 +103,10 @@ pub(crate) fn prepare_execution(
         .nodes
         .iter()
         .filter(|node| {
-            registry
-                .get(&node.builder)
-                .is_some_and(RuntimeBuilder::is_sink)
+            node.data_collector
+                || registry
+                    .get(&node.builder)
+                    .is_some_and(RuntimeBuilder::is_sink)
         })
         .map(|node| node.id)
         .collect();
@@ -126,7 +129,7 @@ fn prepare_cache(compiled: &CompiledGraph) {
     let configs: Vec<_> = compiled
         .nodes
         .iter()
-        .flat_map(|node| node.viewer_word_caches.iter().flatten())
+        .flat_map(|node| node.derived_word_caches.iter().flatten())
         .collect();
     let Some(first) = configs.first() else {
         return;
@@ -143,25 +146,21 @@ pub(crate) fn cache_configs_by_node(
     let mut compiled = super::graph::lower(graph, registry)?;
     configure_directory(&mut compiled, Some(directory));
     let mut result: HashMap<NodeId, Vec<PersistentStoreConfig>> = HashMap::new();
-    for viewer in compiled
-        .nodes
-        .iter()
-        .filter(|node| node.builder == "Viewer")
-    {
-        for (member, config) in viewer.viewer_word_caches.iter().enumerate() {
+    for collector in compiled.nodes.iter().filter(|node| node.data_collector) {
+        for (member, config) in collector.derived_word_caches.iter().enumerate() {
             let Some(config) = config else {
                 continue;
             };
             let input_name = format!("in{member}");
             let Some(edge) = compiled.edges.iter().find(|edge| {
-                edge.to.0 == viewer.id
+                edge.to.0 == collector.id
                     && edge.to.1 == input_name
                     && edge.kind == PortKind::of::<Word>()
             }) else {
                 continue;
             };
 
-            let mut stack = vec![viewer.id, edge.from.0];
+            let mut stack = vec![collector.id, edge.from.0];
             let mut visited = HashSet::new();
             while let Some(node_id) = stack.pop() {
                 if !visited.insert(node_id) {
@@ -189,18 +188,18 @@ pub(crate) fn cache_configs_by_node(
 
 pub(crate) fn persistent_lane_key(
     compiled: &CompiledGraph,
-    viewer_id: NodeId,
+    collector_id: NodeId,
     member: usize,
     edge: &CompiledEdge,
 ) -> Option<[u8; 32]> {
     let mut memo = HashMap::new();
     let upstream = persistent_upstream_key(compiled, edge.from.0, &mut memo)?;
-    let viewer = compiled_node(compiled, viewer_id);
+    let collector = compiled_node(compiled, collector_id);
     let mut hasher = blake3::Hasher::new();
     hash_field(&mut hasher, b"dsl-derived-lane-cache-v1");
     hash_field(&mut hasher, env!("CARGO_PKG_VERSION").as_bytes());
     hash_field(&mut hasher, &DERIVED_CACHE_ABI_VERSION.to_le_bytes());
-    hash_field(&mut hasher, &canonical_json_bytes(&viewer.state));
+    hash_field(&mut hasher, &canonical_json_bytes(&collector.state));
     hash_field(&mut hasher, &(member as u64).to_le_bytes());
     hash_field(&mut hasher, edge.from.1.as_bytes());
     hash_field(&mut hasher, edge.kind.name().as_bytes());

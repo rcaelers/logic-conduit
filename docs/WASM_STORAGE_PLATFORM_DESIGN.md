@@ -84,7 +84,7 @@ propagate into callers.
 lane holds an `Arc<dyn AnnotationQuery>` plus platform-neutral status and metadata handles.
 Drawing, cursor snapping, sampling, and row handling therefore use one code path.
 
-`ViewerSink` uses the same optional writer and query fields on every target. Store construction
+`DerivedDataCollector` uses the same optional writer and query fields on every target. Store construction
 selects the backend internally. The plain `Annotations(Vec<Annotation>)` lane remains available
 for explicitly non-indexed streams; it is not a platform-specific substitute for an indexed lane.
 
@@ -115,7 +115,7 @@ OS-family selection inside a native implementation is also valid.
 
 ## Invariants
 
-- `viewer_sink.rs` has one derived-word lane shape and one store operation path.
+- `derived_data_collector.rs` has one derived-word lane shape and one store operation path.
 - Logic-analyzer drawing, cursor, channel, sampling, and viewer modules are independent of the
   storage platform.
 - Generic compiler IR and live-run code are independent of the storage platform.

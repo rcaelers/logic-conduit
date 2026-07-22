@@ -195,7 +195,7 @@ impl LogicAnalyzerViewer {
             Some(RowKey::Derived(group_id)) => {
                 self.derived.as_ref().map_or_else(Vec::new, |store| {
                     let Some(group) = self
-                        .viewer_lanes
+                        .waveform_presentations
                         .read()
                         .iter()
                         .find(|group| &group.id == group_id)

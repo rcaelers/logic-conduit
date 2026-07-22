@@ -100,7 +100,7 @@ messages or capture-sized queues:
   lockstep. Default packed-block connections are deliberately small.
 - `ChannelMessage<T>::Batch(Vec<T>)` amortizes channel overhead. Ordinary receivers flatten
   batches transparently; batch-aware sinks can drain them directly.
-- `ViewerRetention::Unlimited` preserves finite captures, while continuous sources may
+- `DerivedDataRetention::Unlimited` preserves finite captures, while continuous sources may
   explicitly request bounded rolling retention.
 
 `ParallelDecoder` supports `Auto`, `PackedStream`, and `Indexed` input strategies. Indexed
@@ -156,7 +156,7 @@ worse than a slow one.
   feeding both a file writer and the viewer), the mechanism is an explicit **`Buffer`
   node** (`BufferNode<T>`, [buffer.rs](../crates/logic_analyzer_processing/src/nodes/logic/buffer.rs))
   with a user-visible, user-configured capacity — not a bigger invisible default.
-- `ViewerSink` drains its lanes in bounded batches, so a producer that outruns the viewer
+- `DerivedDataCollector` drains its lanes in bounded batches, so a producer that outruns the viewer
   really does block on `send()` rather than the sink racing to keep the channel empty.
 - The watchdog (below) is the diagnostic net for genuinely-too-small buffers.
 
@@ -218,7 +218,7 @@ node performs at most one send per output per `work()` call.
 | Sources | `DslFileSource` (file replay; per channel `d{i}` edges + `b{i}` blocks), `SigrokFileSource` (native file replay and the explicit embedded synthetic-capture mode), `DsLogicU3Pro16Source` (live USB capture; a `ProcessNode` facade over the driver-neutral `LogicAnalyzer`/`LogicCaptureConfig` interface — see [DSLOGIC_U3PRO16_PROTOCOL.md](DSLOGIC_U3PRO16_PROTOCOL.md)) |
 | Decoders | `SpiDecoder` (modes 0–3, 1–64-bit words, MSB/LSB, CS polarity; two `Word` outputs mosi/miso), `ParallelDecoder` (strobe SDR/DDR/level, 1–64 data bits, optional CS/Enable, multi-cycle word assembly with endianness), `UartDecoder` (single-line, derived bit clock, parity/framing error triggers) |
 | Logic / control | `WordMatcher` (pattern & mask, comparison ops, trigger at word start/end), `SrLatch`, `LogicGate` (NOT/AND/NAND/OR/NOR/XOR/XNOR over variadic inputs), `TriggerCounter`, `TextFormatter` (template substitution, up to 4 inputs merged in timestamp order), `BufferNode` (explicit decoupling) |
-| Sinks | `BinaryFileWriter` (filename-level–driven file rollover; never blocks on `Filename`), `TextFileWriter`, `TgckRecorder` (per-capture line-boundary CSV), `ViewerSink` (pushes lanes into the shared `DerivedLanes` store; see [LOGIC_ANALYZER_VIEWER_DESIGN.md](LOGIC_ANALYZER_VIEWER_DESIGN.md)) |
+| Sinks | `BinaryFileWriter` (filename-level–driven file rollover; never blocks on `Filename`), `TextFileWriter`, `TgckRecorder` (per-capture line-boundary CSV), `DerivedDataCollector` (pushes lanes into the shared `DerivedLanes` store; see [LOGIC_ANALYZER_VIEWER_DESIGN.md](LOGIC_ANALYZER_VIEWER_DESIGN.md)) |
 
 Two merge disciplines exist, chosen deliberately per node:
 

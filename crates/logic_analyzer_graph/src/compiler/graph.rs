@@ -21,7 +21,8 @@ use egui::{Color32, Pos2};
 use serde_json::Value;
 
 use logic_analyzer_viewer::{
-    SamplingEdge, SamplingOverlay, SamplingQualifier, ViewerLaneRegistry, ViewerOutputPresentation,
+    SamplingEdge, SamplingOverlay, SamplingQualifier, ViewerOutputPresentation,
+    WaveformPresentationRegistry,
 };
 use node_graph::{
     Connection, GraphState, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId, SocketShape,
@@ -30,28 +31,29 @@ use node_graph::{
 use signal_processing::{
     AcquisitionContext, AcquisitionError, AcquisitionResult, AppManager, CaptureChannelId,
     CaptureIndexFactory, CaptureProviderCapabilities, CaptureSessionPlan, CaptureStartMode,
-    CaptureStoreCursor, ConfigurationBoundary, DerivedLanes, DisconnectEvent, InputSub, NodeConfig,
-    OverflowPolicy, PersistentStoreConfig, PreparedAcquisition, ProcessNode, SampleBlock,
-    SamplingActivity, SimpleTriggerCondition, TriggerEditorSchema, TriggerProgram, ViewerRetention,
+    CaptureStoreCursor, ConfigurationBoundary, DerivedDataRetention, DerivedLanes, DisconnectEvent,
+    InputSub, NodeConfig, OverflowPolicy, PersistentStoreConfig, PreparedAcquisition, ProcessNode,
+    SampleBlock, SamplingActivity, SimpleTriggerCondition, TriggerEditorSchema, TriggerProgram,
 };
 
 use super::cache_platform;
+use super::data_collector::DataCollectorBuilder;
 use super::errors::{ApplyError, CompileError};
 use super::port_kind::PortKind;
 use crate::decoder_table::{DecoderTableColumnPresentation, DecoderTableRegistry};
 
 /// Shared resources handed to builders. A fresh `DerivedLanes` store per
-/// run makes stale viewer lanes vanish atomically on re-run.
+/// run makes stale collected data vanish atomically on re-run.
 #[derive(Default)]
 pub struct CompileCtx {
     derived_lanes: DerivedLanes,
-    viewer_lanes: ViewerLaneRegistry,
+    waveform_presentations: WaveformPresentationRegistry,
     decoder_tables: DecoderTableRegistry,
     /// Storage policy selected by the graph's source. Finite sources retain
     /// their complete timeline; continuous sources can explicitly choose a
     /// bounded rolling window.
-    viewer_retention: ViewerRetention,
-    viewer_word_caches: Vec<Option<PersistentStoreConfig>>,
+    derived_data_retention: DerivedDataRetention,
+    derived_word_caches: Vec<Option<PersistentStoreConfig>>,
     persistent_cache_directory: Option<std::path::PathBuf>,
     /// Clocked-node sampling overlays resolved during lowering. The host
     /// application chooses at most one candidate to display.
@@ -64,20 +66,22 @@ impl CompileCtx {
         &self.derived_lanes
     }
 
-    pub fn viewer_lanes(&self) -> &ViewerLaneRegistry {
-        &self.viewer_lanes
+    pub fn waveform_presentations(&self) -> &WaveformPresentationRegistry {
+        &self.waveform_presentations
     }
 
     pub fn decoder_tables(&self) -> &DecoderTableRegistry {
         &self.decoder_tables
     }
 
-    pub fn viewer_retention(&self) -> ViewerRetention {
-        self.viewer_retention
+    pub fn derived_data_retention(&self) -> DerivedDataRetention {
+        self.derived_data_retention
     }
 
-    pub fn viewer_word_cache(&self, member: usize) -> Option<&PersistentStoreConfig> {
-        self.viewer_word_caches.get(member).and_then(Option::as_ref)
+    pub fn derived_word_cache(&self, member: usize) -> Option<&PersistentStoreConfig> {
+        self.derived_word_caches
+            .get(member)
+            .and_then(Option::as_ref)
     }
 
     pub fn set_persistent_cache_directory(&mut self, directory: std::path::PathBuf) {
@@ -140,7 +144,7 @@ impl SamplingOverlayCandidate {
 
 /// What one input edge settled on: the negotiated stream kind plus a
 /// human-readable producer label (`"{node title}.{socket}"`, used for
-/// viewer lane names).
+/// retained derived-lane identities).
 #[derive(Debug, Clone)]
 pub struct ResolvedInput {
     pub kind: PortKind,
@@ -416,14 +420,43 @@ pub trait RuntimeBuilder {
     fn is_source(&self) -> bool {
         false
     }
-    /// Retention policy for exact viewer entries in this source's time
+    /// Retention policy for exact derived-data entries in this source's time
     /// domain. Summaries remain complete under bounded retention.
-    fn viewer_retention(&self, _state: &Value) -> ViewerRetention {
-        ViewerRetention::Unlimited
+    fn derived_data_retention(&self, _state: &Value) -> DerivedDataRetention {
+        DerivedDataRetention::Unlimited
     }
     /// Terminal consumer; pruning keeps only nodes reachable from sinks.
     fn is_sink(&self) -> bool {
         false
+    }
+    /// Declares a graph-level subscription to retained data without owning a
+    /// runtime consumer. Lowering materializes a neutral collector for it.
+    fn is_data_subscription(&self) -> bool {
+        false
+    }
+    /// Retains typed output streams independently of any presentation subscriber.
+    fn is_data_collector(&self) -> bool {
+        false
+    }
+    /// Stable retained-lane identities published by this collector.
+    fn collected_lane_names(
+        &self,
+        _state: &Value,
+        _resolved: &ResolvedInputs,
+    ) -> Vec<(usize, String)> {
+        Vec::new()
+    }
+    /// Registers presentation subscribers for retained lane identities.
+    /// Collection has already been planned and is independent of this hook.
+    fn register_presentations(
+        &self,
+        _name: &str,
+        _state: &Value,
+        _resolved: &ResolvedInputs,
+        _lane_names: &[(usize, String)],
+        _ctx: &CompileCtx,
+    ) -> Result<(), String> {
+        Ok(())
     }
     /// Kinds this input socket can consume, in no particular order.
     fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind>;
@@ -445,7 +478,7 @@ pub trait RuntimeBuilder {
         None
     }
     /// Optional protocol-neutral presentation contract for this output when
-    /// it is connected to a Viewer. Generic lowering carries the value
+    /// it has a waveform subscription. Generic lowering carries the value
     /// opaquely; concrete producer builders own its semantics.
     fn viewer_output_presentation(
         &self,
@@ -454,7 +487,7 @@ pub trait RuntimeBuilder {
     ) -> Option<ViewerOutputPresentation> {
         None
     }
-    /// Optional protocol-neutral table column for this output when connected to a Viewer.
+    /// Optional protocol-neutral table column for retained output data.
     fn decoder_table_column(
         &self,
         _socket: &Socket,
@@ -532,11 +565,13 @@ pub trait RuntimeBuilder {
     /// polymorphic consumers pick the matching concrete type.
     fn build(
         &self,
-        name: &str,
-        state: &Value,
-        resolved: &ResolvedInputs,
-        ctx: &mut CompileCtx,
-    ) -> Result<Box<dyn ProcessNode>, String>;
+        _name: &str,
+        _state: &Value,
+        _resolved: &ResolvedInputs,
+        _ctx: &mut CompileCtx,
+    ) -> Result<Box<dyn ProcessNode>, String> {
+        Err("graph-only builder has no runtime node".to_owned())
+    }
 
     /// Runtime configuration for a *hot* state change, if this node type can
     /// apply the whole state without restarting (a hot prop change).
@@ -824,7 +859,7 @@ pub(crate) fn parse_state<T: serde::de::DeserializeOwned>(state: &Value) -> Resu
 pub struct CompiledGraph {
     pub nodes: Vec<CompiledNode>,
     pub edges: Vec<CompiledEdge>,
-    pub viewer_retention: ViewerRetention,
+    pub derived_data_retention: DerivedDataRetention,
     pub sampling_overlays: Vec<SamplingOverlayCandidate>,
 }
 
@@ -836,9 +871,10 @@ pub struct CompiledNode {
     pub state: Value,
     /// Pipeline node name: `n{id}_{title_slug}`.
     pub runtime_name: String,
+    pub data_collector: bool,
     pub resolved: ResolvedInputs,
     pub capture_cache_identity: CaptureCacheIdentity,
-    pub viewer_word_caches: Vec<Option<PersistentStoreConfig>>,
+    pub derived_word_caches: Vec<Option<PersistentStoreConfig>>,
 }
 
 #[derive(Debug, Clone)]
@@ -993,6 +1029,7 @@ fn member_index(node: &Node, socket_index: usize) -> usize {
 /// live-diffing sees the same node across `lower()` calls while the watched
 /// set is unchanged, regardless of how many real nodes come and go.
 const AUTO_VIEW_NODE_ID: NodeId = NodeId(u32::MAX);
+const AUTO_DATA_COLLECTOR_NODE_ID: NodeId = NodeId(u32::MAX - 1);
 
 /// If any output in `graph` is checked "Show in view", returns a clone with
 /// a synthetic `Viewer` node wired to every one of them — the View panel's
@@ -1000,7 +1037,7 @@ const AUTO_VIEW_NODE_ID: NodeId = NodeId(u32::MAX);
 /// exact same pruning and edge-negotiation path an explicit Viewer
 /// connection would take, so nothing downstream in `lower()` needs to know
 /// this node isn't real.
-fn with_auto_view_sink(graph: &GraphState) -> GraphState {
+fn with_auto_view_sink(graph: &GraphState, registry: &BuilderRegistry) -> GraphState {
     let mut watched: Vec<(SocketId, String)> = graph
         .nodes
         .iter()
@@ -1028,12 +1065,57 @@ fn with_auto_view_sink(graph: &GraphState) -> GraphState {
     // schema. Preserve that explicit order without interpreting labels.
     watched.sort_by_key(|(socket, _)| (socket.node.0, socket.index));
 
-    let mut graph = graph.clone();
-    if watched.is_empty() {
-        return graph;
-    }
+    let mut tabled: Vec<(SocketId, String)> = graph
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.kind == NodeKind::Regular)
+        .flat_map(|(&id, node)| {
+            let Some(builder) = registry.get(node.def_name()) else {
+                return Vec::new().into_iter();
+            };
+            node.outputs
+                .iter()
+                .enumerate()
+                .filter(|(index, output)| {
+                    let collected_for_view =
+                        output.visible && output.view_selectable && output.show_in_view;
+                    let collected_by_explicit_sink = graph.connections.iter().any(|connection| {
+                        connection.from.node == id
+                            && connection.from.index == *index
+                            && graph
+                                .nodes
+                                .get(&connection.to.node)
+                                .and_then(|target| registry.get(target.def_name()))
+                                .is_some_and(|builder| {
+                                    builder.is_data_collector() || builder.is_data_subscription()
+                                })
+                    });
+                    !collected_for_view
+                        && !collected_by_explicit_sink
+                        && builder.decoder_table_column(output, &node.state).is_some()
+                        && builder
+                            .offered_kinds(output, &node.state)
+                            .into_iter()
+                            .any(|kind| builder.output_port(output, &node.state, kind).is_some())
+                })
+                .map(move |(index, output)| {
+                    (
+                        SocketId {
+                            node: id,
+                            index,
+                            direction: SocketDirection::Output,
+                        },
+                        format!("{}.{}", node.title, output.name),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+        })
+        .collect();
+    tabled.sort_by_key(|(socket, _)| (socket.node.0, socket.index));
 
-    let inputs = watched
+    let mut graph = graph.clone();
+    let inputs: Vec<Socket> = watched
         .iter()
         .map(|(_, label)| Socket {
             name: label.clone(),
@@ -1062,27 +1144,84 @@ fn with_auto_view_sink(graph: &GraphState) -> GraphState {
             show_in_view: false,
         })
         .collect();
-    let mut auto_view = Node::blank(AUTO_VIEW_NODE_ID, "Viewer", Pos2::ZERO);
-    auto_view.title = "Auto View".to_owned();
-    auto_view.header_color = Color32::from_rgb(160, 80, 60);
-    auto_view.inputs = inputs;
-    auto_view.state = serde_json::json!({ "label": { "value": "" } });
-    graph.nodes.insert(AUTO_VIEW_NODE_ID, auto_view);
-    graph
-        .connections
-        .extend(
-            watched
-                .into_iter()
-                .enumerate()
-                .map(|(member, (from, _))| Connection {
-                    from,
-                    to: SocketId {
-                        node: AUTO_VIEW_NODE_ID,
-                        index: member,
-                        direction: SocketDirection::Input,
-                    },
+    if !inputs.is_empty() {
+        let mut auto_view = Node::blank(AUTO_VIEW_NODE_ID, "Viewer", Pos2::ZERO);
+        auto_view.title = "Auto View".to_owned();
+        auto_view.header_color = Color32::from_rgb(160, 80, 60);
+        auto_view.inputs = inputs;
+        auto_view.state = serde_json::json!({ "label": { "value": "" } });
+        graph.nodes.insert(AUTO_VIEW_NODE_ID, auto_view);
+        graph
+            .connections
+            .extend(
+                watched
+                    .into_iter()
+                    .enumerate()
+                    .map(|(member, (from, _))| Connection {
+                        from,
+                        to: SocketId {
+                            node: AUTO_VIEW_NODE_ID,
+                            index: member,
+                            direction: SocketDirection::Input,
+                        },
+                    }),
+            );
+    }
+    if !tabled.is_empty() {
+        let inputs = tabled
+            .iter()
+            .map(|(_, label)| Socket {
+                name: label.clone(),
+                type_name: "Signal".to_owned(),
+                color: Color32::from_rgb(160, 80, 60),
+                shape: SocketShape::Circle,
+                allowed: vec![
+                    "Words".to_owned(),
+                    "Trigger".to_owned(),
+                    "Number".to_owned(),
+                    "Text".to_owned(),
+                ],
+                resolved_type: None,
+                def_index: 0,
+                variadic: Some(VariadicInfo {
+                    base: "In".to_owned(),
+                    max: tabled.len(),
+                    placeholder: false,
                 }),
+                visible: false,
+                editor_visible: false,
+                hidden: true,
+                has_control: false,
+                view_selectable: false,
+                view_indicator_sources: Vec::new(),
+                show_in_view: false,
+            })
+            .collect();
+        let mut collector = Node::blank(
+            AUTO_DATA_COLLECTOR_NODE_ID,
+            crate::compiler::DATA_COLLECTOR_BUILDER,
+            Pos2::ZERO,
         );
+        collector.title = "Derived Data Collector".to_owned();
+        collector.inputs = inputs;
+        collector.state = Value::Null;
+        graph.nodes.insert(AUTO_DATA_COLLECTOR_NODE_ID, collector);
+        graph
+            .connections
+            .extend(
+                tabled
+                    .into_iter()
+                    .enumerate()
+                    .map(|(member, (from, _))| Connection {
+                        from,
+                        to: SocketId {
+                            node: AUTO_DATA_COLLECTOR_NODE_ID,
+                            index: member,
+                            direction: SocketDirection::Input,
+                        },
+                    }),
+            );
+    }
     graph
 }
 
@@ -1090,7 +1229,7 @@ pub fn lower(
     graph: &GraphState,
     registry: &BuilderRegistry,
 ) -> Result<CompiledGraph, Vec<CompileError>> {
-    let augmented = with_auto_view_sink(graph);
+    let augmented = with_auto_view_sink(graph, registry);
     let graph = &augmented;
     let (wires, mut errors) = resolve_reroute_edges(graph);
 
@@ -1100,7 +1239,9 @@ pub fn lower(
         .values()
         .filter(|node| {
             node.kind == NodeKind::Regular
-                && registry.get(node.def_name()).is_some_and(|b| b.is_sink())
+                && registry
+                    .get(node.def_name())
+                    .is_some_and(|builder| builder.is_sink() || builder.is_data_subscription())
         })
         .map(|node| node.id)
         .collect();
@@ -1126,7 +1267,7 @@ pub fn lower(
 
     // Every kept node must have a runtime; exactly one source.
     let mut source_count = 0usize;
-    let mut viewer_retention = ViewerRetention::Unlimited;
+    let mut derived_data_retention = DerivedDataRetention::Unlimited;
     for &id in &kept {
         let node = &graph.nodes[&id];
         match registry.get(node.def_name()) {
@@ -1136,7 +1277,7 @@ pub fn lower(
             )),
             Some(builder) if builder.is_source() => {
                 source_count += 1;
-                viewer_retention = builder.viewer_retention(&node.state);
+                derived_data_retention = builder.derived_data_retention(&node.state);
             }
             Some(_) => {}
         }
@@ -1299,9 +1440,10 @@ pub fn lower(
                 builder: node.def_name().to_owned(),
                 state: node.state.clone(),
                 runtime_name: runtime_name(node),
+                data_collector: builder.is_data_collector() || builder.is_data_subscription(),
                 capture_cache_identity: builder.capture_cache_identity(&node.state, &resolved),
                 resolved,
-                viewer_word_caches: Vec::new(),
+                derived_word_caches: Vec::new(),
             }
         })
         .collect();
@@ -1362,11 +1504,11 @@ pub fn lower(
     let compiled = CompiledGraph {
         nodes,
         edges,
-        viewer_retention,
+        derived_data_retention,
         sampling_overlays,
     };
     let mut compiled = compiled;
-    cache_platform::assign_viewer_caches(&mut compiled);
+    cache_platform::assign_derived_word_caches(&mut compiled);
     Ok(compiled)
 }
 
@@ -1482,6 +1624,48 @@ pub(crate) fn compiled_node(compiled: &CompiledGraph, id: NodeId) -> &CompiledNo
         .iter()
         .find(|node| node.id == id)
         .expect("node in compiled graph")
+}
+
+fn materialize_compiled_node(
+    node: &CompiledNode,
+    builder: &dyn RuntimeBuilder,
+    runtime_name: &str,
+    ctx: &mut CompileCtx,
+) -> Result<Box<dyn ProcessNode>, String> {
+    if builder.is_data_subscription() {
+        return DataCollectorBuilder::build_with_lane_names(
+            runtime_name,
+            &node.resolved,
+            &builder.collected_lane_names(&node.state, &node.resolved),
+            ctx,
+        );
+    }
+    builder.build(runtime_name, &node.state, &node.resolved, ctx)
+}
+
+fn register_collected_subscribers(
+    node: &CompiledNode,
+    builder: &dyn RuntimeBuilder,
+    subscription_name: &str,
+    ctx: &CompileCtx,
+) -> Result<(), String> {
+    if !node.data_collector {
+        return Ok(());
+    }
+    let lane_names = builder.collected_lane_names(&node.state, &node.resolved);
+    crate::decoder_table::subscribe_collected_tables(
+        node.id,
+        &node.resolved,
+        &lane_names,
+        ctx.decoder_tables(),
+    );
+    builder.register_presentations(
+        subscription_name,
+        &node.state,
+        &node.resolved,
+        &lane_names,
+        ctx,
+    )
 }
 
 pub fn derived_cache_configs_by_node(
@@ -1675,7 +1859,7 @@ pub struct LiveRun {
     /// title renames and in-place restarts.
     names: HashMap<NodeId, String>,
     lanes: DerivedLanes,
-    viewer_lanes: ViewerLaneRegistry,
+    waveform_presentations: WaveformPresentationRegistry,
     decoder_tables: DecoderTableRegistry,
     /// Set by [`Self::stop`]: the wind-down has been signalled but node
     /// threads may still be finishing their current `work()` call.
@@ -1728,9 +1912,10 @@ fn start_live_inner(
     ctx: &mut CompileCtx,
     mut source_overrides: SourceProcessOverrides,
 ) -> Result<LiveRun, Vec<CompileError>> {
+    ctx.waveform_presentations().set_implicit_groups(false);
     let mut compiled = lower(graph, registry)?;
     cache_platform::configure_directory(&mut compiled, ctx.persistent_cache_directory.as_deref());
-    ctx.viewer_retention = compiled.viewer_retention;
+    ctx.derived_data_retention = compiled.derived_data_retention;
     ctx.sampling_overlays
         .clone_from(&compiled.sampling_overlays);
     ctx.sampling_activities = sampling_activity_map(&compiled);
@@ -1738,6 +1923,14 @@ fn start_live_inner(
     let mut names: HashMap<NodeId, String> = HashMap::new();
 
     let (execution, cache_pruned) = cache_platform::prepare_execution(&compiled, registry);
+
+    for node in &execution.nodes {
+        let Some(builder) = registry.get(&node.builder) else {
+            continue;
+        };
+        register_collected_subscribers(node, builder, &node.runtime_name, ctx)
+            .map_err(|message| vec![CompileError::on(node.id, message)])?;
+    }
 
     for source_node in source_overrides.keys().copied() {
         let Some(node) = execution.nodes.iter().find(|node| node.id == source_node) else {
@@ -1765,12 +1958,12 @@ fn start_live_inner(
                 format!("unknown builder '{}'", node.builder),
             )]
         })?;
-        ctx.viewer_word_caches.clone_from(&node.viewer_word_caches);
+        ctx.derived_word_caches
+            .clone_from(&node.derived_word_caches);
         let process = if let Some(process) = source_overrides.remove(&id) {
             process
         } else {
-            builder
-                .build(&node.runtime_name, &node.state, &node.resolved, ctx)
+            materialize_compiled_node(node, builder, &node.runtime_name, ctx)
                 .map_err(|message| vec![CompileError::on(id, message)])?
         };
         let inputs = input_subs(&execution, id, process.as_ref(), &names)
@@ -1795,7 +1988,7 @@ fn start_live_inner(
         compiled,
         names,
         lanes: ctx.derived_lanes.clone(),
-        viewer_lanes: ctx.viewer_lanes.clone(),
+        waveform_presentations: ctx.waveform_presentations.clone(),
         decoder_tables: ctx.decoder_tables.clone(),
         stop_requested: false,
         cache_pruned,
@@ -1812,7 +2005,7 @@ impl LiveRun {
         self.compiled
             .nodes
             .iter()
-            .flat_map(|node| node.viewer_word_caches.iter().flatten().cloned())
+            .flat_map(|node| node.derived_word_caches.iter().flatten().cloned())
             .collect()
     }
 
@@ -1835,17 +2028,17 @@ impl LiveRun {
         }
         if self.cache_pruned {
             return Err(ApplyError::NeedsFullRestart(
-                "the running graph reused persistent viewer data; stop and rerun to apply edits"
+                "the running graph reused persistent derived data; stop and rerun to apply edits"
                     .to_string(),
             ));
         }
 
         let mut ctx = CompileCtx {
             derived_lanes: self.lanes.clone(),
-            viewer_lanes: self.viewer_lanes.clone(),
+            waveform_presentations: self.waveform_presentations.clone(),
             decoder_tables: self.decoder_tables.clone(),
-            viewer_retention: new.viewer_retention,
-            viewer_word_caches: Vec::new(),
+            derived_data_retention: new.derived_data_retention,
+            derived_word_caches: Vec::new(),
             persistent_cache_directory: self.persistent_cache_directory.clone(),
             sampling_overlays: new.sampling_overlays.clone(),
             sampling_activities: sampling_activity_map(&new),
@@ -1864,10 +2057,13 @@ impl LiveRun {
                     let builder = registry.get(&node.builder).ok_or_else(|| {
                         ApplyError::Apply(format!("no builder '{}'", node.builder))
                     })?;
-                    ctx.viewer_word_caches.clone_from(&node.viewer_word_caches);
-                    let process = builder
-                        .build(&node.runtime_name, &node.state, &node.resolved, &mut ctx)
+                    ctx.derived_word_caches
+                        .clone_from(&node.derived_word_caches);
+                    register_collected_subscribers(node, builder, &node.runtime_name, &ctx)
                         .map_err(ApplyError::Apply)?;
+                    let process =
+                        materialize_compiled_node(node, builder, &node.runtime_name, &mut ctx)
+                            .map_err(ApplyError::Apply)?;
                     let inputs = input_subs(&new, id, process.as_ref(), &self.names)
                         .map_err(ApplyError::Apply)?;
                     self.manager
@@ -1900,9 +2096,11 @@ impl LiveRun {
                     let builder = registry.get(&node.builder).ok_or_else(|| {
                         ApplyError::Apply(format!("no builder '{}'", node.builder))
                     })?;
-                    ctx.viewer_word_caches.clone_from(&node.viewer_word_caches);
-                    let process = builder
-                        .build(&name, &node.state, &node.resolved, &mut ctx)
+                    ctx.derived_word_caches
+                        .clone_from(&node.derived_word_caches);
+                    register_collected_subscribers(node, builder, &name, &ctx)
+                        .map_err(ApplyError::Apply)?;
+                    let process = materialize_compiled_node(node, builder, &name, &mut ctx)
                         .map_err(ApplyError::Apply)?;
                     let inputs = input_subs(&new, id, process.as_ref(), &self.names)
                         .map_err(ApplyError::Apply)?;
@@ -1937,7 +2135,7 @@ impl LiveRun {
         }
         if self.cache_pruned {
             return Err(ApplyError::NeedsFullRestart(
-                "the running graph reused persistent viewer data; the edit is deferred to the next capture"
+                "the running graph reused persistent derived data; the edit is deferred to the next capture"
                     .to_string(),
             ));
         }
@@ -2721,7 +2919,9 @@ mod tests {
 
     fn run_cooperatively(widget: &NodeGraphWidget) -> (CompiledGraph, Vec<(String, u64)>) {
         let registry = BuilderRegistry::standard();
-        let compiled = lower(widget.graph(), &registry).unwrap();
+        let cache_directory = tempfile::tempdir().unwrap();
+        let mut compiled = lower(widget.graph(), &registry).unwrap();
+        cache_platform::configure_directory(&mut compiled, Some(cache_directory.path()));
         let mut manager = CooperativeManager::new();
         let mut names = HashMap::new();
         let mut ctx = CompileCtx {
@@ -2732,10 +2932,11 @@ mod tests {
         for id in topo_order(&compiled) {
             let node = compiled_node(&compiled, id);
             let builder = registry.get(&node.builder).unwrap();
-            ctx.viewer_word_caches.clone_from(&node.viewer_word_caches);
-            let process = builder
-                .build(&node.runtime_name, &node.state, &node.resolved, &mut ctx)
-                .unwrap();
+            ctx.derived_word_caches
+                .clone_from(&node.derived_word_caches);
+            register_collected_subscribers(node, builder, &node.runtime_name, &ctx).unwrap();
+            let process =
+                materialize_compiled_node(node, builder, &node.runtime_name, &mut ctx).unwrap();
             let inputs = input_subs(&compiled, id, process.as_ref(), &names).unwrap();
             manager
                 .add_node_deferred(NodeSpec {
@@ -3159,7 +3360,7 @@ mod tests {
     }
 
     /// A lone source node with no explicit sink, used to verify that source
-    /// presentation remains independent of selectable derived viewer lanes.
+    /// presentation remains independent of selectable waveform presentations.
     fn source_only_widget() -> NodeGraphWidget {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         widget
@@ -3249,8 +3450,8 @@ mod tests {
         run.wait();
         let lanes = derived.read();
         for (suffix, expected_kind) in [
-            (".Count", signal_processing::ViewerValueKind::Number),
-            (".Text", signal_processing::ViewerValueKind::Text),
+            (".Count", signal_processing::CollectedValueKind::Number),
+            (".Text", signal_processing::CollectedValueKind::Text),
         ] {
             let lane = lanes
                 .iter()
@@ -3273,8 +3474,41 @@ mod tests {
 
         widget.graph_mut().nodes.get_mut(&node_id).unwrap().outputs[output_index].show_in_view =
             false;
-        let errors = lower(widget.graph(), &registry).unwrap_err();
-        assert!(errors.iter().any(|e| e.message.contains("no sink")));
+        let compiled = lower(widget.graph(), &registry).unwrap();
+        assert!(compiled.nodes.iter().all(|node| node.builder != "Viewer"));
+        assert!(compiled.nodes.iter().any(|node| node.data_collector));
+
+        let mut ctx = CompileCtx::default();
+        let lanes = ctx.derived_lanes().clone();
+        let tables = ctx.decoder_tables().clone();
+        let mut run = start_live(widget.graph(), &registry, &mut ctx).unwrap();
+        run.wait();
+
+        // Presentation subscribers are reconstructible after production has
+        // finished because the collector retains the data independently.
+        tables.clear();
+        for node in compiled.nodes.iter().filter(|node| node.data_collector) {
+            let builder = registry.get(&node.builder).unwrap();
+            crate::decoder_table::subscribe_collected_tables(
+                node.id,
+                &node.resolved,
+                &builder.collected_lane_names(&node.state, &node.resolved),
+                &tables,
+            );
+        }
+        let sources = tables.read();
+        assert!(!sources.is_empty());
+        assert!(
+            sources
+                .iter()
+                .flat_map(|source| &source.columns)
+                .all(|column| {
+                    lanes
+                        .read()
+                        .iter()
+                        .any(|lane| lane.name == column.lane.as_str())
+                })
+        );
     }
 
     #[test]
@@ -3296,17 +3530,40 @@ mod tests {
         assert_eq!(viewer_id(&first), viewer_id(&second));
     }
 
+    #[test]
+    fn viewer_is_a_presentation_subscription_not_a_runtime_sink() {
+        let registry = BuilderRegistry::standard();
+        let builder = registry.get("Viewer").unwrap();
+        assert!(!builder.is_sink());
+        assert!(!builder.is_data_collector());
+        assert!(builder.is_data_subscription());
+
+        let compiled = lower(uart_demo_widget().graph(), &registry).unwrap();
+        let viewer = compiled
+            .nodes
+            .iter()
+            .find(|node| node.builder == "Viewer")
+            .unwrap();
+        assert!(viewer.data_collector, "lowering must plan retained storage");
+
+        let mut ctx = CompileCtx::default();
+        let process =
+            materialize_compiled_node(viewer, builder, &viewer.runtime_name, &mut ctx).unwrap();
+        assert_eq!(process.num_inputs(), viewer.resolved.member_count(0));
+        assert_eq!(process.num_outputs(), 0);
+    }
+
     fn persistent_word_keys(compiled: &CompiledGraph) -> Vec<[u8; 32]> {
         compiled
             .nodes
             .iter()
-            .flat_map(|node| node.viewer_word_caches.iter().flatten())
+            .flat_map(|node| node.derived_word_caches.iter().flatten())
             .map(|config| config.cache_key)
             .collect()
     }
 
     #[test]
-    fn persistent_viewer_key_is_stable_but_decoder_configuration_invalidates_it() {
+    fn persistent_derived_lane_key_is_stable_but_decoder_configuration_invalidates_it() {
         let mut widget = uart_demo_widget();
         let registry = BuilderRegistry::standard();
         let first = lower(widget.graph(), &registry).unwrap();
@@ -3331,7 +3588,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_inventory_maps_a_lane_to_its_viewer_and_upstream_nodes() {
+    fn cache_inventory_maps_a_lane_to_its_collector_and_upstream_nodes() {
         let widget = uart_demo_widget();
         let registry = BuilderRegistry::standard();
         let compiled = lower(widget.graph(), &registry).unwrap();
@@ -3341,7 +3598,7 @@ mod tests {
             .find(|node| node.builder == "Viewer")
             .unwrap();
         let expected: Vec<_> = viewer
-            .viewer_word_caches
+            .derived_word_caches
             .iter()
             .flatten()
             .map(|config| config.cache_key)
@@ -3361,18 +3618,16 @@ mod tests {
             .unwrap();
 
         assert!(!expected.is_empty());
-        assert_eq!(actual, expected);
-        assert_eq!(
-            inventory[&decoder.id]
-                .iter()
-                .map(|config| config.cache_key)
-                .collect::<Vec<_>>(),
-            expected
-        );
+        assert!(expected.iter().all(|key| actual.contains(key)));
+        let decoder_keys = inventory[&decoder.id]
+            .iter()
+            .map(|config| config.cache_key)
+            .collect::<Vec<_>>();
+        assert!(expected.iter().all(|key| decoder_keys.contains(key)));
     }
 
     #[test]
-    fn persistent_viewer_key_includes_variadic_member_order() {
+    fn persistent_derived_lane_key_includes_variadic_member_order() {
         let compiled = lower(uart_demo_widget().graph(), &BuilderRegistry::standard()).unwrap();
         let viewer = compiled
             .nodes
@@ -3391,33 +3646,31 @@ mod tests {
     }
 
     #[test]
-    fn persistent_cache_hit_prunes_decoder_used_only_by_cached_viewer_lane() {
+    fn persistent_cache_hit_prunes_decoder_used_only_by_cached_derived_lane() {
         use signal_processing::{IndexedAnnotationWriter, LiveStoreConfig};
 
         let directory = tempfile::tempdir().unwrap();
         let registry = BuilderRegistry::standard();
         let mut compiled = lower(uart_demo_widget().graph(), &registry).unwrap();
         cache_platform::configure_directory(&mut compiled, Some(directory.path()));
-        let cache = compiled
+        let caches = compiled
             .nodes
             .iter()
-            .find(|node| node.builder == "Viewer")
-            .unwrap()
-            .viewer_word_caches
-            .iter()
-            .flatten()
-            .next()
-            .unwrap()
-            .clone();
-        let (mut writer, store) = IndexedAnnotationWriter::create(LiveStoreConfig {
-            directory: directory.path().to_path_buf(),
-            persistence: Some(cache),
-            ..LiveStoreConfig::default()
-        })
-        .unwrap();
-        writer.append(Word::new(0x48, 0)).unwrap();
-        writer.finish().unwrap();
-        drop((writer, store));
+            .filter(|node| node.data_collector)
+            .flat_map(|node| node.derived_word_caches.iter().flatten().cloned())
+            .collect::<Vec<_>>();
+        assert!(!caches.is_empty());
+        for cache in caches {
+            let (mut writer, store) = IndexedAnnotationWriter::create(LiveStoreConfig {
+                directory: directory.path().to_path_buf(),
+                persistence: Some(cache),
+                ..LiveStoreConfig::default()
+            })
+            .unwrap();
+            writer.append(Word::new(0x48, 0)).unwrap();
+            writer.finish().unwrap();
+            drop((writer, store));
+        }
 
         let (execution, pruned) = cache_platform::prepare_execution(&compiled, &registry);
 
@@ -3480,9 +3733,12 @@ mod tests {
         let compiled = lower(widget.graph(), &BuilderRegistry::standard())
             .unwrap_or_else(|errors| panic!("lower failed: {errors:?}"));
 
-        assert_eq!(compiled.nodes.len(), 3);
-        assert_eq!(compiled.edges.len(), 3);
-        assert_eq!(compiled.viewer_retention, ViewerRetention::Unlimited);
+        assert_eq!(compiled.nodes.len(), 4);
+        assert_eq!(compiled.edges.len(), 4);
+        assert_eq!(
+            compiled.derived_data_retention,
+            DerivedDataRetention::Unlimited
+        );
         assert!(
             compiled
                 .nodes
@@ -3717,18 +3973,15 @@ mod tests {
                 .iter()
                 .find(|node| node.builder == "Viewer")
                 .unwrap();
-            let mut ctx = CompileCtx::default();
-            builders
-                .get("Viewer")
-                .unwrap()
-                .build(
-                    &viewer.runtime_name,
-                    &viewer.state,
-                    &viewer.resolved,
-                    &mut ctx,
-                )
-                .unwrap();
-            let groups = ctx.viewer_lanes.read();
+            let ctx = CompileCtx::default();
+            register_collected_subscribers(
+                viewer,
+                builders.get("Viewer").unwrap(),
+                &viewer.runtime_name,
+                &ctx,
+            )
+            .unwrap();
+            let groups = ctx.waveform_presentations.read();
             groups
                 .iter()
                 .filter(|group| {
@@ -3919,14 +4172,14 @@ mod tests {
     }
 
     #[test]
-    fn file_source_bounds_exact_viewer_entries() {
+    fn file_source_bounds_exact_derived_data_entries() {
         let widget = startup_widget();
         let compiled = lower(widget.graph(), &BuilderRegistry::standard())
             .unwrap_or_else(|errors| panic!("lower failed: {errors:?}"));
 
         assert_eq!(
-            compiled.viewer_retention,
-            ViewerRetention::MaxEntries(signal_processing::DEFAULT_VIEWER_MAX_ENTRIES)
+            compiled.derived_data_retention,
+            DerivedDataRetention::MaxEntries(signal_processing::DEFAULT_DERIVED_DATA_MAX_ENTRIES)
         );
     }
 

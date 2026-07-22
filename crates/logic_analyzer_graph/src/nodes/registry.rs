@@ -472,7 +472,7 @@ pub(crate) mod test_graphs_tests {
         }
         connect(widget, (decoder, "Words"), (writer, "Data"));
 
-        // The generic watched-output contract creates the viewer sink during
+        // The generic watched-output contract creates the waveform subscription during
         // lowering, keeping presentation choices out of the saved graph's
         // processing topology.
         for (node, output) in [

@@ -10,7 +10,7 @@ use signal_processing::{CaptureDataSource, CaptureIndex, CaptureIndexFactory, De
 
 use crate::channel::LogicChannel;
 use crate::indexed_annotations::IndexedAnnotationCacheEntry;
-use crate::lanes::{ViewerLaneGroupId, ViewerLaneRegistry};
+use crate::lanes::{ViewerLaneGroupId, WaveformPresentationRegistry};
 use crate::sampling_overlay::SamplingOverlay;
 use crate::simple_trigger::{SimpleTriggerEdit, SimpleTriggerLane, SimpleTriggerPopup};
 use crate::types::{
@@ -69,10 +69,10 @@ pub struct LogicAnalyzerViewer {
     /// Index into `cursors` of the cursor currently being dragged.
     pub(crate) drag_cursor: Option<usize>,
     pub(crate) color_profile: ColorProfile,
-    /// Lanes produced by Viewer nodes of the running pipeline, rendered as
-    /// extra rows under the raw channels. Swapped wholesale on each run.
+    /// Retained derived data from the running pipeline. Waveform presentation
+    /// subscriptions select which entries appear under the raw channels.
     pub(crate) derived: Option<DerivedLanes>,
-    pub(crate) viewer_lanes: ViewerLaneRegistry,
+    pub(crate) waveform_presentations: WaveformPresentationRegistry,
     pub(crate) indexed_annotation_cache: HashMap<String, IndexedAnnotationCacheEntry>,
     pub(crate) sampling_overlay: Option<SamplingOverlay>,
     pub(crate) sampling_overlay_channels: Option<Vec<LogicChannel>>,
@@ -128,7 +128,7 @@ impl LogicAnalyzerViewer {
             drag_cursor: None,
             color_profile: ColorProfile::DsView,
             derived: None,
-            viewer_lanes: ViewerLaneRegistry::new(),
+            waveform_presentations: WaveformPresentationRegistry::new(),
             indexed_annotation_cache: HashMap::new(),
             sampling_overlay: None,
             sampling_overlay_channels: None,
@@ -180,8 +180,8 @@ impl LogicAnalyzerViewer {
     /// Replaces the explicit presentation registry paired with the current
     /// derived-lane store. The registry may be populated by graph compilation
     /// after this call; clones share the same per-run contents.
-    pub fn set_viewer_lanes(&mut self, lanes: ViewerLaneRegistry) {
-        self.viewer_lanes = lanes;
+    pub fn set_waveform_presentations(&mut self, presentations: WaveformPresentationRegistry) {
+        self.waveform_presentations = presentations;
     }
 
     /// Replaces the protocol-neutral sampling markers drawn over raw capture

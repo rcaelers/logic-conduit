@@ -1,3 +1,4 @@
+mod data_collector;
 mod errors;
 mod graph;
 mod plugin;
@@ -10,6 +11,7 @@ mod cache_platform;
 #[path = "cache_platform_wasm.rs"]
 mod cache_platform;
 
+pub(crate) use data_collector::{BUILDER_NAME as DATA_COLLECTOR_BUILDER, DataCollectorBuilder};
 pub use errors::{ApplyError, CompileError};
 pub(crate) use graph::parse_state;
 pub use graph::{

@@ -19,7 +19,10 @@ fn generic_runtime_contains_no_concrete_source_or_protocol_contracts() {
         ),
         ("threaded manager", include_str!("manager.rs")),
         ("events", include_str!("events.rs")),
-        ("viewer sink", include_str!("viewer_sink.rs")),
+        (
+            "derived-data collector",
+            include_str!("derived_data_collector.rs"),
+        ),
     ];
     let forbidden = [
         "DslFileSource",

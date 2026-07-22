@@ -26,7 +26,7 @@ std::cfg_select! {
     use signal_processing::{
         DecodedBlockCacheStats, DerivedLaneData, DerivedLanes, InputPort, LiveStoreConfig,
         OutputPort, PersistentStoreConfig, Pipeline, PortSchema, ProcessNode, ProtocolKind,
-        ViewerLaneKind, ViewerRetention, ViewerSink, ViewerSinkMetrics, Word, WorkError,
+        CollectedDataKind, DerivedDataRetention, DerivedDataCollector, DerivedDataCollectorMetrics, Word, WorkError,
         WorkResult, configure_decoded_block_cache, decoded_block_cache_stats,
         reset_decoded_block_cache_stats,
     };
@@ -148,7 +148,7 @@ std::cfg_select! {
         #[arg(long, default_value_t = 4)]
         workers: usize,
 
-        /// Maximum retained annotations for the viewer sink.
+        /// Maximum annotations retained by the derived-data collector.
         #[arg(long, default_value_t = 4_000_000)]
         viewer_max_entries: usize,
 
@@ -733,7 +733,7 @@ std::cfg_select! {
 
         let output_stats = Arc::new(Mutex::new(OutputStats::default()));
         let retained_words = Arc::new(Mutex::new(Vec::<Word>::new()));
-        let viewer_metrics = ViewerSinkMetrics::default();
+        let viewer_metrics = DerivedDataCollectorMetrics::default();
         let mut viewer_store = None;
         let word_store_directory = tempfile::tempdir()?;
         let sink_port;
@@ -768,11 +768,11 @@ std::cfg_select! {
                 }
                 pipeline.add_process(
                     "sink",
-                    ViewerSink::new(store.clone())
-                        .with_retention(ViewerRetention::MaxEntries(args.viewer_max_entries.max(1)))
+                    DerivedDataCollector::new(store.clone())
+                        .with_retention(DerivedDataRetention::MaxEntries(args.viewer_max_entries.max(1)))
                         .with_metrics(viewer_metrics.clone())
                         .with_word_store_config(store_config)
-                        .with_lane(ViewerLaneKind::Words, "parallel"),
+                        .with_lane(CollectedDataKind::Words, "parallel"),
                 )?;
                 viewer_store = Some(store);
                 sink_port = Some("in0");

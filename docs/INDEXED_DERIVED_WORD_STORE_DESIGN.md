@@ -7,7 +7,7 @@ time windows, presence summaries for overview rendering, and bounded decoded-blo
 Primary code locations:
 
 - `crates/signal_processing/src/derived_word_store/`;
-- `crates/signal_processing/src/viewer_sink.rs`;
+- `crates/signal_processing/src/derived_data_collector.rs`;
 - `crates/widgets/logic_analyzer_viewer/src/draw/derived.rs`;
 - `crates/widgets/logic_analyzer_viewer/src/cursor.rs`;
 - `crates/widgets/logic_analyzer_viewer/src/channel.rs`;
@@ -30,10 +30,11 @@ The store:
 - detects malformed blocks and stale or incomplete persistent caches;
 - isolates storage failure from other consumers of the decoded word stream.
 
-The store belongs to the viewer sink rather than to a decoder. Any decoder or plugin that emits
-words can use the same storage path, while a decoder connected only to another sink does not
-create a viewer cache. `ParallelDecoder` and other producers remain responsible for producing
-ordered word batches; `ViewerSink` materializes those batches for display.
+The store belongs to a derived-data collector rather than to a decoder or presentation subscriber.
+Any decoder or plugin that emits retained words can use the same storage path, while an output
+connected only to a non-collecting sink does not create a derived-word cache. `ParallelDecoder`
+and other producers remain responsible for producing ordered word batches;
+`DerivedDataCollector` materializes those batches for later subscribers.
 
 ## Architecture
 
@@ -43,7 +44,7 @@ word-producing runtime node
   | ordered Word batches
   +------------------------------> other word consumers
   |
-  +----> ViewerSink word lane
+  +----> DerivedDataCollector word lane
            |
            v
       IndexedAnnotationWriter
@@ -173,7 +174,7 @@ checks neighboring blocks so snapping works at block boundaries and in older reg
 
 ## Live publication
 
-`ViewerSink` owns one writer for each indexed word lane. Appending:
+`DerivedDataCollector` owns one writer for each indexed word lane. Appending:
 
 1. validates ordering;
 2. adds words to the active block builder;

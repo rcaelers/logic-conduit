@@ -11,7 +11,7 @@ Public surface:
 pub use viewer::{ChannelSignal, LogicAnalyzerViewer};
 pub use lanes::{
     AnnotationVisual, DerivedLaneId, ViewerLaneBadge, ViewerLaneFrame,
-    ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneRegistry, ViewerLaneRenderer,
+    ViewerLaneGroup, ViewerLaneGroupId, WaveformPresentationRegistry, ViewerLaneRenderer,
     ViewerLaneTrack, ViewerLaneTrackFrame, ViewerLaneTrackId,
     ViewerOutputPresentation,
 };
@@ -76,7 +76,7 @@ from these transitions.
 ```rust
 let lanes = signal_processing::DerivedLanes::default();      // shared Arc<RwLock<…>> store
 viewer.set_derived_lanes(lanes.clone());       // viewer renders it live
-// hand `lanes` to the pipeline's ViewerSink nodes (the app's compiler does this)
+// hand `lanes` to the pipeline's DerivedDataCollector nodes (the app's compiler does this)
 ```
 
 Whatever the running pipeline pushes into the store appears as extra rows under the
@@ -88,20 +88,19 @@ Without an explicit presentation registry, each payload becomes a default single
 that compile concrete node presentations pair the data store with a per-run registry:
 
 ```rust
-use logic_analyzer_viewer::ViewerLaneRegistry;
+use logic_analyzer_viewer::WaveformPresentationRegistry;
 
-let presentations = ViewerLaneRegistry::new();
-viewer.set_viewer_lanes(presentations.clone());
-let mut compile_ctx = logic_analyzer_graph::compiler::CompileCtx::default();
-compile_ctx.viewer_lanes = presentations; // same registry used by Viewer builders
+let compile_ctx = logic_analyzer_graph::compiler::CompileCtx::default();
+viewer.set_waveform_presentations(compile_ctx.waveform_presentations().clone());
 ```
 
 The registry contains explicit `ViewerLaneGroup` and `ViewerLaneTrack` objects. A group can combine
 several payload lanes in one displayed row and supplies a `ViewerLaneRenderer` for row height,
 annotation labels/styles, and snap-track selection. Concrete producer builders contribute
 `ViewerOutputPresentation` through `RuntimeBuilder::viewer_output_presentation`; the generic
-Viewer builder performs registration without inspecting node names, socket labels, or metadata
-values.
+waveform-subscription builder performs registration without inspecting node names, socket labels,
+or metadata values. The compiler independently materializes a neutral `DerivedDataCollector` for
+the subscribed outputs.
 
 Before invoking a renderer, the viewer prepares a bounded `ViewerLaneFrame` and releases the
 derived-lane lock. Sparse annotation frames contain exact visible values; dense frames become

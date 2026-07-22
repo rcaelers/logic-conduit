@@ -27,7 +27,7 @@
 //! is skipped for this pump cycle, exactly like a node with an unready
 //! input, and retried automatically once [`pump`](Self::pump)'s
 //! `made_progress` loop comes back around. This is what makes it safe for
-//! [`crate::nodes::sinks::ViewerSink`] (or any node) to actually let a
+//! [`crate::DerivedDataCollector`] (or any node) to actually let a
 //! `Block`-policy channel fill and genuinely stall its producer's `send()`
 //! (`docs/PIPELINE_DESIGN.md`, flow control) instead of that call permanently
 //! wedging the one cooperative thread. **This check is a per-cycle
@@ -39,7 +39,7 @@
 //! `ProcessNode::work()` implementation may send more than once per output
 //! per call while running under the cooperative backend.** Every node in
 //! this codebase already satisfies that (one item in, one item out, per
-//! call) except `ViewerSink`'s batched drain, which sends nothing itself
+//! call) except `DerivedDataCollector`'s batched drain, which sends nothing itself
 //! (it has no outputs) and so is exempt by construction. A future node
 //! that fans out many sends from one `work()` call would reopen the
 //! deadlock this check exists to close.

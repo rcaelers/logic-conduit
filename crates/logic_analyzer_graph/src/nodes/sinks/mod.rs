@@ -14,5 +14,5 @@ pub use text_file_writer::TextFileWriter;
 pub(crate) use text_file_writer::TextFileWriterBuilder;
 pub use tgck_recorder::TgckRecorder;
 pub(crate) use tgck_recorder::TgckRecorderBuilder;
-pub(crate) use viewer::ViewerBuilder;
+pub(crate) use viewer::ViewerSubscriptionBuilder;
 pub use viewer::{Viewer, ViewerState};

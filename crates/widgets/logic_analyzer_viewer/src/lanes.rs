@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use egui::{Color32, Stroke};
@@ -269,12 +270,22 @@ impl ViewerOutputPresentation {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct ViewerLaneRegistry {
+#[derive(Debug, Clone)]
+pub struct WaveformPresentationRegistry {
     inner: Arc<RwLock<Vec<ViewerLaneGroup>>>,
+    implicit_groups: Arc<AtomicBool>,
 }
 
-impl ViewerLaneRegistry {
+impl Default for WaveformPresentationRegistry {
+    fn default() -> Self {
+        Self {
+            inner: Arc::default(),
+            implicit_groups: Arc::new(AtomicBool::new(true)),
+        }
+    }
+}
+
+impl WaveformPresentationRegistry {
     pub fn new() -> Self {
         Self::default()
     }
@@ -304,6 +315,16 @@ impl ViewerLaneRegistry {
     pub fn clear(&self) {
         self.inner.write().unwrap().clear();
     }
+
+    /// Controls whether unclaimed retained data appears as a default row.
+    /// Graph-driven viewers disable this and subscribe through explicit groups.
+    pub fn set_implicit_groups(&self, enabled: bool) {
+        self.implicit_groups.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn implicit_groups(&self) -> bool {
+        self.implicit_groups.load(Ordering::Relaxed)
+    }
 }
 
 #[cfg(test)]
@@ -312,7 +333,7 @@ mod tests {
 
     #[test]
     fn compound_registration_replaces_overlapping_singletons() {
-        let registry = ViewerLaneRegistry::new();
+        let registry = WaveformPresentationRegistry::new();
         let first = DerivedLaneId::new("first");
         let second = DerivedLaneId::new("second");
         let badge = ViewerLaneBadge::new("W", Color32::WHITE);

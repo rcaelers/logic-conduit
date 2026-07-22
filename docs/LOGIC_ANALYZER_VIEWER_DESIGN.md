@@ -17,7 +17,7 @@ Implementation:
   (`DslCaptureReader`, `DslFileCaptureDataSource`)
 - Common capture types / traits: [crates/signal_processing/src/capture.rs](../crates/signal_processing/src/capture.rs)
 - Derived-lane store and summary index:
-  [crates/signal_processing/src/viewer_sink.rs](../crates/signal_processing/src/viewer_sink.rs),
+  [crates/signal_processing/src/derived_data_collector.rs](../crates/signal_processing/src/derived_data_collector.rs),
   [crates/signal_processing/src/derived_index.rs](../crates/signal_processing/src/derived_index.rs)
 
 The widget's public API is documented in
@@ -367,7 +367,7 @@ Derived display uses two per-run stores:
 
 - `DerivedLanes` in `signal-processing` maps stable storage keys to payloads, summaries, and
   indexed query handles;
-- `ViewerLaneRegistry` in `logic-analyzer-viewer` maps explicit group and track identities to
+- `WaveformPresentationRegistry` in `logic-analyzer-viewer` maps explicit group and track identities to
   those payloads and supplies protocol-neutral renderer objects.
 
 `DerivedLaneData` has these generic payload families:

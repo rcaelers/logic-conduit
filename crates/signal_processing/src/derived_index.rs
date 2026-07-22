@@ -16,7 +16,7 @@
 //! ever rescanning the raw entries.
 //!
 //! The raw entries themselves keep living in their own `Vec` next to this
-//! index (`DerivedLaneData` in `nodes::sinks::viewer_sink`) — this index
+//! index (`DerivedLaneData` in `derived_data_collector`) — this index
 //! only ever summarizes, it never stores the only copy of anything, which is
 //! what "never drop data" requires.
 

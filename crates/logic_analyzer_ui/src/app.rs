@@ -658,7 +658,7 @@ impl App {
         self.logic_analyzer
             .set_derived_lanes(ctx.derived_lanes().clone());
         self.logic_analyzer
-            .set_viewer_lanes(ctx.viewer_lanes().clone());
+            .set_waveform_presentations(ctx.waveform_presentations().clone());
         self.decoder_panels
             .set_run_data(ctx.derived_lanes().clone(), ctx.decoder_tables().clone());
 
@@ -876,7 +876,7 @@ impl App {
         self.logic_analyzer
             .set_derived_lanes(ctx.derived_lanes().clone());
         self.logic_analyzer
-            .set_viewer_lanes(ctx.viewer_lanes().clone());
+            .set_waveform_presentations(ctx.waveform_presentations().clone());
         self.decoder_panels
             .set_run_data(ctx.derived_lanes().clone(), ctx.decoder_tables().clone());
         let source = compiler::LiveAnalysisSource {

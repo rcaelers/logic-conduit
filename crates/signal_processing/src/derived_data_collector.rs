@@ -1,6 +1,4 @@
-//! Viewer sink that pushes decoded streams into a shared lane store the UI
-//! renders as extra rows under the raw channels
-//! (`docs/LOGIC_ANALYZER_VIEWER_DESIGN.md`).
+//! Presentation-neutral collection of typed derived streams into retained storage.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,12 +19,12 @@ use crate::ports::{InputPort, OutputPort, PortDirection, PortSchema};
 use crate::sample::Sample;
 
 #[derive(Clone, Default)]
-pub struct ViewerSinkMetrics {
-    inner: Arc<ViewerSinkMetricsInner>,
+pub struct DerivedDataCollectorMetrics {
+    inner: Arc<DerivedDataCollectorMetricsInner>,
 }
 
 #[derive(Default)]
-struct ViewerSinkMetricsInner {
+struct DerivedDataCollectorMetricsInner {
     drain_ns: AtomicU64,
     append_ns: AtomicU64,
     items: AtomicU64,
@@ -34,16 +32,16 @@ struct ViewerSinkMetricsInner {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ViewerSinkMetricsSnapshot {
+pub struct DerivedDataCollectorMetricsSnapshot {
     pub drain_ns: u64,
     pub append_ns: u64,
     pub items: u64,
     pub batches: u64,
 }
 
-impl ViewerSinkMetrics {
-    pub fn snapshot(&self) -> ViewerSinkMetricsSnapshot {
-        ViewerSinkMetricsSnapshot {
+impl DerivedDataCollectorMetrics {
+    pub fn snapshot(&self) -> DerivedDataCollectorMetricsSnapshot {
+        DerivedDataCollectorMetricsSnapshot {
             drain_ns: self.inner.drain_ns.load(Ordering::Relaxed),
             append_ns: self.inner.append_ns.load(Ordering::Relaxed),
             items: self.inner.items.load(Ordering::Relaxed),
@@ -73,23 +71,23 @@ impl ViewerSinkMetrics {
 /// Suggested per-lane limit for continuous sources that explicitly select
 /// rolling in-memory exact-detail retention. Native indexed word lanes do
 /// not use this limit because their complete exact history is disk-backed.
-pub const DEFAULT_VIEWER_MAX_ENTRIES: usize = 1_000_000;
+pub const DEFAULT_DERIVED_DATA_MAX_ENTRIES: usize = 1_000_000;
 
 /// Most items one lane drains from its channel per `work()` call. Bounds how
 /// long one call holds `DerivedLanes`' write lock and, more importantly,
-/// stops `ViewerSink` from racing a fast producer to keep its channel
+/// stops `DerivedDataCollector` from racing a fast producer to keep its channel
 /// perpetually empty — a channel that's allowed to actually fill is what
 /// lets its `Block` overflow policy engage and slow the producer down.
 const DRAIN_BATCH_SIZE: usize = 65_536;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum ViewerRetention {
+pub enum DerivedDataRetention {
     #[default]
     Unlimited,
     MaxEntries(usize),
 }
 
-impl ViewerRetention {
+impl DerivedDataRetention {
     fn trim_target(self, len: usize) -> Option<usize> {
         let Self::MaxEntries(max) = self else {
             return None;
@@ -113,25 +111,25 @@ pub enum DerivedLaneData {
     /// Zero-width event markers (trigger timestamps, ns).
     Markers(Vec<u64>),
     /// Labeled level values, each valid until the following entry.
-    Values(ViewerValueLane),
+    Values(CollectedValueLane),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ViewerValueKind {
+pub enum CollectedValueKind {
     Number,
     Text,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ViewerValue {
+pub struct CollectedValue {
     pub value: String,
     pub start_time_ns: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ViewerValueLane {
-    pub kind: ViewerValueKind,
-    pub values: Vec<ViewerValue>,
+pub struct CollectedValueLane {
+    pub kind: CollectedValueKind,
+    pub values: Vec<CollectedValue>,
 }
 
 #[derive(Clone)]
@@ -260,8 +258,8 @@ impl LaneFold<u64> for MarkerFold {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ValueFold;
-impl LaneFold<ViewerValue> for ValueFold {
-    fn leaf(entry: &ViewerValue) -> MipmapRecord {
+impl LaneFold<CollectedValue> for ValueFold {
+    fn leaf(entry: &CollectedValue) -> MipmapRecord {
         MipmapRecord {
             start_ns: entry.start_time_ns,
             end_ns: entry.start_time_ns,
@@ -288,13 +286,12 @@ pub enum LaneSummary {
     Annotations(ChunkedMipmap<Annotation, AnnotationFold>),
     IndexedAnnotations,
     Markers(AppendOnlyMipmap<u64, MarkerFold>),
-    Values(AppendOnlyMipmap<ViewerValue, ValueFold>),
+    Values(AppendOnlyMipmap<CollectedValue, ValueFold>),
 }
 
 impl LaneSummary {
-    /// A summary backfilled from `data` — every production caller registers
-    /// a lane empty (`ViewerBuilder::build` always passes a fresh
-    /// `Vec::new()`) so this is normally a no-op, but the invariant "summary
+    /// A summary backfilled from `data` — every production collector registers
+    /// a lane with fresh empty storage, so this is normally a no-op, but the invariant "summary
     /// mirrors data" has to hold for *any* caller, not just the ones that
     /// happen to start empty.
     fn matching(data: &DerivedLaneData) -> Self {
@@ -341,9 +338,9 @@ pub struct DerivedLane {
     pub word_display_format: Option<String>,
 }
 
-/// Shared, append-only store of derived lanes. The compiler hands one clone
-/// to every `ViewerSink` and one to the UI; a re-run swaps in a fresh store
-/// so stale lanes vanish atomically.
+/// Shared, append-only store of derived lanes. Producers and subscribers hold
+/// independent clones, so subscribers may attach after collection has begun or
+/// completed. A re-run swaps in a fresh store so stale lanes vanish atomically.
 #[derive(Debug, Clone, Default)]
 pub struct DerivedLanes {
     inner: Arc<RwLock<Vec<DerivedLane>>>,
@@ -355,9 +352,9 @@ impl DerivedLanes {
     }
 
     /// Adds an empty lane and returns its index. Lane order is registration
-    /// order (= viewer wiring order). Registering an existing name normally
+    /// order (= collector wiring order). Registering an existing name normally
     /// reuses data of the same kind. Indexed annotations are replaced even
-    /// by another indexed lane so a restarted viewer publishes its new
+    /// by another indexed lane so a restarted collector publishes its new
     /// writer's query handle instead of leaving a stale store visible.
     pub fn register(&self, name: impl Into<String>, data: DerivedLaneData) -> usize {
         let name = name.into();
@@ -400,14 +397,14 @@ impl DerivedLanes {
     }
 
     /// Appends a whole batch under a single write-lock acquisition — called
-    /// once per `ViewerSink::work()` invocation per lane, rather than once
+    /// once per `DerivedDataCollector::work()` invocation per lane, rather than once
     /// per item, so a burst of decoded entries doesn't take (and contend
     /// the UI thread's `read()` for) the lock once per item.
     fn append_digital_batch_retained(
         &self,
         lane: usize,
         samples: impl IntoIterator<Item = Sample>,
-        retention: ViewerRetention,
+        retention: DerivedDataRetention,
     ) {
         let mut lanes = self.inner.write().unwrap();
         let Some(lane) = lanes.get_mut(lane) else {
@@ -432,7 +429,7 @@ impl DerivedLanes {
         &self,
         lane: usize,
         words: impl IntoIterator<Item = (u64, u64, u64)>,
-        retention: ViewerRetention,
+        retention: DerivedDataRetention,
     ) {
         let mut lanes = self.inner.write().unwrap();
         let Some(lane) = lanes.get_mut(lane) else {
@@ -489,7 +486,7 @@ impl DerivedLanes {
         &self,
         lane: usize,
         timestamps: impl IntoIterator<Item = u64>,
-        retention: ViewerRetention,
+        retention: DerivedDataRetention,
     ) {
         let mut lanes = self.inner.write().unwrap();
         let Some(lane) = lanes.get_mut(lane) else {
@@ -512,8 +509,8 @@ impl DerivedLanes {
     fn append_value_batch_retained(
         &self,
         lane: usize,
-        values: impl IntoIterator<Item = ViewerValue>,
-        retention: ViewerRetention,
+        values: impl IntoIterator<Item = CollectedValue>,
+        retention: DerivedDataRetention,
     ) {
         let mut lanes = self.inner.write().unwrap();
         let Some(lane) = lanes.get_mut(lane) else {
@@ -534,13 +531,10 @@ impl DerivedLanes {
     }
 }
 
-/// The generic shapes a viewer lane's data can take
-/// (`docs/LOGIC_ANALYZER_VIEWER_DESIGN.md`) — every decoder's output reduces to
-/// one of these, so the viewer itself never needs to know which decoder
-/// produced a lane: a boolean level (`Signal`), decoded values (`Words`, i.e.
-/// [`Word`]), instantaneous events (`Trigger`), or labeled number/text levels.
+/// The generic shapes retained derived data can take. Every producer output
+/// reduces to one of these without naming any eventual presentation subscriber.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ViewerLaneKind {
+pub enum CollectedDataKind {
     Signal,
     Words,
     Trigger,
@@ -557,7 +551,7 @@ enum LaneBuffer {
 }
 
 struct Lane {
-    kind: ViewerLaneKind,
+    kind: CollectedDataKind,
     store_index: usize,
     buffer: LaneBuffer,
     eos: bool,
@@ -572,23 +566,23 @@ struct Lane {
 /// filling faster than this sink drains it stays full and the producer's
 /// own send genuinely blocks (`docs/PIPELINE_DESIGN.md`, flow control) — real
 /// backpressure, not a silent drop once storage fills up.
-pub struct ViewerSink {
+pub struct DerivedDataCollector {
     name: String,
     store: DerivedLanes,
     lanes: Vec<Lane>,
-    retention: ViewerRetention,
-    metrics: Option<ViewerSinkMetrics>,
+    retention: DerivedDataRetention,
+    metrics: Option<DerivedDataCollectorMetrics>,
     indexed_words: bool,
     word_store_config: LiveStoreConfig,
 }
 
-impl ViewerSink {
+impl DerivedDataCollector {
     pub fn new(store: DerivedLanes) -> Self {
         Self {
-            name: "viewer".to_string(),
+            name: "derived-data-collector".to_string(),
             store,
             lanes: Vec::new(),
-            retention: ViewerRetention::Unlimited,
+            retention: DerivedDataRetention::Unlimited,
             metrics: None,
             indexed_words: true,
             word_store_config: LiveStoreConfig::default(),
@@ -600,12 +594,12 @@ impl ViewerSink {
         self
     }
 
-    pub fn with_retention(mut self, retention: ViewerRetention) -> Self {
+    pub fn with_retention(mut self, retention: DerivedDataRetention) -> Self {
         self.retention = retention;
         self
     }
 
-    pub fn with_metrics(mut self, metrics: ViewerSinkMetrics) -> Self {
+    pub fn with_metrics(mut self, metrics: DerivedDataCollectorMetrics) -> Self {
         self.metrics = Some(metrics);
         self
     }
@@ -624,11 +618,11 @@ impl ViewerSink {
     }
 
     /// Appends a lane; input port order follows lane order (`in0`, `in1`, …).
-    pub fn with_lane(mut self, kind: ViewerLaneKind, name: impl Into<String>) -> Self {
+    pub fn with_lane(mut self, kind: CollectedDataKind, name: impl Into<String>) -> Self {
         let name = name.into();
         let (data, word_writer, word_indexed) = match kind {
-            ViewerLaneKind::Signal => (DerivedLaneData::Digital(Vec::new()), None, false),
-            ViewerLaneKind::Words if self.indexed_words => {
+            CollectedDataKind::Signal => (DerivedLaneData::Digital(Vec::new()), None, false),
+            CollectedDataKind::Words if self.indexed_words => {
                 if let Some(persistent) = self.word_store_config.persistence.as_ref() {
                     match IndexedAnnotationStore::open_persistent(persistent) {
                         Ok(Some(store)) => {
@@ -650,7 +644,7 @@ impl ViewerSink {
                         Err(error) => tracing::warn!(
                             lane = %name,
                             %error,
-                            "invalid persistent viewer cache; rebuilding"
+                            "invalid persistent derived-data cache; rebuilding"
                         ),
                     }
                 }
@@ -666,22 +660,22 @@ impl ViewerSink {
                         tracing::warn!(
                             lane = %name,
                             %error,
-                            "could not create indexed viewer word lane; using in-memory storage"
+                            "could not create indexed derived-data word lane; using in-memory storage"
                         );
                         (DerivedLaneData::Annotations(Vec::new()), None, false)
                     }
                 }
             }
-            ViewerLaneKind::Words => (DerivedLaneData::Annotations(Vec::new()), None, false),
-            ViewerLaneKind::Trigger => (DerivedLaneData::Markers(Vec::new()), None, false),
-            ViewerLaneKind::Number | ViewerLaneKind::Text => {
-                let kind = if kind == ViewerLaneKind::Number {
-                    ViewerValueKind::Number
+            CollectedDataKind::Words => (DerivedLaneData::Annotations(Vec::new()), None, false),
+            CollectedDataKind::Trigger => (DerivedLaneData::Markers(Vec::new()), None, false),
+            CollectedDataKind::Number | CollectedDataKind::Text => {
+                let kind = if kind == CollectedDataKind::Number {
+                    CollectedValueKind::Number
                 } else {
-                    ViewerValueKind::Text
+                    CollectedValueKind::Text
                 };
                 (
-                    DerivedLaneData::Values(ViewerValueLane {
+                    DerivedLaneData::Values(CollectedValueLane {
                         kind,
                         values: Vec::new(),
                     }),
@@ -691,11 +685,11 @@ impl ViewerSink {
             }
         };
         let buffer = match kind {
-            ViewerLaneKind::Signal => LaneBuffer::Signal(VecDeque::new()),
-            ViewerLaneKind::Words => LaneBuffer::Words(VecDeque::new()),
-            ViewerLaneKind::Trigger => LaneBuffer::Trigger(VecDeque::new()),
-            ViewerLaneKind::Number => LaneBuffer::Number(VecDeque::new()),
-            ViewerLaneKind::Text => LaneBuffer::Text(VecDeque::new()),
+            CollectedDataKind::Signal => LaneBuffer::Signal(VecDeque::new()),
+            CollectedDataKind::Words => LaneBuffer::Words(VecDeque::new()),
+            CollectedDataKind::Trigger => LaneBuffer::Trigger(VecDeque::new()),
+            CollectedDataKind::Number => LaneBuffer::Number(VecDeque::new()),
+            CollectedDataKind::Text => LaneBuffer::Text(VecDeque::new()),
         };
         let store_index = self.store.register(name, data);
         self.lanes.push(Lane {
@@ -711,7 +705,7 @@ impl ViewerSink {
 
     pub fn with_lane_format(
         self,
-        kind: ViewerLaneKind,
+        kind: CollectedDataKind,
         name: impl Into<String>,
         format: Option<String>,
     ) -> Self {
@@ -723,7 +717,7 @@ impl ViewerSink {
     }
 }
 
-impl ProcessNode for ViewerSink {
+impl ProcessNode for DerivedDataCollector {
     fn name(&self) -> &str {
         &self.name
     }
@@ -751,19 +745,19 @@ impl ProcessNode for ViewerSink {
             .map(|(index, lane)| {
                 let name = format!("in{index}");
                 match lane.kind {
-                    ViewerLaneKind::Signal => {
+                    CollectedDataKind::Signal => {
                         PortSchema::new::<Sample>(name, index, PortDirection::Input)
                     }
-                    ViewerLaneKind::Words => {
+                    CollectedDataKind::Words => {
                         PortSchema::new::<Word>(name, index, PortDirection::Input)
                     }
-                    ViewerLaneKind::Trigger => {
+                    CollectedDataKind::Trigger => {
                         PortSchema::new::<Trigger>(name, index, PortDirection::Input)
                     }
-                    ViewerLaneKind::Number => {
+                    CollectedDataKind::Number => {
                         PortSchema::new::<NumberSample>(name, index, PortDirection::Input)
                     }
-                    ViewerLaneKind::Text => {
+                    CollectedDataKind::Text => {
                         PortSchema::new::<TextSample>(name, index, PortDirection::Input)
                     }
                 }
@@ -788,7 +782,7 @@ impl ProcessNode for ViewerSink {
             }
             let port = inputs
                 .get(index)
-                .ok_or_else(|| WorkError::NodeError(format!("Missing viewer input {index}")))?;
+                .ok_or_else(|| WorkError::NodeError(format!("missing collector input {index}")))?;
 
             // Bounded, not drained to exhaustion: letting a burst fill this
             // lane's channel (rather than racing to empty it every call) is
@@ -844,7 +838,7 @@ impl ProcessNode for ViewerSink {
                             tracing::warn!(
                                 lane = lane.store_index,
                                 %error,
-                                "indexed viewer word lane failed; disabling further appends"
+                                "indexed derived-data word lane failed; disabling further appends"
                             );
                             lane.word_writer = None;
                         }
@@ -884,7 +878,7 @@ impl ProcessNode for ViewerSink {
                         let append_started = metrics.as_ref().map(|_| Instant::now());
                         store.append_value_batch_retained(
                             lane.store_index,
-                            batch.into_iter().map(|sample| ViewerValue {
+                            batch.into_iter().map(|sample| CollectedValue {
                                 value: sample.value.to_string(),
                                 start_time_ns: sample.start_time_ns,
                             }),
@@ -902,7 +896,7 @@ impl ProcessNode for ViewerSink {
                         let append_started = metrics.as_ref().map(|_| Instant::now());
                         store.append_value_batch_retained(
                             lane.store_index,
-                            batch.into_iter().map(|sample| ViewerValue {
+                            batch.into_iter().map(|sample| CollectedValue {
                                 value: sample.value,
                                 start_time_ns: sample.start_time_ns,
                             }),
@@ -922,7 +916,7 @@ impl ProcessNode for ViewerSink {
                 tracing::warn!(
                     lane = lane.store_index,
                     %error,
-                    "could not finish indexed viewer word lane"
+                    "could not finish indexed derived-data word lane"
                 );
             }
         }
@@ -965,25 +959,25 @@ mod tests {
         where
             I: IntoIterator<Item = Sample>,
         {
-            self.append_digital_batch_retained(lane, samples, ViewerRetention::Unlimited);
+            self.append_digital_batch_retained(lane, samples, DerivedDataRetention::Unlimited);
         }
 
         fn append_word_batch<I>(&self, lane: usize, words: I)
         where
             I: IntoIterator<Item = (u64, u64, u64)>,
         {
-            self.append_word_batch_retained(lane, words, ViewerRetention::Unlimited);
+            self.append_word_batch_retained(lane, words, DerivedDataRetention::Unlimited);
         }
 
         fn append_marker_batch<I>(&self, lane: usize, timestamps: I)
         where
             I: IntoIterator<Item = u64>,
         {
-            self.append_marker_batch_retained(lane, timestamps, ViewerRetention::Unlimited);
+            self.append_marker_batch_retained(lane, timestamps, DerivedDataRetention::Unlimited);
         }
     }
 
-    fn run_sink(sink: &mut ViewerSink, inputs: Vec<InputPort>) {
+    fn run_sink(sink: &mut DerivedDataCollector, inputs: Vec<InputPort>) {
         let outputs: Vec<OutPort> = vec![];
         loop {
             match sink.work(&inputs, &outputs) {
@@ -997,10 +991,10 @@ mod tests {
     #[test]
     fn lanes_collect_signals_words_and_triggers() {
         let store = DerivedLanes::new();
-        let mut sink = ViewerSink::new(store.clone())
-            .with_lane(ViewerLaneKind::Signal, "latch.q")
-            .with_lane(ViewerLaneKind::Words, "decoder.words")
-            .with_lane(ViewerLaneKind::Trigger, "start.match");
+        let mut sink = DerivedDataCollector::new(store.clone())
+            .with_lane(CollectedDataKind::Signal, "latch.q")
+            .with_lane(CollectedDataKind::Words, "decoder.words")
+            .with_lane(CollectedDataKind::Trigger, "start.match");
 
         let wd = Watchdog::new();
         let (sig_tx, sig_rx) = bounded::<ChannelMessage<Sample>>(16);
@@ -1081,9 +1075,9 @@ mod tests {
     #[test]
     fn lanes_collect_number_and_text_levels() {
         let store = DerivedLanes::new();
-        let mut sink = ViewerSink::new(store.clone())
-            .with_lane(ViewerLaneKind::Number, "counter.count")
-            .with_lane(ViewerLaneKind::Text, "formatter.text");
+        let mut sink = DerivedDataCollector::new(store.clone())
+            .with_lane(CollectedDataKind::Number, "counter.count")
+            .with_lane(CollectedDataKind::Text, "formatter.text");
 
         let wd = Watchdog::new();
         let (number_tx, number_rx) = bounded::<ChannelMessage<NumberSample>>(16);
@@ -1113,15 +1107,15 @@ mod tests {
         let DerivedLaneData::Values(numbers) = &lanes[0].data else {
             panic!("expected number values");
         };
-        assert_eq!(numbers.kind, ViewerValueKind::Number);
+        assert_eq!(numbers.kind, CollectedValueKind::Number);
         assert_eq!(
             numbers.values,
             [
-                ViewerValue {
+                CollectedValue {
                     value: "-2".to_owned(),
                     start_time_ns: 0,
                 },
-                ViewerValue {
+                CollectedValue {
                     value: "3".to_owned(),
                     start_time_ns: 500,
                 },
@@ -1130,10 +1124,10 @@ mod tests {
         let DerivedLaneData::Values(text) = &lanes[1].data else {
             panic!("expected text values");
         };
-        assert_eq!(text.kind, ViewerValueKind::Text);
+        assert_eq!(text.kind, CollectedValueKind::Text);
         assert_eq!(
             text.values,
-            [ViewerValue {
+            [CollectedValue {
                 value: "Window 03".to_owned(),
                 start_time_ns: 500,
             }]
@@ -1147,7 +1141,8 @@ mod tests {
         // `Block` overflow policy apply real backpressure instead of never
         // engaging (§`DRAIN_BATCH_SIZE`).
         let store = DerivedLanes::new();
-        let mut sink = ViewerSink::new(store.clone()).with_lane(ViewerLaneKind::Signal, "sig");
+        let mut sink =
+            DerivedDataCollector::new(store.clone()).with_lane(CollectedDataKind::Signal, "sig");
 
         let total = DRAIN_BATCH_SIZE + 5;
         let wd = Watchdog::new();
@@ -1379,18 +1374,18 @@ mod tests {
     }
 
     #[test]
-    fn viewer_retains_the_complete_timeline_by_default() {
-        let sink = ViewerSink::new(DerivedLanes::new());
-        assert_eq!(sink.retention, ViewerRetention::Unlimited);
+    fn collector_retains_the_complete_timeline_by_default() {
+        let sink = DerivedDataCollector::new(DerivedLanes::new());
+        assert_eq!(sink.retention, DerivedDataRetention::Unlimited);
     }
 
     #[test]
-    fn viewer_retention_drops_oldest_exact_entries_but_keeps_full_summary() {
+    fn derived_data_retention_drops_oldest_exact_entries_but_keeps_full_summary() {
         let store = DerivedLanes::new();
-        let mut sink = ViewerSink::new(store.clone())
+        let mut sink = DerivedDataCollector::new(store.clone())
             .with_indexed_words(false)
-            .with_retention(ViewerRetention::MaxEntries(4))
-            .with_lane(ViewerLaneKind::Words, "words");
+            .with_retention(DerivedDataRetention::MaxEntries(4))
+            .with_lane(CollectedDataKind::Words, "words");
         let wd = Watchdog::new();
         let (tx, rx) = bounded::<ChannelMessage<Word>>(2);
         tx.send(ChannelMessage::Batch(
@@ -1430,9 +1425,9 @@ mod tests {
             ..LiveStoreConfig::default()
         };
 
-        let sink = ViewerSink::new(store.clone())
+        let sink = DerivedDataCollector::new(store.clone())
             .with_word_store_config(config)
-            .with_lane(ViewerLaneKind::Words, "words");
+            .with_lane(CollectedDataKind::Words, "words");
 
         assert!(sink.lanes[0].word_writer.is_none());
         assert!(matches!(
@@ -1449,9 +1444,9 @@ mod tests {
             directory: directory.path().to_path_buf(),
             ..LiveStoreConfig::default()
         };
-        let mut sink = ViewerSink::new(store.clone())
+        let mut sink = DerivedDataCollector::new(store.clone())
             .with_word_store_config(config)
-            .with_lane(ViewerLaneKind::Words, "words");
+            .with_lane(CollectedDataKind::Words, "words");
         let word_count = DRAIN_BATCH_SIZE + 17;
         let words: Vec<_> = (0..word_count as u64)
             .map(|index| Word::new(index, index * 10))
@@ -1484,17 +1479,17 @@ mod tests {
     }
 
     #[test]
-    fn indexed_lane_failure_does_not_stop_other_viewer_lanes() {
+    fn indexed_lane_failure_does_not_stop_other_collected_lanes() {
         let directory = tempfile::tempdir().unwrap();
         let store = DerivedLanes::new();
         let config = LiveStoreConfig {
             directory: directory.path().to_path_buf(),
             ..LiveStoreConfig::default()
         };
-        let mut sink = ViewerSink::new(store.clone())
+        let mut sink = DerivedDataCollector::new(store.clone())
             .with_word_store_config(config)
-            .with_lane(ViewerLaneKind::Words, "words")
-            .with_lane(ViewerLaneKind::Trigger, "trigger");
+            .with_lane(CollectedDataKind::Words, "words")
+            .with_lane(CollectedDataKind::Trigger, "trigger");
         let wd = Watchdog::new();
         let (word_tx, word_rx) = bounded::<ChannelMessage<Word>>(4);
         word_tx
@@ -1537,17 +1532,17 @@ mod tests {
             ..LiveStoreConfig::default()
         };
         let store = DerivedLanes::new();
-        let first = ViewerSink::new(store.clone())
+        let first = DerivedDataCollector::new(store.clone())
             .with_word_store_config(config.clone())
-            .with_lane(ViewerLaneKind::Words, "words");
+            .with_lane(CollectedDataKind::Words, "words");
         let first_query = match &store.read()[0].data {
             DerivedLaneData::IndexedAnnotations(indexed) => Arc::clone(&indexed.query),
             other => panic!("expected indexed annotation lane, got {other:?}"),
         };
 
-        let second = ViewerSink::new(store.clone())
+        let second = DerivedDataCollector::new(store.clone())
             .with_word_store_config(config)
-            .with_lane(ViewerLaneKind::Words, "words");
+            .with_lane(CollectedDataKind::Words, "words");
         let second_query = match &store.read()[0].data {
             DerivedLaneData::IndexedAnnotations(indexed) => Arc::clone(&indexed.query),
             other => panic!("expected indexed annotation lane, got {other:?}"),
@@ -1563,7 +1558,7 @@ mod tests {
     }
 
     #[test]
-    fn viewer_reopens_persistent_lane_and_does_not_rewrite_incoming_words() {
+    fn collector_reopens_persistent_lane_and_does_not_rewrite_incoming_words() {
         let directory = tempfile::tempdir().unwrap();
         let persistent =
             crate::derived_word_store::PersistentStoreConfig::new(directory.path(), [9; 32]);
@@ -1580,9 +1575,9 @@ mod tests {
         drop(writer);
 
         let lanes = DerivedLanes::new();
-        let mut sink = ViewerSink::new(lanes.clone())
+        let mut sink = DerivedDataCollector::new(lanes.clone())
             .with_word_store_config(config)
-            .with_lane(ViewerLaneKind::Words, "words");
+            .with_lane(CollectedDataKind::Words, "words");
         assert!(sink.lanes[0].word_writer.is_none());
         assert!(sink.lanes[0].word_indexed);
         let wd = Watchdog::new();

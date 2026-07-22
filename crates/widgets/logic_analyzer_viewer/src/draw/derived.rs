@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
 use signal_processing::{
-    Annotation, AnnotationFold, ChunkedMipmap, MAX_ANNOTATION_NS, Sample, ViewerValue,
+    Annotation, AnnotationFold, ChunkedMipmap, CollectedValue, MAX_ANNOTATION_NS, Sample,
     WordPresenceBucket,
 };
 
@@ -121,7 +121,7 @@ impl LogicAnalyzerViewer {
         wave_rect: Rect,
         y_top: f32,
         row_height: f32,
-        values: &[ViewerValue],
+        values: &[CollectedValue],
         color: Color32,
     ) {
         if values.is_empty() {
@@ -546,7 +546,7 @@ fn dense_annotation_runs(
 
 /// Effective right edge for one annotation box. The most recent word ever
 /// decoded has no successor to patch its `end_ns` (see `append_word` in
-/// `viewer_sink.rs`) — `start_ns == end_ns` forever, not just until the next
+/// `derived_data_collector.rs`) — `start_ns == end_ns` forever, not just until the next
 /// word arrives — so it's rendered open-ended using the previous word's
 /// width as a same-framing estimate (falling back to the burst cap when
 /// there's no previous word to measure), rather than collapsing to an

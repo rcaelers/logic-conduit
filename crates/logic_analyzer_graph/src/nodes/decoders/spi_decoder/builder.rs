@@ -101,17 +101,18 @@ impl RuntimeBuilder for SpiDecoderBuilder {
             _ => None,
         }
     }
-    fn output_port(&self, socket: &Socket, _state: &Value, kind: PortKind) -> Option<String> {
+    fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
         if kind != PortKind::of::<Word>() {
             return None;
         }
+        let has_miso = Self::parsed(state).ok()?.has_miso.value;
         match socket.def_index {
             0 => Some("mosi_words".into()),
-            1 => Some("miso_words".into()),
+            1 if has_miso => Some("miso_words".into()),
             2 => Some("mosi_bits".into()),
             3 => Some("mosi_data".into()),
-            4 => Some("miso_bits".into()),
-            5 => Some("miso_data".into()),
+            4 if has_miso => Some("miso_bits".into()),
+            5 if has_miso => Some("miso_data".into()),
             _ => None,
         }
     }

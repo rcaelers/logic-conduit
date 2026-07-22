@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use logic_analyzer_processing::nodes::sources::synthetic_capture_source::SyntheticCaptureSource;
 use node_graph::Socket;
-use signal_processing::{ProcessNode, Sample, SampleBlock, TextSample, ViewerRetention};
+use signal_processing::{DerivedDataRetention, ProcessNode, Sample, SampleBlock, TextSample};
 
 use crate::{
     CapturePresentation, CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state,
@@ -17,8 +17,8 @@ impl RuntimeBuilder for FileSourceBuilder {
         true
     }
 
-    fn viewer_retention(&self, _state: &Value) -> ViewerRetention {
-        ViewerRetention::Unlimited
+    fn derived_data_retention(&self, _state: &Value) -> DerivedDataRetention {
+        DerivedDataRetention::Unlimited
     }
 
     fn accepted_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {

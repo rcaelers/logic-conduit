@@ -24,8 +24,8 @@ std::cfg_select! {
 
 pub use lanes::{
     AnnotationVisual, DefaultViewerLaneRenderer, DerivedLaneId, ViewerLaneBadge, ViewerLaneFrame,
-    ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneRegistry, ViewerLaneRenderer, ViewerLaneTrack,
-    ViewerLaneTrackFrame, ViewerLaneTrackId, ViewerOutputPresentation,
+    ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneRenderer, ViewerLaneTrack, ViewerLaneTrackFrame,
+    ViewerLaneTrackId, ViewerOutputPresentation, WaveformPresentationRegistry,
 };
 pub use sampling_overlay::{SamplingEdge, SamplingOverlay, SamplingQualifier};
 pub use simple_trigger::{SimpleTriggerEdit, SimpleTriggerLane};

@@ -19,6 +19,7 @@ mod app_manager;
 pub mod capture;
 mod capture_policy;
 mod cooperative_manager;
+mod derived_data_collector;
 mod derived_index;
 pub mod derived_word_store;
 mod edge_query;
@@ -39,7 +40,6 @@ mod sampling_activity;
 mod scheduler;
 mod sender;
 mod type_registry;
-mod viewer_sink;
 mod watchdog;
 
 std::cfg_select! {
@@ -91,6 +91,12 @@ pub use capture_policy::{
     TriggerPlacementCapability, TriggerTimeout, TriggerTimeoutAction,
 };
 pub use cooperative_manager::CooperativeManager;
+pub use derived_data_collector::{
+    AnnotationFold, CollectedDataKind, CollectedValue, CollectedValueKind, CollectedValueLane,
+    DEFAULT_DERIVED_DATA_MAX_ENTRIES, DerivedDataCollector, DerivedDataCollectorMetrics,
+    DerivedDataCollectorMetricsSnapshot, DerivedDataRetention, DerivedLane, DerivedLaneData,
+    DerivedLanes, DigitalFold, IndexedAnnotationLane, LaneSummary, MarkerFold, ValueFold,
+};
 pub use derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 pub use derived_word_store::{
     AnnotationQuery, BlockCodecConfig, IndexedAnnotationStore, IndexedAnnotationWriter,
@@ -134,11 +140,5 @@ pub(crate) use sample_kind::negotiate as negotiate_sample_kind;
 pub use sampling_activity::SamplingActivity;
 pub use scheduler::{Scheduler, StopHandle};
 pub use sender::{ChannelMessage, OverflowPolicy, Sender, SharedSenders};
-pub use viewer_sink::{
-    AnnotationFold, DEFAULT_VIEWER_MAX_ENTRIES, DerivedLane, DerivedLaneData, DerivedLanes,
-    DigitalFold, IndexedAnnotationLane, LaneSummary, MarkerFold, ValueFold, ViewerLaneKind,
-    ViewerRetention, ViewerSink, ViewerSinkMetrics, ViewerSinkMetricsSnapshot, ViewerValue,
-    ViewerValueKind, ViewerValueLane,
-};
 pub(crate) use watchdog::OperationGuard;
 pub use watchdog::{Watchdog, WatchdogHandle};

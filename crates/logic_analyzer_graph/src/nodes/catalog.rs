@@ -7,13 +7,18 @@ use super::logic::{
     BufferBuilder, CounterBuilder, FormatterBuilder, LogicGateBuilder, SrFlipFlopBuilder,
     WordMatcherBuilder,
 };
-use super::sinks::{TgckRecorderBuilder, ViewerBuilder};
+use super::sinks::{TgckRecorderBuilder, ViewerSubscriptionBuilder};
 #[cfg(any(test, feature = "test-support"))]
 use super::sources::{TestCaptureSourceBuilder, TestUartSourceBuilder};
 use crate::RuntimeBuilder;
 
 pub(crate) fn standard_builders() -> HashMap<String, Box<dyn RuntimeBuilder>> {
     let mut builders: HashMap<String, Box<dyn RuntimeBuilder>> = HashMap::new();
+
+    builders.insert(
+        crate::compiler::DATA_COLLECTOR_BUILDER.into(),
+        Box::new(crate::compiler::DataCollectorBuilder),
+    );
 
     super::registry_platform::register_builders(&mut builders);
 
@@ -35,6 +40,6 @@ pub(crate) fn standard_builders() -> HashMap<String, Box<dyn RuntimeBuilder>> {
     builders.insert("Counter".into(), Box::new(CounterBuilder));
     builders.insert("String Formatter".into(), Box::new(FormatterBuilder));
     builders.insert("TGCK Recorder".into(), Box::new(TgckRecorderBuilder));
-    builders.insert("Viewer".into(), Box::new(ViewerBuilder));
+    builders.insert("Viewer".into(), Box::new(ViewerSubscriptionBuilder));
     builders
 }

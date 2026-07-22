@@ -72,7 +72,7 @@ impl LogicAnalyzerViewer {
     pub(crate) fn display_row_height(&self, key: &RowKey, default_height: f32) -> f32 {
         let group = match key {
             RowKey::Derived(id) => self
-                .viewer_lanes
+                .waveform_presentations
                 .read()
                 .iter()
                 .find(|group| &group.id == id)
@@ -104,7 +104,7 @@ impl LogicAnalyzerViewer {
                 })
             }
             RowKey::Derived(group_id) => {
-                let groups = self.viewer_lanes.read();
+                let groups = self.waveform_presentations.read();
                 let group = groups.iter().find(|group| &group.id == group_id)?;
                 let name = self
                     .derived_names
@@ -310,7 +310,7 @@ impl LogicAnalyzerViewer {
             RowKey::Derived(group_id) => {
                 let name = name.trim().to_string();
                 let default_name = self
-                    .viewer_lanes
+                    .waveform_presentations
                     .read()
                     .iter()
                     .find(|group| &group.id == group_id)
@@ -446,7 +446,7 @@ impl LogicAnalyzerViewer {
                 order.push(RowKey::Channel(channel.index));
             }
         }
-        for group in self.viewer_lanes.read().iter() {
+        for group in self.waveform_presentations.read().iter() {
             if self.viewer_group_is_active(&group.id) && seen_derived.insert(group.id.clone()) {
                 order.push(RowKey::Derived(group.id.clone()));
             }
@@ -461,7 +461,7 @@ impl LogicAnalyzerViewer {
         let Some(store) = &self.derived else {
             return false;
         };
-        let groups = self.viewer_lanes.read();
+        let groups = self.waveform_presentations.read();
         let Some(group) = groups.iter().find(|group| &group.id == group_id) else {
             return false;
         };
@@ -473,12 +473,15 @@ impl LogicAnalyzerViewer {
     }
 
     fn ensure_default_viewer_groups(&self) {
+        if !self.waveform_presentations.implicit_groups() {
+            return;
+        }
         let Some(store) = &self.derived else {
             return;
         };
         let lanes = store.read();
         let claimed: HashSet<DerivedLaneId> = self
-            .viewer_lanes
+            .waveform_presentations
             .read()
             .iter()
             .flat_map(|group| group.tracks.iter().map(|track| track.lane.clone()))
@@ -499,20 +502,21 @@ impl LogicAnalyzerViewer {
                     ViewerLaneBadge::new("T", Color32::from_rgb(230, 190, 80))
                 }
                 DerivedLaneData::Values(values) => match values.kind {
-                    signal_processing::ViewerValueKind::Number => {
+                    signal_processing::CollectedValueKind::Number => {
                         ViewerLaneBadge::new("N", Color32::from_rgb(95, 145, 210))
                     }
-                    signal_processing::ViewerValueKind::Text => {
+                    signal_processing::CollectedValueKind::Text => {
                         ViewerLaneBadge::new("TXT", Color32::from_rgb(215, 150, 170))
                     }
                 },
             };
-            self.viewer_lanes.register(ViewerLaneGroup::singleton(
-                ViewerLaneGroupId::new(format!("default:{}", lane.name)),
-                lane.name.clone(),
-                badge,
-                lane_id,
-            ));
+            self.waveform_presentations
+                .register(ViewerLaneGroup::singleton(
+                    ViewerLaneGroupId::new(format!("default:{}", lane.name)),
+                    lane.name.clone(),
+                    badge,
+                    lane_id,
+                ));
         }
     }
 
@@ -554,7 +558,7 @@ impl LogicAnalyzerViewer {
             RowKey::Derived(group_id) => {
                 let (start_ns, end_ns) = self.visible_window_ns();
                 let lanes = self.derived.as_ref()?.read();
-                let groups = self.viewer_lanes.read();
+                let groups = self.waveform_presentations.read();
                 let group = groups.iter().find(|group| &group.id == group_id)?;
                 let lane = group.tracks.iter().find_map(|track| {
                     lanes
@@ -594,7 +598,7 @@ impl LogicAnalyzerViewer {
         let Some(store) = &self.derived else {
             return false;
         };
-        let groups = self.viewer_lanes.read();
+        let groups = self.waveform_presentations.read();
         let Some(group) = groups.iter().find(|group| &group.id == group_id) else {
             return false;
         };

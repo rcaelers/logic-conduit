@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use logic_analyzer_processing::nodes::sources::synthetic_capture_source::SyntheticCaptureSource;
 use node_graph::Socket;
-use signal_processing::{ProcessNode, Sample, SampleBlock, ViewerRetention};
+use signal_processing::{DerivedDataRetention, ProcessNode, Sample, SampleBlock};
 
 use super::definition::U3Pro16State;
 use crate::{
@@ -19,8 +19,8 @@ impl RuntimeBuilder for DsLogicU3Pro16Builder {
         true
     }
 
-    fn viewer_retention(&self, _state: &Value) -> ViewerRetention {
-        ViewerRetention::Unlimited
+    fn derived_data_retention(&self, _state: &Value) -> DerivedDataRetention {
+        DerivedDataRetention::Unlimited
     }
 
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
