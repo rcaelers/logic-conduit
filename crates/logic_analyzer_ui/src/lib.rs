@@ -3,7 +3,6 @@ mod app;
 mod app_platform;
 mod application_config;
 mod decoder_panel;
-mod demo_signals;
 mod input_binding_config;
 mod live_capture;
 mod product;

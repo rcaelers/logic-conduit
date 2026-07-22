@@ -14,7 +14,6 @@ use trigger_editor::{TriggerEditor, TriggerEditorChannel};
 use crate::about::AboutWindow;
 use crate::app_platform::load_symbol_fonts;
 use crate::decoder_panel::DecoderPanels;
-use crate::demo_signals;
 use crate::live_capture::{
     CaptureAnalysisAttachment, CaptureAvailability, CaptureCoordinator, CaptureCoordinatorContract,
     CaptureReplayAttachment, ConfigurationEpochResolution, capture_availability,
@@ -365,7 +364,6 @@ impl App {
                 .color_profile
                 .into(),
         );
-        logic_analyzer.set_channels(demo_signals::channels());
         let capture = CaptureCoordinator::configured(
             application_config.live_capture.max_recent_sessions,
             application_config
