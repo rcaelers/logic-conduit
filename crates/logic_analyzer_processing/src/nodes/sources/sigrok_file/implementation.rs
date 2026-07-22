@@ -10,8 +10,8 @@ use signal_processing::{
     PortDirection, PortSchema, ProcessNode, Result, Sample, Sender, WorkError, WorkResult,
 };
 
-use crate::support::sigrok_file::{SigrokCapture, SigrokFileCaptureDataSource};
 use crate::support::capture_index::capture_cache_identity;
+use crate::support::sigrok_file::{SigrokCapture, SigrokFileCaptureDataSource};
 
 /// A PulseView/sigrok v2 session source.
 pub struct SigrokFileSource {

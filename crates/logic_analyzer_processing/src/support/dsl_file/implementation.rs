@@ -17,6 +17,8 @@ use signal_processing::capture::{
 use signal_processing::waveform_index::IndexSampler;
 use signal_processing::{Error, Result};
 
+use crate::support::{get_packed_bit, parse_sample_rate};
+
 fn zip_error(error: zip::result::ZipError) -> Error {
     Error::ParseError(format!("capture archive error: {error}"))
 }
@@ -95,7 +97,7 @@ impl DslCaptureReader {
         let sample_in_block = (position % self.header.samples_per_block) as usize;
         let key = (channel, block_num);
         let data = self.read_block_cached(key)?;
-        Ok(get_bit(&data, sample_in_block))
+        Ok(get_packed_bit(&data, sample_in_block))
     }
 
     fn read_block_cached(&mut self, key: (usize, u64)) -> Result<BlockData> {
@@ -317,34 +319,4 @@ pub(crate) fn parse_header(archive: &mut ZipArchive<File>) -> Result<CaptureMeta
         probe_names,
         trigger_sample,
     })
-}
-/// Extract a single bit from a byte array at the given bit index
-#[inline]
-pub(crate) fn get_bit(data: &[u8], bit_index: usize) -> bool {
-    let byte_index = bit_index / 8;
-    let bit_offset = bit_index % 8;
-
-    if byte_index < data.len() {
-        (data[byte_index] >> bit_offset) & 1 == 1
-    } else {
-        false
-    }
-}
-
-/// Parse a sample rate string (e.g., "50 MHz") into Hz
-pub(crate) fn parse_sample_rate(samplerate: &str) -> Option<f64> {
-    let parts: Vec<&str> = samplerate.split_whitespace().collect();
-    if parts.len() >= 2
-        && let Ok(value) = parts[0].parse::<f64>()
-    {
-        let multiplier = match parts[1] {
-            "GHz" => 1_000_000_000.0,
-            "MHz" => 1_000_000.0,
-            "KHz" | "kHz" => 1_000.0,
-            "Hz" => 1.0,
-            _ => return None,
-        };
-        return Some(value * multiplier);
-    }
-    None
 }

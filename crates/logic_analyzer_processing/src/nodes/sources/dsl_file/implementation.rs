@@ -27,11 +27,9 @@ use signal_processing::{
 };
 
 use super::super::capture_archive::zip_error;
-use crate::support::dsl_file::{
-    DslChunkedCaptureReader, DslFileCaptureDataSource, get_bit,
-    parse_header,
-};
 use crate::support::capture_index::capture_cache_identity;
+use crate::support::dsl_file::{DslChunkedCaptureReader, DslFileCaptureDataSource, parse_header};
+use crate::support::get_packed_bit;
 const DEFAULT_BLOCK_CACHE_WINDOWS: usize = 2;
 
 type BlockKey = (usize, u64);
@@ -373,7 +371,7 @@ impl DslFileSource {
         let sample_in_block = (position % self.header.samples_per_block) as usize;
 
         let data = Self::load_block(&self.archive, &self.blocks, channel, block_num)?;
-        let result = get_bit(&data, sample_in_block);
+        let result = get_packed_bit(&data, sample_in_block);
         Ok(result)
     }
 
@@ -490,7 +488,7 @@ impl DslFileSource {
             let samples_in_block = block_capacity.min(total_samples - block_start_position);
 
             for sample_in_block in 0..samples_in_block as usize {
-                let value = get_bit(&block_data, sample_in_block);
+                let value = get_packed_bit(&block_data, sample_in_block);
                 let timestamp = position * timestamp_step;
 
                 if position == 0 {
@@ -1039,7 +1037,8 @@ mod tests {
     use signal_processing::ProcessNode;
 
     use super::*;
-    use crate::support::dsl_file::{DslCaptureReader, parse_sample_rate};
+    use crate::support::dsl_file::DslCaptureReader;
+    use crate::support::{get_packed_bit, parse_sample_rate};
 
     pub(crate) fn open_dsl_chunked_capture<P: AsRef<Path>>(
         path: P,
@@ -1287,19 +1286,19 @@ mod tests {
     #[test]
     fn test_get_bit() {
         let data = vec![0b10101010, 0b11001100];
-        assert!(!get_bit(&data, 0)); // bit 0 of byte 0
-        assert!(get_bit(&data, 1)); // bit 1 of byte 0
-        assert!(!get_bit(&data, 2)); // bit 2 of byte 0
-        assert!(get_bit(&data, 3)); // bit 3 of byte 0
-        assert!(get_bit(&data, 7)); // bit 7 of byte 0
-        assert!(!get_bit(&data, 8)); // bit 0 of byte 1
-        assert!(!get_bit(&data, 9)); // bit 1 of byte 1
-        assert!(get_bit(&data, 10)); // bit 2 of byte 1
-        assert!(get_bit(&data, 11)); // bit 3 of byte 1
+        assert!(!get_packed_bit(&data, 0)); // bit 0 of byte 0
+        assert!(get_packed_bit(&data, 1)); // bit 1 of byte 0
+        assert!(!get_packed_bit(&data, 2)); // bit 2 of byte 0
+        assert!(get_packed_bit(&data, 3)); // bit 3 of byte 0
+        assert!(get_packed_bit(&data, 7)); // bit 7 of byte 0
+        assert!(!get_packed_bit(&data, 8)); // bit 0 of byte 1
+        assert!(!get_packed_bit(&data, 9)); // bit 1 of byte 1
+        assert!(get_packed_bit(&data, 10)); // bit 2 of byte 1
+        assert!(get_packed_bit(&data, 11)); // bit 3 of byte 1
 
         // Out of bounds
-        assert!(!get_bit(&data, 16));
-        assert!(!get_bit(&data, 100));
+        assert!(!get_packed_bit(&data, 16));
+        assert!(!get_packed_bit(&data, 100));
     }
 
     #[test]

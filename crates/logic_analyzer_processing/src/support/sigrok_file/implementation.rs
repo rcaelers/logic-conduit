@@ -12,6 +12,8 @@ use signal_processing::capture::{
 };
 use signal_processing::{Error, Result};
 
+use crate::support::parse_sample_rate;
+
 /// Decoded sigrok capture data shared by a file source and random-access reader.
 pub(crate) struct SigrokCapture {
     header: CaptureMetadata,
@@ -286,16 +288,4 @@ fn required<'a>(values: &'a BTreeMap<String, String>, key: &str) -> Result<&'a s
         .get(key)
         .map(String::as_str)
         .ok_or_else(|| Error::ParseError(format!("missing required field: device X.{key}")))
-}
-fn parse_sample_rate(rate: &str) -> Option<f64> {
-    let mut parts = rate.split_whitespace();
-    let value: f64 = parts.next()?.parse().ok()?;
-    let multiplier = match parts.next()? {
-        "GHz" => 1e9,
-        "MHz" => 1e6,
-        "KHz" | "kHz" => 1e3,
-        "Hz" => 1.0,
-        _ => return None,
-    };
-    Some(value * multiplier)
 }
