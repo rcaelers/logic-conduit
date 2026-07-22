@@ -75,7 +75,7 @@ const RATES: &[u64] = &[
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LinkSpeed {
+pub(crate) enum LinkSpeed {
     High,
     Super,
 }
@@ -546,7 +546,7 @@ pub(crate) struct DsLogicU3Pro16<T: UsbTransport = RusbTransport> {
 
 /// Immutable, validated device-buffered acquisition plan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DsLogicCapturePlan {
+pub(crate) struct DsLogicCapturePlan {
     channels: u8,
     actual_samples: u64,
     actual_bytes: usize,
@@ -555,7 +555,7 @@ pub struct DsLogicCapturePlan {
 
 impl DsLogicCapturePlan {
     /// Validates a finite acquisition request against the U3Pro16 device memory.
-    pub fn new_buffered(config: &LogicCaptureConfig) -> LogicAnalyzerResult<Self> {
+    pub(crate) fn new_buffered(config: &LogicCaptureConfig) -> LogicAnalyzerResult<Self> {
         if config.mode != CaptureMode::Finite {
             return Err(LogicAnalyzerError::InvalidSettings(
                 "buffered acquisition requires finite capture mode".into(),
@@ -565,7 +565,7 @@ impl DsLogicCapturePlan {
     }
 
     /// Validates a host-streamed acquisition request for one USB link speed.
-    pub fn new_streaming(
+    pub(crate) fn new_streaming(
         config: &LogicCaptureConfig,
         link_speed: LinkSpeed,
     ) -> LogicAnalyzerResult<Self> {
@@ -577,20 +577,12 @@ impl DsLogicCapturePlan {
         build_plan(link_speed, &settings_from_config(config)?)
     }
 
-    pub const fn channel_count(self) -> u8 {
+    pub(crate) const fn channel_count(self) -> u8 {
         self.channels
     }
 
-    pub const fn actual_samples(self) -> u64 {
+    pub(crate) const fn actual_samples(self) -> u64 {
         self.actual_samples
-    }
-
-    pub const fn actual_bytes(self) -> usize {
-        self.actual_bytes
-    }
-
-    pub const fn stream_buffer_bytes(self) -> usize {
-        self.stream_buffer
     }
 }
 
@@ -2853,7 +2845,7 @@ mod tests {
 
         assert_eq!(get16(&packet, 10), 1);
         assert_eq!(get16(&packet, 12), 3 << 8);
-        assert_eq!(plan.stream_buffer_bytes(), 1_000_448);
+        assert_eq!(plan.stream_buffer, 1_000_448);
     }
 
     #[test]
