@@ -21,7 +21,7 @@ use egui::{Color32, Pos2};
 use serde_json::Value;
 
 use logic_analyzer_viewer::{
-    SamplingEdge, SamplingOverlay, SamplingQualifier, ViewerOutputPresentation,
+    SamplingEdge, SamplingOverlay, SamplingQualifier, ViewerLaneBadge, ViewerOutputPresentation,
     WaveformPresentationRegistry,
 };
 use node_graph::{
@@ -155,11 +155,33 @@ pub struct ResolvedInput {
     pub source_node_title: String,
     pub word_display_format: Option<String>,
     pub viewer_presentation: Option<ViewerOutputPresentation>,
+    /// Registry-owned fallback presentation for a viewable payload. Concrete
+    /// producers may still provide a richer multi-track presentation above.
+    pub default_viewer_presentation: Option<DefaultViewerPayloadPresentation>,
     pub decoder_table_column: Option<DecoderTableColumnPresentation>,
     /// Displayed capture channel from which this edge originates. Concrete
     /// source builders provide it explicitly; generic lowering never parses
     /// runtime port names or display labels.
     pub capture_channel: Option<usize>,
+}
+
+/// Default singleton presentation supplied by a viewable payload owner.
+///
+/// This is used only when the producing node has not supplied a richer
+/// output-specific presentation contract.
+#[derive(Debug, Clone)]
+pub struct DefaultViewerPayloadPresentation {
+    badge: ViewerLaneBadge,
+}
+
+impl DefaultViewerPayloadPresentation {
+    pub fn new(badge: ViewerLaneBadge) -> Self {
+        Self { badge }
+    }
+
+    pub fn badge(&self) -> &ViewerLaneBadge {
+        &self.badge
+    }
 }
 
 /// Per input socket, keyed `(def_index, member_index)`. Keys are
@@ -618,7 +640,13 @@ pub struct DiscoveredCapturePresentation {
 pub struct BuilderRegistry {
     builders: HashMap<String, Box<dyn RuntimeBuilder>>,
     collected_payloads: CollectedPayloadRegistry,
-    viewable_payloads: Vec<PortKind>,
+    viewable_payloads: Vec<ViewablePayload>,
+}
+
+#[derive(Clone)]
+struct ViewablePayload {
+    kind: PortKind,
+    presentation: DefaultViewerPayloadPresentation,
 }
 
 impl BuilderRegistry {
@@ -633,19 +661,44 @@ impl BuilderRegistry {
         )
         .expect("built-in collected payload adapters must be valid");
         registry
-            .register_viewable_collected_payload::<signal_processing::Sample>()
+            .register_viewable_collected_payload::<signal_processing::Sample>(
+                DefaultViewerPayloadPresentation::new(ViewerLaneBadge::new(
+                    "S",
+                    Color32::from_rgb(95, 175, 95),
+                )),
+            )
             .expect("built-in digital payload must be viewable");
         registry
-            .register_viewable_collected_payload::<signal_processing::Word>()
+            .register_viewable_collected_payload::<signal_processing::Word>(
+                DefaultViewerPayloadPresentation::new(ViewerLaneBadge::new(
+                    "W",
+                    Color32::from_rgb(215, 140, 60),
+                )),
+            )
             .expect("built-in word payload must be viewable");
         registry
-            .register_viewable_collected_payload::<signal_processing::Trigger>()
+            .register_viewable_collected_payload::<signal_processing::Trigger>(
+                DefaultViewerPayloadPresentation::new(ViewerLaneBadge::new(
+                    "T",
+                    Color32::from_rgb(230, 190, 80),
+                )),
+            )
             .expect("built-in trigger payload must be viewable");
         registry
-            .register_viewable_collected_payload::<signal_processing::NumberSample>()
+            .register_viewable_collected_payload::<signal_processing::NumberSample>(
+                DefaultViewerPayloadPresentation::new(ViewerLaneBadge::new(
+                    "N",
+                    Color32::from_rgb(95, 145, 210),
+                )),
+            )
             .expect("built-in number payload must be viewable");
         registry
-            .register_viewable_collected_payload::<signal_processing::TextSample>()
+            .register_viewable_collected_payload::<signal_processing::TextSample>(
+                DefaultViewerPayloadPresentation::new(ViewerLaneBadge::new(
+                    "TXT",
+                    Color32::from_rgb(215, 150, 170),
+                )),
+            )
             .expect("built-in text payload must be viewable");
         registry
     }
@@ -693,6 +746,7 @@ impl BuilderRegistry {
     /// subscriptions. A payload remains non-viewable until its owner opts in.
     pub fn register_viewable_collected_payload<T: PortValue>(
         &mut self,
+        presentation: DefaultViewerPayloadPresentation,
     ) -> Result<&mut Self, CollectedPayloadRegistrationError> {
         let type_id = std::any::TypeId::of::<T>();
         let descriptor = self
@@ -711,8 +765,15 @@ impl BuilderRegistry {
             });
         }
         let kind = PortKind::of::<T>();
-        if !self.viewable_payloads.contains(&kind) {
-            self.viewable_payloads.push(kind);
+        if let Some(existing) = self
+            .viewable_payloads
+            .iter_mut()
+            .find(|existing| existing.kind == kind)
+        {
+            existing.presentation = presentation;
+        } else {
+            self.viewable_payloads
+                .push(ViewablePayload { kind, presentation });
         }
         Ok(self)
     }
@@ -723,9 +784,10 @@ impl BuilderRegistry {
         &mut self,
         stable_id: impl Into<String>,
         adapter: std::sync::Arc<dyn CollectedPayloadAdapter>,
+        presentation: DefaultViewerPayloadPresentation,
     ) -> Result<&mut Self, CollectedPayloadRegistrationError> {
         self.register_collected_payload_adapter::<T>(stable_id, adapter)?;
-        self.register_viewable_collected_payload::<T>()
+        self.register_viewable_collected_payload::<T>(presentation)
     }
 
     /// Registered retained-payload identities, keyed by runtime `TypeId` and
@@ -734,8 +796,21 @@ impl BuilderRegistry {
         &self.collected_payloads
     }
 
-    fn viewable_payloads(&self) -> &[PortKind] {
-        &self.viewable_payloads
+    fn viewable_payload_kinds(&self) -> Vec<PortKind> {
+        self.viewable_payloads
+            .iter()
+            .map(|payload| payload.kind)
+            .collect()
+    }
+
+    fn viewable_payload_presentation(
+        &self,
+        kind: PortKind,
+    ) -> Option<DefaultViewerPayloadPresentation> {
+        self.viewable_payloads
+            .iter()
+            .find(|payload| payload.kind == kind)
+            .map(|payload| payload.presentation.clone())
     }
 
     pub(crate) fn get(&self, def_name: &str) -> Option<&dyn RuntimeBuilder> {
@@ -1433,7 +1508,7 @@ pub fn lower(
         let offered = from_builder.offered_kinds(from_socket, &from_node.state);
         let data_subscription = to_builder.is_data_subscription();
         let accepted = if data_subscription {
-            registry.viewable_payloads().to_vec()
+            registry.viewable_payload_kinds()
         } else {
             to_builder.accepted_kinds(to_socket, &to_node.state)
         };
@@ -1480,6 +1555,9 @@ pub fn lower(
                     .word_display_format(from_socket, &from_node.state),
                 viewer_presentation: from_builder
                     .viewer_output_presentation(from_socket, &from_node.state),
+                default_viewer_presentation: data_subscription
+                    .then(|| registry.viewable_payload_presentation(kind))
+                    .flatten(),
                 decoder_table_column: from_builder
                     .decoder_table_column(from_socket, &from_node.state),
                 capture_channel: from_builder.viewer_channel_origin(from_socket, &from_node.state),
@@ -2430,24 +2508,34 @@ mod tests {
     use crate::nodes;
 
     #[test]
-    fn viewable_payloads_are_registered_with_the_builder_registry() {
+    fn viewable_payloads_register_subscription_and_default_presentation() {
         let mut registry = BuilderRegistry::standard();
 
         assert!(
             registry
-                .viewable_payloads()
+                .viewable_payload_kinds()
                 .contains(&PortKind::of::<Sample>())
         );
         assert!(
             registry
-                .viewable_payloads()
+                .viewable_payload_kinds()
                 .contains(&PortKind::of::<Word>())
+        );
+        assert_eq!(
+            registry
+                .viewable_payload_presentation(PortKind::of::<Word>())
+                .unwrap()
+                .badge()
+                .text,
+            "W"
         );
         registry
             .register_collected_payload::<SampleBlock>("org.example.block/v1")
             .unwrap();
         assert!(matches!(
-            registry.register_viewable_collected_payload::<SampleBlock>(),
+            registry.register_viewable_collected_payload::<SampleBlock>(
+                DefaultViewerPayloadPresentation::new(ViewerLaneBadge::new("B", Color32::WHITE))
+            ),
             Err(CollectedPayloadRegistrationError::PayloadHasNoAdapter { .. })
         ));
     }
@@ -4430,6 +4518,7 @@ mod tests {
                 source_node_title: "Formatter".into(),
                 word_display_format: None,
                 viewer_presentation: None,
+                default_viewer_presentation: None,
                 decoder_table_column: None,
                 capture_channel: None,
             },

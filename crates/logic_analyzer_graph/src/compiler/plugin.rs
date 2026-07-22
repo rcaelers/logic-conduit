@@ -110,9 +110,10 @@ impl<'a> PluginContext<'a> {
         &mut self,
         stable_id: impl Into<String>,
         adapter: std::sync::Arc<dyn signal_processing::CollectedPayloadAdapter>,
+        presentation: crate::DefaultViewerPayloadPresentation,
     ) -> Result<&mut Self, signal_processing::CollectedPayloadRegistrationError> {
         self.builders
-            .register_viewable_collected_payload_adapter::<T>(stable_id, adapter)?;
+            .register_viewable_collected_payload_adapter::<T>(stable_id, adapter, presentation)?;
         Ok(self)
     }
 }

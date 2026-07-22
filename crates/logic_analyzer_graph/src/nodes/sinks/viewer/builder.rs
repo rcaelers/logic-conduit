@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use egui::Color32;
 use serde_json::Value;
 
 use logic_analyzer_viewer::{
@@ -11,7 +10,6 @@ use logic_analyzer_viewer::{
     ViewerLaneTrack,
 };
 use node_graph::Socket;
-use signal_processing::{NumberSample, Sample, TextSample, Word};
 
 use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
@@ -130,17 +128,17 @@ impl RuntimeBuilder for ViewerSubscriptionBuilder {
                     });
                 }
             } else {
-                let badge = if input.kind == PortKind::of::<Sample>() {
-                    ViewerLaneBadge::new("S", Color32::from_rgb(95, 175, 95))
-                } else if input.kind == PortKind::of::<Word>() {
-                    ViewerLaneBadge::new("W", Color32::from_rgb(215, 140, 60))
-                } else if input.kind == PortKind::of::<NumberSample>() {
-                    ViewerLaneBadge::new("N", Color32::from_rgb(95, 145, 210))
-                } else if input.kind == PortKind::of::<TextSample>() {
-                    ViewerLaneBadge::new("TXT", Color32::from_rgb(215, 150, 170))
-                } else {
-                    ViewerLaneBadge::new("T", Color32::from_rgb(230, 190, 80))
-                };
+                let badge = input
+                    .default_viewer_presentation
+                    .as_ref()
+                    .ok_or_else(|| {
+                        format!(
+                            "viewable payload '{}' has no default presentation",
+                            input.kind.name()
+                        )
+                    })?
+                    .badge()
+                    .clone();
                 ctx.waveform_presentations()
                     .register(ViewerLaneGroup::singleton(
                         ViewerLaneGroupId::new(format!("{name}:lane:{member}")),
