@@ -34,11 +34,6 @@ pub trait CaptureExportObserver {
     fn on_progress(&mut self, _progress: CaptureExportProgress) {}
 }
 
-#[derive(Default)]
-pub struct IgnoreCaptureExportProgress;
-
-impl CaptureExportObserver for IgnoreCaptureExportProgress {}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaptureExportWarning {
     PortableTriggerMetadataExtension,
@@ -402,6 +397,11 @@ mod tests {
         entry.read_to_string(&mut contents).unwrap();
         contents
     }
+
+    #[derive(Default)]
+    pub struct IgnoreCaptureExportProgress;
+
+    impl CaptureExportObserver for IgnoreCaptureExportProgress {}
 
     #[test]
     fn portable_export_reopens_with_identical_timeline_and_samples() {
