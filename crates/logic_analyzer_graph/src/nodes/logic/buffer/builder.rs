@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::nodes::logic::BufferNode;
+use logic_analyzer_processing::nodes::logic::buffer::BufferNode;
 use node_graph::Socket;
 use signal_processing::{
     NumberSample, ProcessNode, Sample, SampleBlock, TextSample, Trigger, Word,

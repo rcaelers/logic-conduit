@@ -2059,8 +2059,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    use logic_analyzer_processing::nodes::sinks::BinaryFileWriter;
-    use logic_analyzer_processing::nodes::sources::{BufferedFakeConfig, BufferedFakeProvider};
+    use logic_analyzer_processing::nodes::sinks::binary_file_writer::BinaryFileWriter;
+    use logic_analyzer_processing::nodes::sources::synthetic_capture_source::{
+        BufferedFakeConfig, BufferedFakeProvider,
+    };
     use node_graph::{NodeDef, NodeGraphWidget};
     use signal_processing::{
         AcquisitionContext, AcquisitionResult, CaptureAnalysisChannel, CaptureAnalysisSource,
@@ -4395,13 +4397,15 @@ mod tests {
     /// Reference pipeline: the byte-exact Phase-1 wiring of
     /// `examples/spi_graph_decode.rs`.
     fn run_reference(capture: &Path, out_dir: &Path) {
-        use logic_analyzer_processing::nodes::decoders::{
-            ParallelDecoder, SpiDecoder, SpiMode, StrobeMode,
+        use logic_analyzer_processing::nodes::decoders::parallel_decoder::{
+            ParallelDecoder, StrobeMode,
         };
-        use logic_analyzer_processing::nodes::logic::{
-            SrLatch, TextFormatter, TriggerCounter, WordMatcher,
-        };
-        use logic_analyzer_processing::nodes::sources::DslFileSource;
+        use logic_analyzer_processing::nodes::decoders::spi_decoder::{SpiDecoder, SpiMode};
+        use logic_analyzer_processing::nodes::logic::sr_latch::SrLatch;
+        use logic_analyzer_processing::nodes::logic::text_formatter::TextFormatter;
+        use logic_analyzer_processing::nodes::logic::trigger_counter::TriggerCounter;
+        use logic_analyzer_processing::nodes::logic::word_matcher::WordMatcher;
+        use logic_analyzer_processing::nodes::sources::dsl_file::DslFileSource;
         use logic_analyzer_processing::types::CsPolarity;
 
         let mut pipeline = Pipeline::new().with_default_buffer_size(10_000_000);
@@ -4492,13 +4496,16 @@ mod tests {
     }
 
     fn run_current_reference(capture: &Path, out_dir: &Path) {
-        use logic_analyzer_processing::nodes::decoders::{
-            ParallelDecoder, SpiDecoder, SpiMode, StrobeMode,
+        use logic_analyzer_processing::nodes::decoders::parallel_decoder::{
+            ParallelDecoder, StrobeMode,
         };
-        use logic_analyzer_processing::nodes::logic::{
-            GateOp, LogicGate, SrLatch, TextFormatter, TriggerCounter, WordMatcher,
-        };
-        use logic_analyzer_processing::nodes::sources::DslFileSource;
+        use logic_analyzer_processing::nodes::decoders::spi_decoder::{SpiDecoder, SpiMode};
+        use logic_analyzer_processing::nodes::logic::logic_gate::{GateOp, LogicGate};
+        use logic_analyzer_processing::nodes::logic::sr_latch::SrLatch;
+        use logic_analyzer_processing::nodes::logic::text_formatter::TextFormatter;
+        use logic_analyzer_processing::nodes::logic::trigger_counter::TriggerCounter;
+        use logic_analyzer_processing::nodes::logic::word_matcher::WordMatcher;
+        use logic_analyzer_processing::nodes::sources::dsl_file::DslFileSource;
         use logic_analyzer_processing::types::CsPolarity;
 
         let mut pipeline = Pipeline::new().with_default_buffer_size(10_000_000);

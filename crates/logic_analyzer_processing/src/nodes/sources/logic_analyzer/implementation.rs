@@ -17,7 +17,7 @@ use signal_processing::{
     Sender, WorkError, WorkResult,
 };
 
-use super::logic_trigger::LogicTrigger;
+use super::trigger::LogicTrigger;
 
 /// Static capabilities exposed by a logic-analyzer driver.
 #[derive(Debug, Clone, PartialEq, Eq)]

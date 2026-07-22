@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::nodes::logic::{GateOp, LogicGate};
+use logic_analyzer_processing::nodes::logic::logic_gate::{GateOp, LogicGate};
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample};
 

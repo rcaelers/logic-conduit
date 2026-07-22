@@ -22,13 +22,13 @@ use signal_processing::capture::{
     BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureMetadata,
     CaptureSampledWindow, CaptureSource, CaptureTransition,
 };
-use signal_processing::waveform_index::{CaptureIndexProgress, IndexSampler};
+use signal_processing::waveform_index::IndexSampler;
 use signal_processing::{
     EdgeQuery, Error, InputPort, OutputPort, ProcessNode, ProtocolKind, Result, Sample,
     SampleBlock, SampleKind, Sender, TextSample, WorkResult,
 };
 
-use super::capture_archive::zip_error;
+use super::super::capture_archive::zip_error;
 
 const DEFAULT_BLOCK_CACHE_WINDOWS: usize = 2;
 
@@ -290,23 +290,6 @@ impl CaptureDataSource for DslFileCaptureDataSource {
 }
 
 pub type DslChunkedCaptureReader = IndexSampler<DslCaptureReader>;
-
-pub fn open_dsl_chunked_capture<P: AsRef<Path>>(path: P) -> Result<DslChunkedCaptureReader> {
-    let source = DslFileCaptureDataSource::open(path)?;
-    IndexSampler::open_data_source_with_progress(source, |_| {})
-}
-
-pub fn open_dsl_chunked_capture_with_progress<P, C>(
-    path: P,
-    progress: C,
-) -> Result<DslChunkedCaptureReader>
-where
-    P: AsRef<Path>,
-    C: FnMut(CaptureIndexProgress),
-{
-    let source = DslFileCaptureDataSource::open(path)?;
-    IndexSampler::open_data_source_with_progress(source, progress)
-}
 
 fn dsl_sidecar_path(path: &Path) -> PathBuf {
     let mut name = path
@@ -1348,6 +1331,11 @@ mod tests {
     use signal_processing::ProcessNode;
 
     use super::*;
+
+    pub fn open_dsl_chunked_capture<P: AsRef<Path>>(path: P) -> Result<DslChunkedCaptureReader> {
+        let source = DslFileCaptureDataSource::open(path)?;
+        IndexSampler::open_data_source_with_progress(source, |_| {})
+    }
 
     #[test]
     fn bounded_block_cache_evicts_least_recently_used_entry() {

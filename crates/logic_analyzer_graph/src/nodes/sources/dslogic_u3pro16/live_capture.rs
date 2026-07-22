@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use logic_analyzer_processing::nodes::sources::{
-    DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider, LinkSpeed, LogicCaptureConfig,
+use logic_analyzer_processing::nodes::sources::dslogic_u3pro16::{
+    DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider, LinkSpeed,
     u3pro16_buffered_plan, u3pro16_streaming_plan,
 };
+use logic_analyzer_processing::nodes::sources::logic_analyzer::LogicCaptureConfig;
 use signal_processing::{
     AcquisitionContext, AcquisitionError, AcquisitionResult, CaptureAnalysisChannel,
     CaptureAnalysisSource, CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery,

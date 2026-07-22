@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::nodes::decoders::{SpiDecoder, SpiMode};
+use logic_analyzer_processing::nodes::decoders::spi_decoder::{SpiDecoder, SpiMode};
 use logic_analyzer_processing::types::{BitOrder, CsPolarity};
 use logic_analyzer_viewer::{SamplingEdge, ViewerOutputPresentation};
 use node_graph::Socket;

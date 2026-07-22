@@ -1,6 +1,6 @@
 //! Shared browser presentation for concrete synthetic source stand-ins.
 
-use logic_analyzer_processing::nodes::sources::SyntheticCaptureSource;
+use logic_analyzer_processing::nodes::sources::synthetic_capture_source::SyntheticCaptureSource;
 
 use crate::{CapturePresentation, CapturePresentationSignal};
 

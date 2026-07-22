@@ -15,9 +15,9 @@ std::cfg_select! {
 
             use clap::{Parser, ValueEnum};
 
-            use logic_analyzer_processing::nodes::decoders::{SpiDecoder, SpiMode};
-            use logic_analyzer_processing::nodes::sinks::{CsvValueFormat, CsvWordWriter};
-            use logic_analyzer_processing::nodes::sources::DslFileSource;
+            use logic_analyzer_processing::nodes::sinks::csv_word_writer::{CsvValueFormat, CsvWordWriter};
+            use logic_analyzer_processing::nodes::decoders::spi_decoder::{SpiDecoder, SpiMode};
+            use logic_analyzer_processing::nodes::sources::dsl_file::DslFileSource;
             use signal_processing::{
                 DerivedLanes, LiveStoreConfig, Pipeline, ProcessNode, ViewerLaneKind,
                 ViewerRetention, ViewerSink, Watchdog, Word, WorkError,

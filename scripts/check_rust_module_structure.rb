@@ -13,6 +13,16 @@ PUBLIC_MODULES = {
   "crates/signal_processing/src/lib.rs" => %w[capture derived_word_store live_capture live_capture_store waveform_index],
   "crates/logic_analyzer_processing/src/lib.rs" => %w[nodes types],
   "crates/logic_analyzer_processing/src/nodes/mod.rs" => %w[decoders logic sinks sources],
+  "crates/logic_analyzer_processing/src/nodes/decoders/mod.rs" => %w[parallel_decoder spi_decoder uart_decoder],
+  "crates/logic_analyzer_processing/src/nodes/logic/mod.rs" => %w[
+    buffer logic_gate sr_latch text_formatter trigger_counter word_matcher
+  ],
+  "crates/logic_analyzer_processing/src/nodes/sinks/mod.rs" => %w[
+    binary_file_writer csv_word_writer discard_writer text_file_writer tgck_recorder
+  ],
+  "crates/logic_analyzer_processing/src/nodes/sources/mod.rs" => %w[
+    dsl_file dslogic_u3pro16 logic_analyzer sigrok_file synthetic_capture_source synthetic_uart_source
+  ],
   "crates/logic_analyzer_graph/src/lib.rs" => %w[nodes],
   "crates/logic_analyzer_graph/src/nodes/mod.rs" => %w[decoders logic sinks sources]
 }.freeze

@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::nodes::logic::TriggerCounter;
+use logic_analyzer_processing::nodes::logic::trigger_counter::TriggerCounter;
 use node_graph::Socket;
 use signal_processing::{NumberSample, ProcessNode, Trigger};
 

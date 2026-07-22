@@ -8,5 +8,5 @@ mod implementation;
 mod implementation;
 mod types;
 
-pub use implementation::{ParallelDecoder, ParallelDecoderMetrics, ParallelDecoderMetricsSnapshot};
+pub use implementation::ParallelDecoder;
 pub use types::{ParallelInputStrategy, StrobeMode};

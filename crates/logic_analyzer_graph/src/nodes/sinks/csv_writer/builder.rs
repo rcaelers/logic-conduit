@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::nodes::sinks::{CsvValueFormat, CsvWordWriter};
+use logic_analyzer_processing::nodes::sinks::csv_word_writer::{CsvValueFormat, CsvWordWriter};
 use node_graph::Socket;
 use signal_processing::{ProcessNode, TextSample, Word};
 

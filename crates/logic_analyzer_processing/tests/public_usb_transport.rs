@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use logic_analyzer_processing::nodes::sources::{
+use logic_analyzer_processing::nodes::sources::dslogic_u3pro16::{
     DsLogicU3Pro16, LinkSpeed, UsbError, UsbTransport,
 };
 

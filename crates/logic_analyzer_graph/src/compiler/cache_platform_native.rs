@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use logic_analyzer_processing::nodes::sources::DslFileCaptureDataSource;
+use logic_analyzer_processing::nodes::sources::dsl_file::DslFileCaptureDataSource;
 use node_graph::{GraphState, NodeId};
 use signal_processing::{CaptureDataSource, IndexedAnnotationStore, PersistentStoreConfig, Word};
 

@@ -1,6 +1,6 @@
 //! Native lowering from portable trigger metadata to the hardware contract.
 
-use logic_analyzer_processing::nodes::sources::{
+use logic_analyzer_processing::nodes::sources::logic_analyzer::{
     LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic,
 };
 use signal_processing::{SimpleTriggerCondition, TriggerLogicOperator, TriggerPredicate};
@@ -58,7 +58,9 @@ pub(crate) fn lower_program(state: &U3Pro16State) -> Result<LogicTrigger, String
 
 #[cfg(test)]
 mod tests {
-    use logic_analyzer_processing::nodes::sources::{TriggerCondition, TriggerLogic};
+    use logic_analyzer_processing::nodes::sources::logic_analyzer::{
+        TriggerCondition, TriggerLogic,
+    };
     use signal_processing::{
         SimpleTriggerCondition, TriggerCount, TriggerCountMode, TriggerLogicOperator,
         TriggerPredicate, TriggerProgram, TriggerStage,

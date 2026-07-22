@@ -23,7 +23,7 @@ use signal_processing::{
     WorkError, WorkResult,
 };
 
-use super::capture_archive::zip_error;
+use super::super::capture_archive::zip_error;
 
 /// A PulseView/sigrok v2 session source.  Sigrok stores complete sample words
 /// (unlike DSLogic's per-channel bit blocks), so this reader keeps the

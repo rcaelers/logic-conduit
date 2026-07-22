@@ -479,7 +479,8 @@ mod tests {
     };
 
     use super::*;
-    use crate::nodes::sources::{DslCaptureReader, SigrokCaptureReader};
+    use crate::nodes::sources::dsl_file::DslCaptureReader;
+    use crate::nodes::sources::sigrok_file::SigrokCaptureReader;
 
     const LEVELS: [[bool; 3]; 10] = [
         [false, true, true],

@@ -10,8 +10,9 @@ use signal_processing::{
     PreparedAcquisition, SimpleTriggerCondition, bounded_capture_event_queue,
 };
 
-use super::buffered_fake::{BufferedFakeConfig, BufferedFakeProvider};
-use super::synthetic_capture_source::{DeterministicFakeConfig, DeterministicFakeProvider};
+use super::synthetic_capture_source::{
+    BufferedFakeConfig, BufferedFakeProvider, DeterministicFakeConfig, DeterministicFakeProvider,
+};
 
 const TIMEOUT: Duration = Duration::from_secs(2);
 

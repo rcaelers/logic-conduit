@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::nodes::sinks::{BinaryFileWriter, WriteWidth};
+use logic_analyzer_processing::nodes::sinks::binary_file_writer::{BinaryFileWriter, WriteWidth};
 use node_graph::Socket;
 use signal_processing::{ProcessNode, TextSample, Word};
 

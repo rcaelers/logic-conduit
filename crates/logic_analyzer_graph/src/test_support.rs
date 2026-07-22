@@ -10,7 +10,7 @@ use signal_processing::{
 
 #[derive(Clone, Debug)]
 pub struct TestDeterministicFakeConfig(
-    logic_analyzer_processing::nodes::sources::DeterministicFakeConfig,
+    logic_analyzer_processing::nodes::sources::synthetic_capture_source::DeterministicFakeConfig,
 );
 
 impl TestDeterministicFakeConfig {
@@ -19,7 +19,7 @@ impl TestDeterministicFakeConfig {
         chunk_sample_counts: impl Into<Arc<[u64]>>,
         seed: u64,
     ) -> AcquisitionResult<Self> {
-        logic_analyzer_processing::nodes::sources::DeterministicFakeConfig::new(
+        logic_analyzer_processing::nodes::sources::synthetic_capture_source::DeterministicFakeConfig::new(
             channels,
             chunk_sample_counts,
             seed,
@@ -45,7 +45,7 @@ impl TestDeterministicFakeConfig {
 
 #[derive(Clone, Debug)]
 pub struct TestDeterministicFakeController(
-    logic_analyzer_processing::nodes::sources::DeterministicFakeController,
+    logic_analyzer_processing::nodes::sources::synthetic_capture_source::DeterministicFakeController,
 );
 
 impl TestDeterministicFakeController {
@@ -55,7 +55,7 @@ impl TestDeterministicFakeController {
 }
 
 pub struct TestDeterministicFakeProvider(
-    logic_analyzer_processing::nodes::sources::DeterministicFakeProvider,
+    logic_analyzer_processing::nodes::sources::synthetic_capture_source::DeterministicFakeProvider,
 );
 
 impl TestDeterministicFakeProvider {
@@ -63,7 +63,7 @@ impl TestDeterministicFakeProvider {
         config: TestDeterministicFakeConfig,
     ) -> (Self, TestDeterministicFakeController) {
         let (provider, controller) =
-            logic_analyzer_processing::nodes::sources::DeterministicFakeProvider::manually_paced(
+            logic_analyzer_processing::nodes::sources::synthetic_capture_source::DeterministicFakeProvider::manually_paced(
                 config.0,
             );
         (Self(provider), TestDeterministicFakeController(controller))
@@ -78,7 +78,9 @@ impl TestDeterministicFakeProvider {
 }
 
 #[derive(Clone, Debug)]
-pub struct TestBufferedFakeConfig(logic_analyzer_processing::nodes::sources::BufferedFakeConfig);
+pub struct TestBufferedFakeConfig(
+    logic_analyzer_processing::nodes::sources::synthetic_capture_source::BufferedFakeConfig,
+);
 
 impl TestBufferedFakeConfig {
     pub fn new(
@@ -88,7 +90,7 @@ impl TestBufferedFakeConfig {
         upload_chunk_samples: u64,
         seed: u64,
     ) -> AcquisitionResult<Self> {
-        logic_analyzer_processing::nodes::sources::BufferedFakeConfig::new(
+        logic_analyzer_processing::nodes::sources::synthetic_capture_source::BufferedFakeConfig::new(
             channels,
             sample_rate_hz,
             total_samples,
@@ -116,7 +118,7 @@ impl TestBufferedFakeConfig {
 
 #[derive(Clone, Debug)]
 pub struct TestBufferedFakeController(
-    logic_analyzer_processing::nodes::sources::BufferedFakeController,
+    logic_analyzer_processing::nodes::sources::synthetic_capture_source::BufferedFakeController,
 );
 
 impl TestBufferedFakeController {
@@ -130,13 +132,13 @@ impl TestBufferedFakeController {
 }
 
 pub struct TestBufferedFakeProvider(
-    logic_analyzer_processing::nodes::sources::BufferedFakeProvider,
+    logic_analyzer_processing::nodes::sources::synthetic_capture_source::BufferedFakeProvider,
 );
 
 impl TestBufferedFakeProvider {
     pub fn manually_uploaded(config: TestBufferedFakeConfig) -> (Self, TestBufferedFakeController) {
         let (provider, controller) =
-            logic_analyzer_processing::nodes::sources::BufferedFakeProvider::manually_uploaded(
+            logic_analyzer_processing::nodes::sources::synthetic_capture_source::BufferedFakeProvider::manually_uploaded(
                 config.0,
             );
         (Self(provider), TestBufferedFakeController(controller))

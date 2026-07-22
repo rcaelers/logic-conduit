@@ -17,11 +17,11 @@ std::cfg_select! {
 
     use clap::{Parser, ValueEnum};
 
-    use logic_analyzer_processing::nodes::decoders::{
+    use logic_analyzer_processing::nodes::decoders::parallel_decoder::{
         ParallelDecoder, ParallelInputStrategy, StrobeMode,
     };
-    use logic_analyzer_processing::nodes::sinks::BinaryFileWriter;
-    use logic_analyzer_processing::nodes::sources::DslFileSource;
+    use logic_analyzer_processing::nodes::sinks::binary_file_writer::BinaryFileWriter;
+    use logic_analyzer_processing::nodes::sources::dsl_file::DslFileSource;
     use logic_analyzer_processing::types::CsPolarity;
     use signal_processing::{
         DecodedBlockCacheStats, DerivedLaneData, DerivedLanes, InputPort, LiveStoreConfig,

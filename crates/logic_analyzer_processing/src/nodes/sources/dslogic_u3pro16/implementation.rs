@@ -17,10 +17,7 @@ use signal_processing::TriggerCountMode;
 use super::super::logic_analyzer::{
     CaptureMode, ClockEdge, ClockSource, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
     LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
-    LogicEncodingRequest,
-};
-use super::super::logic_trigger::{
-    LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic,
+    LogicEncodingRequest, LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic,
 };
 
 const VID: u16 = 0x2a0e;
@@ -609,9 +606,6 @@ pub struct DsLogicU3Pro16<T: UsbTransport = RusbTransport> {
     bytes_remaining: Option<usize>,
     bit_position: u64,
 }
-
-/// Production DSLogic source node using the `rusb` transport.
-pub type DsLogicU3Pro16Source = LogicAnalyzerSource<DsLogicU3Pro16<RusbTransport>>;
 
 /// Immutable, validated device-buffered acquisition plan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

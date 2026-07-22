@@ -2,7 +2,9 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::nodes::decoders::{UartDecoder, UartParity, UartStopBits};
+use logic_analyzer_processing::nodes::decoders::uart_decoder::{
+    UartDecoder, UartParity, UartStopBits,
+};
 use logic_analyzer_processing::types::BitOrder;
 use logic_analyzer_viewer::ViewerOutputPresentation;
 use node_graph::Socket;

@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::nodes::decoders::{
+use logic_analyzer_processing::nodes::decoders::parallel_decoder::{
     ParallelDecoder, ParallelInputStrategy, StrobeMode,
 };
 use logic_analyzer_processing::types::{CsPolarity, Endianness};
