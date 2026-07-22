@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use node_graph::Socket;
 use signal_processing::{
-    CollectedDataKind, CollectedLaneRequest, CollectedPayloadRegistry, DerivedDataCollector,
+    CollectedLaneRequest, CollectedPayloadRegistry, CollectedWordLaneOptions, DerivedDataCollector,
     LiveStoreConfig, NumberSample, ProcessNode, Sample, TextSample, Trigger, Word,
 };
 
@@ -31,60 +31,49 @@ impl DataCollectorBuilder {
             let input = resolved
                 .get(0, *member)
                 .ok_or_else(|| format!("collector input {member} is unresolved"))?;
-            if let Some(adapter) = collected_payloads.adapter_by_type_id(input.kind.type_id()) {
-                let descriptor = collected_payloads
-                    .descriptor_by_type_id(input.kind.type_id())
-                    .expect("an adapter always has a registered payload identity")
-                    .clone();
-                let ingestor = adapter
-                    .create_ingestor(CollectedLaneRequest::new(
-                        lane_name,
-                        *member,
-                        ctx.derived_lanes().clone(),
-                        descriptor,
-                    ))
-                    .map_err(|error| {
-                        format!(
-                            "collector adapter for '{}' could not create '{}': {error}",
-                            input.kind.name(),
-                            lane_name
-                        )
-                    })?;
-                collector = collector.with_ingestor(ingestor);
-                continue;
-            }
-            collector = if input.kind == PortKind::of::<Sample>() {
-                collector.with_lane(CollectedDataKind::Signal, lane_name.clone())
-            } else if input.kind == PortKind::of::<Word>() {
-                if let Some(persistent) = ctx.derived_word_cache(*member) {
-                    collector = collector.with_word_store_config(LiveStoreConfig {
+            let descriptor = collected_payloads
+                .descriptor_by_type_id(input.kind.type_id())
+                .ok_or_else(|| format!("collector cannot retain {:?}", input.kind))?
+                .clone();
+            let mut request = CollectedLaneRequest::new(
+                lane_name,
+                *member,
+                ctx.derived_lanes().clone(),
+                descriptor,
+                ctx.derived_data_retention(),
+            );
+            if input.kind == PortKind::of::<Word>() {
+                let store_config = if let Some(persistent) = ctx.derived_word_cache(*member) {
+                    LiveStoreConfig {
                         directory: persistent.directory.clone(),
                         persistence: Some(persistent.clone()),
                         ..LiveStoreConfig::default()
-                    });
-                }
-                collector.with_lane_format(
-                    CollectedDataKind::Words,
-                    lane_name.clone(),
+                    }
+                } else {
+                    LiveStoreConfig::default()
+                };
+                request = request.with_options(CollectedWordLaneOptions::new(
+                    store_config,
                     input.word_display_format.clone(),
-                )
-            } else if input.kind == PortKind::of::<Trigger>() {
-                collector.with_lane(CollectedDataKind::Trigger, lane_name.clone())
-            } else if input.kind == PortKind::of::<NumberSample>() {
-                collector.with_lane(CollectedDataKind::Number, lane_name.clone())
-            } else if input.kind == PortKind::of::<TextSample>() {
-                collector.with_lane(CollectedDataKind::Text, lane_name.clone())
-            } else if let Some(descriptor) =
-                collected_payloads.descriptor_by_type_id(input.kind.type_id())
-            {
-                return Err(format!(
-                    "collected payload '{}' ({}) has no ingestion adapter",
-                    input.kind.name(),
-                    descriptor.stable_id()
                 ));
-            } else {
-                return Err(format!("collector cannot retain {:?}", input.kind));
-            };
+            }
+            let adapter = collected_payloads
+                .adapter_by_type_id(input.kind.type_id())
+                .ok_or_else(|| {
+                    format!(
+                        "collected payload '{}' ({}) has no ingestion adapter",
+                        input.kind.name(),
+                        request.payload().stable_id()
+                    )
+                })?;
+            let ingestor = adapter.create_ingestor(request).map_err(|error| {
+                format!(
+                    "collector adapter for '{}' could not create '{}': {error}",
+                    input.kind.name(),
+                    lane_name
+                )
+            })?;
+            collector = collector.with_ingestor(ingestor);
         }
         Ok(Box::new(collector))
     }
@@ -164,11 +153,14 @@ impl RuntimeBuilder for DataCollectorBuilder {
         resolved: &ResolvedInputs,
         ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
+        let mut collected_payloads = CollectedPayloadRegistry::new();
+        signal_processing::register_builtin_collected_payload_adapters(&mut collected_payloads)
+            .expect("built-in collected payload adapters must be valid");
         Self::build_with_lane_names(
             name,
             resolved,
             &Self::default_lane_names(resolved),
-            &CollectedPayloadRegistry::new(),
+            &collected_payloads,
             ctx,
         )
     }

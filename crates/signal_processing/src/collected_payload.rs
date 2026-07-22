@@ -5,7 +5,7 @@
 //! representations; keeping that later contract separate prevents a plugin
 //! from being advertised as collectable before it has storage semantics.
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -31,6 +31,8 @@ pub struct CollectedLaneRequest {
     input_index: usize,
     lanes: DerivedLanes,
     payload: CollectedPayloadDescriptor,
+    retention: DerivedDataRetention,
+    options: Arc<dyn Any + Send + Sync>,
 }
 
 impl CollectedLaneRequest {
@@ -39,12 +41,15 @@ impl CollectedLaneRequest {
         input_index: usize,
         lanes: DerivedLanes,
         payload: CollectedPayloadDescriptor,
+        retention: DerivedDataRetention,
     ) -> Self {
         Self {
             name: name.into(),
             input_index,
             lanes,
             payload,
+            retention,
+            options: Arc::new(()),
         }
     }
 
@@ -62,6 +67,21 @@ impl CollectedLaneRequest {
 
     pub fn payload(&self) -> &CollectedPayloadDescriptor {
         &self.payload
+    }
+
+    pub fn retention(&self) -> DerivedDataRetention {
+        self.retention
+    }
+
+    /// Attaches adapter-owned construction options without making the
+    /// collector understand their concrete type.
+    pub fn with_options<T: Send + Sync + 'static>(mut self, options: T) -> Self {
+        self.options = Arc::new(options);
+        self
+    }
+
+    pub fn options<T: Send + Sync + 'static>(&self) -> Option<&T> {
+        self.options.downcast_ref::<T>()
     }
 }
 

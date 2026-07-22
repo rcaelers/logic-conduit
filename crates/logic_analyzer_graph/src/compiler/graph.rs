@@ -33,9 +33,9 @@ use signal_processing::{
     CaptureIndexFactory, CaptureProviderCapabilities, CaptureSessionPlan, CaptureStartMode,
     CaptureStoreCursor, CollectedPayloadAdapter, CollectedPayloadRegistrationError,
     CollectedPayloadRegistry, ConfigurationBoundary, DerivedDataRetention, DerivedLanes,
-    DisconnectEvent, InputSub, NodeConfig, NumberSample, OverflowPolicy, PersistentStoreConfig,
-    PreparedAcquisition, ProcessNode, Sample, SampleBlock, SamplingActivity,
-    SimpleTriggerCondition, TextSample, Trigger, TriggerEditorSchema, TriggerProgram, Word,
+    DisconnectEvent, InputSub, NodeConfig, OverflowPolicy, PersistentStoreConfig,
+    PreparedAcquisition, ProcessNode, SampleBlock, SamplingActivity, SimpleTriggerCondition,
+    TriggerEditorSchema, TriggerProgram,
 };
 
 use super::cache_platform;
@@ -626,7 +626,10 @@ impl BuilderRegistry {
             builders: crate::nodes::standard_builders(),
             collected_payloads: CollectedPayloadRegistry::new(),
         };
-        registry.register_builtin_collected_payloads();
+        signal_processing::register_builtin_collected_payload_adapters(
+            &mut registry.collected_payloads,
+        )
+        .expect("built-in collected payload adapters must be valid");
         registry
     }
 
@@ -677,19 +680,6 @@ impl BuilderRegistry {
 
     pub(crate) fn get(&self, def_name: &str) -> Option<&dyn RuntimeBuilder> {
         self.builders.get(def_name).map(|b| b.as_ref())
-    }
-
-    fn register_builtin_collected_payloads(&mut self) {
-        self.register_collected_payload::<Sample>("org.logicconduit.digital-sample/v1")
-            .expect("built-in collected payload identities must be unique");
-        self.register_collected_payload::<Word>("org.logicconduit.word/v1")
-            .expect("built-in collected payload identities must be unique");
-        self.register_collected_payload::<Trigger>("org.logicconduit.trigger/v1")
-            .expect("built-in collected payload identities must be unique");
-        self.register_collected_payload::<NumberSample>("org.logicconduit.number-sample/v1")
-            .expect("built-in collected payload identities must be unique");
-        self.register_collected_payload::<TextSample>("org.logicconduit.text-sample/v1")
-            .expect("built-in collected payload identities must be unique");
     }
 }
 

@@ -7,7 +7,10 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use web_time::Instant;
 
-use crate::collected_payload::{CollectedLaneIngestor, CollectedPayloadDescriptor};
+use crate::collected_payload::{
+    CollectedLaneIngestor, CollectedLaneRequest, CollectedPayloadAdapter,
+    CollectedPayloadDescriptor, CollectedPayloadRegistrationError, CollectedPayloadRegistry,
+};
 use crate::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 use crate::derived_word_store::{
     AnnotationQuery, AnnotationStoreBackend, AnnotationStoreMetadata, AnnotationStoreWriterBackend,
@@ -615,11 +618,142 @@ enum LaneBuffer {
 
 struct Lane {
     kind: CollectedDataKind,
+    store: DerivedLanes,
     store_index: usize,
     buffer: LaneBuffer,
     eos: bool,
     word_writer: Option<IndexedAnnotationWriter>,
     word_indexed: bool,
+    retention: DerivedDataRetention,
+}
+
+impl CollectedLaneIngestor for Lane {
+    fn input_schema(&self, index: usize) -> PortSchema {
+        let name = format!("in{index}");
+        match self.kind {
+            CollectedDataKind::Signal => {
+                PortSchema::new::<Sample>(name, index, PortDirection::Input)
+            }
+            CollectedDataKind::Words => PortSchema::new::<Word>(name, index, PortDirection::Input),
+            CollectedDataKind::Trigger => {
+                PortSchema::new::<Trigger>(name, index, PortDirection::Input)
+            }
+            CollectedDataKind::Number => {
+                PortSchema::new::<NumberSample>(name, index, PortDirection::Input)
+            }
+            CollectedDataKind::Text => {
+                PortSchema::new::<TextSample>(name, index, PortDirection::Input)
+            }
+        }
+    }
+
+    fn drain(&mut self, input: &InputPort, _retention: DerivedDataRetention) -> WorkResult<usize> {
+        use crossbeam_channel::TryRecvError;
+
+        macro_rules! drain_batch {
+            ($ty:ty, $buffer:expr) => {{
+                let mut batch: Vec<$ty> = Vec::with_capacity(DRAIN_BATCH_SIZE);
+                if let Some(mut receiver) = input.get::<$ty>($buffer) {
+                    match receiver.try_recv_many(&mut batch, DRAIN_BATCH_SIZE) {
+                        Ok(_) | Err(TryRecvError::Empty) => {}
+                        Err(TryRecvError::Disconnected) => self.eos = true,
+                    }
+                } else {
+                    self.eos = true;
+                }
+                batch
+            }};
+        }
+
+        let store = self.store.clone();
+        let retention = self.retention;
+        let batch_len = match &mut self.buffer {
+            LaneBuffer::Signal(buffer) => {
+                let batch = drain_batch!(Sample, buffer);
+                let len = batch.len();
+                if !batch.is_empty() {
+                    store.append_digital_batch_retained(self.store_index, batch, retention);
+                }
+                len
+            }
+            LaneBuffer::Words(buffer) => {
+                let batch = drain_batch!(Word, buffer);
+                let len = batch.len();
+                if !batch.is_empty() {
+                    if let Some(writer) = self.word_writer.as_mut()
+                        && let Err(error) =
+                            AnnotationStoreWriterBackend::append_batch(writer, &batch)
+                    {
+                        tracing::warn!(lane = self.store_index, %error, "indexed derived-data word lane failed; disabling further appends");
+                        self.word_writer = None;
+                    }
+                    if !self.word_indexed {
+                        store.append_word_batch_retained(
+                            self.store_index,
+                            batch
+                                .into_iter()
+                                .map(|word| (word.timestamp_ns, word.duration_ns, word.value)),
+                            retention,
+                        );
+                    }
+                }
+                len
+            }
+            LaneBuffer::Trigger(buffer) => {
+                let batch = drain_batch!(Trigger, buffer);
+                let len = batch.len();
+                if !batch.is_empty() {
+                    store.append_marker_batch_retained(
+                        self.store_index,
+                        batch.into_iter().map(|trigger| trigger.timestamp_ns),
+                        retention,
+                    );
+                }
+                len
+            }
+            LaneBuffer::Number(buffer) => {
+                let batch = drain_batch!(NumberSample, buffer);
+                let len = batch.len();
+                if !batch.is_empty() {
+                    store.append_value_batch_retained(
+                        self.store_index,
+                        batch.into_iter().map(|sample| CollectedValue {
+                            value: sample.value.to_string(),
+                            start_time_ns: sample.start_time_ns,
+                        }),
+                        retention,
+                    );
+                }
+                len
+            }
+            LaneBuffer::Text(buffer) => {
+                let batch = drain_batch!(TextSample, buffer);
+                let len = batch.len();
+                if !batch.is_empty() {
+                    store.append_value_batch_retained(
+                        self.store_index,
+                        batch.into_iter().map(|sample| CollectedValue {
+                            value: sample.value,
+                            start_time_ns: sample.start_time_ns,
+                        }),
+                        retention,
+                    );
+                }
+                len
+            }
+        };
+        if self.eos
+            && let Some(mut writer) = self.word_writer.take()
+            && let Err(error) = AnnotationStoreWriterBackend::finish(&mut writer)
+        {
+            tracing::warn!(lane = self.store_index, %error, "could not finish indexed derived-data word lane");
+        }
+        Ok(batch_len)
+    }
+
+    fn is_finished(&self) -> bool {
+        self.eos
+    }
 }
 
 enum CollectorLane {
@@ -634,6 +768,105 @@ impl CollectorLane {
             Self::Adapter(lane) => lane.is_finished(),
         }
     }
+}
+
+/// Adapter-specific construction options for the built-in word payload.
+#[derive(Clone)]
+pub struct CollectedWordLaneOptions {
+    indexed: bool,
+    store_config: LiveStoreConfig,
+    display_format: Option<String>,
+}
+
+impl Default for CollectedWordLaneOptions {
+    fn default() -> Self {
+        Self {
+            indexed: true,
+            store_config: LiveStoreConfig::default(),
+            display_format: None,
+        }
+    }
+}
+
+impl CollectedWordLaneOptions {
+    pub fn new(store_config: LiveStoreConfig, display_format: Option<String>) -> Self {
+        Self {
+            indexed: true,
+            store_config,
+            display_format,
+        }
+    }
+}
+
+struct BuiltinPayloadAdapter {
+    kind: CollectedDataKind,
+}
+
+impl CollectedPayloadAdapter for BuiltinPayloadAdapter {
+    fn create_ingestor(
+        &self,
+        request: CollectedLaneRequest,
+    ) -> Result<Box<dyn CollectedLaneIngestor>, String> {
+        let mut collector =
+            DerivedDataCollector::new(request.lanes().clone()).with_retention(request.retention());
+        if self.kind == CollectedDataKind::Words {
+            let options = request
+                .options::<CollectedWordLaneOptions>()
+                .cloned()
+                .unwrap_or_default();
+            collector = collector
+                .with_indexed_words(options.indexed)
+                .with_word_store_config(options.store_config)
+                .with_lane_format(self.kind, request.name(), options.display_format);
+        } else {
+            collector = collector.with_lane(self.kind, request.name());
+        }
+        let Some(CollectorLane::BuiltIn(lane)) = collector.lanes.pop() else {
+            return Err("built-in payload adapter did not create one lane".to_owned());
+        };
+        Ok(lane)
+    }
+}
+
+/// Registers built-in retained payloads through the same adapter contract
+/// used by compile-time plugins.
+pub fn register_builtin_collected_payload_adapters(
+    registry: &mut CollectedPayloadRegistry,
+) -> Result<(), CollectedPayloadRegistrationError> {
+    fn register<T: Clone + Send + Sync + 'static>(
+        registry: &mut CollectedPayloadRegistry,
+        stable_id: &str,
+        kind: CollectedDataKind,
+    ) -> Result<(), CollectedPayloadRegistrationError> {
+        registry.register::<T>(stable_id)?;
+        registry.register_adapter::<T>(Arc::new(BuiltinPayloadAdapter { kind }))
+    }
+
+    register::<Sample>(
+        registry,
+        "org.logicconduit.digital-sample/v1",
+        CollectedDataKind::Signal,
+    )?;
+    register::<Word>(
+        registry,
+        "org.logicconduit.word/v1",
+        CollectedDataKind::Words,
+    )?;
+    register::<Trigger>(
+        registry,
+        "org.logicconduit.trigger/v1",
+        CollectedDataKind::Trigger,
+    )?;
+    register::<NumberSample>(
+        registry,
+        "org.logicconduit.number-sample/v1",
+        CollectedDataKind::Number,
+    )?;
+    register::<TextSample>(
+        registry,
+        "org.logicconduit.text-sample/v1",
+        CollectedDataKind::Text,
+    )
 }
 
 /// Sink with one typed input per lane. Never blocks *waiting* on any single
@@ -709,11 +942,13 @@ impl DerivedDataCollector {
                             let store_index = self.store.register(name, data);
                             self.lanes.push(CollectorLane::BuiltIn(Box::new(Lane {
                                 kind,
+                                store: self.store.clone(),
                                 store_index,
                                 buffer: LaneBuffer::Words(VecDeque::new()),
                                 eos: false,
                                 word_writer: None,
                                 word_indexed: true,
+                                retention: self.retention,
                             })));
                             return self;
                         }
@@ -771,11 +1006,13 @@ impl DerivedDataCollector {
         let store_index = self.store.register(name, data);
         self.lanes.push(CollectorLane::BuiltIn(Box::new(Lane {
             kind,
+            store: self.store.clone(),
             store_index,
             buffer,
             eos: false,
             word_writer,
             word_indexed,
+            retention: self.retention,
         })));
         self
     }
@@ -1186,6 +1423,22 @@ mod tests {
                 .unwrap(),
             vec![2, 5]
         );
+    }
+
+    #[test]
+    fn built_in_payloads_register_through_the_adapter_registry() {
+        let mut payloads = crate::CollectedPayloadRegistry::new();
+        register_builtin_collected_payload_adapters(&mut payloads).unwrap();
+
+        for type_id in [
+            std::any::TypeId::of::<Sample>(),
+            std::any::TypeId::of::<Word>(),
+            std::any::TypeId::of::<Trigger>(),
+            std::any::TypeId::of::<NumberSample>(),
+            std::any::TypeId::of::<TextSample>(),
+        ] {
+            assert!(payloads.adapter_by_type_id(type_id).is_some());
+        }
     }
 
     #[test]

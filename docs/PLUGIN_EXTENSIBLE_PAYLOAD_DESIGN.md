@@ -16,7 +16,9 @@ stable identifier assigned to multiple Rust types, and a Rust type assigned mult
 an adapter factory. `DerivedDataCollector` schedules adapter-created lane ingestors beside its
 built-in lanes. An adapter publishes its retained, type-erased query object through `DerivedLanes`,
 so a later subscriber can discover it by stable payload identity and downcast only to its own
-registered query type. Built-in lanes still use the existing closed storage representations.
+registered query type. Built-in payloads are registered through this same path while preserving
+their existing digital, indexed-word, marker, and value storage representations behind their
+adapters.
 
 The retained-data path is currently closed. `DerivedDataCollector` selects storage and draining
 behavior through the built-in `CollectedDataKind` variants, and `DerivedLaneData` contains the
@@ -118,8 +120,8 @@ data rather than receiving the live stream.
 
 ### Migration path
 
-1. Replace the built-in collector `CollectedDataKind`/`LaneBuffer` dispatch with registered
-   adapters.
+1. Move the remaining built-in `CollectedDataKind`/`LaneBuffer` implementation behind the
+   adapters and remove the collector's closed lane representation.
 2. Replace `DerivedLaneData` with adapter-owned query handles and snapshots.
 3. Make data-subscription negotiation registry-driven instead of listing built-in `PortKind`s.
 4. Register built-in waveform and table adapters through the same mechanism as plugins.

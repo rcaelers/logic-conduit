@@ -34,10 +34,11 @@ presentation without editing a generic crate.
   with registry-driven negotiation or a true viewable-payload wildcard. Keep unsupported output
   types out of the View panel, and report a clear compile error if a saved or explicitly wired
   graph requests viewing for a payload whose adapter is unavailable.
-- Replace `CollectedDataKind`/`LaneBuffer` dispatch with an object-safe lane-ingest boundary created
-  by a typed registration factory. The factory must still construct the correctly typed runtime
-  `PortSchema` and drain the corresponding `InputPort`, while the generic `DerivedDataCollector` only
-  schedules lanes, applies backpressure/retention policy, and publishes progress.
+- Move the remaining built-in `CollectedDataKind`/`LaneBuffer` implementation behind the
+  registered adapters, then remove the collector's closed representation. The factory constructs
+  the correctly typed runtime `PortSchema` and drains the corresponding `InputPort`, while the
+  generic `DerivedDataCollector` only schedules lanes, applies backpressure/retention policy, and
+  publishes progress.
 - Replace the closed `DerivedLaneData` and `ViewerValueKind` representation with registered lane
   data/query handles. Separate typed append state from immutable UI snapshots so arbitrary
   values do not require conversion to strings or integers. Each adapter supplies timestamp/span
