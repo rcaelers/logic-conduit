@@ -4,8 +4,8 @@ use serde_json::Value;
 
 use logic_analyzer_processing::nodes::sources::dslogic_u3pro16::{
     DsLogicCapturePlan, DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider, LinkSpeed,
-    LogicCaptureConfig,
 };
+use logic_analyzer_processing::support::logic_analyzer::LogicCaptureConfig;
 use signal_processing::{
     AcquisitionContext, AcquisitionError, AcquisitionResult, CaptureAnalysisChannel,
     CaptureAnalysisSource, CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery,
