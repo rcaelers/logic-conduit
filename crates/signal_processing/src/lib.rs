@@ -18,6 +18,7 @@ mod advanced_trigger;
 mod app_manager;
 pub mod capture;
 mod capture_policy;
+mod collected_payload;
 mod cooperative_manager;
 mod derived_data_collector;
 mod derived_index;
@@ -89,6 +90,9 @@ pub use capture_policy::{
     CaptureStartMode, CompletionPolicy, CompletionPolicyKind, EffectiveCapturePolicy,
     RecordingStart, RetentionPolicy, RetentionPolicyKind, TriggerPlacement,
     TriggerPlacementCapability, TriggerTimeout, TriggerTimeoutAction,
+};
+pub use collected_payload::{
+    CollectedPayloadDescriptor, CollectedPayloadRegistrationError, CollectedPayloadRegistry,
 };
 pub use cooperative_manager::CooperativeManager;
 pub use derived_data_collector::{

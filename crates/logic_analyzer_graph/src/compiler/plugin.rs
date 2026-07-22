@@ -27,6 +27,12 @@
 //!   `crossbeam` channel of `T`) — that one's a real, TypeId-keyed runtime
 //!   registry and does need the call, `T: PortValue` is just a convenient
 //!   bound (identical to what the runtime registry itself requires).
+//!
+//! A payload that should be retained for a waveform, table, or plugin panel
+//! additionally uses [`Self::register_collected_payload`]. That creates the
+//! runtime channel registration and assigns the durable identity used by
+//! future collection adapters and serialized presentation state. It does not
+//! make every `PortValue` collectable.
 
 use node_graph::{NodeDef, NodeTypeRegistry};
 
@@ -71,5 +77,51 @@ impl<'a> PluginContext<'a> {
     pub fn register_payload<T: PortValue>(&mut self) -> &mut Self {
         signal_processing::register_type::<T>();
         self
+    }
+
+    /// Registers a payload with the runtime channel factory and assigns its
+    /// durable collected-payload identity. The payload's later adapter
+    /// registration defines ingestion, storage, and presentation semantics.
+    pub fn register_collected_payload<T: PortValue>(
+        &mut self,
+        stable_id: impl Into<String>,
+    ) -> Result<&mut Self, signal_processing::CollectedPayloadRegistrationError> {
+        self.builders.register_collected_payload::<T>(stable_id)?;
+        Ok(self)
+    }
+}
+
+#[cfg(test)]
+mod plugin_tests {
+    use node_graph::NodeTypeRegistry;
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct PluginEvent;
+
+    impl PortValue for PluginEvent {
+        fn kind_name() -> &'static str {
+            "Plugin Event"
+        }
+    }
+
+    #[test]
+    fn compile_time_plugin_registers_a_collected_payload_identity() {
+        let mut nodes = NodeTypeRegistry::new();
+        let mut builders = BuilderRegistry::standard();
+
+        PluginContext::new(&mut nodes, &mut builders)
+            .register_collected_payload::<PluginEvent>("org.example.plugin-event/v1")
+            .unwrap();
+
+        assert_eq!(
+            builders
+                .collected_payloads()
+                .descriptor::<PluginEvent>()
+                .unwrap()
+                .stable_id(),
+            "org.example.plugin-event/v1"
+        );
     }
 }

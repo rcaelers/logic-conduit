@@ -31,15 +31,17 @@ use node_graph::{
 use signal_processing::{
     AcquisitionContext, AcquisitionError, AcquisitionResult, AppManager, CaptureChannelId,
     CaptureIndexFactory, CaptureProviderCapabilities, CaptureSessionPlan, CaptureStartMode,
-    CaptureStoreCursor, ConfigurationBoundary, DerivedDataRetention, DerivedLanes, DisconnectEvent,
-    InputSub, NodeConfig, OverflowPolicy, PersistentStoreConfig, PreparedAcquisition, ProcessNode,
-    SampleBlock, SamplingActivity, SimpleTriggerCondition, TriggerEditorSchema, TriggerProgram,
+    CaptureStoreCursor, CollectedPayloadRegistrationError, CollectedPayloadRegistry,
+    ConfigurationBoundary, DerivedDataRetention, DerivedLanes, DisconnectEvent, InputSub,
+    NodeConfig, NumberSample, OverflowPolicy, PersistentStoreConfig, PreparedAcquisition,
+    ProcessNode, Sample, SampleBlock, SamplingActivity, SimpleTriggerCondition, TextSample,
+    Trigger, TriggerEditorSchema, TriggerProgram, Word,
 };
 
 use super::cache_platform;
 use super::data_collector::DataCollectorBuilder;
 use super::errors::{ApplyError, CompileError};
-use super::port_kind::PortKind;
+use super::port_kind::{PortKind, PortValue};
 use crate::decoder_table::{DecoderTableColumnPresentation, DecoderTableRegistry};
 
 /// Shared resources handed to builders. A fresh `DerivedLanes` store per
@@ -613,11 +615,19 @@ pub struct DiscoveredCapturePresentation {
     pub presentation: CapturePresentation,
 }
 
-pub struct BuilderRegistry(HashMap<String, Box<dyn RuntimeBuilder>>);
+pub struct BuilderRegistry {
+    builders: HashMap<String, Box<dyn RuntimeBuilder>>,
+    collected_payloads: CollectedPayloadRegistry,
+}
 
 impl BuilderRegistry {
     pub fn standard() -> Self {
-        Self(crate::nodes::standard_builders())
+        let mut registry = Self {
+            builders: crate::nodes::standard_builders(),
+            collected_payloads: CollectedPayloadRegistry::new(),
+        };
+        registry.register_builtin_collected_payloads();
+        registry
     }
 
     /// Adds (or overwrites) one builder, keyed the same way `standard()`
@@ -629,12 +639,46 @@ impl BuilderRegistry {
         name: impl Into<String>,
         builder: Box<dyn RuntimeBuilder>,
     ) -> &mut Self {
-        self.0.insert(name.into(), builder);
+        self.builders.insert(name.into(), builder);
         self
     }
 
+    /// Registers a payload that has explicit retained-data semantics.
+    ///
+    /// This also registers the payload with the generic runtime channel
+    /// factory. The present registry records only the durable identity; a
+    /// later adapter registration supplies its typed ingestion and query
+    /// behavior.
+    pub fn register_collected_payload<T: PortValue>(
+        &mut self,
+        stable_id: impl Into<String>,
+    ) -> Result<&mut Self, CollectedPayloadRegistrationError> {
+        signal_processing::register_type::<T>();
+        self.collected_payloads.register::<T>(stable_id)?;
+        Ok(self)
+    }
+
+    /// Registered retained-payload identities, keyed by runtime `TypeId` and
+    /// durable plugin-owned identifiers.
+    pub fn collected_payloads(&self) -> &CollectedPayloadRegistry {
+        &self.collected_payloads
+    }
+
     pub(crate) fn get(&self, def_name: &str) -> Option<&dyn RuntimeBuilder> {
-        self.0.get(def_name).map(|b| b.as_ref())
+        self.builders.get(def_name).map(|b| b.as_ref())
+    }
+
+    fn register_builtin_collected_payloads(&mut self) {
+        self.register_collected_payload::<Sample>("org.logicconduit.digital-sample/v1")
+            .expect("built-in collected payload identities must be unique");
+        self.register_collected_payload::<Word>("org.logicconduit.word/v1")
+            .expect("built-in collected payload identities must be unique");
+        self.register_collected_payload::<Trigger>("org.logicconduit.trigger/v1")
+            .expect("built-in collected payload identities must be unique");
+        self.register_collected_payload::<NumberSample>("org.logicconduit.number-sample/v1")
+            .expect("built-in collected payload identities must be unique");
+        self.register_collected_payload::<TextSample>("org.logicconduit.text-sample/v1")
+            .expect("built-in collected payload identities must be unique");
     }
 }
 
