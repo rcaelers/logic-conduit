@@ -93,6 +93,7 @@ pub use capture_policy::{
 };
 pub use collected_payload::{
     CollectedLaneIngestor, CollectedLaneQuery, CollectedLaneRequest, CollectedLaneSnapshotRequest,
+    CollectedLaneTableMetadata, CollectedLaneTableRow, CollectedLaneTableSnapshot,
     CollectedPayloadAdapter, CollectedPayloadDescriptor, CollectedPayloadRegistrationError,
     CollectedPayloadRegistry, OpaqueCollectedLaneSnapshot,
 };

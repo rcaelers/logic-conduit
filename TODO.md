@@ -31,8 +31,8 @@ fallback representation and completes the payload capabilities required by arbit
   information, and interaction hooks. Renderers must continue to receive only bounded,
   type-safe-or-contract-checked snapshots and no `LogicAnalyzerViewer` internals or locked
   runtime storage.
-- Complete the word-lane migration by moving its remaining legacy storage and table fallback
-  paths onto its adapter-owned query; cursor snapping and timeline extent already use that
+- Complete the word-lane migration by moving its remaining legacy storage onto its adapter-owned
+  query; viewer snapshots, cursor snapping, timeline extent, and table rows already use that
   query. Migrate digital signals, triggers, numbers, and text from the shared
   `CollectedDataKind`/`LaneBuffer` implementation in the same way. Default singleton
   presentation, cursor snapping, timeline fitting, row activity, retention, and native/wasm

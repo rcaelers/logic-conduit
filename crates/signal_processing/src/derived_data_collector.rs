@@ -8,6 +8,7 @@ use web_time::Instant;
 
 use crate::collected_payload::{
     CollectedLaneIngestor, CollectedLaneQuery, CollectedLaneRequest, CollectedLaneSnapshotRequest,
+    CollectedLaneTableMetadata, CollectedLaneTableRow, CollectedLaneTableSnapshot,
     CollectedPayloadAdapter, CollectedPayloadDescriptor, CollectedPayloadRegistrationError,
     CollectedPayloadRegistry, OpaqueCollectedLaneSnapshot,
 };
@@ -287,6 +288,99 @@ impl CollectedLaneQuery for WordLaneQuery {
             DerivedLaneData::IndexedAnnotations(indexed) => indexed.metadata().extent_end_ns,
             _ => None,
         }
+    }
+
+    fn table_metadata(&self) -> Option<CollectedLaneTableMetadata> {
+        let lanes = self.store.read();
+        let lane = lanes.iter().find(|lane| lane.name == self.name)?;
+        match &lane.data {
+            DerivedLaneData::Annotations(annotations) => Some(CollectedLaneTableMetadata {
+                generation: annotations.last().map_or(0, |annotation| annotation.end_ns),
+                total_rows: annotations.len() as u64,
+            }),
+            DerivedLaneData::IndexedAnnotations(indexed) => {
+                let metadata = indexed.metadata();
+                Some(CollectedLaneTableMetadata {
+                    generation: metadata.generation,
+                    total_rows: metadata.total_word_count,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn table_snapshot(&self, max_rows: usize) -> Option<CollectedLaneTableSnapshot> {
+        enum Source {
+            InMemory {
+                rows: Vec<CollectedLaneTableRow>,
+                complete: bool,
+                format_hint: Option<String>,
+            },
+            Indexed {
+                query: Arc<dyn AnnotationQuery>,
+                format_hint: Option<String>,
+            },
+        }
+
+        let source = {
+            let lanes = self.store.read();
+            let lane = lanes.iter().find(|lane| lane.name == self.name)?;
+            match &lane.data {
+                DerivedLaneData::Annotations(annotations) => Source::InMemory {
+                    rows: annotations
+                        .iter()
+                        .take(max_rows)
+                        .map(annotation_table_row)
+                        .collect(),
+                    complete: annotations.len() <= max_rows,
+                    format_hint: lane.word_display_format.clone(),
+                },
+                DerivedLaneData::IndexedAnnotations(indexed) => Source::Indexed {
+                    query: Arc::clone(indexed.query()),
+                    format_hint: lane.word_display_format.clone(),
+                },
+                _ => return None,
+            }
+        };
+
+        match source {
+            Source::InMemory {
+                rows,
+                complete,
+                format_hint,
+            } => Some(CollectedLaneTableSnapshot {
+                rows,
+                complete,
+                format_hint,
+            }),
+            Source::Indexed { query, format_hint } => {
+                let metadata = query.metadata();
+                let window = query
+                    .exact_window(
+                        metadata.first_timestamp_ns.unwrap_or(0),
+                        metadata.extent_end_ns.unwrap_or(u64::MAX),
+                        max_rows,
+                    )
+                    .ok()?;
+                Some(CollectedLaneTableSnapshot {
+                    rows: window
+                        .annotations
+                        .iter()
+                        .map(annotation_table_row)
+                        .collect(),
+                    complete: window.complete,
+                    format_hint,
+                })
+            }
+        }
+    }
+}
+
+fn annotation_table_row(annotation: &Annotation) -> CollectedLaneTableRow {
+    CollectedLaneTableRow {
+        start_time_ns: annotation.start_ns,
+        end_time_ns: annotation.end_ns,
+        value: annotation.value,
     }
 }
 
@@ -579,6 +673,16 @@ impl OpaqueCollectedLane {
     /// the concrete lane storage.
     pub fn timeline_extent_end_ns(&self) -> Option<u64> {
         self.query.timeline_extent_end_ns()
+    }
+
+    /// Returns table revision metadata supplied by the lane's adapter.
+    pub fn table_metadata(&self) -> Option<CollectedLaneTableMetadata> {
+        self.query.table_metadata()
+    }
+
+    /// Returns bounded table rows supplied by the lane's adapter.
+    pub fn table_snapshot(&self, max_rows: usize) -> Option<CollectedLaneTableSnapshot> {
+        self.query.table_snapshot(max_rows)
     }
 }
 
@@ -1693,6 +1797,32 @@ mod tests {
         assert_eq!(query.nearest_time_boundary(19, 3), Some(20));
         assert_eq!(query.nearest_time_boundary(25, 3), None);
         assert_eq!(query.timeline_extent_end_ns(), Some(60));
+        assert_eq!(
+            query.table_metadata(),
+            Some(CollectedLaneTableMetadata {
+                generation: 60,
+                total_rows: 3,
+            })
+        );
+        assert_eq!(
+            query.table_snapshot(2),
+            Some(CollectedLaneTableSnapshot {
+                rows: vec![
+                    CollectedLaneTableRow {
+                        start_time_ns: 10,
+                        end_time_ns: 20,
+                        value: 1,
+                    },
+                    CollectedLaneTableRow {
+                        start_time_ns: 30,
+                        end_time_ns: 40,
+                        value: 2,
+                    },
+                ],
+                complete: false,
+                format_hint: None,
+            })
+        );
     }
 
     #[test]

@@ -6,7 +6,9 @@ use logic_analyzer_graph::{
     DecoderTableCellMode, DecoderTableColumn, DecoderTableRegistry, DecoderTableSource,
 };
 use logic_analyzer_viewer::AnnotationVisual;
-use signal_processing::{Annotation, DerivedLaneData, DerivedLanes};
+use signal_processing::{
+    Annotation, CollectedLaneTableRow, DerivedLaneData, DerivedLanes, OpaqueCollectedLane,
+};
 
 const MAX_TABLE_ROWS: usize = 100_000;
 
@@ -219,11 +221,26 @@ impl Default for TableCache {
 }
 
 fn table_fingerprint(source: &DecoderTableSource, lanes: &DerivedLanes) -> Vec<(String, u64, u64)> {
+    let opaque_metadata: HashMap<_, _> = lanes
+        .opaque_lanes()
+        .into_iter()
+        .filter_map(|lane| {
+            lane.table_metadata()
+                .map(|metadata| (lane.name().to_owned(), metadata))
+        })
+        .collect();
     let lanes = lanes.read();
     source
         .columns
         .iter()
         .filter_map(|column| {
+            if let Some(metadata) = opaque_metadata.get(column.lane.as_str()) {
+                return Some((
+                    column.lane.as_str().to_owned(),
+                    metadata.generation,
+                    metadata.total_rows,
+                ));
+            }
             let lane = lanes
                 .iter()
                 .find(|lane| lane.name == column.lane.as_str())?;
@@ -515,7 +532,7 @@ fn handle_toolbar_keyboard(
 }
 
 struct LoadedColumn {
-    annotations: Vec<Annotation>,
+    rows: Vec<CollectedLaneTableRow>,
     lane_format: Option<String>,
 }
 
@@ -530,12 +547,21 @@ fn load_table(
     lanes: &DerivedLanes,
     row_limit: usize,
 ) -> Result<LoadedTable, String> {
+    let opaque_table_lanes: HashMap<_, _> = lanes
+        .opaque_lanes()
+        .into_iter()
+        .filter(|lane| lane.table_metadata().is_some())
+        .map(|lane| (lane.name().to_owned(), lane))
+        .collect();
     let lane_handles = {
         let lanes = lanes.read();
         source
             .columns
             .iter()
             .map(|column| {
+                if let Some(lane) = opaque_table_lanes.get(column.lane.as_str()) {
+                    return Ok((ColumnData::Opaque(lane.clone()), None));
+                }
                 let lane = lanes
                     .iter()
                     .find(|lane| lane.name == column.lane.as_str())
@@ -558,13 +584,30 @@ fn load_table(
     let columns = lane_handles
         .into_iter()
         .map(|(data, lane_format)| {
-            let annotations = match data {
+            let (rows, lane_format) = match data {
+                ColumnData::Opaque(lane) => {
+                    let snapshot = lane
+                        .table_snapshot(row_limit)
+                        .ok_or_else(|| format!("{} has no table data", lane.name()))?;
+                    truncated |= !snapshot.complete;
+                    (snapshot.rows, snapshot.format_hint)
+                }
                 ColumnData::Memory(mut annotations) => {
                     if annotations.len() > row_limit {
                         annotations.truncate(row_limit);
                         truncated = true;
                     }
-                    annotations
+                    (
+                        annotations
+                            .iter()
+                            .map(|annotation| CollectedLaneTableRow {
+                                start_time_ns: annotation.start_ns,
+                                end_time_ns: annotation.end_ns,
+                                value: annotation.value,
+                            })
+                            .collect(),
+                        lane_format,
+                    )
                 }
                 ColumnData::Indexed(query) => {
                     let metadata = query.metadata();
@@ -576,13 +619,21 @@ fn load_table(
                         )
                         .map_err(|error| error.to_string())?;
                     truncated |= !window.complete;
-                    window.annotations
+                    (
+                        window
+                            .annotations
+                            .iter()
+                            .map(|annotation| CollectedLaneTableRow {
+                                start_time_ns: annotation.start_ns,
+                                end_time_ns: annotation.end_ns,
+                                value: annotation.value,
+                            })
+                            .collect(),
+                        lane_format,
+                    )
                 }
             };
-            Ok(LoadedColumn {
-                annotations,
-                lane_format,
-            })
+            Ok(LoadedColumn { rows, lane_format })
         })
         .collect::<Result<Vec<_>, String>>()?;
     let anchor = source
@@ -598,6 +649,7 @@ fn load_table(
 }
 
 enum ColumnData {
+    Opaque(OpaqueCollectedLane),
     Memory(Vec<Annotation>),
     Indexed(std::sync::Arc<dyn signal_processing::AnnotationQuery>),
 }
@@ -623,7 +675,7 @@ fn show_table(
     } else {
         false
     };
-    let rows = &table.columns[table.anchor].annotations;
+    let rows = &table.columns[table.anchor].rows;
     if rows.is_empty() {
         ui.centered_and_justified(|ui| ui.weak("No decoded values"));
         return load_more;
@@ -709,26 +761,27 @@ fn show_row(
     index: usize,
 ) -> Vec<egui::Rect> {
     let mut cells = Vec::new();
-    let anchor = table.columns[table.anchor].annotations[index];
+    let anchor = table.columns[table.anchor].rows[index];
     if visible(state, "sequence") {
         cells.push(ui.monospace((index + 1).to_string()).rect);
     }
     if visible(state, "start") {
-        cells.push(ui.monospace(format_time_ns(anchor.start_ns)).rect);
+        cells.push(ui.monospace(format_time_ns(anchor.start_time_ns)).rect);
     }
     if visible(state, "end") {
-        cells.push(ui.monospace(format_time_ns(anchor.end_ns)).rect);
+        cells.push(ui.monospace(format_time_ns(anchor.end_time_ns)).rect);
     }
     for (column_index, column) in source.columns.iter().enumerate() {
         if visible(state, &format!("output:{}", column.key)) {
             let loaded = &table.columns[column_index];
             let values = loaded
-                .annotations
+                .rows
                 .iter()
-                .filter(|annotation| {
-                    annotation.start_ns >= anchor.start_ns && annotation.start_ns <= anchor.end_ns
+                .filter(|row| {
+                    row.start_time_ns >= anchor.start_time_ns
+                        && row.start_time_ns <= anchor.end_time_ns
                 })
-                .map(|annotation| format_cell_value(column, annotation.value, state, loaded))
+                .map(|row| format_cell_value(column, row.value, state, loaded))
                 .collect::<Vec<_>>();
             let text = match &column.cell_mode {
                 DecoderTableCellMode::Single => values.first().cloned().unwrap_or_default(),
@@ -841,6 +894,14 @@ fn visible(state: &DecoderPanelState, key: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use logic_analyzer_viewer::{DefaultViewerLaneRenderer, DerivedLaneId, ViewerLaneTrackId};
+    use signal_processing::{
+        CollectedLaneQuery, CollectedLaneTableMetadata, CollectedLaneTableRow,
+        CollectedLaneTableSnapshot, CollectedPayloadRegistry, Word,
+    };
+
     use super::*;
 
     fn key_event(key: egui::Key) -> egui::Event {
@@ -866,6 +927,83 @@ mod tests {
         assert_eq!(format_value(0x41, Some("Hex")), "41");
         assert_eq!(format_value(0x41, Some("ASCII")), "A");
         assert_eq!(format_value(0x41, Some("Hex + ASCII")), "41 'A'");
+    }
+
+    #[test]
+    fn table_uses_an_adapter_owned_projection_when_available() {
+        struct TableQuery;
+
+        impl CollectedLaneQuery for TableQuery {
+            fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+                self
+            }
+
+            fn table_metadata(&self) -> Option<CollectedLaneTableMetadata> {
+                Some(CollectedLaneTableMetadata {
+                    generation: 7,
+                    total_rows: 4,
+                })
+            }
+
+            fn table_snapshot(&self, _max_rows: usize) -> Option<CollectedLaneTableSnapshot> {
+                Some(CollectedLaneTableSnapshot {
+                    rows: vec![CollectedLaneTableRow {
+                        start_time_ns: 10,
+                        end_time_ns: 20,
+                        value: 0x2A,
+                    }],
+                    complete: false,
+                    format_hint: Some("Hex".to_owned()),
+                })
+            }
+        }
+
+        let lane_id = DerivedLaneId::new("decoded.words");
+        let source = DecoderTableSource {
+            id: "decoder".to_owned(),
+            label: "Decoder".to_owned(),
+            columns: vec![DecoderTableColumn {
+                key: "data".to_owned(),
+                label: "Data".to_owned(),
+                lane: lane_id.clone(),
+                track: ViewerLaneTrackId::new("data"),
+                row_anchor: true,
+                cell_mode: DecoderTableCellMode::Single,
+                renderer: Arc::new(DefaultViewerLaneRenderer),
+            }],
+        };
+        let lanes = DerivedLanes::new();
+        lanes.register(
+            lane_id.as_str(),
+            DerivedLaneData::Annotations(vec![Annotation {
+                start_ns: 100,
+                end_ns: 200,
+                value: 0x11,
+            }]),
+        );
+        let mut payloads = CollectedPayloadRegistry::new();
+        payloads.register::<Word>("org.example.word/v1").unwrap();
+        lanes.publish_opaque_lane(
+            lane_id.as_str(),
+            payloads.descriptor::<Word>().unwrap().clone(),
+            Arc::new(TableQuery),
+        );
+
+        assert_eq!(
+            table_fingerprint(&source, &lanes),
+            vec![("decoded.words".to_owned(), 7, 4)]
+        );
+        let table = load_table(&source, &lanes, 1).unwrap();
+        assert!(table.truncated);
+        assert_eq!(
+            table.columns[0].rows,
+            vec![CollectedLaneTableRow {
+                start_time_ns: 10,
+                end_time_ns: 20,
+                value: 0x2A,
+            }]
+        );
+        assert_eq!(table.columns[0].lane_format.as_deref(), Some("Hex"));
     }
 
     #[test]

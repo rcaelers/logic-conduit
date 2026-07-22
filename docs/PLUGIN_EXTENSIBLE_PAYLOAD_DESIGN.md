@@ -105,8 +105,12 @@ The waveform viewer owns a separate presentation registry keyed by the collected
 Its adapter supplies default group/badge metadata and a renderer for bounded snapshots. Rendering
 occurs after the retained-lane lock is released.
 
-Table projection is optional adapter metadata. An adapter may expose rows and columns when that is
-meaningful; no table-specific behavior is required for arbitrary payloads.
+Table projection is optional adapter metadata. `CollectedLaneQuery::table_metadata` supplies a
+revision and row count for cache invalidation, while `table_snapshot(max_rows)` supplies bounded
+scalar rows with a format hint and a completeness flag. The decoder-table panel consumes this
+contract through opaque lane handles and never reads a concrete payload's retained storage. An
+adapter may expose rows and columns when that is meaningful; no table-specific behavior is
+required for arbitrary payloads.
 
 Extra panels are UI-owned plugin registrations, not graph or processing registrations. A panel
 receives a restricted read-only context containing collected-lane descriptors and query handles,

@@ -32,6 +32,29 @@ pub struct CollectedLaneSnapshotRequest {
     pub max_items: usize,
 }
 
+/// Revision and cardinality of one optional tabular lane projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CollectedLaneTableMetadata {
+    pub generation: u64,
+    pub total_rows: u64,
+}
+
+/// One scalar record supplied by an optional tabular lane projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CollectedLaneTableRow {
+    pub start_time_ns: u64,
+    pub end_time_ns: u64,
+    pub value: u64,
+}
+
+/// Bounded rows for an optional scalar table projection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CollectedLaneTableSnapshot {
+    pub rows: Vec<CollectedLaneTableRow>,
+    pub complete: bool,
+    pub format_hint: Option<String>,
+}
+
 /// Type-erased immutable result of a bounded retained-data query.
 #[derive(Clone)]
 pub struct OpaqueCollectedLaneSnapshot {
@@ -86,6 +109,18 @@ pub trait CollectedLaneQuery: Send + Sync {
     /// adapter owns the exact span semantics for its payload; a query without
     /// timeline data returns `None`.
     fn timeline_extent_end_ns(&self) -> Option<u64> {
+        None
+    }
+
+    /// Supplies revision metadata for a row-oriented scalar table. Queries
+    /// without a table projection return `None`.
+    fn table_metadata(&self) -> Option<CollectedLaneTableMetadata> {
+        None
+    }
+
+    /// Supplies at most `max_rows` scalar table rows from the beginning of
+    /// the retained sequence. `complete` reports whether more rows exist.
+    fn table_snapshot(&self, _max_rows: usize) -> Option<CollectedLaneTableSnapshot> {
         None
     }
 }
