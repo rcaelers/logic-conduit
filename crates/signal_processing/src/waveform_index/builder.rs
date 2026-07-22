@@ -222,8 +222,9 @@ where
 
         let l1_groups = (valid_samples as usize).div_ceil(64);
         let full_l1_groups = valid_samples as usize / 64;
-        for (group, chunk) in data[..full_l1_groups * 8].chunks_exact(8).enumerate() {
-            let word = u64::from_le_bytes(chunk.try_into().expect("L1 chunks are exactly 8 bytes"));
+        let (full_l1_chunks, _) = data[..full_l1_groups * 8].as_chunks::<8>();
+        for (group, chunk) in full_l1_chunks.iter().enumerate() {
+            let word = u64::from_le_bytes(*chunk);
             Self::record_l1_group(
                 &mut lvl.l1_toggle,
                 &mut lvl.l1_last,
