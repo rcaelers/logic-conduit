@@ -338,6 +338,9 @@ impl LaneSummary {
 #[derive(Debug, Clone)]
 pub struct DerivedLane {
     pub name: String,
+    /// Durable identity of the payload adapter that owns this lane, when it
+    /// was registered through the collected-payload contract.
+    pub payload: Option<CollectedPayloadDescriptor>,
     pub data: DerivedLaneData,
     pub summary: LaneSummary,
     pub word_display_format: Option<String>,
@@ -396,6 +399,15 @@ impl DerivedLanes {
     /// by another indexed lane so a restarted collector publishes its new
     /// writer's query handle instead of leaving a stale store visible.
     pub fn register(&self, name: impl Into<String>, data: DerivedLaneData) -> usize {
+        self.register_with_payload(name, None, data)
+    }
+
+    fn register_with_payload(
+        &self,
+        name: impl Into<String>,
+        payload: Option<CollectedPayloadDescriptor>,
+        data: DerivedLaneData,
+    ) -> usize {
         let name = name.into();
         let mut lanes = self.inner.write().unwrap();
         if let Some(index) = lanes.iter().position(|lane| lane.name == name) {
@@ -412,11 +424,15 @@ impl DerivedLanes {
                 lanes[index].summary = LaneSummary::matching(&data);
                 lanes[index].data = data;
             }
+            if payload.is_some() {
+                lanes[index].payload = payload;
+            }
             return index;
         }
         let summary = LaneSummary::matching(&data);
         lanes.push(DerivedLane {
             name,
+            payload,
             data,
             summary,
             word_display_format: None,
@@ -638,6 +654,7 @@ impl Lane {
             request.name().to_owned(),
             request.lanes().clone(),
             request.retention(),
+            Some(request.payload().clone()),
             options,
         )
     }
@@ -647,6 +664,7 @@ impl Lane {
         name: String,
         store: DerivedLanes,
         retention: DerivedDataRetention,
+        payload: Option<CollectedPayloadDescriptor>,
         word_options: CollectedWordLaneOptions,
     ) -> Self {
         let (data, word_writer, word_indexed) = match kind {
@@ -655,8 +673,9 @@ impl Lane {
                 if let Some(persistent) = word_options.store_config.persistence.as_ref() {
                     match IndexedAnnotationStore::open_persistent(persistent) {
                         Ok(Some(indexed_store)) => {
-                            let store_index = store.register(
+                            let store_index = store.register_with_payload(
                                 name.clone(),
+                                payload,
                                 DerivedLaneData::IndexedAnnotations(
                                     IndexedAnnotationLane::from_store(indexed_store),
                                 ),
@@ -724,7 +743,7 @@ impl Lane {
             CollectedDataKind::Number => LaneBuffer::Number(VecDeque::new()),
             CollectedDataKind::Text => LaneBuffer::Text(VecDeque::new()),
         };
-        let store_index = store.register(name, data);
+        let store_index = store.register_with_payload(name, payload, data);
         if kind == CollectedDataKind::Words {
             store.set_word_display_format(store_index, word_options.display_format);
         }
@@ -912,6 +931,7 @@ pub fn built_in_word_lane_ingestor(
         name.into(),
         lanes,
         retention,
+        None,
         options,
     ))
 }
@@ -1121,6 +1141,7 @@ mod tests {
                 name.into(),
                 self.test_lanes.clone(),
                 self.retention,
+                None,
                 self.test_word_options.clone(),
             )));
             self
@@ -1286,6 +1307,34 @@ mod tests {
         ] {
             assert!(payloads.adapter_by_type_id(type_id).is_some());
         }
+    }
+
+    #[test]
+    fn adapter_owned_lane_publishes_its_payload_identity() {
+        let lanes = DerivedLanes::new();
+        let mut payloads = crate::CollectedPayloadRegistry::new();
+        register_builtin_collected_payload_adapters(&mut payloads).unwrap();
+        let descriptor = payloads.descriptor::<Word>().unwrap().clone();
+        let ingestor = payloads
+            .adapter_by_type_id(std::any::TypeId::of::<Word>())
+            .unwrap()
+            .create_ingestor(CollectedLaneRequest::new(
+                "words",
+                0,
+                lanes.clone(),
+                descriptor,
+                DerivedDataRetention::Unlimited,
+            ))
+            .unwrap();
+
+        let _collector = DerivedDataCollector::new().with_ingestor(ingestor);
+        assert_eq!(
+            lanes.read()[0]
+                .payload
+                .as_ref()
+                .map(CollectedPayloadDescriptor::stable_id),
+            Some("org.logicconduit.word/v1")
+        );
     }
 
     #[test]
