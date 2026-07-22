@@ -2,4 +2,4 @@
 
 mod implementation;
 
-pub use implementation::{TgckRecord, TgckRecorder};
+pub use implementation::TgckRecorder;

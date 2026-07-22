@@ -3,11 +3,16 @@
 mod buffered;
 mod common;
 mod implementation;
+mod source;
 mod streaming;
 
 pub use buffered::DsLogicU3Pro16BufferedProvider;
-pub use implementation::{
-    DsLogicCapturePlan, DsLogicU3Pro16, LinkSpeed,
-    RusbTransport, UsbError, UsbTransport, u3pro16_buffered_plan, u3pro16_streaming_plan,
-};
+pub use implementation::{DsLogicCapturePlan, LinkSpeed};
+pub use source::DsLogicU3Pro16Source;
 pub use streaming::DsLogicU3Pro16StreamingProvider;
+
+pub use crate::support::logic_analyzer::{
+    CaptureMode, ClockEdge, ClockSource, LogicAnalyzerError, LogicAnalyzerResult,
+    LogicCaptureConfig, LogicEncodingRequest, LogicTrigger, LogicTriggerStage, TriggerCondition,
+    TriggerLogic,
+};

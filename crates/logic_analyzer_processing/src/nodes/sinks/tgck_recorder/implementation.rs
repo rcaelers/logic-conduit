@@ -29,15 +29,15 @@ use signal_processing::{
 
 /// One complete TGCK cycle, positioned within the current capture window.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TgckRecord {
-    pub rising_byte_index: usize,
-    pub rising_timestamp: u64,
-    pub falling_byte_index: usize,
-    pub falling_timestamp: u64,
-    pub first_word_after_rising_byte_index: usize,
-    pub first_word_after_rising_timestamp: u64,
-    pub first_word_after_falling_byte_index: usize,
-    pub first_word_after_falling_timestamp: u64,
+pub(crate) struct TgckRecord {
+    pub(crate) rising_byte_index: usize,
+    pub(crate) rising_timestamp: u64,
+    pub(crate) falling_byte_index: usize,
+    pub(crate) falling_timestamp: u64,
+    pub(crate) first_word_after_rising_byte_index: usize,
+    pub(crate) first_word_after_rising_timestamp: u64,
+    pub(crate) first_word_after_falling_byte_index: usize,
+    pub(crate) first_word_after_falling_timestamp: u64,
 }
 
 impl TgckRecord {

@@ -14,7 +14,7 @@ use rusb::{Context, DeviceHandle, UsbContext};
 
 use signal_processing::TriggerCountMode;
 
-use super::super::logic_analyzer::{
+use crate::support::logic_analyzer::{
     CaptureMode, ClockEdge, ClockSource, LogicAnalyzer, LogicAnalyzerError, LogicAnalyzerInfo,
     LogicAnalyzerResult, LogicAnalyzerSource, LogicCaptureConfig, LogicChunk, LogicEncoding,
     LogicEncodingRequest, LogicTrigger, LogicTriggerStage, TriggerCondition, TriggerLogic,
@@ -162,35 +162,9 @@ fn settings_from_config(
     Ok(settings)
 }
 
-/// Validates a concrete finite request without opening hardware. Finite-mode
-/// memory/rate constraints are identical at high- and SuperSpeed.
-pub fn u3pro16_buffered_plan(
-    config: &LogicCaptureConfig,
-) -> LogicAnalyzerResult<DsLogicCapturePlan> {
-    if config.mode != CaptureMode::Finite {
-        return Err(LogicAnalyzerError::InvalidSettings(
-            "buffered acquisition requires finite capture mode".into(),
-        ));
-    }
-    build_plan(LinkSpeed::Super, &settings_from_config(config)?)
-}
-
-/// Validates a host-streamed request against one concrete USB link speed.
-pub fn u3pro16_streaming_plan(
-    config: &LogicCaptureConfig,
-    link_speed: LinkSpeed,
-) -> LogicAnalyzerResult<DsLogicCapturePlan> {
-    if config.mode != CaptureMode::Streaming {
-        return Err(LogicAnalyzerError::InvalidSettings(
-            "host-streamed acquisition requires streaming capture mode".into(),
-        ));
-    }
-    build_plan(link_speed, &settings_from_config(config)?)
-}
-
 /// Failure reported by a [`UsbTransport`] operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UsbError {
+pub(crate) enum UsbError {
     /// The operation did not complete before its deadline.
     Timeout,
     /// The transport failed for a reason other than a timeout.
@@ -202,7 +176,7 @@ pub enum UsbError {
 /// Implementations must preserve call order. The queued-read methods may use an
 /// asynchronous backend; transports without that capability can retain the
 /// default synchronous fallback.
-pub trait UsbTransport: Send + 'static {
+pub(crate) trait UsbTransport: Send + 'static {
     /// Returns the negotiated USB link speed.
     fn link_speed(&self) -> LinkSpeed;
     /// Performs one USB control write.
@@ -270,7 +244,7 @@ pub trait UsbTransport: Send + 'static {
 }
 
 /// Production `rusb` transport. It claims interface 0 during discovery.
-pub struct RusbTransport {
+pub(crate) struct RusbTransport {
     context: Context,
     handle: DeviceHandle<Context>,
     speed: LinkSpeed,
@@ -298,7 +272,7 @@ extern "system" fn mark_bulk_read_complete(transfer: *mut rusb::ffi::libusb_tran
 }
 
 impl RusbTransport {
-    pub fn open_first() -> LogicAnalyzerResult<Self> {
+    fn open_first() -> LogicAnalyzerResult<Self> {
         let context = Context::new().map_err(rusb_error)?;
         let devices = context.devices().map_err(rusb_error)?;
         for device in devices.iter() {
@@ -340,43 +314,6 @@ impl RusbTransport {
         }
         Err(LogicAnalyzerError::Transport(
             "no accessible DSLogic U3Pro16 runtime device found".into(),
-        ))
-    }
-
-    /// Open a device in FX2 boot mode for the explicit recovery API. Runtime
-    /// strings are deliberately not accepted here; callers must supply the
-    /// exact U3Pro16 firmware image to `recover_usb_firmware`.
-    pub fn open_bootloader() -> LogicAnalyzerResult<Self> {
-        let context = Context::new().map_err(rusb_error)?;
-        let devices = context.devices().map_err(rusb_error)?;
-        for device in devices.iter() {
-            let descriptor = device.device_descriptor().map_err(rusb_error)?;
-            if descriptor.vendor_id() != VID || descriptor.product_id() != PID {
-                continue;
-            }
-            let speed = match device.speed() {
-                rusb::Speed::High => LinkSpeed::High,
-                rusb::Speed::Super => LinkSpeed::Super,
-                _ => continue,
-            };
-            let handle = device.open().map_err(rusb_error)?;
-            if handle.active_configuration().map_err(rusb_error)? != 1 {
-                handle.set_active_configuration(1).map_err(rusb_error)?;
-            }
-            if handle.kernel_driver_active(0).unwrap_or(false) {
-                let _ = handle.detach_kernel_driver(0);
-            }
-            handle.claim_interface(0).map_err(rusb_error)?;
-            return Ok(Self {
-                context,
-                handle,
-                speed,
-                claimed: true,
-                queued_bulk_reads: VecDeque::new(),
-            });
-        }
-        Err(LogicAnalyzerError::Transport(
-            "no accessible DSLogic FX2 boot-mode device found".into(),
         ))
     }
 }
@@ -590,7 +527,7 @@ fn usb<T>(result: Result<T, UsbError>, action: &str) -> LogicAnalyzerResult<T> {
     })
 }
 
-pub struct DsLogicU3Pro16<T: UsbTransport = RusbTransport> {
+pub(crate) struct DsLogicU3Pro16<T: UsbTransport = RusbTransport> {
     transport: T,
     info: LogicAnalyzerInfo,
     settings: DsLogicCaptureSettings,
@@ -617,6 +554,29 @@ pub struct DsLogicCapturePlan {
 }
 
 impl DsLogicCapturePlan {
+    /// Validates a finite acquisition request against the U3Pro16 device memory.
+    pub fn new_buffered(config: &LogicCaptureConfig) -> LogicAnalyzerResult<Self> {
+        if config.mode != CaptureMode::Finite {
+            return Err(LogicAnalyzerError::InvalidSettings(
+                "buffered acquisition requires finite capture mode".into(),
+            ));
+        }
+        build_plan(LinkSpeed::Super, &settings_from_config(config)?)
+    }
+
+    /// Validates a host-streamed acquisition request for one USB link speed.
+    pub fn new_streaming(
+        config: &LogicCaptureConfig,
+        link_speed: LinkSpeed,
+    ) -> LogicAnalyzerResult<Self> {
+        if config.mode != CaptureMode::Streaming {
+            return Err(LogicAnalyzerError::InvalidSettings(
+                "host-streamed acquisition requires streaming capture mode".into(),
+            ));
+        }
+        build_plan(link_speed, &settings_from_config(config)?)
+    }
+
     pub const fn channel_count(self) -> u8 {
         self.channels
     }
@@ -636,7 +596,7 @@ impl DsLogicCapturePlan {
 
 /// Device header translated into the capture timeline used by the application.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DsLogicTriggerHeader {
+pub(crate) struct DsLogicTriggerHeader {
     trigger_sample: Option<u64>,
     captured_samples: u64,
     remaining_samples: u64,
@@ -644,37 +604,33 @@ pub struct DsLogicTriggerHeader {
 }
 
 impl DsLogicTriggerHeader {
-    pub const fn trigger_sample(self) -> Option<u64> {
+    pub(crate) const fn trigger_sample(self) -> Option<u64> {
         self.trigger_sample
     }
 
-    pub const fn captured_samples(self) -> u64 {
+    pub(crate) const fn captured_samples(self) -> u64 {
         self.captured_samples
     }
 
-    pub const fn remaining_samples(self) -> u64 {
+    #[cfg(test)]
+    pub(crate) const fn remaining_samples(self) -> u64 {
         self.remaining_samples
     }
 
-    pub const fn ram_start(self) -> u32 {
+    #[cfg(test)]
+    pub(crate) const fn ram_start(self) -> u32 {
         self.ram_start
     }
 }
 
 impl DsLogicU3Pro16<RusbTransport> {
-    pub fn open_first() -> LogicAnalyzerResult<Self> {
+    pub(crate) fn open_first() -> LogicAnalyzerResult<Self> {
         Self::new(RusbTransport::open_first()?)
-    }
-
-    /// Open boot mode for explicit firmware recovery. Drop this instance and
-    /// rediscover with `open_first` after the device re-enumerates.
-    pub fn open_bootloader() -> LogicAnalyzerResult<Self> {
-        Self::new(RusbTransport::open_bootloader()?)
     }
 }
 
 impl<T: UsbTransport> DsLogicU3Pro16<T> {
-    pub fn new(transport: T) -> LogicAnalyzerResult<Self> {
+    fn new(transport: T) -> LogicAnalyzerResult<Self> {
         let settings = DsLogicCaptureSettings::finite(1_000_000, 1, 1024);
         let info = LogicAnalyzerInfo {
             driver: "dslogic_u3pro16".into(),
@@ -701,7 +657,7 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
     }
 
     /// Configure the capture FPGA with the exact U3Pro16 `.bin` image.
-    pub fn configure_fpga(&mut self, image: &[u8]) -> LogicAnalyzerResult<()> {
+    fn configure_fpga(&mut self, image: &[u8]) -> LogicAnalyzerResult<()> {
         if image.is_empty() || image.len() > 0x00ff_ffff {
             return Err(LogicAnalyzerError::InvalidSettings(
                 "FPGA image must be 1..=0x00ffffff bytes".into(),
@@ -772,7 +728,7 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
     }
 
     /// Move this configured driver into a graph source node.
-    pub fn into_source(
+    pub(crate) fn into_source(
         self,
         config: LogicCaptureConfig,
     ) -> LogicAnalyzerResult<LogicAnalyzerSource<Self>> {
@@ -781,7 +737,7 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
 
     /// Validates a finite buffered request against the connected device and
     /// freezes the plan used by the subsequent `start_capture` call.
-    pub fn negotiate_buffered_capture(
+    pub(crate) fn negotiate_buffered_capture(
         &mut self,
         config: &LogicCaptureConfig,
     ) -> LogicAnalyzerResult<DsLogicCapturePlan> {
@@ -798,7 +754,7 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
 
     /// Negotiates and configures the device without arming acquisition.
     /// `start_capture` then performs only the final Start command.
-    pub fn prepare_buffered_capture(
+    pub(crate) fn prepare_buffered_capture(
         &mut self,
         config: &LogicCaptureConfig,
     ) -> LogicAnalyzerResult<DsLogicCapturePlan> {
@@ -809,7 +765,7 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
 
     /// Validates a host-streamed request against the connected link and
     /// configures the device without issuing the final Start command.
-    pub fn prepare_streaming_capture(
+    pub(crate) fn prepare_streaming_capture(
         &mut self,
         config: &LogicCaptureConfig,
     ) -> LogicAnalyzerResult<DsLogicCapturePlan> {
@@ -825,27 +781,8 @@ impl<T: UsbTransport> DsLogicU3Pro16<T> {
         Ok(plan)
     }
 
-    pub fn take_trigger_header(&mut self) -> Option<DsLogicTriggerHeader> {
+    pub(crate) fn take_trigger_header(&mut self) -> Option<DsLogicTriggerHeader> {
         self.trigger_header.take()
-    }
-
-    /// Explicitly dangerous FX2 recovery. Only pass the exact U3Pro16 `.fw` image.
-    pub fn recover_usb_firmware(&mut self, image: &[u8]) -> LogicAnalyzerResult<()> {
-        if image.is_empty() || image.len() > 0x1_0000 {
-            return Err(LogicAnalyzerError::InvalidSettings(
-                "firmware image must fit in the 16-bit FX2 address space".into(),
-            ));
-        }
-        self.raw_control_write(0x40, 0xa0, 0xe600, &[1])?;
-        for (chunk_index, chunk) in image.chunks(4096).enumerate() {
-            self.raw_control_write(0x40, 0xa0, (chunk_index * 4096) as u16, chunk)?;
-        }
-        self.raw_control_write(0x40, 0xa0, 0xe600, &[0])
-    }
-
-    /// Explicitly dangerous nonvolatile-memory write; normal captures never call this.
-    pub fn dangerous_write_nvm(&mut self, offset: u16, data: &[u8]) -> LogicAnalyzerResult<()> {
-        self.command_write(12, offset, data)
     }
 
     fn raw_control_write(
@@ -1902,8 +1839,8 @@ mod tests {
         bounded_capture_event_queue,
     };
 
-    use super::super::buffered::DsLogicU3Pro16BufferedProvider;
-    use super::super::streaming::DsLogicU3Pro16StreamingProvider;
+    use super::super::buffered::BufferedProvider;
+    use super::super::streaming::StreamingProvider;
     use super::*;
 
     #[derive(Deserialize)]
@@ -2639,8 +2576,7 @@ mod tests {
             signal_processing::CaptureChannelId::new("u3pro16:input:2"),
             signal_processing::CaptureChannelId::new("u3pro16:input:5"),
         ];
-        let provider =
-            DsLogicU3Pro16BufferedProvider::new(analyzer, config, channels.clone()).unwrap();
+        let provider = BufferedProvider::new(analyzer, config, channels.clone()).unwrap();
         let directory = tempfile::tempdir().unwrap();
         let session_id = CaptureSessionId::new(0x8316);
         let descriptor = CaptureStoreDescriptor::new(session_id, channels).unwrap();
@@ -2724,8 +2660,7 @@ mod tests {
             signal_processing::CaptureChannelId::new("u3pro16:input:2"),
             signal_processing::CaptureChannelId::new("u3pro16:input:5"),
         ];
-        let provider =
-            DsLogicU3Pro16StreamingProvider::new(analyzer, config, channels.clone()).unwrap();
+        let provider = StreamingProvider::new(analyzer, config, channels.clone()).unwrap();
         let directory = tempfile::tempdir().unwrap();
         let session_id = CaptureSessionId::new(0x8317);
         let descriptor = CaptureStoreDescriptor::new(session_id, channels).unwrap();
@@ -2822,8 +2757,7 @@ mod tests {
             signal_processing::CaptureChannelId::new("u3pro16:input:2"),
             signal_processing::CaptureChannelId::new("u3pro16:input:5"),
         ];
-        let provider =
-            DsLogicU3Pro16StreamingProvider::new(analyzer, config, channels.clone()).unwrap();
+        let provider = StreamingProvider::new(analyzer, config, channels.clone()).unwrap();
         let directory = tempfile::tempdir().unwrap();
         let session_id = CaptureSessionId::new(0x8319);
         let descriptor = CaptureStoreDescriptor::new(session_id, channels).unwrap();
@@ -2867,8 +2801,7 @@ mod tests {
             signal_processing::CaptureChannelId::new("u3pro16:input:2"),
             signal_processing::CaptureChannelId::new("u3pro16:input:5"),
         ];
-        let provider =
-            DsLogicU3Pro16StreamingProvider::new(analyzer, config, channels.clone()).unwrap();
+        let provider = StreamingProvider::new(analyzer, config, channels.clone()).unwrap();
         let directory = tempfile::tempdir().unwrap();
         let session_id = CaptureSessionId::new(0x8318);
         let descriptor = CaptureStoreDescriptor::new(session_id, channels).unwrap();
@@ -2893,20 +2826,20 @@ mod tests {
     fn streaming_plan_enforces_link_speed_and_highest_enabled_input() {
         let mut config = LogicCaptureConfig::finite(100_000_000, 0b111, 4096);
         config.mode = CaptureMode::Streaming;
-        assert!(u3pro16_streaming_plan(&config, LinkSpeed::High).is_ok());
+        assert!(DsLogicCapturePlan::new_streaming(&config, LinkSpeed::High).is_ok());
 
         config.input_mask = 0b1001;
-        assert!(u3pro16_streaming_plan(&config, LinkSpeed::High).is_err());
-        assert!(u3pro16_streaming_plan(&config, LinkSpeed::Super).is_ok());
+        assert!(DsLogicCapturePlan::new_streaming(&config, LinkSpeed::High).is_err());
+        assert!(DsLogicCapturePlan::new_streaming(&config, LinkSpeed::Super).is_ok());
 
         config.sample_rate_hz = 250_000_000;
         config.input_mask = 1 << 12;
-        assert!(u3pro16_streaming_plan(&config, LinkSpeed::Super).is_err());
+        assert!(DsLogicCapturePlan::new_streaming(&config, LinkSpeed::Super).is_err());
 
         config.sample_rate_hz = 100_000;
         config.input_mask = 1;
-        assert!(u3pro16_streaming_plan(&config, LinkSpeed::High).is_ok());
-        assert!(u3pro16_streaming_plan(&config, LinkSpeed::Super).is_err());
+        assert!(DsLogicCapturePlan::new_streaming(&config, LinkSpeed::High).is_ok());
+        assert!(DsLogicCapturePlan::new_streaming(&config, LinkSpeed::Super).is_err());
     }
 
     #[test]
@@ -2949,8 +2882,7 @@ mod tests {
                     signal_processing::CaptureChannelId::new(format!("u3pro16:input:{channel}"))
                 })
                 .collect::<Vec<_>>();
-            let provider =
-                DsLogicU3Pro16StreamingProvider::new(analyzer, config, channels.clone()).unwrap();
+            let provider = StreamingProvider::new(analyzer, config, channels.clone()).unwrap();
             let directory = tempfile::tempdir().unwrap();
             let session_id = CaptureSessionId::new(0x9000 + channels_count as u128);
             let descriptor = CaptureStoreDescriptor::new(session_id, channels.clone()).unwrap();

@@ -21,11 +21,11 @@ use super::trigger::LogicTrigger;
 
 /// Static capabilities exposed by a logic-analyzer driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LogicAnalyzerInfo {
-    pub driver: String,
-    pub model: String,
-    pub channels: u8,
-    pub sample_rates_hz: Vec<u64>,
+pub(crate) struct LogicAnalyzerInfo {
+    pub(crate) driver: String,
+    pub(crate) model: String,
+    pub(crate) channels: u8,
+    pub(crate) sample_rates_hz: Vec<u64>,
 }
 
 /// Capture mode supported by most logic analyzers.
@@ -93,7 +93,7 @@ impl LogicCaptureConfig {
 
 /// Data encoding returned by a driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogicEncoding {
+pub(crate) enum LogicEncoding {
     /// Samples are LSB-first, with enabled inputs in increasing input-number order.
     InterleavedLsbFirst,
     /// Device-specific encoded data. It is delivered only through the `raw` port.
@@ -105,17 +105,22 @@ pub enum LogicEncoding {
 /// `bit_offset` and `bit_len` identify the valid span in `data`; they permit a
 /// driver to preserve transfer boundaries that occur in the middle of a sample.
 #[derive(Clone, Debug)]
-pub struct LogicChunk {
-    pub data: Arc<[u8]>,
-    pub bit_offset: u8,
-    pub bit_len: usize,
-    pub channel_count: u8,
-    pub start_bit: u64,
-    pub encoding: LogicEncoding,
+pub(crate) struct LogicChunk {
+    pub(crate) data: Arc<[u8]>,
+    pub(crate) bit_offset: u8,
+    pub(crate) bit_len: usize,
+    pub(crate) channel_count: u8,
+    pub(crate) start_bit: u64,
+    pub(crate) encoding: LogicEncoding,
 }
 
 impl LogicChunk {
-    pub fn interleaved(data: impl Into<Arc<[u8]>>, channel_count: u8, start_bit: u64) -> Self {
+    #[cfg(test)]
+    pub(crate) fn interleaved(
+        data: impl Into<Arc<[u8]>>,
+        channel_count: u8,
+        start_bit: u64,
+    ) -> Self {
         let data = data.into();
         Self {
             bit_len: data.len() * 8,
@@ -128,7 +133,7 @@ impl LogicChunk {
     }
 
     #[inline]
-    pub fn bit(&self, relative_bit: usize) -> bool {
+    pub(crate) fn bit(&self, relative_bit: usize) -> bool {
         debug_assert!(relative_bit < self.bit_len);
         let absolute = usize::from(self.bit_offset) + relative_bit;
         (self.data[absolute / 8] >> (absolute % 8)) & 1 != 0
@@ -156,7 +161,7 @@ pub type LogicAnalyzerResult<T> = std::result::Result<T, LogicAnalyzerError>;
 
 /// The minimal interface required by the runtime and by prospective C-driver
 /// bridges. Implementations must serialize their device control path.
-pub trait LogicAnalyzer: Send + 'static {
+pub(crate) trait LogicAnalyzer: Send + 'static {
     fn info(&self) -> &LogicAnalyzerInfo;
     fn configure_capture(&mut self, config: &LogicCaptureConfig) -> LogicAnalyzerResult<()>;
     /// The rate of the active capture. Valid after `start_capture` succeeds.
@@ -171,7 +176,7 @@ pub trait LogicAnalyzer: Send + 'static {
 /// Output names retain the file-source convention: `d0..dN` are transition
 /// streams, `b0..bN` are aligned packed blocks, and `raw` exposes lossless
 /// driver chunks. Logical input N is the Nth enabled hardware input.
-pub struct LogicAnalyzerSource<A: LogicAnalyzer> {
+pub(crate) struct LogicAnalyzerSource<A: LogicAnalyzer> {
     name: String,
     analyzer: Option<A>,
     channels: u8,
@@ -183,7 +188,7 @@ pub struct LogicAnalyzerSource<A: LogicAnalyzer> {
 }
 
 impl<A: LogicAnalyzer> LogicAnalyzerSource<A> {
-    pub fn new(analyzer: A, config: LogicCaptureConfig) -> LogicAnalyzerResult<Self> {
+    pub(crate) fn new(analyzer: A, config: LogicCaptureConfig) -> LogicAnalyzerResult<Self> {
         signal_processing::register_type::<LogicChunk>();
         let channels = config.input_mask.count_ones() as u8;
         if channels == 0
@@ -207,7 +212,7 @@ impl<A: LogicAnalyzer> LogicAnalyzerSource<A> {
         })
     }
 
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub(crate) fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
         self
     }

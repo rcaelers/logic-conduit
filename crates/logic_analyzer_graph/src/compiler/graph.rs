@@ -2060,9 +2060,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use logic_analyzer_processing::nodes::sinks::binary_file_writer::BinaryFileWriter;
-    use logic_analyzer_processing::nodes::sources::synthetic_capture_source::{
-        BufferedFakeConfig, BufferedFakeProvider,
-    };
+    use logic_analyzer_processing::test_support::{BufferedFakeConfig, BufferedFakeProvider};
     use node_graph::{NodeDef, NodeGraphWidget};
     use signal_processing::{
         AcquisitionContext, AcquisitionResult, CaptureAnalysisChannel, CaptureAnalysisSource,

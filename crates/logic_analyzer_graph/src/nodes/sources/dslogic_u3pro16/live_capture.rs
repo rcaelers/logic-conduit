@@ -3,10 +3,9 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use logic_analyzer_processing::nodes::sources::dslogic_u3pro16::{
-    DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider, LinkSpeed,
-    u3pro16_buffered_plan, u3pro16_streaming_plan,
+    DsLogicCapturePlan, DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider, LinkSpeed,
+    LogicCaptureConfig,
 };
-use logic_analyzer_processing::nodes::sources::logic_analyzer::LogicCaptureConfig;
 use signal_processing::{
     AcquisitionContext, AcquisitionError, AcquisitionResult, CaptureAnalysisChannel,
     CaptureAnalysisSource, CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery,
@@ -141,15 +140,15 @@ pub(crate) fn feature(state: &Value) -> Result<Option<Box<dyn LiveCaptureFeature
     let config = capture_config(&state)?;
     let trigger_conditions = super::trigger::conditions(&state)?;
     let (profile, delivery, actual_samples) = if state.mode.selected() == "Buffer" {
-        let plan = u3pro16_buffered_plan(&config).map_err(|error| error.to_string())?;
+        let plan = DsLogicCapturePlan::new_buffered(&config).map_err(|error| error.to_string())?;
         (
             U3Pro16AcquisitionProfile::Buffered,
             CaptureDataDelivery::BufferedUpload,
             plan.actual_samples(),
         )
     } else {
-        let high = u3pro16_streaming_plan(&config, LinkSpeed::High);
-        let super_speed = u3pro16_streaming_plan(&config, LinkSpeed::Super);
+        let high = DsLogicCapturePlan::new_streaming(&config, LinkSpeed::High);
+        let super_speed = DsLogicCapturePlan::new_streaming(&config, LinkSpeed::Super);
         if let (Err(high), Err(super_speed)) = (high, super_speed) {
             return Err(format!(
                 "U3Pro16 stream is unsupported on High Speed ({high}) and SuperSpeed ({super_speed})"

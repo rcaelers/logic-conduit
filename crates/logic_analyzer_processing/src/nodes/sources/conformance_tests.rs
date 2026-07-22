@@ -10,7 +10,7 @@ use signal_processing::{
     PreparedAcquisition, SimpleTriggerCondition, bounded_capture_event_queue,
 };
 
-use super::synthetic_capture_source::{
+use crate::test_support::{
     BufferedFakeConfig, BufferedFakeProvider, DeterministicFakeConfig, DeterministicFakeProvider,
 };
 

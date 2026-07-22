@@ -8,7 +8,9 @@ use std::collections::VecDeque;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::Ordering;
 
 use tracing::debug;
 
@@ -27,11 +29,13 @@ use crate::types::{CsPolarity, Endianness};
 
 use super::types::{ParallelInputStrategy, StrobeMode};
 
+#[allow(dead_code)]
 #[derive(Clone)]
-pub struct ParallelDecoderMetrics {
+pub(crate) struct ParallelDecoderMetrics {
     inner: Arc<ParallelDecoderMetricsInner>,
 }
 
+#[allow(dead_code)]
 struct ParallelDecoderMetricsInner {
     workers: AtomicUsize,
     max_outstanding: AtomicUsize,
@@ -52,16 +56,20 @@ impl Default for ParallelDecoderMetrics {
     }
 }
 
+#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ParallelDecoderMetricsSnapshot {
-    pub workers: usize,
-    pub max_outstanding: usize,
-    pub max_reorder: usize,
-    pub estimated_fragment_bytes: usize,
+pub(crate) struct ParallelDecoderMetricsSnapshot {
+    pub(crate) workers: usize,
+    pub(crate) max_outstanding: usize,
+    pub(crate) max_reorder: usize,
+    pub(crate) estimated_fragment_bytes: usize,
 }
 
 impl ParallelDecoderMetrics {
-    pub fn snapshot(&self) -> ParallelDecoderMetricsSnapshot {
+    #[allow(dead_code)]
+    #[cfg(test)]
+    pub(crate) fn snapshot(&self) -> ParallelDecoderMetricsSnapshot {
         let max_outstanding = self.inner.max_outstanding.load(Ordering::Relaxed);
         let max_fragment_bytes = self.inner.max_fragment_bytes.load(Ordering::Relaxed);
         ParallelDecoderMetricsSnapshot {
@@ -207,7 +215,9 @@ impl ParallelDecoder {
         platform_effective_workers(self.parallel_workers, &self.parallel_metrics)
     }
 
-    pub fn parallel_metrics(&self) -> ParallelDecoderMetrics {
+    #[allow(dead_code)]
+    #[cfg(test)]
+    pub(crate) fn parallel_metrics(&self) -> ParallelDecoderMetrics {
         self.parallel_metrics.clone()
     }
 

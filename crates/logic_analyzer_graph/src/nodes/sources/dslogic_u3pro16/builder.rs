@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::nodes::sources::dslogic_u3pro16::DsLogicU3Pro16;
+use logic_analyzer_processing::nodes::sources::dslogic_u3pro16::DsLogicU3Pro16Source;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock, ViewerRetention};
 
@@ -129,9 +129,7 @@ impl RuntimeBuilder for DsLogicU3Pro16Builder {
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: U3Pro16State = parse_state(state)?;
         let config = super::implementation::capture_config(&state)?;
-        let source = DsLogicU3Pro16::open_first()
-            .map_err(|error| error.to_string())?
-            .into_source(config)
+        let source = DsLogicU3Pro16Source::open_first(config)
             .map_err(|error| error.to_string())?
             .with_name(name);
         Ok(Box::new(source))

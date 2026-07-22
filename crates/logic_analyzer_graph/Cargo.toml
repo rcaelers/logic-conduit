@@ -9,7 +9,7 @@ name = "logic_analyzer_graph"
 path = "src/lib.rs"
 
 [features]
-test-support = []
+test-support = ["logic-analyzer-processing/test-support"]
 
 [dependencies]
 signal-processing = { path = "../signal_processing" }
@@ -24,3 +24,4 @@ blake3 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+logic-analyzer-processing = { path = "../logic_analyzer_processing", features = ["test-support"] }

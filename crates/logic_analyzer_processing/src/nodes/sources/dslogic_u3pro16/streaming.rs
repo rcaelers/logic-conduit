@@ -10,18 +10,18 @@ use signal_processing::{
     CaptureSessionId, CaptureSessionState, PreparedAcquisition,
 };
 
-use super::super::logic_analyzer::{LogicAnalyzer, LogicCaptureConfig};
 use super::common::{CanonicalTransferAssembler, map_analyzer_error};
 use super::implementation::{DsLogicCapturePlan, DsLogicU3Pro16, RusbTransport, UsbTransport};
+use crate::support::logic_analyzer::{LogicAnalyzer, LogicCaptureConfig};
 
-pub struct DsLogicU3Pro16StreamingProvider<T: UsbTransport = RusbTransport> {
+pub(crate) struct StreamingProvider<T: UsbTransport = RusbTransport> {
     analyzer: DsLogicU3Pro16<T>,
     config: LogicCaptureConfig,
     channels: Arc<[CaptureChannelId]>,
 }
 
-impl DsLogicU3Pro16StreamingProvider<RusbTransport> {
-    pub fn open_first(
+impl StreamingProvider<RusbTransport> {
+    fn open_first(
         config: LogicCaptureConfig,
         channels: impl Into<Arc<[CaptureChannelId]>>,
     ) -> AcquisitionResult<Self> {
@@ -30,8 +30,8 @@ impl DsLogicU3Pro16StreamingProvider<RusbTransport> {
     }
 }
 
-impl<T: UsbTransport> DsLogicU3Pro16StreamingProvider<T> {
-    pub fn new(
+impl<T: UsbTransport> StreamingProvider<T> {
+    pub(crate) fn new(
         analyzer: DsLogicU3Pro16<T>,
         config: LogicCaptureConfig,
         channels: impl Into<Arc<[CaptureChannelId]>>,
@@ -49,7 +49,7 @@ impl<T: UsbTransport> DsLogicU3Pro16StreamingProvider<T> {
         })
     }
 
-    pub fn prepare(
+    pub(crate) fn prepare(
         mut self,
         mut context: AcquisitionContext,
     ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
@@ -81,6 +81,29 @@ impl<T: UsbTransport> DsLogicU3Pro16StreamingProvider<T> {
             handle: None,
             started: false,
         }))
+    }
+}
+
+/// Host-streamed live-acquisition adapter for the U3Pro16.
+pub struct DsLogicU3Pro16StreamingProvider {
+    inner: StreamingProvider,
+}
+
+impl DsLogicU3Pro16StreamingProvider {
+    /// Opens the first U3Pro16 for a host-streamed capture.
+    pub fn open_first(
+        config: LogicCaptureConfig,
+        channels: impl Into<Arc<[CaptureChannelId]>>,
+    ) -> AcquisitionResult<Self> {
+        StreamingProvider::open_first(config, channels).map(|inner| Self { inner })
+    }
+
+    /// Prepares the capture through the generic acquisition runtime.
+    pub fn prepare(
+        self,
+        context: AcquisitionContext,
+    ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
+        self.inner.prepare(context)
     }
 }
 

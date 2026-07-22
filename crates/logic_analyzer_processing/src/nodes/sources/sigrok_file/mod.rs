@@ -2,7 +2,4 @@
 
 mod implementation;
 
-pub use implementation::{
-    SigrokCaptureReader, SigrokChunkedCaptureReader, SigrokFileCaptureDataSource, SigrokFileSource,
-    open_sigrok_chunked_capture,
-};
+pub use implementation::{SigrokCaptureReader, SigrokFileCaptureDataSource, SigrokFileSource};

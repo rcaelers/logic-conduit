@@ -289,7 +289,7 @@ impl CaptureDataSource for DslFileCaptureDataSource {
     }
 }
 
-pub type DslChunkedCaptureReader = IndexSampler<DslCaptureReader>;
+pub(crate) type DslChunkedCaptureReader = IndexSampler<DslCaptureReader>;
 
 fn dsl_sidecar_path(path: &Path) -> PathBuf {
     let mut name = path
@@ -1332,7 +1332,9 @@ mod tests {
 
     use super::*;
 
-    pub fn open_dsl_chunked_capture<P: AsRef<Path>>(path: P) -> Result<DslChunkedCaptureReader> {
+    pub(crate) fn open_dsl_chunked_capture<P: AsRef<Path>>(
+        path: P,
+    ) -> Result<DslChunkedCaptureReader> {
         let source = DslFileCaptureDataSource::open(path)?;
         IndexSampler::open_data_source_with_progress(source, |_| {})
     }

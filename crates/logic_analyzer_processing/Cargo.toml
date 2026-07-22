@@ -11,6 +11,9 @@ license = "MIT"
 name = "logic_analyzer_processing"
 path = "src/lib.rs"
 
+[features]
+test-support = []
+
 [dependencies]
 signal-processing = { path = "../signal_processing" }
 zip = { workspace = true }

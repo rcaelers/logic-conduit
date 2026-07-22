@@ -177,9 +177,11 @@ impl CaptureDataSource for SigrokFileCaptureDataSource {
     }
 }
 
-pub type SigrokChunkedCaptureReader = signal_processing::IndexSampler<SigrokCaptureReader>;
+#[cfg(test)]
+type SigrokChunkedCaptureReader = signal_processing::IndexSampler<SigrokCaptureReader>;
 
-pub fn open_sigrok_chunked_capture<P: AsRef<Path>>(path: P) -> Result<SigrokChunkedCaptureReader> {
+#[cfg(test)]
+fn open_sigrok_chunked_capture<P: AsRef<Path>>(path: P) -> Result<SigrokChunkedCaptureReader> {
     signal_processing::IndexSampler::open_data_source(SigrokFileCaptureDataSource::open(path)?)
 }
 

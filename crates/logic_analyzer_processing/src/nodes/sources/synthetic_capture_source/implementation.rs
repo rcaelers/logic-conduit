@@ -308,7 +308,9 @@ mod tests {
                     channels[data_channel][position]
                 })
                 .collect::<Vec<_>>()
-                .as_chunks::<8>().0.iter()
+                .as_chunks::<8>()
+                .0
+                .iter()
                 .map(|bits| {
                     bits.iter()
                         .fold(0u8, |word, bit| (word << 1) | u8::from(*bit))
