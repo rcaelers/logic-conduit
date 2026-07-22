@@ -250,9 +250,10 @@ impl LogicAnalyzerViewer {
                     let (visible_start_ns, visible_end_ns) = self.visible_window_ns();
                     for (track, track_top, track_height) in group.track_rects(y_top, display_height)
                     {
-                        if let Some(query) = opaque_lanes
-                            .iter()
-                            .find(|lane| lane.name() == track.lane.as_str())
+                        if group.renderer.uses_opaque_snapshot(&track)
+                            && let Some(query) = opaque_lanes
+                                .iter()
+                                .find(|lane| lane.name() == track.lane.as_str())
                         {
                             let snapshot = query.snapshot(CollectedLaneSnapshotRequest {
                                 start_time_ns: visible_start_ns,
@@ -685,6 +686,10 @@ mod frame_tests {
     }
 
     impl ViewerLaneRenderer for OpaqueSnapshotRenderer {
+        fn uses_opaque_snapshot(&self, _track: &ViewerLaneTrack) -> bool {
+            true
+        }
+
         fn draw_opaque_lane(
             &self,
             _track: &ViewerLaneTrack,

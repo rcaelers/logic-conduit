@@ -15,7 +15,7 @@ use crate::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapReco
 use crate::derived_word_store::{
     AnnotationQuery, AnnotationStoreBackend, AnnotationStoreMetadata, AnnotationStoreWriterBackend,
     IndexedAnnotationStore, IndexedAnnotationWriter, LiveStoreConfig, LiveStoreMetadata,
-    StoreStatus,
+    StoreStatus, WordPresenceBucket,
 };
 use crate::errors::{WorkError, WorkResult};
 use crate::events::{Annotation, NumberSample, TextSample, Trigger, Word};
@@ -141,6 +141,112 @@ pub struct CollectedValueLane {
 pub struct IndexedAnnotationLane {
     query: Arc<dyn AnnotationQuery>,
     store: IndexedAnnotationStore,
+}
+
+/// Immutable bounded result of a built-in word-lane query.
+#[derive(Clone, Debug)]
+pub enum WordLaneSnapshot {
+    Exact {
+        annotations: Vec<Annotation>,
+        last_timestamp_ns: Option<u64>,
+    },
+    Presence(Vec<WordPresenceBucket>),
+    Activity,
+    Error,
+}
+
+struct WordLaneQuery {
+    store: DerivedLanes,
+    name: String,
+}
+
+impl WordLaneQuery {
+    fn snapshot(&self, request: CollectedLaneSnapshotRequest) -> WordLaneSnapshot {
+        enum Source {
+            InMemory(WordLaneSnapshot),
+            Indexed(Arc<dyn AnnotationQuery>),
+            Missing,
+        }
+
+        let source = {
+            let lanes = self.store.read();
+            let Some(lane) = lanes.iter().find(|lane| lane.name == self.name) else {
+                return WordLaneSnapshot::Error;
+            };
+            match &lane.data {
+                DerivedLaneData::Annotations(annotations) => {
+                    let first = annotations
+                        .partition_point(|annotation| annotation.end_ns < request.start_time_ns);
+                    let last = annotations
+                        .partition_point(|annotation| annotation.start_ns <= request.end_time_ns);
+                    let visible = &annotations[first..last];
+                    if visible.len() > request.max_items {
+                        Source::InMemory(WordLaneSnapshot::Activity)
+                    } else {
+                        Source::InMemory(WordLaneSnapshot::Exact {
+                            annotations: visible.to_vec(),
+                            last_timestamp_ns: annotations
+                                .last()
+                                .map(|annotation| annotation.start_ns),
+                        })
+                    }
+                }
+                DerivedLaneData::IndexedAnnotations(indexed) => {
+                    Source::Indexed(Arc::clone(indexed.query()))
+                }
+                _ => Source::Missing,
+            }
+        };
+
+        match source {
+            Source::InMemory(snapshot) => snapshot,
+            Source::Missing => WordLaneSnapshot::Error,
+            Source::Indexed(query) => {
+                let target_points = request.max_items.max(1);
+                let Ok(buckets) = query.coarse_presence_window(
+                    request.start_time_ns,
+                    request.end_time_ns,
+                    target_points,
+                ) else {
+                    return WordLaneSnapshot::Error;
+                };
+                let count = buckets
+                    .iter()
+                    .map(|bucket| bucket.word_count)
+                    .fold(0u64, u64::saturating_add);
+                if count > request.max_items as u64 {
+                    return WordLaneSnapshot::Presence(buckets);
+                }
+                match query.exact_window(
+                    request.start_time_ns,
+                    request.end_time_ns,
+                    request.max_items.max(1),
+                ) {
+                    Ok(window) if window.complete => WordLaneSnapshot::Exact {
+                        annotations: window.annotations,
+                        last_timestamp_ns: query.metadata().last_timestamp_ns,
+                    },
+                    Ok(_) => WordLaneSnapshot::Presence(buckets),
+                    Err(_) => WordLaneSnapshot::Error,
+                }
+            }
+        }
+    }
+}
+
+impl CollectedLaneQuery for WordLaneQuery {
+    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+        self
+    }
+
+    fn snapshot(
+        &self,
+        request: CollectedLaneSnapshotRequest,
+    ) -> Option<OpaqueCollectedLaneSnapshot> {
+        Some(OpaqueCollectedLaneSnapshot::new(Arc::new(
+            self.snapshot(request),
+        )))
+    }
 }
 
 impl IndexedAnnotationLane {
@@ -621,12 +727,11 @@ impl DerivedLanes {
     }
 }
 
-/// The generic shapes retained derived data can take. Every producer output
-/// reduces to one of these without naming any eventual presentation subscriber.
+/// Legacy built-in fallback shapes retained for existing viewer and table
+/// presentations while payload adapters migrate to owned query handles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CollectedDataKind {
     Signal,
-    Words,
     Trigger,
     Number,
     Text,
@@ -634,7 +739,6 @@ enum CollectedDataKind {
 
 enum LaneBuffer {
     Signal(VecDeque<Sample>),
-    Words(VecDeque<Word>),
     Trigger(VecDeque<Trigger>),
     Number(VecDeque<NumberSample>),
     Text(VecDeque<TextSample>),
@@ -646,123 +750,55 @@ struct Lane {
     store_index: usize,
     buffer: LaneBuffer,
     eos: bool,
-    word_writer: Option<IndexedAnnotationWriter>,
-    word_indexed: bool,
     retention: DerivedDataRetention,
 }
 
 impl Lane {
     fn new(kind: CollectedDataKind, request: CollectedLaneRequest) -> Self {
-        let options = request
-            .options::<CollectedWordLaneOptions>()
-            .cloned()
-            .unwrap_or_default();
-        Self::with_options(
+        Self::with_store(
             kind,
             request.name().to_owned(),
             request.lanes().clone(),
             request.retention(),
             Some(request.payload().clone()),
-            options,
         )
     }
 
-    fn with_options(
+    fn with_store(
         kind: CollectedDataKind,
         name: String,
         store: DerivedLanes,
         retention: DerivedDataRetention,
         payload: Option<CollectedPayloadDescriptor>,
-        word_options: CollectedWordLaneOptions,
     ) -> Self {
-        let (data, word_writer, word_indexed) = match kind {
-            CollectedDataKind::Signal => (DerivedLaneData::Digital(Vec::new()), None, false),
-            CollectedDataKind::Words if word_options.indexed => {
-                if let Some(persistent) = word_options.store_config.persistence.as_ref() {
-                    match IndexedAnnotationStore::open_persistent(persistent) {
-                        Ok(Some(indexed_store)) => {
-                            let store_index = store.register_with_payload(
-                                name.clone(),
-                                payload,
-                                DerivedLaneData::IndexedAnnotations(
-                                    IndexedAnnotationLane::from_store(indexed_store),
-                                ),
-                            );
-                            store.set_word_display_format(store_index, word_options.display_format);
-                            return Self {
-                                kind,
-                                store,
-                                store_index,
-                                buffer: LaneBuffer::Words(VecDeque::new()),
-                                eos: false,
-                                word_writer: None,
-                                word_indexed: true,
-                                retention,
-                            };
-                        }
-                        Ok(None) => {}
-                        Err(error) => tracing::warn!(
-                            lane = %name,
-                            %error,
-                            "invalid persistent derived-data cache; rebuilding"
-                        ),
-                    }
-                }
-                match IndexedAnnotationWriter::create(word_options.store_config) {
-                    Ok((writer, indexed_store)) => (
-                        DerivedLaneData::IndexedAnnotations(IndexedAnnotationLane::from_store(
-                            indexed_store,
-                        )),
-                        Some(writer),
-                        true,
-                    ),
-                    Err(error) => {
-                        tracing::warn!(
-                            lane = %name,
-                            %error,
-                            "could not create indexed derived-data word lane; using in-memory storage"
-                        );
-                        (DerivedLaneData::Annotations(Vec::new()), None, false)
-                    }
-                }
-            }
-            CollectedDataKind::Words => (DerivedLaneData::Annotations(Vec::new()), None, false),
-            CollectedDataKind::Trigger => (DerivedLaneData::Markers(Vec::new()), None, false),
+        let data = match kind {
+            CollectedDataKind::Signal => DerivedLaneData::Digital(Vec::new()),
+            CollectedDataKind::Trigger => DerivedLaneData::Markers(Vec::new()),
             CollectedDataKind::Number | CollectedDataKind::Text => {
                 let value_kind = if kind == CollectedDataKind::Number {
                     CollectedValueKind::Number
                 } else {
                     CollectedValueKind::Text
                 };
-                (
-                    DerivedLaneData::Values(CollectedValueLane {
-                        kind: value_kind,
-                        values: Vec::new(),
-                    }),
-                    None,
-                    false,
-                )
+                DerivedLaneData::Values(CollectedValueLane {
+                    kind: value_kind,
+                    values: Vec::new(),
+                })
             }
         };
         let buffer = match kind {
             CollectedDataKind::Signal => LaneBuffer::Signal(VecDeque::new()),
-            CollectedDataKind::Words => LaneBuffer::Words(VecDeque::new()),
             CollectedDataKind::Trigger => LaneBuffer::Trigger(VecDeque::new()),
             CollectedDataKind::Number => LaneBuffer::Number(VecDeque::new()),
             CollectedDataKind::Text => LaneBuffer::Text(VecDeque::new()),
         };
         let store_index = store.register_with_payload(name, payload, data);
-        if kind == CollectedDataKind::Words {
-            store.set_word_display_format(store_index, word_options.display_format);
-        }
         Self {
             kind,
             store,
             store_index,
             buffer,
             eos: false,
-            word_writer,
-            word_indexed,
             retention,
         }
     }
@@ -775,7 +811,6 @@ impl CollectedLaneIngestor for Lane {
             CollectedDataKind::Signal => {
                 PortSchema::new::<Sample>(name, index, PortDirection::Input)
             }
-            CollectedDataKind::Words => PortSchema::new::<Word>(name, index, PortDirection::Input),
             CollectedDataKind::Trigger => {
                 PortSchema::new::<Trigger>(name, index, PortDirection::Input)
             }
@@ -814,29 +849,6 @@ impl CollectedLaneIngestor for Lane {
                 let len = batch.len();
                 if !batch.is_empty() {
                     store.append_digital_batch_retained(self.store_index, batch, retention);
-                }
-                len
-            }
-            LaneBuffer::Words(buffer) => {
-                let batch = drain_batch!(Word, buffer);
-                let len = batch.len();
-                if !batch.is_empty() {
-                    if let Some(writer) = self.word_writer.as_mut()
-                        && let Err(error) =
-                            AnnotationStoreWriterBackend::append_batch(writer, &batch)
-                    {
-                        tracing::warn!(lane = self.store_index, %error, "indexed derived-data word lane failed; disabling further appends");
-                        self.word_writer = None;
-                    }
-                    if !self.word_indexed {
-                        store.append_word_batch_retained(
-                            self.store_index,
-                            batch
-                                .into_iter()
-                                .map(|word| (word.timestamp_ns, word.duration_ns, word.value)),
-                            retention,
-                        );
-                    }
                 }
                 len
             }
@@ -883,12 +895,6 @@ impl CollectedLaneIngestor for Lane {
                 len
             }
         };
-        if self.eos
-            && let Some(mut writer) = self.word_writer.take()
-            && let Err(error) = AnnotationStoreWriterBackend::finish(&mut writer)
-        {
-            tracing::warn!(lane = self.store_index, %error, "could not finish indexed derived-data word lane");
-        }
         Ok(batch_len)
     }
 
@@ -925,6 +931,167 @@ impl CollectedWordLaneOptions {
     }
 }
 
+/// Typed append state for the built-in word payload. It owns the indexed
+/// writer and fallback in-memory storage policy independently of the other
+/// built-in payload adapters.
+struct WordLane {
+    store: DerivedLanes,
+    store_index: usize,
+    buffer: VecDeque<Word>,
+    eos: bool,
+    writer: Option<IndexedAnnotationWriter>,
+    indexed: bool,
+    retention: DerivedDataRetention,
+}
+
+impl WordLane {
+    fn new(request: CollectedLaneRequest) -> Self {
+        let options = request
+            .options::<CollectedWordLaneOptions>()
+            .cloned()
+            .unwrap_or_default();
+        let name = request.name().to_owned();
+        let store = request.lanes().clone();
+        let lane = Self::with_options(
+            name.clone(),
+            store.clone(),
+            request.retention(),
+            Some(request.payload().clone()),
+            options,
+        );
+        request.publish_query(Arc::new(WordLaneQuery { store, name }));
+        lane
+    }
+
+    fn with_options(
+        name: String,
+        store: DerivedLanes,
+        retention: DerivedDataRetention,
+        payload: Option<CollectedPayloadDescriptor>,
+        options: CollectedWordLaneOptions,
+    ) -> Self {
+        if options.indexed {
+            if let Some(persistent) = options.store_config.persistence.as_ref() {
+                match IndexedAnnotationStore::open_persistent(persistent) {
+                    Ok(Some(indexed_store)) => {
+                        let store_index = store.register_with_payload(
+                            name,
+                            payload,
+                            DerivedLaneData::IndexedAnnotations(IndexedAnnotationLane::from_store(
+                                indexed_store,
+                            )),
+                        );
+                        store.set_word_display_format(store_index, options.display_format);
+                        return Self {
+                            store,
+                            store_index,
+                            buffer: VecDeque::new(),
+                            eos: false,
+                            writer: None,
+                            indexed: true,
+                            retention,
+                        };
+                    }
+                    Ok(None) => {}
+                    Err(error) => tracing::warn!(
+                        lane = %name,
+                        %error,
+                        "invalid persistent derived-data cache; rebuilding"
+                    ),
+                }
+            }
+            match IndexedAnnotationWriter::create(options.store_config) {
+                Ok((writer, indexed_store)) => {
+                    let store_index = store.register_with_payload(
+                        name,
+                        payload,
+                        DerivedLaneData::IndexedAnnotations(IndexedAnnotationLane::from_store(
+                            indexed_store,
+                        )),
+                    );
+                    store.set_word_display_format(store_index, options.display_format);
+                    return Self {
+                        store,
+                        store_index,
+                        buffer: VecDeque::new(),
+                        eos: false,
+                        writer: Some(writer),
+                        indexed: true,
+                        retention,
+                    };
+                }
+                Err(error) => tracing::warn!(
+                    lane = %name,
+                    %error,
+                    "could not create indexed derived-data word lane; using in-memory storage"
+                ),
+            }
+        }
+
+        let store_index =
+            store.register_with_payload(name, payload, DerivedLaneData::Annotations(Vec::new()));
+        store.set_word_display_format(store_index, options.display_format);
+        Self {
+            store,
+            store_index,
+            buffer: VecDeque::new(),
+            eos: false,
+            writer: None,
+            indexed: false,
+            retention,
+        }
+    }
+}
+
+impl CollectedLaneIngestor for WordLane {
+    fn input_schema(&self, index: usize) -> PortSchema {
+        PortSchema::new::<Word>(format!("in{index}"), index, PortDirection::Input)
+    }
+
+    fn drain(&mut self, input: &InputPort, _retention: DerivedDataRetention) -> WorkResult<usize> {
+        use crossbeam_channel::TryRecvError;
+
+        let mut batch = Vec::with_capacity(DRAIN_BATCH_SIZE);
+        if let Some(mut receiver) = input.get::<Word>(&mut self.buffer) {
+            match receiver.try_recv_many(&mut batch, DRAIN_BATCH_SIZE) {
+                Ok(_) | Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => self.eos = true,
+            }
+        } else {
+            self.eos = true;
+        }
+        let batch_len = batch.len();
+        if !batch.is_empty() {
+            if let Some(writer) = self.writer.as_mut()
+                && let Err(error) = AnnotationStoreWriterBackend::append_batch(writer, &batch)
+            {
+                tracing::warn!(lane = self.store_index, %error, "indexed derived-data word lane failed; disabling further appends");
+                self.writer = None;
+            }
+            if !self.indexed {
+                self.store.append_word_batch_retained(
+                    self.store_index,
+                    batch
+                        .into_iter()
+                        .map(|word| (word.timestamp_ns, word.duration_ns, word.value)),
+                    self.retention,
+                );
+            }
+        }
+        if self.eos
+            && let Some(mut writer) = self.writer.take()
+            && let Err(error) = AnnotationStoreWriterBackend::finish(&mut writer)
+        {
+            tracing::warn!(lane = self.store_index, %error, "could not finish indexed derived-data word lane");
+        }
+        Ok(batch_len)
+    }
+
+    fn is_finished(&self) -> bool {
+        self.eos
+    }
+}
+
 /// Creates the built-in retained word-lane adapter for non-graph callers
 /// such as benchmark tools. Graph compilation obtains the same adapter from
 /// [`CollectedPayloadRegistry`].
@@ -934,8 +1101,7 @@ pub fn built_in_word_lane_ingestor(
     retention: DerivedDataRetention,
     options: CollectedWordLaneOptions,
 ) -> Box<dyn CollectedLaneIngestor> {
-    Box::new(Lane::with_options(
-        CollectedDataKind::Words,
+    Box::new(WordLane::with_options(
         name.into(),
         lanes,
         retention,
@@ -946,6 +1112,17 @@ pub fn built_in_word_lane_ingestor(
 
 struct BuiltinPayloadAdapter {
     kind: CollectedDataKind,
+}
+
+struct WordPayloadAdapter;
+
+impl CollectedPayloadAdapter for WordPayloadAdapter {
+    fn create_ingestor(
+        &self,
+        request: CollectedLaneRequest,
+    ) -> Result<Box<dyn CollectedLaneIngestor>, String> {
+        Ok(Box::new(WordLane::new(request)))
+    }
 }
 
 impl CollectedPayloadAdapter for BuiltinPayloadAdapter {
@@ -976,11 +1153,8 @@ pub fn register_builtin_collected_payload_adapters(
         "org.logicconduit.digital-sample/v1",
         CollectedDataKind::Signal,
     )?;
-    register::<Word>(
-        registry,
-        "org.logicconduit.word/v1",
-        CollectedDataKind::Words,
-    )?;
+    registry.register::<Word>("org.logicconduit.word/v1")?;
+    registry.register_adapter::<Word>(Arc::new(WordPayloadAdapter))?;
     register::<Trigger>(
         registry,
         "org.logicconduit.trigger/v1",
@@ -1144,8 +1318,18 @@ mod tests {
         }
 
         fn with_lane(mut self, kind: CollectedDataKind, name: impl Into<String>) -> Self {
-            self.lanes.push(Box::new(Lane::with_options(
+            self.lanes.push(Box::new(Lane::with_store(
                 kind,
+                name.into(),
+                self.test_lanes.clone(),
+                self.retention,
+                None,
+            )));
+            self
+        }
+
+        fn with_words(mut self, name: impl Into<String>) -> Self {
+            self.lanes.push(Box::new(WordLane::with_options(
                 name.into(),
                 self.test_lanes.clone(),
                 self.retention,
@@ -1349,6 +1533,64 @@ mod tests {
                 .map(CollectedPayloadDescriptor::stable_id),
             Some("org.logicconduit.word/v1")
         );
+        let snapshot = lanes.opaque_lanes()[0]
+            .snapshot(CollectedLaneSnapshotRequest {
+                start_time_ns: 0,
+                end_time_ns: 1,
+                max_items: 8,
+            })
+            .unwrap();
+        assert!(matches!(
+            snapshot.value::<WordLaneSnapshot>().as_deref(),
+            Some(WordLaneSnapshot::Exact { annotations, .. }) if annotations.is_empty()
+        ));
+    }
+
+    #[test]
+    fn word_query_returns_only_a_bounded_visible_snapshot() {
+        let lanes = DerivedLanes::new();
+        lanes.register(
+            "words",
+            DerivedLaneData::Annotations(vec![
+                Annotation {
+                    start_ns: 10,
+                    end_ns: 20,
+                    value: 1,
+                },
+                Annotation {
+                    start_ns: 30,
+                    end_ns: 40,
+                    value: 2,
+                },
+                Annotation {
+                    start_ns: 50,
+                    end_ns: 60,
+                    value: 3,
+                },
+            ]),
+        );
+        let query = WordLaneQuery {
+            store: lanes,
+            name: "words".to_owned(),
+        };
+
+        assert!(matches!(
+            query.snapshot(CollectedLaneSnapshotRequest {
+                start_time_ns: 25,
+                end_time_ns: 45,
+                max_items: 2,
+            }),
+            WordLaneSnapshot::Exact { annotations, .. }
+                if annotations.iter().map(|annotation| annotation.value).eq([2])
+        ));
+        assert!(matches!(
+            query.snapshot(CollectedLaneSnapshotRequest {
+                start_time_ns: 0,
+                end_time_ns: 100,
+                max_items: 2,
+            }),
+            WordLaneSnapshot::Activity
+        ));
     }
 
     #[test]
@@ -1356,7 +1598,7 @@ mod tests {
         let store = DerivedLanes::new();
         let mut sink = test_collector(store.clone())
             .with_lane(CollectedDataKind::Signal, "latch.q")
-            .with_lane(CollectedDataKind::Words, "decoder.words")
+            .with_words("decoder.words")
             .with_lane(CollectedDataKind::Trigger, "start.match");
 
         let wd = Watchdog::new();
@@ -1747,7 +1989,7 @@ mod tests {
         let mut sink = test_collector(store.clone())
             .with_indexed_words(false)
             .with_retention(DerivedDataRetention::MaxEntries(4))
-            .with_lane(CollectedDataKind::Words, "words");
+            .with_words("words");
         let wd = Watchdog::new();
         let (tx, rx) = bounded::<ChannelMessage<Word>>(2);
         tx.send(ChannelMessage::Batch(
@@ -1789,7 +2031,7 @@ mod tests {
 
         let _sink = test_collector(store.clone())
             .with_word_store_config(config)
-            .with_lane(CollectedDataKind::Words, "words");
+            .with_words("words");
 
         assert!(matches!(
             store.read()[0].data,
@@ -1807,7 +2049,7 @@ mod tests {
         };
         let mut sink = test_collector(store.clone())
             .with_word_store_config(config)
-            .with_lane(CollectedDataKind::Words, "words");
+            .with_words("words");
         let word_count = DRAIN_BATCH_SIZE + 17;
         let words: Vec<_> = (0..word_count as u64)
             .map(|index| Word::new(index, index * 10))
@@ -1849,7 +2091,7 @@ mod tests {
         };
         let mut sink = test_collector(store.clone())
             .with_word_store_config(config)
-            .with_lane(CollectedDataKind::Words, "words")
+            .with_words("words")
             .with_lane(CollectedDataKind::Trigger, "trigger");
         let wd = Watchdog::new();
         let (word_tx, word_rx) = bounded::<ChannelMessage<Word>>(4);
@@ -1895,7 +2137,7 @@ mod tests {
         let store = DerivedLanes::new();
         let first = test_collector(store.clone())
             .with_word_store_config(config.clone())
-            .with_lane(CollectedDataKind::Words, "words");
+            .with_words("words");
         let first_query = match &store.read()[0].data {
             DerivedLaneData::IndexedAnnotations(indexed) => Arc::clone(&indexed.query),
             other => panic!("expected indexed annotation lane, got {other:?}"),
@@ -1903,7 +2145,7 @@ mod tests {
 
         let second = test_collector(store.clone())
             .with_word_store_config(config)
-            .with_lane(CollectedDataKind::Words, "words");
+            .with_words("words");
         let second_query = match &store.read()[0].data {
             DerivedLaneData::IndexedAnnotations(indexed) => Arc::clone(&indexed.query),
             other => panic!("expected indexed annotation lane, got {other:?}"),
@@ -1938,7 +2180,7 @@ mod tests {
         let lanes = DerivedLanes::new();
         let mut sink = test_collector(lanes.clone())
             .with_word_store_config(config)
-            .with_lane(CollectedDataKind::Words, "words");
+            .with_words("words");
         assert!(matches!(
             lanes.read()[0].data,
             DerivedLaneData::IndexedAnnotations(_)

@@ -18,32 +18,24 @@
 
 ### Plugin-extensible viewer payloads
 
-`ViewerLaneKind`, `ViewerValueKind`, `DerivedLaneData`, `LaneBuffer`, the synthetic Viewer
-socket, and `ViewerBuilder` currently form a closed list of payloads the viewer understands.
-Number and text viewing may remain as the temporary implementation, but the viewer must become
-open to plugin-defined socket and value types. A plugin-defined camera frame, for example, must
-be able to register timestamp extraction, storage/sampling, a thumbnail lane, and its default
-presentation without editing a generic crate.
+Collected payloads already register typed ingestion adapters, stable identities, viewable
+presentations, and bounded opaque snapshots. The remaining work removes the legacy built-in
+fallback representation and completes the payload capabilities required by arbitrary plugins.
 
-- Extend the collected-payload identity registry keyed by the existing open
-  `PortKind`/payload `TypeId` with a typed ingest factory, timeline semantics, storage/query
-  adapter, default badge/group, and renderer. Registration must compose with
-  `register_payload::<T>()`; adding a type must not require a match arm in
-  `logic_analyzer_graph`, `signal_processing`, or `logic_analyzer_viewer`.
 - Replace the closed `DerivedLaneData` and `ViewerValueKind` representation with registered lane
   data/query handles. Separate typed append state from immutable UI snapshots so arbitrary
   values do not require conversion to strings or integers. Each adapter supplies timestamp/span
   extraction, timeline extent, bounded visible-window sampling, dense/activity fallback, and an
   optional indexed or custom storage capability.
-- Generalize `ViewerLaneFrame` and `ViewerLaneRenderer` beyond word-style annotation formatting.
-  A renderer must receive a bounded, type-safe-or-contract-checked snapshot plus a restricted
-  drawing context containing row geometry, clipping, time transforms, theme information, and
-  interaction hooks. This must support custom content such as camera thumbnails without giving
-  plugins access to `LogicAnalyzerViewer` internals or locked runtime storage.
+- Extend the opaque-snapshot `ViewerLaneRenderer` contract with time transforms, theme
+  information, and interaction hooks. Renderers must continue to receive only bounded,
+  type-safe-or-contract-checked snapshots and no `LogicAnalyzerViewer` internals or locked
+  runtime storage.
 - Retain reusable built-in adapters for digital signals, words, triggers, numbers, and text, but
-  register them through the same public mechanism plugins use. Default singleton presentation,
-  cursor snapping, timeline fitting, row activity, retention, and native/wasm behavior must be
-  capabilities of the registered adapter rather than exhaustive matches over built-in variants.
+  replace their shared `CollectedDataKind`/`LaneBuffer` implementation with adapter-owned typed
+  append state and query handles. Default singleton presentation, cursor snapping, timeline
+  fitting, row activity, retention, and native/wasm behavior must be capabilities of the
+  registered adapter rather than exhaustive matches over built-in variants.
 - Define saved-graph compatibility for Viewer sockets and `show_in_view` outputs. Migrate legacy
   built-in lanes explicitly, preserve their visual behavior, and show a user-visible warning for
   missing plugin payload/presentation registrations.

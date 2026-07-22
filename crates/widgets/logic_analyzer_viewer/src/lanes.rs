@@ -127,6 +127,13 @@ pub trait ViewerLaneRenderer: Send + Sync {
         default
     }
 
+    /// Whether this renderer consumes an adapter-owned opaque snapshot for
+    /// the track. Returning `false` preserves the legacy fallback without
+    /// issuing an unnecessary retained-data query.
+    fn uses_opaque_snapshot(&self, _track: &ViewerLaneTrack) -> bool {
+        false
+    }
+
     /// Draws an adapter-owned opaque lane from an immutable, bounded
     /// snapshot. Returning `true` means the renderer handled the track;
     /// returning `false` allows the built-in retained-lane fallback to
