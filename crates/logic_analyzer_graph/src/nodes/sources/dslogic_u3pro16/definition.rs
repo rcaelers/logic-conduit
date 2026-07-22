@@ -173,13 +173,13 @@ fn format_duration(nanoseconds: u64) -> String {
         format!("{:.2} h", nanoseconds as f64 / 3_600_000_000_000.0)
     } else if nanoseconds >= 60_000_000_000 {
         format!("{:.2} min", nanoseconds as f64 / 60_000_000_000.0)
-    } else if nanoseconds >= 1_000_000_000 && nanoseconds % 1_000_000_000 != 0 {
+    } else if nanoseconds >= 1_000_000_000 && !nanoseconds.is_multiple_of(1_000_000_000) {
         format!("{:.2} s", nanoseconds as f64 / 1_000_000_000.0)
-    } else if nanoseconds % 1_000_000_000 == 0 {
+    } else if nanoseconds.is_multiple_of(1_000_000_000) {
         format!("{} s", nanoseconds / 1_000_000_000)
-    } else if nanoseconds % 1_000_000 == 0 {
+    } else if nanoseconds.is_multiple_of(1_000_000) {
         format!("{} ms", nanoseconds / 1_000_000)
-    } else if nanoseconds % 1_000 == 0 {
+    } else if nanoseconds.is_multiple_of(1_000) {
         format!("{} µs", nanoseconds / 1_000)
     } else {
         format!("{nanoseconds} ns")
