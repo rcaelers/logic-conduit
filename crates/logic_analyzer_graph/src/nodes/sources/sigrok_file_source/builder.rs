@@ -5,42 +5,12 @@ use serde_json::Value;
 use logic_analyzer_processing::nodes::sources::sigrok_file::SigrokFileSource;
 use logic_analyzer_processing::nodes::sources::synthetic_capture_source::SyntheticCaptureSource;
 use node_graph::Socket;
-use signal_processing::{
-    CaptureIndexBuildProgress, CaptureIndexFactory, IndexSampler, ProcessNode, Sample, SampleBlock,
-};
+use signal_processing::{ProcessNode, Sample, SampleBlock};
 
 use crate::{
-    CapturePresentation, CapturePresentationSignal, CompileCtx, PortKind, ResolvedInputs,
-    RuntimeBuilder, parse_state,
+    CaptureCacheIdentity, CapturePresentation, CapturePresentationSignal, CompileCtx, PortKind,
+    ResolvedInputs, RuntimeBuilder, parse_state,
 };
-
-struct SigrokCaptureIndexFactory {
-    path: std::path::PathBuf,
-}
-
-impl CaptureIndexFactory for SigrokCaptureIndexFactory {
-    fn display_name(&self) -> String {
-        self.path.display().to_string()
-    }
-
-    fn open(
-        self: Box<Self>,
-        progress: &mut dyn FnMut(CaptureIndexBuildProgress),
-    ) -> signal_processing::Result<Box<dyn signal_processing::CaptureIndex + Send>> {
-        let source =
-            logic_analyzer_processing::nodes::sources::sigrok_file::SigrokFileCaptureDataSource::open(
-                &self.path,
-            )
-            .map_err(|error| signal_processing::Error::ParseError(error.to_string()))?;
-        IndexSampler::open_data_source_with_progress(source, |value| {
-            progress(CaptureIndexBuildProgress {
-                completed: value.completed_roots,
-                total: value.total_roots,
-            });
-        })
-        .map(|index| Box::new(index) as Box<dyn signal_processing::CaptureIndex + Send>)
-    }
-}
 
 pub(crate) struct SigrokFileSourceBuilder;
 
@@ -111,10 +81,26 @@ impl RuntimeBuilder for SigrokFileSourceBuilder {
         if path.as_os_str().is_empty() {
             return Ok(None);
         }
+        let indexed = SigrokFileSource::indexed_capture_presentation(&path);
         Ok(Some(CapturePresentation::Indexed {
-            identity: path.clone(),
-            factory: Box::new(SigrokCaptureIndexFactory { path }),
+            identity: indexed.identity,
+            factory: indexed.factory,
         }))
+    }
+    fn capture_cache_identity(
+        &self,
+        state: &Value,
+        _resolved: &ResolvedInputs,
+    ) -> CaptureCacheIdentity {
+        let Ok(state) = parse_state::<super::definition::SigrokFileSourceState>(state) else {
+            return CaptureCacheIdentity::Dynamic;
+        };
+        if state.demo_data {
+            return CaptureCacheIdentity::NotCapture;
+        }
+        SigrokFileSource::capture_cache_identity(&state.file.value)
+            .map(CaptureCacheIdentity::Stable)
+            .unwrap_or(CaptureCacheIdentity::Dynamic)
     }
     fn input_required(&self, socket: &Socket, state: &Value) -> bool {
         socket.def_index == 0

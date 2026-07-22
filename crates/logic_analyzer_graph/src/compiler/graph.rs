@@ -471,6 +471,16 @@ pub trait RuntimeBuilder {
     fn capture_presentation(&self, _state: &Value) -> Result<Option<CapturePresentation>, String> {
         Ok(None)
     }
+    /// Opaque identity for a finite capture source's raw data. A dynamic
+    /// source cannot safely reuse persistent derived data before its input is
+    /// known at runtime.
+    fn capture_cache_identity(
+        &self,
+        _state: &Value,
+        _resolved: &ResolvedInputs,
+    ) -> CaptureCacheIdentity {
+        CaptureCacheIdentity::NotCapture
+    }
     /// Optional protocol-neutral description of how this node samples its
     /// inputs. Concrete builders own the mapping from node state and input
     /// definitions to this electrical presentation contract.
@@ -553,6 +563,14 @@ pub enum CapturePresentation {
         duration_us: f64,
     },
     Channels(Vec<(usize, String)>),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CaptureCacheIdentity {
+    #[default]
+    NotCapture,
+    Dynamic,
+    Stable([u8; 32]),
 }
 
 pub struct DiscoveredCapturePresentation {
@@ -819,6 +837,7 @@ pub struct CompiledNode {
     /// Pipeline node name: `n{id}_{title_slug}`.
     pub runtime_name: String,
     pub resolved: ResolvedInputs,
+    pub capture_cache_identity: CaptureCacheIdentity,
     pub viewer_word_caches: Vec<Option<PersistentStoreConfig>>,
 }
 
@@ -1271,12 +1290,17 @@ pub fn lower(
         .iter()
         .map(|&id| {
             let node = &graph.nodes[&id];
+            let resolved = resolved.remove(&id).unwrap_or_default();
+            let builder = registry
+                .get(node.def_name())
+                .expect("retained node has a registered builder");
             CompiledNode {
                 id,
                 builder: node.def_name().to_owned(),
                 state: node.state.clone(),
                 runtime_name: runtime_name(node),
-                resolved: resolved.remove(&id).unwrap_or_default(),
+                capture_cache_identity: builder.capture_cache_identity(&node.state, &resolved),
+                resolved,
                 viewer_word_caches: Vec::new(),
             }
         })
@@ -3364,26 +3388,6 @@ mod tests {
             cache_platform::persistent_lane_key(&compiled, viewer.id, 0, edge),
             cache_platform::persistent_lane_key(&compiled, viewer.id, 1, edge)
         );
-    }
-
-    #[test]
-    fn capture_file_identity_changes_when_source_file_changes() {
-        use std::io::Write;
-
-        let mut file = tempfile::NamedTempFile::new().unwrap();
-        file.write_all(b"first").unwrap();
-        file.as_file().sync_data().unwrap();
-        let path = std::fs::canonicalize(file.path()).unwrap();
-        let digest = |path: &Path| {
-            let mut hasher = blake3::Hasher::new();
-            cache_platform::hash_capture_file_identity(&mut hasher, path).unwrap();
-            *hasher.finalize().as_bytes()
-        };
-        let first = digest(&path);
-        file.write_all(b"-changed").unwrap();
-        file.as_file().sync_data().unwrap();
-        let second = digest(&path);
-        assert_ne!(first, second);
     }
 
     #[test]

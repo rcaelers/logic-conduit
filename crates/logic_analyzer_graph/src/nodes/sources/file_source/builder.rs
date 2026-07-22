@@ -3,44 +3,16 @@
 
 use serde_json::Value;
 
-use logic_analyzer_processing::nodes::sources::dsl_file::{DeferredDslFileSource, DslFileSource};
+use logic_analyzer_processing::nodes::sources::dsl_file::DslFileSource;
 use node_graph::Socket;
 use signal_processing::{
-    CaptureIndexBuildProgress, CaptureIndexFactory, DEFAULT_VIEWER_MAX_ENTRIES, IndexSampler,
-    ProcessNode, Sample, SampleBlock, TextSample, ViewerRetention,
+    DEFAULT_VIEWER_MAX_ENTRIES, ProcessNode, Sample, SampleBlock, TextSample, ViewerRetention,
 };
 
 use crate::{
-    CapturePresentation, CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state,
+    CaptureCacheIdentity, CapturePresentation, CompileCtx, PortKind, ResolvedInputs,
+    RuntimeBuilder, parse_state,
 };
-
-struct DslCaptureIndexFactory {
-    path: std::path::PathBuf,
-}
-
-impl CaptureIndexFactory for DslCaptureIndexFactory {
-    fn display_name(&self) -> String {
-        self.path.display().to_string()
-    }
-
-    fn open(
-        self: Box<Self>,
-        progress: &mut dyn FnMut(CaptureIndexBuildProgress),
-    ) -> signal_processing::Result<Box<dyn signal_processing::CaptureIndex + Send>> {
-        let source =
-            logic_analyzer_processing::nodes::sources::dsl_file::DslFileCaptureDataSource::open(
-                &self.path,
-            )
-            .map_err(|error| signal_processing::Error::ParseError(error.to_string()))?;
-        IndexSampler::open_data_source_with_progress(source, |value| {
-            progress(CaptureIndexBuildProgress {
-                completed: value.completed_roots,
-                total: value.total_roots,
-            });
-        })
-        .map(|index| Box::new(index) as Box<dyn signal_processing::CaptureIndex + Send>)
-    }
-}
 
 pub(crate) struct FileSourceBuilder;
 
@@ -54,8 +26,8 @@ impl RuntimeBuilder for FileSourceBuilder {
     fn accepted_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
         match socket.def_index {
             // A wired File socket delivers the filename at run start (the
-            // deferred source below); the trade-off is documented on
-            // `logic_analyzer_processing::nodes::sources::dsl_file::DeferredDslFileSource`.
+            // source below); the trade-off is documented on
+            // `logic_analyzer_processing::nodes::sources::dsl_file::DslFileSource`.
             0 => vec![PortKind::of::<TextSample>()],
             _ => vec![],
         }
@@ -86,10 +58,26 @@ impl RuntimeBuilder for FileSourceBuilder {
         if path.as_os_str().is_empty() {
             return Ok(None);
         }
+        let indexed = DslFileSource::indexed_capture_presentation(&path);
         Ok(Some(CapturePresentation::Indexed {
-            identity: path.clone(),
-            factory: Box::new(DslCaptureIndexFactory { path }),
+            identity: indexed.identity,
+            factory: indexed.factory,
         }))
+    }
+    fn capture_cache_identity(
+        &self,
+        state: &Value,
+        resolved: &ResolvedInputs,
+    ) -> CaptureCacheIdentity {
+        let Ok(state) = parse_state::<super::definition::DslFileSourceState>(state) else {
+            return CaptureCacheIdentity::Dynamic;
+        };
+        if resolved.kind(0).is_some() || state.file.value.trim().is_empty() {
+            return CaptureCacheIdentity::Dynamic;
+        }
+        DslFileSource::capture_cache_identity(&state.file.value)
+            .map(CaptureCacheIdentity::Stable)
+            .unwrap_or(CaptureCacheIdentity::Dynamic)
     }
     fn input_required(&self, _socket: &Socket, _state: &Value) -> bool {
         // Empty paths are valid in saved/example graphs.  Runtime start will
@@ -108,9 +96,7 @@ impl RuntimeBuilder for FileSourceBuilder {
         if resolved.kind(0).is_some() {
             // File socket wired: the path arrives over the wire at run
             // start; consumers stream (no index to query yet at build).
-            return Ok(Box::new(
-                DeferredDslFileSource::new(channels).with_name(name),
-            ));
+            return Ok(DslFileSource::from_filename_input(name, channels));
         }
         let source = DslFileSource::new(&state.file.value, channels)
             .map_err(|e| format!("cannot open '{}': {e}", state.file.value))?

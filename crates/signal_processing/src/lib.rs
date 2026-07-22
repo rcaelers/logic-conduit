@@ -80,7 +80,8 @@ pub use app_manager::AppManager;
 pub use capture::{
     BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureIndex,
     CaptureIndexBuildProgress, CaptureIndexFactory, CaptureMetadata, CaptureSampledChannel,
-    CaptureSampledWindow, CaptureSource, CaptureTransition, CaptureWaveformSegment, packed_bit,
+    CaptureSampledWindow, CaptureSource, CaptureTransition, CaptureWaveformSegment,
+    IndexedCapturePresentation, packed_bit,
 };
 pub use capture_policy::{
     CaptureFraction, CapturePolicy, CapturePolicyCapabilities, CapturePolicyContext,

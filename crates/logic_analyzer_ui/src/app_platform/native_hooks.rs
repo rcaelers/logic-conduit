@@ -143,7 +143,9 @@ impl App {
         }
         self.platform.capture_presentation_identity = Some(discovered.identity);
         match discovered.presentation {
-            compiler::CapturePresentation::Indexed { identity, factory } => {
+            compiler::CapturePresentation::Indexed {
+                identity, factory, ..
+            } => {
                 self.logic_analyzer.set_capture_factory(identity, factory);
             }
             compiler::CapturePresentation::InMemory { signals, .. } => {

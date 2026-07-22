@@ -2,4 +2,4 @@
 
 mod implementation;
 
-pub use implementation::{SigrokCaptureReader, SigrokFileCaptureDataSource, SigrokFileSource};
+pub use implementation::SigrokFileSource;

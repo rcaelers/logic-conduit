@@ -2,6 +2,4 @@
 
 mod implementation;
 
-pub use implementation::{
-    DeferredDslFileSource, DslCaptureReader, DslFileCaptureDataSource, DslFileSource,
-};
+pub use implementation::DslFileSource;

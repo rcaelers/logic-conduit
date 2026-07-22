@@ -2176,6 +2176,7 @@ dependencies = [
 name = "logic-analyzer-processing"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "clap",
  "crossbeam-channel",
  "libc",

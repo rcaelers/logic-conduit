@@ -5,12 +5,14 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use logic_analyzer_processing::nodes::sources::dsl_file::DslFileCaptureDataSource;
 use node_graph::{GraphState, NodeId};
-use signal_processing::{CaptureDataSource, IndexedAnnotationStore, PersistentStoreConfig, Word};
+use signal_processing::{IndexedAnnotationStore, PersistentStoreConfig, Word};
 
 use super::errors::CompileError;
-use super::graph::{BuilderRegistry, CompiledEdge, CompiledGraph, RuntimeBuilder, compiled_node};
+use super::graph::{
+    BuilderRegistry, CaptureCacheIdentity, CompiledEdge, CompiledGraph, RuntimeBuilder,
+    compiled_node,
+};
 use super::port_kind::PortKind;
 
 const DERIVED_CACHE_ABI_VERSION: u32 = 2;
@@ -219,11 +221,10 @@ fn persistent_upstream_key(
     hash_field(&mut hasher, b"node");
     hash_field(&mut hasher, node.builder.as_bytes());
     hash_field(&mut hasher, &canonical_json_bytes(&node.state));
-    if node.builder == "DSL File Source" {
-        if compiled.edges.iter().any(|edge| edge.to.0 == node_id) {
-            return None;
-        }
-        hash_capture_source(&mut hasher, &node.state)?;
+    match node.capture_cache_identity {
+        CaptureCacheIdentity::NotCapture => {}
+        CaptureCacheIdentity::Dynamic => return None,
+        CaptureCacheIdentity::Stable(identity) => hash_field(&mut hasher, &identity),
     }
     let mut incoming: Vec<_> = compiled
         .edges
@@ -249,35 +250,6 @@ fn persistent_upstream_key(
     let key = *hasher.finalize().as_bytes();
     memo.insert(node_id, key);
     Some(key)
-}
-
-fn hash_capture_source(hasher: &mut blake3::Hasher, state: &Value) -> Option<()> {
-    let state: crate::nodes::DslFileSourceState = serde_json::from_value(state.clone()).ok()?;
-    let path = std::fs::canonicalize(&state.file.value).ok()?;
-    hash_capture_file_identity(hasher, &path)?;
-    let source = DslFileCaptureDataSource::open(&path).ok()?;
-    let metadata = source.metadata();
-    hash_field(hasher, &metadata.samplerate_hz.to_bits().to_le_bytes());
-    hash_field(hasher, &metadata.total_samples.to_le_bytes());
-    hash_field(hasher, &(metadata.total_probes as u64).to_le_bytes());
-    for name in &metadata.probe_names {
-        hash_field(hasher, name.as_bytes());
-    }
-    Some(())
-}
-
-pub(crate) fn hash_capture_file_identity(hasher: &mut blake3::Hasher, path: &Path) -> Option<()> {
-    let file_metadata = std::fs::metadata(path).ok()?;
-    let modified_ns = file_metadata
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_nanos();
-    hash_field(hasher, path.to_string_lossy().as_bytes());
-    hash_field(hasher, &file_metadata.len().to_le_bytes());
-    hash_field(hasher, &modified_ns.to_le_bytes());
-    Some(())
 }
 
 fn canonical_json_bytes(value: &Value) -> Vec<u8> {

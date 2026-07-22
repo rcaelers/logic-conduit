@@ -340,6 +340,13 @@ pub struct CaptureIndexBuildProgress {
     pub total: usize,
 }
 
+/// Generic indexed-capture presentation supplied by a concrete source.
+///
+pub struct IndexedCapturePresentation {
+    pub identity: PathBuf,
+    pub factory: Box<dyn CaptureIndexFactory>,
+}
+
 /// Deferred construction of an indexed capture view.
 ///
 /// Concrete file formats implement this at their owning integration boundary. Consumers can move

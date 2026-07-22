@@ -1,38 +1,22 @@
 //! Sigrok v2 (`.sr`) processing-node file source.
-//!
-//! Sigrok session files are ZIP archives containing INI metadata and one or
-//! more interleaved `logic-*` sample files.  This source decodes the logic
-//! samples into level changes for each selected probe.
 
-use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 
-use zip::ZipArchive;
-
-use signal_processing::capture::{
-    BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureMetadata,
-    CaptureSource,
-};
 use signal_processing::{
-    Error, InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, Result, Sample, Sender,
-    WorkError, WorkResult,
+    CaptureIndex, CaptureIndexBuildProgress, CaptureIndexFactory, InputPort, OutputPort,
+    PortDirection, PortSchema, ProcessNode, Result, Sample, Sender, WorkError, WorkResult,
 };
 
-use super::super::capture_archive::zip_error;
+use crate::support::sigrok_file::{SigrokCapture, SigrokFileCaptureDataSource};
+use crate::support::capture_index::capture_cache_identity;
 
-/// A PulseView/sigrok v2 session source.  Sigrok stores complete sample words
-/// (unlike DSLogic's per-channel bit blocks), so this reader keeps the
-/// decompressed logic stream in memory and exposes edge streams.
+/// A PulseView/sigrok v2 session source.
 pub struct SigrokFileSource {
     name: String,
-    header: CaptureMetadata,
-    samples: Arc<[u8]>,
-    unitsize: usize,
+    capture: SigrokCapture,
     num_channels: u8,
     shutdown: Arc<AtomicBool>,
     completed: Arc<AtomicUsize>,
@@ -81,241 +65,53 @@ impl ChannelStream {
     }
 }
 
-/// Random-access reader for a sigrok v2 logic capture.
-pub struct SigrokCaptureReader {
-    source: SigrokFileSource,
-}
-
-impl SigrokCaptureReader {
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let source = SigrokFileSource::new(path, 1)?;
-        Ok(Self { source })
-    }
-}
-
-impl CaptureSource for SigrokCaptureReader {
-    fn metadata(&self) -> &CaptureMetadata {
-        &self.source.header
-    }
-
-    fn read_sample(&mut self, channel: usize, position: u64) -> Result<bool> {
-        if channel >= self.source.header.total_probes {
-            return Err(Error::InvalidProbe(channel));
-        }
-        if position >= self.source.header.total_samples {
-            return Err(Error::OutOfBounds(position));
-        }
-        let byte = self.source.samples[position as usize * self.source.unitsize + channel / 8];
-        Ok(byte & (1 << (channel % 8)) != 0)
-    }
-}
-
-impl BlockCaptureSource for SigrokCaptureReader {
-    fn read_packed_block(&mut self, channel: usize, block: u64) -> Result<BlockData> {
-        if channel >= self.source.header.total_probes {
-            return Err(Error::InvalidProbe(channel));
-        }
-        if block != 0 {
-            return Err(Error::InvalidBlock(block));
-        }
-        let samples = self.source.header.total_samples as usize;
-        let mut packed = vec![0_u8; samples.div_ceil(8)];
-        for sample in 0..samples {
-            let byte = self.source.samples[sample * self.source.unitsize + channel / 8];
-            if byte & (1 << (channel % 8)) != 0 {
-                packed[sample / 8] |= 1 << (sample % 8);
-            }
-        }
-        Ok(BlockData::from(packed))
-    }
-}
-
-/// Indexable sigrok v2 capture data for the logic-analyzer viewer.
-#[derive(Debug, Clone)]
-pub struct SigrokFileCaptureDataSource {
+struct SigrokCaptureIndexFactory {
     path: PathBuf,
-    header: CaptureMetadata,
-    source_len: u64,
 }
 
-impl SigrokFileCaptureDataSource {
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path.as_ref().to_path_buf();
-        let source_len = std::fs::metadata(&path)?.len();
-        let header = SigrokFileSource::new(&path, 1)?.header.clone();
-        Ok(Self {
-            path,
-            header,
-            source_len,
-        })
-    }
-}
-
-impl CaptureDataSource for SigrokFileCaptureDataSource {
-    type Reader = SigrokCaptureReader;
-
-    fn open_reader(&self) -> Result<Self::Reader> {
-        SigrokCaptureReader::open(&self.path)
-    }
-    fn metadata(&self) -> &CaptureMetadata {
-        &self.header
-    }
-    fn fingerprint(&self) -> CaptureFingerprint {
-        CaptureFingerprint {
-            revision: self.source_len,
-        }
-    }
-    fn index_path(&self) -> Option<PathBuf> {
-        Some(sigrok_sidecar_path(&self.path))
-    }
+impl CaptureIndexFactory for SigrokCaptureIndexFactory {
     fn display_name(&self) -> String {
-        self.path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("capture.sr")
-            .to_string()
+        self.path.display().to_string()
     }
-}
 
-#[cfg(test)]
-type SigrokChunkedCaptureReader = signal_processing::IndexSampler<SigrokCaptureReader>;
-
-#[cfg(test)]
-fn open_sigrok_chunked_capture<P: AsRef<Path>>(path: P) -> Result<SigrokChunkedCaptureReader> {
-    signal_processing::IndexSampler::open_data_source(SigrokFileCaptureDataSource::open(path)?)
-}
-
-fn sigrok_sidecar_path(path: &Path) -> PathBuf {
-    let mut name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("capture.sr")
-        .to_string();
-    name.push_str(".idx");
-    path.with_file_name(name)
+    fn open(
+        self: Box<Self>,
+        progress: &mut dyn FnMut(CaptureIndexBuildProgress),
+    ) -> Result<Box<dyn CaptureIndex + Send>> {
+        let source = SigrokFileCaptureDataSource::open(&self.path)?;
+        signal_processing::IndexSampler::open_data_source_with_progress(source, |value| {
+            progress(CaptureIndexBuildProgress {
+                completed: value.completed_roots,
+                total: value.total_roots,
+            });
+        })
+        .map(|index| Box::new(index) as Box<dyn CaptureIndex + Send>)
+    }
 }
 
 impl SigrokFileSource {
-    pub fn new<P: AsRef<Path>>(path: P, num_channels: u8) -> Result<Self> {
-        if !(1..=32).contains(&num_channels) {
-            return Err(Error::ParseError(format!(
-                "num_channels must be 1-32, got {num_channels}"
-            )));
+    /// Creates the generic indexed-capture presentation for a static sigrok file.
+    pub fn indexed_capture_presentation(
+        path: impl AsRef<Path>,
+    ) -> signal_processing::IndexedCapturePresentation {
+        let path = path.as_ref().to_path_buf();
+        signal_processing::IndexedCapturePresentation {
+            identity: path.clone(),
+            factory: Box::new(SigrokCaptureIndexFactory { path }),
         }
+    }
 
-        let mut archive = ZipArchive::new(File::open(path)?).map_err(zip_error)?;
-        let version = read_zip_text(&mut archive, "version")?;
-        if version.trim() != "2" {
-            return Err(Error::ParseError(format!(
-                "unsupported sigrok session version '{}' (expected 2)",
-                version.trim()
-            )));
-        }
+    /// Returns the persistent-cache identity for a static sigrok file.
+    pub fn capture_cache_identity(path: impl AsRef<Path>) -> Result<[u8; 32]> {
+        let path = path.as_ref();
+        let source = SigrokFileCaptureDataSource::open(path)?;
+        Ok(capture_cache_identity(path, &source))
+    }
 
-        let metadata = parse_ini(&read_zip_text(&mut archive, "metadata")?);
-        let device = metadata
-            .iter()
-            .find(|(section, values)| {
-                section.starts_with("device ") && values.contains_key("capturefile")
-            })
-            .ok_or_else(|| {
-                Error::ParseError("missing required field: device X.capturefile".into())
-            })?;
-        let values = device.1;
-        let capturefile = required(values, "capturefile")?;
-        let total_probes: usize = required(values, "total probes")?
-            .parse()
-            .map_err(|_| Error::ParseError("invalid device X.total probes".to_string()))?;
-        let unitsize: usize = required(values, "unitsize")?
-            .parse()
-            .map_err(|_| Error::ParseError("invalid device X.unitsize".to_string()))?;
-        if unitsize == 0 || total_probes == 0 || total_probes > unitsize * 8 {
-            return Err(Error::ParseError(format!(
-                "invalid sigrok logic layout: {total_probes} probes in {unitsize}-byte samples"
-            )));
-        }
-        if total_probes < num_channels as usize {
-            return Err(Error::ParseError(format!(
-                "File has only {total_probes} channels, need at least {num_channels}"
-            )));
-        }
-
-        let samplerate = required(values, "samplerate")?.to_string();
-        let samplerate_hz = parse_sample_rate(&samplerate)
-            .ok_or_else(|| Error::ParseError(format!("Invalid sample rate: {samplerate}")))?;
-        let trigger_sample = values
-            .get("trigger sample")
-            .map(|sample| {
-                sample
-                    .parse::<u64>()
-                    .map_err(|_| Error::ParseError("invalid device X.trigger sample".to_string()))
-            })
-            .transpose()?;
-
-        let mut logic_entries: Vec<String> = archive
-            .file_names()
-            .filter(|name| {
-                *name == capturefile
-                    || name
-                        .strip_prefix(&format!("{capturefile}-"))
-                        .is_some_and(|suffix| suffix.parse::<u64>().is_ok())
-            })
-            .map(str::to_owned)
-            .collect();
-        logic_entries.sort_by_key(|name| {
-            name.strip_prefix(&format!("{capturefile}-"))
-                .and_then(|suffix| suffix.parse::<u64>().ok())
-                .unwrap_or(0)
-        });
-        if logic_entries.is_empty() {
-            return Err(Error::ParseError(format!(
-                "no {capturefile} logic data found"
-            )));
-        }
-
-        let mut samples = Vec::new();
-        for entry in logic_entries {
-            let mut logic = archive.by_name(&entry).map_err(zip_error)?;
-            logic.read_to_end(&mut samples)?;
-        }
-        if samples.len() % unitsize != 0 {
-            return Err(Error::ParseError(format!(
-                "logic data size {} is not divisible by unitsize {unitsize}",
-                samples.len()
-            )));
-        }
-        let total_samples = (samples.len() / unitsize) as u64;
-        if total_samples == 0 {
-            return Err(Error::ParseError(
-                "logic data contains no samples".to_string(),
-            ));
-        }
-
-        let probe_names = (0..total_probes)
-            .map(|probe| {
-                values
-                    .get(&format!("probe{}", probe + 1))
-                    .cloned()
-                    .unwrap_or_else(|| format!("Probe {probe}"))
-            })
-            .collect();
-        let header = CaptureMetadata {
-            total_probes,
-            samplerate,
-            samplerate_hz,
-            sample_period: 1.0 / samplerate_hz,
-            total_samples,
-            total_blocks: 1,
-            samples_per_block: total_samples,
-            probe_names,
-            trigger_sample,
-        };
-
+    pub fn new(path: impl AsRef<Path>, num_channels: u8) -> Result<Self> {
         Ok(Self {
             name: "sigrok_file_source".into(),
-            header,
-            samples: Arc::from(samples),
-            unitsize,
+            capture: SigrokCapture::open(path, num_channels)?,
             num_channels,
             shutdown: Arc::new(AtomicBool::new(false)),
             completed: Arc::new(AtomicUsize::new(0)),
@@ -330,8 +126,8 @@ impl SigrokFileSource {
         self
     }
 
-    pub fn header(&self) -> &CaptureMetadata {
-        &self.header
+    pub fn header(&self) -> &signal_processing::CaptureMetadata {
+        self.capture.metadata()
     }
 }
 
@@ -362,7 +158,6 @@ impl ProcessNode for SigrokFileSource {
             })
             .collect()
     }
-
     fn work(&mut self, _inputs: &[InputPort], outputs: &[OutputPort]) -> WorkResult<usize> {
         if self.spawned {
             return Err(WorkError::NodeError(
@@ -370,7 +165,7 @@ impl ProcessNode for SigrokFileSource {
             ));
         }
         self.spawned = true;
-        let timestamp_step = (1_000_000_000.0 / self.header.samplerate_hz) as u64;
+        let timestamp_step = (1_000_000_000.0 / self.capture.metadata().samplerate_hz) as u64;
         let mut threads = Vec::new();
         for channel in 0..self.num_channels as usize {
             let Some(senders) = outputs
@@ -380,11 +175,11 @@ impl ProcessNode for SigrokFileSource {
                 continue;
             };
             for sender in senders {
-                let samples = Arc::clone(&self.samples);
+                let samples = self.capture.samples();
                 let shutdown = Arc::clone(&self.shutdown);
                 let completed = Arc::clone(&self.completed);
-                let unitsize = self.unitsize;
-                let total_samples = self.header.total_samples as usize;
+                let unitsize = self.capture.unitsize();
+                let total_samples = self.capture.metadata().total_samples as usize;
                 threads.push(std::thread::spawn(move || {
                     ChannelStream {
                         samples,
@@ -417,62 +212,14 @@ impl Drop for SigrokFileSource {
     }
 }
 
-fn read_zip_text(archive: &mut ZipArchive<File>, name: &str) -> Result<String> {
-    let mut file = archive
-        .by_name(name)
-        .map_err(|_| Error::ParseError(format!("missing required field: {name}")))?;
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
-    Ok(contents)
-}
-
-fn parse_ini(text: &str) -> BTreeMap<String, BTreeMap<String, String>> {
-    let mut sections = BTreeMap::new();
-    let mut section = String::new();
-    for line in text.lines().map(str::trim) {
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some(name) = line
-            .strip_prefix('[')
-            .and_then(|line| line.strip_suffix(']'))
-        {
-            section = name.to_string();
-        } else if let Some((key, value)) = line.split_once('=') {
-            sections
-                .entry(section.clone())
-                .or_insert_with(BTreeMap::new)
-                .insert(key.trim().to_string(), value.trim().to_string());
-        }
-    }
-    sections
-}
-
-fn required<'a>(values: &'a BTreeMap<String, String>, key: &str) -> Result<&'a str> {
-    values
-        .get(key)
-        .map(String::as_str)
-        .ok_or_else(|| Error::ParseError(format!("missing required field: device X.{key}")))
-}
-
-fn parse_sample_rate(rate: &str) -> Option<f64> {
-    let mut parts = rate.split_whitespace();
-    let value: f64 = parts.next()?.parse().ok()?;
-    let multiplier = match parts.next()? {
-        "GHz" => 1e9,
-        "MHz" => 1e6,
-        "KHz" | "kHz" => 1e3,
-        "Hz" => 1.0,
-        _ => return None,
-    };
-    Some(value * multiplier)
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Write;
 
+    use signal_processing::capture::{CaptureDataSource, CaptureSource};
+
     use super::*;
+    use crate::support::sigrok_file::SigrokFileCaptureDataSource;
 
     fn fixture() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
@@ -500,16 +247,10 @@ mod tests {
     }
 
     #[test]
-    fn builds_a_persistent_waveform_index() {
+    fn data_source_is_private_support_for_the_node() {
         let dir = fixture();
-        let capture = dir.path().join("hello.sr");
-
-        let source = SigrokFileCaptureDataSource::open(&capture).unwrap();
-        let index_path = source.index_path().unwrap();
-        let mut reader = open_sigrok_chunked_capture(&capture).unwrap();
-
-        assert!(index_path.exists());
-        assert_eq!(reader.header().total_samples, 8);
-        assert!(reader.sampled_window(&[0], 0, 128, 64).is_ok());
+        let source = SigrokFileCaptureDataSource::open(dir.path().join("hello.sr")).unwrap();
+        assert_eq!(source.metadata().total_samples, 8);
+        assert_eq!(source.open_reader().unwrap().metadata().total_probes, 8);
     }
 }

@@ -8,7 +8,7 @@
 //! and block cache via `Arc<Mutex<..>>`.
 
 use std::collections::{HashMap, VecDeque};
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -18,18 +18,20 @@ use std::thread::JoinHandle;
 use tracing::{debug, info, warn};
 use zip::ZipArchive;
 
-use signal_processing::capture::{
-    BlockCaptureSource, BlockData, CaptureDataSource, CaptureFingerprint, CaptureMetadata,
-    CaptureSampledWindow, CaptureSource, CaptureTransition,
-};
+use signal_processing::capture::{BlockData, CaptureMetadata, CaptureTransition};
 use signal_processing::waveform_index::IndexSampler;
 use signal_processing::{
-    EdgeQuery, Error, InputPort, OutputPort, ProcessNode, ProtocolKind, Result, Sample,
-    SampleBlock, SampleKind, Sender, TextSample, WorkResult,
+    CaptureIndex, CaptureIndexBuildProgress, CaptureIndexFactory, EdgeQuery, Error, InputPort,
+    OutputPort, ProcessNode, ProtocolKind, Result, Sample, SampleBlock, SampleKind, Sender,
+    TextSample, WorkResult,
 };
 
 use super::super::capture_archive::zip_error;
-
+use crate::support::dsl_file::{
+    DslChunkedCaptureReader, DslFileCaptureDataSource, get_bit,
+    parse_header,
+};
+use crate::support::capture_index::capture_cache_identity;
 const DEFAULT_BLOCK_CACHE_WINDOWS: usize = 2;
 
 type BlockKey = (usize, u64);
@@ -82,225 +84,6 @@ impl BoundedBlockCache {
     }
 }
 
-/// Windowed DSLogic capture reader for interactive viewers.
-///
-/// Unlike [`DslFileSource`], this reader is not a streaming graph source. It is
-/// optimized for repeated random-access viewport reads and keeps only a bounded
-/// number of packed-bit ZIP blocks in memory.
-pub struct DslCaptureReader {
-    path: PathBuf,
-    archive: ZipArchive<File>,
-    header: CaptureMetadata,
-    cache: HashMap<(usize, u64), BlockData>,
-    cache_order: VecDeque<(usize, u64)>,
-    max_cached_blocks: usize,
-}
-
-impl DslCaptureReader {
-    /// A single slot: enough to make sequential `read_sample` access viable
-    /// (the current block stays decompressed). Block-level consumers get
-    /// their caching from the mmap'd raw sidecar instead, so a larger LRU
-    /// here would only duplicate it — notably during the index build, where
-    /// every parallel worker holds its own reader. Callers that genuinely
-    /// stream samples across blocks can raise it via
-    /// [`DslCaptureReader::with_max_cached_blocks`].
-    const DEFAULT_MAX_CACHED_BLOCKS: usize = 1;
-
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path.as_ref().to_path_buf();
-        let file = File::open(&path)?;
-        let mut archive = ZipArchive::new(file).map_err(zip_error)?;
-        let header = DslFileSource::parse_header(&mut archive)?;
-
-        Ok(Self {
-            path,
-            archive,
-            header,
-            cache: HashMap::new(),
-            cache_order: VecDeque::new(),
-            max_cached_blocks: Self::DEFAULT_MAX_CACHED_BLOCKS,
-        })
-    }
-
-    pub fn with_max_cached_blocks(mut self, max_cached_blocks: usize) -> Self {
-        self.max_cached_blocks = max_cached_blocks.max(1);
-        self.trim_cache();
-        self
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub fn header(&self) -> &CaptureMetadata {
-        &self.header
-    }
-
-    pub fn capture_duration_us(&self) -> f64 {
-        self.header.duration_us()
-    }
-
-    pub fn sampled_window(
-        &mut self,
-        channels: &[usize],
-        start_sample: u64,
-        end_sample: u64,
-        target_points: usize,
-    ) -> Result<CaptureSampledWindow> {
-        CaptureSource::sampled_window(self, channels, start_sample, end_sample, target_points)
-    }
-
-    fn read_bit_cached(&mut self, channel: usize, position: u64) -> Result<bool> {
-        if position >= self.header.total_samples {
-            return Err(Error::OutOfBounds(position));
-        }
-
-        let block_num = position / self.header.samples_per_block;
-        if block_num >= self.header.total_blocks {
-            return Err(Error::OutOfBounds(position));
-        }
-
-        let sample_in_block = (position % self.header.samples_per_block) as usize;
-        let key = (channel, block_num);
-        let data = self.read_block_cached(key)?;
-        Ok(DslFileSource::get_bit(&data, sample_in_block))
-    }
-
-    fn read_block_cached(&mut self, key: (usize, u64)) -> Result<BlockData> {
-        if let Some(data) = self.cache.get(&key).cloned() {
-            self.touch_cache_key(key);
-            return Ok(data);
-        }
-
-        let (channel, block_num) = key;
-        let block_name = format!("L-{}/{}", channel, block_num);
-        let data = {
-            let mut file = self
-                .archive
-                .by_name(&block_name)
-                .map_err(|_| Error::InvalidBlock(block_num))?;
-            let mut data = Vec::new();
-            file.read_to_end(&mut data)?;
-            BlockData::from(data)
-        };
-
-        self.cache.insert(key, data.clone());
-        self.cache_order.push_back(key);
-        self.trim_cache();
-        Ok(data)
-    }
-
-    fn touch_cache_key(&mut self, key: (usize, u64)) {
-        if self
-            .cache_order
-            .back()
-            .is_some_and(|existing| *existing == key)
-        {
-            return;
-        }
-        self.cache_order.retain(|existing| *existing != key);
-        self.cache_order.push_back(key);
-    }
-
-    fn trim_cache(&mut self) {
-        while self.cache.len() > self.max_cached_blocks {
-            if let Some(key) = self.cache_order.pop_front() {
-                self.cache.remove(&key);
-            } else {
-                break;
-            }
-        }
-    }
-}
-
-impl CaptureSource for DslCaptureReader {
-    fn metadata(&self) -> &CaptureMetadata {
-        &self.header
-    }
-
-    fn read_sample(&mut self, channel: usize, position: u64) -> Result<bool> {
-        self.read_bit_cached(channel, position)
-    }
-}
-
-impl BlockCaptureSource for DslCaptureReader {
-    fn read_packed_block(&mut self, channel: usize, block: u64) -> Result<BlockData> {
-        self.read_block_cached((channel, block))
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DslFileCaptureDataSource {
-    path: PathBuf,
-    header: CaptureMetadata,
-    source_len: u64,
-    index_path: PathBuf,
-}
-
-impl DslFileCaptureDataSource {
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path.as_ref().to_path_buf();
-        let source_len = fs::metadata(&path)?.len();
-        let file = File::open(&path)?;
-        let mut archive = ZipArchive::new(file).map_err(zip_error)?;
-        let header = DslFileSource::parse_header(&mut archive)?;
-        let index_path = dsl_sidecar_path(&path);
-
-        Ok(Self {
-            path,
-            header,
-            source_len,
-            index_path,
-        })
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl CaptureDataSource for DslFileCaptureDataSource {
-    type Reader = DslCaptureReader;
-
-    fn open_reader(&self) -> Result<Self::Reader> {
-        DslCaptureReader::open(&self.path)
-    }
-
-    fn metadata(&self) -> &CaptureMetadata {
-        &self.header
-    }
-
-    fn fingerprint(&self) -> CaptureFingerprint {
-        CaptureFingerprint {
-            revision: self.source_len,
-        }
-    }
-
-    fn index_path(&self) -> Option<PathBuf> {
-        Some(self.index_path.clone())
-    }
-
-    fn display_name(&self) -> String {
-        self.path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("capture")
-            .to_string()
-    }
-}
-
-pub(crate) type DslChunkedCaptureReader = IndexSampler<DslCaptureReader>;
-
-fn dsl_sidecar_path(path: &Path) -> PathBuf {
-    let mut name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("capture.dsl")
-        .to_string();
-    name.push_str(".idx");
-    path.with_file_name(name)
-}
-
 /// File-backed [`EdgeQuery`] for one channel, sharing the same on-disk
 /// `.idx`/`.raw` waveform index the viewer uses for random-access reads
 /// (via [`DslChunkedCaptureReader`]).
@@ -310,6 +93,30 @@ struct DslChannelEdgeIndex {
     sample_period: f64,
     samplerate_hz: f64,
     total_samples: u64,
+}
+
+struct DslCaptureIndexFactory {
+    path: PathBuf,
+}
+
+impl CaptureIndexFactory for DslCaptureIndexFactory {
+    fn display_name(&self) -> String {
+        self.path.display().to_string()
+    }
+
+    fn open(
+        self: Box<Self>,
+        progress: &mut dyn FnMut(CaptureIndexBuildProgress),
+    ) -> Result<Box<dyn CaptureIndex + Send>> {
+        let source = DslFileCaptureDataSource::open(&self.path)?;
+        IndexSampler::open_data_source_with_progress(source, |value| {
+            progress(CaptureIndexBuildProgress {
+                completed: value.completed_roots,
+                total: value.total_roots,
+            });
+        })
+        .map(|index| Box::new(index) as Box<dyn CaptureIndex + Send>)
+    }
 }
 
 impl EdgeQuery for DslChannelEdgeIndex {
@@ -429,6 +236,30 @@ pub struct DslFileSource {
 }
 
 impl DslFileSource {
+    /// Creates the generic indexed-capture presentation for a static DSL file.
+    pub fn indexed_capture_presentation(
+        path: impl AsRef<Path>,
+    ) -> signal_processing::IndexedCapturePresentation {
+        let path = path.as_ref().to_path_buf();
+        signal_processing::IndexedCapturePresentation {
+            identity: path.clone(),
+            factory: Box::new(DslCaptureIndexFactory { path }),
+        }
+    }
+
+    /// Returns the persistent-cache identity for a static DSL file.
+    pub fn capture_cache_identity(path: impl AsRef<Path>) -> Result<[u8; 32]> {
+        let path = path.as_ref();
+        let source = DslFileCaptureDataSource::open(path)?;
+        Ok(capture_cache_identity(path, &source))
+    }
+
+    /// Creates the runtime variant whose filename arrives through its input
+    /// port at run start.
+    pub fn from_filename_input(name: impl Into<String>, num_channels: u8) -> Box<dyn ProcessNode> {
+        Box::new(DeferredDslFileSource::new(num_channels).with_name(name))
+    }
+
     /// Create a new DSL file source from a file path
     pub fn new<P: AsRef<Path>>(path: P, num_channels: u8) -> Result<Self> {
         if !(1..=16).contains(&num_channels) {
@@ -441,7 +272,7 @@ impl DslFileSource {
         let path = path.as_ref().to_path_buf();
         let file = File::open(&path)?;
         let mut archive = ZipArchive::new(file).map_err(zip_error)?;
-        let header = Self::parse_header(&mut archive)?;
+        let header = parse_header(&mut archive)?;
 
         if header.total_probes < num_channels as usize {
             return Err(Error::ParseError(format!(
@@ -493,98 +324,6 @@ impl DslFileSource {
         }
         guard.clone()
     }
-
-    fn parse_header(archive: &mut ZipArchive<File>) -> Result<CaptureMetadata> {
-        let mut header_file = archive
-            .by_name("header")
-            .map_err(|e| Error::ParseError(format!("Cannot find header file: {}", e)))?;
-
-        let mut header_content = String::new();
-        header_file.read_to_string(&mut header_content)?;
-        drop(header_file); // Explicitly drop to release archive borrow
-
-        let mut total_probes: Option<usize> = None;
-        let mut samplerate: Option<String> = None;
-        let mut total_samples: Option<u64> = None;
-        let mut total_blocks: Option<u64> = None;
-        let mut trigger_sample: Option<u64> = None;
-        let mut probe_names_map: HashMap<usize, String> = HashMap::new();
-
-        for line in header_content.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-
-            if let Some(value) = line.strip_prefix("total probes = ") {
-                total_probes = value.parse().ok();
-            } else if let Some(value) = line.strip_prefix("samplerate = ") {
-                samplerate = Some(value.to_string());
-            } else if let Some(value) = line.strip_prefix("total samples = ") {
-                total_samples = value.parse().ok();
-            } else if let Some(value) = line.strip_prefix("total blocks = ") {
-                total_blocks = value.parse().ok();
-            } else if let Some(value) = line.strip_prefix("trigger sample = ") {
-                trigger_sample = value.parse().ok();
-            } else if line.starts_with("probe")
-                && let Some((probe_part, name)) = line.split_once(" = ")
-                && let Some(num_str) = probe_part.strip_prefix("probe")
-                && let Ok(probe_num) = num_str.parse::<usize>()
-            {
-                probe_names_map.insert(probe_num, name.to_string());
-            }
-        }
-
-        let total_probes = total_probes
-            .ok_or_else(|| Error::ParseError("missing required field: total probes".into()))?;
-        let samplerate = samplerate
-            .ok_or_else(|| Error::ParseError("missing required field: samplerate".into()))?;
-        let total_samples = total_samples
-            .ok_or_else(|| Error::ParseError("missing required field: total samples".into()))?;
-        let total_blocks = total_blocks
-            .ok_or_else(|| Error::ParseError("missing required field: total blocks".into()))?;
-
-        let samplerate_hz = Self::parse_sample_rate(&samplerate)
-            .ok_or_else(|| Error::ParseError(format!("Invalid sample rate: {}", samplerate)))?;
-        let sample_period = 1.0 / samplerate_hz;
-
-        // ZIP metadata already contains the uncompressed byte count. Avoid
-        // decompressing the first 2 MiB block just to discover its size.
-        let samples_per_block = {
-            let block_name = "L-0/0";
-            let file = archive
-                .by_name(block_name)
-                .map_err(|_| Error::ParseError("Could not read first block".to_string()))?;
-            file.size() * 8
-        };
-
-        debug!(
-            "File has {} samples across {} blocks ({} samples/block standard size)",
-            total_samples, total_blocks, samples_per_block
-        );
-
-        let probe_names = (0..total_probes)
-            .map(|i| {
-                probe_names_map
-                    .get(&i)
-                    .cloned()
-                    .unwrap_or_else(|| format!("Probe{}", i))
-            })
-            .collect();
-
-        Ok(CaptureMetadata {
-            total_probes,
-            samplerate,
-            samplerate_hz,
-            sample_period,
-            total_samples, // Use actual value from header file
-            total_blocks,
-            samples_per_block,
-            probe_names,
-            trigger_sample,
-        })
-    }
-
     /// Get the header information
     pub fn header(&self) -> &CaptureMetadata {
         &self.header
@@ -634,7 +373,7 @@ impl DslFileSource {
         let sample_in_block = (position % self.header.samples_per_block) as usize;
 
         let data = Self::load_block(&self.archive, &self.blocks, channel, block_num)?;
-        let result = Self::get_bit(&data, sample_in_block);
+        let result = get_bit(&data, sample_in_block);
         Ok(result)
     }
 
@@ -656,38 +395,6 @@ impl DslFileSource {
     }
 
     // ── Associated Functions (Helpers) ──────────────────────────────────
-
-    /// Extract a single bit from a byte array at the given bit index
-    #[inline]
-    fn get_bit(data: &[u8], bit_index: usize) -> bool {
-        let byte_index = bit_index / 8;
-        let bit_offset = bit_index % 8;
-
-        if byte_index < data.len() {
-            (data[byte_index] >> bit_offset) & 1 == 1
-        } else {
-            false
-        }
-    }
-
-    /// Parse a sample rate string (e.g., "50 MHz") into Hz
-    fn parse_sample_rate(samplerate: &str) -> Option<f64> {
-        let parts: Vec<&str> = samplerate.split_whitespace().collect();
-        if parts.len() >= 2
-            && let Ok(value) = parts[0].parse::<f64>()
-        {
-            let multiplier = match parts[1] {
-                "GHz" => 1_000_000_000.0,
-                "MHz" => 1_000_000.0,
-                "KHz" | "kHz" => 1_000.0,
-                "Hz" => 1.0,
-                _ => return None,
-            };
-            return Some(value * multiplier);
-        }
-        None
-    }
-
     fn load_block(
         archive: &Arc<Mutex<ZipArchive<File>>>,
         blocks: &BlockCache,
@@ -783,7 +490,7 @@ impl DslFileSource {
             let samples_in_block = block_capacity.min(total_samples - block_start_position);
 
             for sample_in_block in 0..samples_in_block as usize {
-                let value = Self::get_bit(&block_data, sample_in_block);
+                let value = get_bit(&block_data, sample_in_block);
                 let timestamp = position * timestamp_step;
 
                 if position == 0 {
@@ -1167,7 +874,7 @@ impl Drop for DslFileSource {
 /// - **One file per run.** Filename changes after the first value are not
 ///   consumed; a name level that keeps changing will eventually fill its
 ///   channel and backpressure its producer.
-pub struct DeferredDslFileSource {
+struct DeferredDslFileSource {
     name: String,
     num_channels: u8,
     max_samples: Option<u64>,
@@ -1176,7 +883,7 @@ pub struct DeferredDslFileSource {
 }
 
 impl DeferredDslFileSource {
-    pub fn new(num_channels: u8) -> Self {
+    fn new(num_channels: u8) -> Self {
         Self {
             name: "dsl_file_source".to_string(),
             num_channels,
@@ -1186,12 +893,13 @@ impl DeferredDslFileSource {
         }
     }
 
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
         self
     }
 
-    pub fn with_max_samples(mut self, max_samples: Option<u64>) -> Self {
+    #[cfg(test)]
+    fn with_max_samples(mut self, max_samples: Option<u64>) -> Self {
         self.max_samples = max_samples;
         self
     }
@@ -1331,6 +1039,7 @@ mod tests {
     use signal_processing::ProcessNode;
 
     use super::*;
+    use crate::support::dsl_file::{DslCaptureReader, parse_sample_rate};
 
     pub(crate) fn open_dsl_chunked_capture<P: AsRef<Path>>(
         path: P,
@@ -1557,49 +1266,40 @@ mod tests {
 
     #[test]
     fn test_parse_sample_rate_valid() {
-        assert_eq!(
-            DslFileSource::parse_sample_rate("50 MHz"),
-            Some(50_000_000.0)
-        );
-        assert_eq!(
-            DslFileSource::parse_sample_rate("1 GHz"),
-            Some(1_000_000_000.0)
-        );
-        assert_eq!(DslFileSource::parse_sample_rate("100 kHz"), Some(100_000.0));
-        assert_eq!(DslFileSource::parse_sample_rate("100 KHz"), Some(100_000.0));
-        assert_eq!(DslFileSource::parse_sample_rate("1000 Hz"), Some(1000.0));
-        assert_eq!(
-            DslFileSource::parse_sample_rate("2.5 MHz"),
-            Some(2_500_000.0)
-        );
+        assert_eq!(parse_sample_rate("50 MHz"), Some(50_000_000.0));
+        assert_eq!(parse_sample_rate("1 GHz"), Some(1_000_000_000.0));
+        assert_eq!(parse_sample_rate("100 kHz"), Some(100_000.0));
+        assert_eq!(parse_sample_rate("100 KHz"), Some(100_000.0));
+        assert_eq!(parse_sample_rate("1000 Hz"), Some(1000.0));
+        assert_eq!(parse_sample_rate("2.5 MHz"), Some(2_500_000.0));
     }
 
     #[test]
     fn test_parse_sample_rate_invalid() {
-        assert_eq!(DslFileSource::parse_sample_rate("invalid"), None);
-        assert_eq!(DslFileSource::parse_sample_rate("50"), None);
-        assert_eq!(DslFileSource::parse_sample_rate("MHz 50"), None);
-        assert_eq!(DslFileSource::parse_sample_rate("50 mhz"), None);
-        assert_eq!(DslFileSource::parse_sample_rate(""), None);
-        assert_eq!(DslFileSource::parse_sample_rate("abc MHz"), None);
+        assert_eq!(parse_sample_rate("invalid"), None);
+        assert_eq!(parse_sample_rate("50"), None);
+        assert_eq!(parse_sample_rate("MHz 50"), None);
+        assert_eq!(parse_sample_rate("50 mhz"), None);
+        assert_eq!(parse_sample_rate(""), None);
+        assert_eq!(parse_sample_rate("abc MHz"), None);
     }
 
     #[test]
     fn test_get_bit() {
         let data = vec![0b10101010, 0b11001100];
-        assert!(!DslFileSource::get_bit(&data, 0)); // bit 0 of byte 0
-        assert!(DslFileSource::get_bit(&data, 1)); // bit 1 of byte 0
-        assert!(!DslFileSource::get_bit(&data, 2)); // bit 2 of byte 0
-        assert!(DslFileSource::get_bit(&data, 3)); // bit 3 of byte 0
-        assert!(DslFileSource::get_bit(&data, 7)); // bit 7 of byte 0
-        assert!(!DslFileSource::get_bit(&data, 8)); // bit 0 of byte 1
-        assert!(!DslFileSource::get_bit(&data, 9)); // bit 1 of byte 1
-        assert!(DslFileSource::get_bit(&data, 10)); // bit 2 of byte 1
-        assert!(DslFileSource::get_bit(&data, 11)); // bit 3 of byte 1
+        assert!(!get_bit(&data, 0)); // bit 0 of byte 0
+        assert!(get_bit(&data, 1)); // bit 1 of byte 0
+        assert!(!get_bit(&data, 2)); // bit 2 of byte 0
+        assert!(get_bit(&data, 3)); // bit 3 of byte 0
+        assert!(get_bit(&data, 7)); // bit 7 of byte 0
+        assert!(!get_bit(&data, 8)); // bit 0 of byte 1
+        assert!(!get_bit(&data, 9)); // bit 1 of byte 1
+        assert!(get_bit(&data, 10)); // bit 2 of byte 1
+        assert!(get_bit(&data, 11)); // bit 3 of byte 1
 
         // Out of bounds
-        assert!(!DslFileSource::get_bit(&data, 16));
-        assert!(!DslFileSource::get_bit(&data, 100));
+        assert!(!get_bit(&data, 16));
+        assert!(!get_bit(&data, 100));
     }
 
     #[test]
