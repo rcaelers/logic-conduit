@@ -21,7 +21,7 @@ pub(crate) struct BufferedProvider<T: UsbTransport = RusbTransport> {
 }
 
 impl BufferedProvider<RusbTransport> {
-    fn open_first(
+    pub(crate) fn open_first(
         config: LogicCaptureConfig,
         channels: impl Into<Arc<[CaptureChannelId]>>,
     ) -> AcquisitionResult<Self> {
@@ -81,29 +81,6 @@ impl<T: UsbTransport> BufferedProvider<T> {
             handle: None,
             started: false,
         }))
-    }
-}
-
-/// Device-buffered live-acquisition adapter for the U3Pro16.
-pub struct DsLogicU3Pro16BufferedProvider {
-    inner: BufferedProvider,
-}
-
-impl DsLogicU3Pro16BufferedProvider {
-    /// Opens the first U3Pro16 for a finite, device-buffered capture.
-    pub fn open_first(
-        config: LogicCaptureConfig,
-        channels: impl Into<Arc<[CaptureChannelId]>>,
-    ) -> AcquisitionResult<Self> {
-        BufferedProvider::open_first(config, channels).map(|inner| Self { inner })
-    }
-
-    /// Prepares the capture through the generic acquisition runtime.
-    pub fn prepare(
-        self,
-        context: AcquisitionContext,
-    ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
-        self.inner.prepare(context)
     }
 }
 

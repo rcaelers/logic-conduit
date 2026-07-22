@@ -2,14 +2,11 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use logic_analyzer_processing::nodes::sources::dslogic_u3pro16::{
-    DsLogicCapturePlan, DsLogicU3Pro16BufferedProvider, DsLogicU3Pro16StreamingProvider, LinkSpeed,
-};
-use logic_analyzer_processing::support::logic_analyzer::LogicCaptureConfig;
+use logic_analyzer_processing::nodes::sources::dslogic_u3pro16::DsLogicU3Pro16Capture;
 use signal_processing::{
     AcquisitionContext, AcquisitionError, AcquisitionResult, CaptureAnalysisChannel,
-    CaptureAnalysisSource, CaptureChannelId, CaptureCommandCapabilities, CaptureDataDelivery,
-    CaptureFraction, CapturePolicyCapabilities, CapturePolicyContext, CaptureProviderCapabilities,
+    CaptureAnalysisSource, CaptureChannelId, CaptureCommandCapabilities, CaptureFraction,
+    CapturePolicyCapabilities, CapturePolicyContext, CaptureProviderCapabilities,
     CaptureSessionPlan, CaptureStartMode, CaptureStoreCursor, CompletionPolicyKind,
     PreparedAcquisition, ProcessNode, RecordingStart, RetentionPolicyKind,
     TriggerPlacementCapability, TriggerProgram, TriggerTimeoutAction,
@@ -45,14 +42,7 @@ struct U3Pro16LiveCaptureFeature {
     analysis_channels: Arc<[CaptureAnalysisChannel]>,
     capabilities: CaptureProviderCapabilities,
     session_plan: CaptureSessionPlan,
-    profile: U3Pro16AcquisitionProfile,
-    config: LogicCaptureConfig,
-}
-
-#[derive(Clone, Copy)]
-enum U3Pro16AcquisitionProfile {
-    Buffered,
-    Streaming,
+    capture: DsLogicU3Pro16Capture,
 }
 
 impl LiveCaptureFeature for U3Pro16LiveCaptureFeature {
@@ -113,25 +103,21 @@ impl U3Pro16LiveCaptureFeature {
         mut context: AcquisitionContext,
         mode: CaptureStartMode,
     ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
-        let mut config = self.config;
         let plan = if mode == CaptureStartMode::CaptureNow {
             if !self.capabilities.commands().capture_now {
                 return Err(AcquisitionError::UnsupportedOperation("capture now".into()));
             }
-            config.trigger = Default::default();
             self.session_plan.clone().capture_now()
         } else {
             self.session_plan.clone()
         };
         context.publish_plan(plan)?;
-        match self.profile {
-            U3Pro16AcquisitionProfile::Buffered => {
-                DsLogicU3Pro16BufferedProvider::open_first(config, self.channels)?.prepare(context)
-            }
-            U3Pro16AcquisitionProfile::Streaming => {
-                DsLogicU3Pro16StreamingProvider::open_first(config, self.channels)?.prepare(context)
-            }
-        }
+        let capture = if mode == CaptureStartMode::CaptureNow {
+            self.capture.without_trigger()
+        } else {
+            self.capture
+        };
+        capture.prepare(context)
     }
 }
 
@@ -139,27 +125,6 @@ pub(crate) fn feature(state: &Value) -> Result<Option<Box<dyn LiveCaptureFeature
     let state = parse_state::<U3Pro16State>(state)?;
     let config = capture_config(&state)?;
     let trigger_conditions = super::trigger::conditions(&state)?;
-    let (profile, delivery, actual_samples) = if state.mode.selected() == "Buffer" {
-        let plan = DsLogicCapturePlan::new_buffered(&config).map_err(|error| error.to_string())?;
-        (
-            U3Pro16AcquisitionProfile::Buffered,
-            CaptureDataDelivery::BufferedUpload,
-            plan.actual_samples(),
-        )
-    } else {
-        let high = DsLogicCapturePlan::new_streaming(&config, LinkSpeed::High);
-        let super_speed = DsLogicCapturePlan::new_streaming(&config, LinkSpeed::Super);
-        if let (Err(high), Err(super_speed)) = (high, super_speed) {
-            return Err(format!(
-                "U3Pro16 stream is unsupported on High Speed ({high}) and SuperSpeed ({super_speed})"
-            ));
-        }
-        (
-            U3Pro16AcquisitionProfile::Streaming,
-            CaptureDataDelivery::DuringAcquisition,
-            config.sample_limit,
-        )
-    };
     let mut channels = Vec::new();
     let mut channel_names = Vec::new();
     let mut simple_trigger_channels = Vec::new();
@@ -186,6 +151,10 @@ pub(crate) fn feature(state: &Value) -> Result<Option<Box<dyn LiveCaptureFeature
         });
     }
     let channels: Arc<[CaptureChannelId]> = channels.into();
+    let capture = DsLogicU3Pro16Capture::new(config.clone(), Arc::clone(&channels))
+        .map_err(|error| error.to_string())?;
+    let delivery = capture.data_delivery();
+    let actual_samples = capture.capture_window_samples();
     let policy_capabilities = CapturePolicyCapabilities::new(
         Arc::from([RecordingStart::Immediate, RecordingStart::Trigger]),
         Arc::from([
@@ -255,8 +224,7 @@ pub(crate) fn feature(state: &Value) -> Result<Option<Box<dyn LiveCaptureFeature
         channels,
         capabilities,
         session_plan,
-        profile,
-        config,
+        capture,
     })))
 }
 

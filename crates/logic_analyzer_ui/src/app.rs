@@ -128,12 +128,12 @@ pub struct App {
     pub(crate) trigger_configuration: Option<compiler::DiscoveredTriggerConfiguration>,
     pub(crate) trigger_configuration_error: Option<String>,
     pub(crate) capture_graph: Option<GraphState>,
-    pub(crate) capture_analysis: Option<compiler::AppRun>,
+    pub(crate) capture_analysis: Option<compiler::LiveRun>,
     pub(crate) capture_analysis_error: Option<String>,
     pub(crate) capture_epoch_observed_graph: Option<Vec<u8>>,
     pub(crate) capture_epoch_request_in_flight: bool,
     pub(crate) last_capture_epoch_sync: f64,
-    pub(crate) run: Option<compiler::AppRun>,
+    pub(crate) run: Option<compiler::LiveRun>,
     /// Persistent run *state* shown in the status bar next to Run/Stop — the
     /// current compile-error summary, or "stop & rerun to apply" while a
     /// live edit can't be applied in place. One-off events (a live edit that
@@ -774,7 +774,7 @@ impl App {
         let capture_cache_configs = self
             .capture_analysis
             .as_ref()
-            .map(compiler::AppRun::persistent_cache_configs)
+            .map(compiler::LiveRun::persistent_cache_configs)
             .unwrap_or_default();
         self.capture_analysis = None;
         self.capture_analysis_error = None;
@@ -1282,7 +1282,7 @@ impl App {
                 if self
                     .capture_analysis
                     .as_ref()
-                    .is_some_and(compiler::AppRun::is_finished)
+                    .is_some_and(compiler::LiveRun::is_finished)
                 {
                     ui.label(format!("Analysis complete · {processed} samples"));
                 } else {

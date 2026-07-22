@@ -21,7 +21,7 @@ pub(crate) struct StreamingProvider<T: UsbTransport = RusbTransport> {
 }
 
 impl StreamingProvider<RusbTransport> {
-    fn open_first(
+    pub(crate) fn open_first(
         config: LogicCaptureConfig,
         channels: impl Into<Arc<[CaptureChannelId]>>,
     ) -> AcquisitionResult<Self> {
@@ -81,29 +81,6 @@ impl<T: UsbTransport> StreamingProvider<T> {
             handle: None,
             started: false,
         }))
-    }
-}
-
-/// Host-streamed live-acquisition adapter for the U3Pro16.
-pub struct DsLogicU3Pro16StreamingProvider {
-    inner: StreamingProvider,
-}
-
-impl DsLogicU3Pro16StreamingProvider {
-    /// Opens the first U3Pro16 for a host-streamed capture.
-    pub fn open_first(
-        config: LogicCaptureConfig,
-        channels: impl Into<Arc<[CaptureChannelId]>>,
-    ) -> AcquisitionResult<Self> {
-        StreamingProvider::open_first(config, channels).map(|inner| Self { inner })
-    }
-
-    /// Prepares the capture through the generic acquisition runtime.
-    pub fn prepare(
-        self,
-        context: AcquisitionContext,
-    ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
-        self.inner.prepare(context)
     }
 }
 

@@ -691,15 +691,6 @@ pub fn apply_live_capture_edit(
 /// Resolves a live feature only from nodes retained by a successfully
 /// compiled graph. This prevents a disconnected development or hardware node
 /// from becoming the acquisition source for a different active time domain.
-pub fn discover_compiled_live_capture_feature(
-    graph: &GraphState,
-    compiled: &CompiledGraph,
-    builders: &BuilderRegistry,
-) -> Result<Option<DiscoveredLiveCaptureFeature>, LiveCaptureDiscoveryError> {
-    let retained: HashSet<_> = compiled.nodes.iter().map(|node| node.id).collect();
-    discover_live_capture_feature_from(graph, builders, |node| retained.contains(&node.id))
-}
-
 fn discover_live_capture_feature_from(
     graph: &GraphState,
     builders: &BuilderRegistry,
@@ -1685,7 +1676,7 @@ pub type SourceProcessOverrides = HashMap<NodeId, Box<dyn ProcessNode>>;
 
 /// Lowers and materializes `graph` under an [`AppManager`] — real OS threads
 /// natively, a cooperative single-thread runner on wasm.
-pub fn start_live(
+fn start_live(
     graph: &GraphState,
     registry: &BuilderRegistry,
     ctx: &mut CompileCtx,
@@ -2030,13 +2021,11 @@ impl LiveRun {
     }
 }
 
-pub type AppRun = LiveRun;
-
 pub fn start_app_run(
     graph: &GraphState,
     registry: &BuilderRegistry,
     ctx: &mut CompileCtx,
-) -> Result<AppRun, Vec<CompileError>> {
+) -> Result<LiveRun, Vec<CompileError>> {
     start_live(graph, registry, ctx)
 }
 
@@ -2048,7 +2037,7 @@ pub fn start_app_run_with_source_overrides(
     registry: &BuilderRegistry,
     ctx: &mut CompileCtx,
     overrides: SourceProcessOverrides,
-) -> Result<AppRun, Vec<CompileError>> {
+) -> Result<LiveRun, Vec<CompileError>> {
     start_live_inner(graph, registry, ctx, overrides)
 }
 
@@ -2073,6 +2062,15 @@ mod tests {
     };
 
     use super::*;
+
+    fn discover_compiled_live_capture_feature(
+        graph: &GraphState,
+        compiled: &CompiledGraph,
+        builders: &BuilderRegistry,
+    ) -> Result<Option<DiscoveredLiveCaptureFeature>, LiveCaptureDiscoveryError> {
+        let retained: HashSet<_> = compiled.nodes.iter().map(|node| node.id).collect();
+        discover_live_capture_feature_from(graph, builders, |node| retained.contains(&node.id))
+    }
     use crate::nodes;
 
     fn startup_widget() -> NodeGraphWidget {

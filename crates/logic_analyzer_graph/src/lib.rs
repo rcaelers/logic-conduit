@@ -21,17 +21,16 @@ pub use capture_export::{
 };
 pub(crate) use compiler::parse_state;
 pub use compiler::{
-    AppRun, ApplyError, ApplySummary, BuilderRegistry, CaptureGraphSourceFactory,
-    CapturePresentation, CapturePresentationSignal, CompileCtx, CompileError, CompiledEdge,
-    CompiledGraph, CompiledNode, DiscoveredCapturePresentation, DiscoveredLiveCaptureFeature,
-    DiscoveredTriggerConfiguration, LiveAnalysisSource, LiveCaptureDiscoveryError, LiveCaptureEdit,
-    LiveCaptureFeature, LiveRun, PluginContext, PortKind, PortValue, ResolvedInput, ResolvedInputs,
-    RuntimeBuilder, SamplingOverlayCandidate, SamplingOverlayDescriptor,
-    SamplingQualifierDescriptor, SimpleTriggerChannel, SourceProcessOverrides,
-    TriggerConfigurationFeature, apply_live_capture_edit, derived_cache_configs_by_node,
-    discover_capture_presentation, discover_compiled_live_capture_feature,
+    ApplyError, ApplySummary, BuilderRegistry, CaptureGraphSourceFactory, CapturePresentation,
+    CapturePresentationSignal, CompileCtx, CompileError, CompiledEdge, CompiledGraph, CompiledNode,
+    DiscoveredCapturePresentation, DiscoveredLiveCaptureFeature, DiscoveredTriggerConfiguration,
+    LiveAnalysisSource, LiveCaptureDiscoveryError, LiveCaptureEdit, LiveCaptureFeature, LiveRun,
+    PluginContext, PortKind, PortValue, ResolvedInput, ResolvedInputs, RuntimeBuilder,
+    SamplingOverlayCandidate, SamplingOverlayDescriptor, SamplingQualifierDescriptor,
+    SimpleTriggerChannel, SourceProcessOverrides, TriggerConfigurationFeature,
+    apply_live_capture_edit, derived_cache_configs_by_node, discover_capture_presentation,
     discover_live_capture_feature, discover_trigger_configuration, lower,
-    sampling_overlay_candidates, start_app_run, start_app_run_with_source_overrides, start_live,
+    sampling_overlay_candidates, start_app_run, start_app_run_with_source_overrides,
     start_live_analysis,
 };
 pub use decoder_table::{
