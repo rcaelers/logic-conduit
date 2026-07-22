@@ -37,8 +37,8 @@ const TABLES: [[u32; 256]; 8] = tables();
 
 #[inline]
 fn update(mut crc: u32, bytes: &[u8]) -> u32 {
-    let mut chunks = bytes.chunks_exact(8);
-    for chunk in &mut chunks {
+    let (chunks, remainder) = bytes.as_chunks::<8>();
+    for chunk in chunks {
         crc ^= u32::from_le_bytes(chunk[..4].try_into().expect("four-byte CRC prefix"));
         crc = TABLES[7][(crc & 0xff) as usize]
             ^ TABLES[6][((crc >> 8) & 0xff) as usize]
@@ -49,7 +49,7 @@ fn update(mut crc: u32, bytes: &[u8]) -> u32 {
             ^ TABLES[1][chunk[6] as usize]
             ^ TABLES[0][chunk[7] as usize];
     }
-    for &byte in chunks.remainder() {
+    for &byte in remainder {
         crc = TABLES[0][((crc ^ u32::from(byte)) & 0xff) as usize] ^ (crc >> 8);
     }
     crc
