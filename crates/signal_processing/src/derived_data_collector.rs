@@ -1,6 +1,5 @@
 //! Presentation-neutral collection of typed derived streams into retained storage.
 
-use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
@@ -8,7 +7,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 use web_time::Instant;
 
 use crate::collected_payload::{
-    CollectedLaneIngestor, CollectedLaneRequest, CollectedPayloadAdapter,
+    CollectedLaneIngestor, CollectedLaneQuery, CollectedLaneRequest, CollectedPayloadAdapter,
     CollectedPayloadDescriptor, CollectedPayloadRegistrationError, CollectedPayloadRegistry,
 };
 use crate::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
@@ -352,7 +351,7 @@ pub struct DerivedLane {
 pub struct OpaqueCollectedLane {
     name: String,
     payload: CollectedPayloadDescriptor,
-    query: Arc<dyn Any + Send + Sync>,
+    query: Arc<dyn CollectedLaneQuery>,
 }
 
 impl OpaqueCollectedLane {
@@ -365,7 +364,7 @@ impl OpaqueCollectedLane {
     }
 
     pub fn query<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
-        Arc::downcast::<T>(Arc::clone(&self.query)).ok()
+        Arc::downcast::<T>(Arc::clone(&self.query).into_any()).ok()
     }
 }
 
@@ -448,7 +447,7 @@ impl DerivedLanes {
     /// Publishes an adapter-owned retained query. A later subscriber can
     /// attach after collection has completed and downcast only to the payload
     /// type it registered.
-    pub fn publish_opaque_lane<T: Send + Sync + 'static>(
+    pub fn publish_opaque_lane<T: CollectedLaneQuery + 'static>(
         &self,
         name: impl Into<String>,
         payload: CollectedPayloadDescriptor,

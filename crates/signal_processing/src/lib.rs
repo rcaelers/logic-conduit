@@ -92,7 +92,7 @@ pub use capture_policy::{
     TriggerPlacementCapability, TriggerTimeout, TriggerTimeoutAction,
 };
 pub use collected_payload::{
-    CollectedLaneIngestor, CollectedLaneRequest, CollectedPayloadAdapter,
+    CollectedLaneIngestor, CollectedLaneQuery, CollectedLaneRequest, CollectedPayloadAdapter,
     CollectedPayloadDescriptor, CollectedPayloadRegistrationError, CollectedPayloadRegistry,
 };
 pub use cooperative_manager::CooperativeManager;

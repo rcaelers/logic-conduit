@@ -24,6 +24,27 @@ pub trait CollectedLaneIngestor: Send {
     fn is_finished(&self) -> bool;
 }
 
+/// Type-erased, adapter-owned retained-data query.
+///
+/// A collector publishes this after it has created the lane's storage. Data
+/// subscribers may attach during or after a run and downcast it only to the
+/// query type registered by that payload owner. The generic collector and
+/// storage registry never inspect the concrete query value.
+pub trait CollectedLaneQuery: Send + Sync {
+    fn as_any(&self) -> &dyn Any;
+    fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
+}
+
+impl<T: Any + Send + Sync> CollectedLaneQuery for T {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
+    }
+}
+
 /// Context supplied when a payload adapter creates one retained lane.
 #[derive(Clone)]
 pub struct CollectedLaneRequest {
@@ -82,6 +103,14 @@ impl CollectedLaneRequest {
 
     pub fn options<T: Send + Sync + 'static>(&self) -> Option<&T> {
         self.options.downcast_ref::<T>()
+    }
+
+    /// Publishes an adapter-owned retained query under this lane's stable
+    /// identity. Subscribers may resolve it immediately or after the
+    /// producing run has finished.
+    pub fn publish_query<T: CollectedLaneQuery + 'static>(&self, query: Arc<T>) {
+        self.lanes
+            .publish_opaque_lane(&self.name, self.payload.clone(), query);
     }
 }
 
@@ -288,5 +317,24 @@ mod collected_payload_tests {
             registry.register_adapter::<First>(Arc::new(FailingAdapter)),
             Err(CollectedPayloadRegistrationError::AdapterAlreadyRegistered { .. })
         ));
+    }
+
+    #[test]
+    fn request_publishes_an_adapter_owned_query() {
+        let lanes = DerivedLanes::new();
+        let mut registry = CollectedPayloadRegistry::new();
+        registry.register::<First>("org.example.first/v1").unwrap();
+        let request = CollectedLaneRequest::new(
+            "first",
+            0,
+            lanes.clone(),
+            registry.descriptor::<First>().unwrap().clone(),
+            DerivedDataRetention::Unlimited,
+        );
+
+        request.publish_query(Arc::new(vec![1_u64, 2, 3]));
+
+        let query = lanes.opaque_lanes()[0].query::<Vec<u64>>().unwrap();
+        assert_eq!(query.as_slice(), &[1, 2, 3]);
     }
 }
