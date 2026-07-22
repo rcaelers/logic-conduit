@@ -8,9 +8,7 @@ use std::collections::VecDeque;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tracing::debug;
 
@@ -29,9 +27,8 @@ use crate::types::{CsPolarity, Endianness};
 
 use super::types::{ParallelInputStrategy, StrobeMode};
 
-#[allow(dead_code)]
 #[derive(Clone)]
-pub(crate) struct ParallelDecoderMetrics {
+pub struct ParallelDecoderMetrics {
     inner: Arc<ParallelDecoderMetricsInner>,
 }
 
@@ -56,20 +53,17 @@ impl Default for ParallelDecoderMetrics {
     }
 }
 
-#[allow(dead_code)]
-#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ParallelDecoderMetricsSnapshot {
-    pub(crate) workers: usize,
-    pub(crate) max_outstanding: usize,
-    pub(crate) max_reorder: usize,
-    pub(crate) estimated_fragment_bytes: usize,
+pub struct ParallelDecoderMetricsSnapshot {
+    pub workers: usize,
+    pub max_outstanding: usize,
+    pub max_reorder: usize,
+    pub estimated_fragment_bytes: usize,
 }
 
 impl ParallelDecoderMetrics {
-    #[allow(dead_code)]
-    #[cfg(test)]
-    pub(crate) fn snapshot(&self) -> ParallelDecoderMetricsSnapshot {
+    /// Returns a point-in-time view of the decoder's worker-pool activity.
+    pub fn snapshot(&self) -> ParallelDecoderMetricsSnapshot {
         let max_outstanding = self.inner.max_outstanding.load(Ordering::Relaxed);
         let max_fragment_bytes = self.inner.max_fragment_bytes.load(Ordering::Relaxed);
         ParallelDecoderMetricsSnapshot {
@@ -215,9 +209,10 @@ impl ParallelDecoder {
         platform_effective_workers(self.parallel_workers, &self.parallel_metrics)
     }
 
-    #[allow(dead_code)]
-    #[cfg(test)]
-    pub(crate) fn parallel_metrics(&self) -> ParallelDecoderMetrics {
+    /// Returns an observer for parallel-decoder worker-pool activity.
+    ///
+    /// The observer remains valid after this decoder is moved into a pipeline.
+    pub fn parallel_metrics(&self) -> ParallelDecoderMetrics {
         self.parallel_metrics.clone()
     }
 
