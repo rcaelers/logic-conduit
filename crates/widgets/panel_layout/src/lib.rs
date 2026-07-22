@@ -20,6 +20,13 @@ const BOUNDARY_SNAP_GRID: f32 = 16.0;
 const BOUNDARY_ALIGNMENT_DISTANCE: f32 = 10.0;
 const BOUNDARY_EXTEND_DISTANCE: f32 = 12.0;
 
+type BoundaryHandling = (
+    Vec<LayoutAction>,
+    Option<BoundaryInteraction>,
+    Option<(SplitAxis, f32)>,
+    bool,
+);
+
 #[derive(Debug, Clone, Copy)]
 pub struct PanelSpec<'a> {
     pub id: &'a str,
@@ -719,12 +726,7 @@ impl PanelLayout {
         ui: &mut Ui,
         boundaries: &[BoundaryGeometry],
         root_rect: Rect,
-    ) -> (
-        Vec<LayoutAction>,
-        Option<BoundaryInteraction>,
-        Option<(SplitAxis, f32)>,
-        bool,
-    ) {
+    ) -> BoundaryHandling {
         let mut actions = Vec::new();
         let mut interaction = None;
         let mut extended_boundary_guide = None;
