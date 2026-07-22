@@ -257,6 +257,70 @@ impl CollectedLaneQuery for WordLaneQuery {
             self.snapshot(request),
         )))
     }
+
+    fn nearest_time_boundary(&self, timestamp_ns: u64, max_distance_ns: u64) -> Option<u64> {
+        let indexed_query = {
+            let lanes = self.store.read();
+            let lane = lanes.iter().find(|lane| lane.name == self.name)?;
+            match &lane.data {
+                DerivedLaneData::Annotations(annotations) => {
+                    return nearest_annotation_boundary(annotations, timestamp_ns, max_distance_ns);
+                }
+                DerivedLaneData::IndexedAnnotations(indexed) => Arc::clone(indexed.query()),
+                _ => return None,
+            }
+        };
+
+        indexed_query
+            .nearest_boundary(timestamp_ns, max_distance_ns)
+            .ok()
+            .flatten()
+    }
+}
+
+fn nearest_annotation_boundary(
+    annotations: &[Annotation],
+    timestamp_ns: u64,
+    max_distance_ns: u64,
+) -> Option<u64> {
+    let index = annotations.partition_point(|annotation| annotation.start_ns <= timestamp_ns);
+    let first = index.saturating_sub(2);
+    let last = (index + 2).min(annotations.len());
+
+    annotations[first..last]
+        .iter()
+        .enumerate()
+        .flat_map(|(offset, annotation)| {
+            let annotation_index = first + offset;
+            let previous_duration_ns = annotation_index.checked_sub(1).map(|previous_index| {
+                let previous = &annotations[previous_index];
+                previous.end_ns.saturating_sub(previous.start_ns)
+            });
+            let end_ns = annotation_display_end(
+                annotation,
+                annotation_index == annotations.len() - 1,
+                previous_duration_ns,
+            );
+            [annotation.start_ns, end_ns]
+        })
+        .filter(|candidate| candidate.abs_diff(timestamp_ns) <= max_distance_ns)
+        .min_by_key(|candidate| candidate.abs_diff(timestamp_ns))
+}
+
+fn annotation_display_end(
+    annotation: &Annotation,
+    is_last_ever: bool,
+    previous_duration_ns: Option<u64>,
+) -> u64 {
+    if is_last_ever && annotation.end_ns == annotation.start_ns {
+        annotation.start_ns.saturating_add(
+            previous_duration_ns
+                .unwrap_or(crate::events::MAX_ANNOTATION_NS)
+                .min(crate::events::MAX_ANNOTATION_NS),
+        )
+    } else {
+        annotation.end_ns.max(annotation.start_ns)
+    }
 }
 
 impl IndexedAnnotationLane {
@@ -490,6 +554,13 @@ impl OpaqueCollectedLane {
         request: CollectedLaneSnapshotRequest,
     ) -> Option<OpaqueCollectedLaneSnapshot> {
         self.query.snapshot(request)
+    }
+
+    /// Requests a nearby adapter-defined time boundary for generic cursor
+    /// snapping without exposing the retained data representation.
+    pub fn nearest_time_boundary(&self, timestamp_ns: u64, max_distance_ns: u64) -> Option<u64> {
+        self.query
+            .nearest_time_boundary(timestamp_ns, max_distance_ns)
     }
 }
 
@@ -1601,6 +1672,8 @@ mod tests {
             }),
             WordLaneSnapshot::Activity
         ));
+        assert_eq!(query.nearest_time_boundary(19, 3), Some(20));
+        assert_eq!(query.nearest_time_boundary(25, 3), None);
     }
 
     #[test]

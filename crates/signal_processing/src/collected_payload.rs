@@ -74,6 +74,13 @@ pub trait CollectedLaneQuery: Send + Sync {
     ) -> Option<OpaqueCollectedLaneSnapshot> {
         None
     }
+
+    /// Returns a nearby semantic time boundary for cursor snapping. The
+    /// adapter defines which boundaries are meaningful for its payload; a
+    /// query that has no snapping behavior returns `None`.
+    fn nearest_time_boundary(&self, _timestamp_ns: u64, _max_distance_ns: u64) -> Option<u64> {
+        None
+    }
 }
 
 /// Context supplied when a payload adapter creates one retained lane.

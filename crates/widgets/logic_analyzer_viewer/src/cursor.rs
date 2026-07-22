@@ -8,8 +8,8 @@ use crate::draw::annotation_box_end;
 use crate::types::{AnalyzerLayout, CursorInput, RowKey, TimeCursor, Transition};
 use crate::viewer::LogicAnalyzerViewer;
 
-enum AnnotationBoundarySource {
-    InMemory(Option<f64>),
+enum TimeBoundarySource {
+    Direct(Option<f64>),
     Indexed(Arc<dyn AnnotationQuery>),
 }
 
@@ -209,6 +209,35 @@ impl LogicAnalyzerViewer {
                     );
                     let pointer_fraction = (pointer.y - row_top) / row_height.max(1.0);
                     let selected = group.renderer.snap_lanes(&group, pointer_fraction);
+                    let timestamp_ns = (time_us.max(0.0) * 1_000.0).round() as u64;
+                    let max_distance_ns =
+                        (self.visible_span_us * 1_000.0 * f64::from(SNAP_DISTANCE_PX)
+                            / f64::from(wave_rect.width().max(1.0)))
+                        .ceil()
+                        .max(1.0) as u64;
+                    let opaque_lanes = store.opaque_lanes();
+                    let has_opaque_query = selected.iter().any(|lane_id| {
+                        opaque_lanes
+                            .iter()
+                            .any(|lane| lane.name() == lane_id.as_str())
+                    });
+                    let opaque_boundaries: Vec<_> = selected
+                        .iter()
+                        .filter_map(|lane_id| {
+                            opaque_lanes
+                                .iter()
+                                .find(|lane| lane.name() == lane_id.as_str())
+                                .and_then(|lane| {
+                                    lane.nearest_time_boundary(timestamp_ns, max_distance_ns)
+                                })
+                                .map(|boundary_ns| {
+                                    TimeBoundarySource::Direct(Some(boundary_ns as f64 / 1_000.0))
+                                })
+                        })
+                        .collect();
+                    if has_opaque_query {
+                        return opaque_boundaries;
+                    }
                     let lanes = store.read();
                     selected
                         .iter()
@@ -218,15 +247,13 @@ impl LogicAnalyzerViewer {
                                 .find(|lane| lane.name == lane_id.as_str())
                                 .and_then(|lane| match &lane.data {
                                     DerivedLaneData::Annotations(annotations) => {
-                                        Some(AnnotationBoundarySource::InMemory(
+                                        Some(TimeBoundarySource::Direct(
                                             nearest_annotation_boundary_time(annotations, time_us),
                                         ))
                                     }
-                                    DerivedLaneData::IndexedAnnotations(indexed) => {
-                                        Some(AnnotationBoundarySource::Indexed(Arc::clone(
-                                            indexed.query(),
-                                        )))
-                                    }
+                                    DerivedLaneData::IndexedAnnotations(indexed) => Some(
+                                        TimeBoundarySource::Indexed(Arc::clone(indexed.query())),
+                                    ),
                                     _ => None,
                                 })
                         })
@@ -239,8 +266,8 @@ impl LogicAnalyzerViewer {
             let nearest = annotation_sources
                 .into_iter()
                 .filter_map(|source| match source {
-                    AnnotationBoundarySource::InMemory(nearest) => nearest,
-                    AnnotationBoundarySource::Indexed(query) => {
+                    TimeBoundarySource::Direct(nearest) => nearest,
+                    TimeBoundarySource::Indexed(query) => {
                         let timestamp_ns = (time_us.max(0.0) * 1_000.0).round() as u64;
                         let max_distance_ns =
                             (self.visible_span_us * 1_000.0 * f64::from(SNAP_DISTANCE_PX)
@@ -418,8 +445,11 @@ fn format_cursor_time(us: f64) -> String {
 
 #[cfg(test)]
 mod cursor_tests {
+    use std::sync::Arc;
+
     use signal_processing::{
-        DerivedLanes, IndexedAnnotationLane, IndexedAnnotationWriter, LiveStoreConfig, Word,
+        CollectedLaneQuery, CollectedPayloadRegistry, DerivedLanes, IndexedAnnotationLane,
+        IndexedAnnotationWriter, LiveStoreConfig, Word,
     };
 
     use super::*;
@@ -521,6 +551,53 @@ mod cursor_tests {
             viewer.snap_cursor_time(wave_rect, Pos2::new(210.0, 115.0), 21.0),
             21.0,
             "a boundary more than eight pixels away must not capture the cursor"
+        );
+    }
+
+    #[test]
+    fn cursor_uses_the_adapter_owned_boundary_query_when_available() {
+        struct BoundaryQuery;
+
+        impl CollectedLaneQuery for BoundaryQuery {
+            fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+                self
+            }
+
+            fn nearest_time_boundary(
+                &self,
+                _timestamp_ns: u64,
+                _max_distance_ns: u64,
+            ) -> Option<u64> {
+                Some(20_000)
+            }
+        }
+
+        let lanes = DerivedLanes::new();
+        lanes.register(
+            "decoded.words",
+            DerivedLaneData::Annotations(vec![Annotation {
+                start_ns: 10_000,
+                end_ns: 10_000,
+                value: 0x27,
+            }]),
+        );
+        let mut payloads = CollectedPayloadRegistry::new();
+        payloads.register::<Word>("org.example.word/v1").unwrap();
+        lanes.publish_opaque_lane(
+            "decoded.words",
+            payloads.descriptor::<Word>().unwrap().clone(),
+            Arc::new(BoundaryQuery),
+        );
+
+        let mut viewer = LogicAnalyzerViewer::new();
+        viewer.visible_span_us = 100.0;
+        viewer.set_derived_lanes(lanes);
+        viewer.ensure_row_order();
+        let wave_rect = Rect::from_min_max(Pos2::new(0.0, 100.0), Pos2::new(1_000.0, 130.0));
+
+        assert_eq!(
+            viewer.snap_cursor_time(wave_rect, Pos2::new(205.0, 115.0), 20.5),
+            20.0
         );
     }
 
