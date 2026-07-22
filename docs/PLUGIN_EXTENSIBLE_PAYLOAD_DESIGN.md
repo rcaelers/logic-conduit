@@ -12,6 +12,12 @@ payload types, and `PluginContext::register_collected_payload::<T>(stable_id)` r
 payload with both the runtime channel factory and that identity registry. The registry rejects a
 stable identifier assigned to multiple Rust types, and a Rust type assigned multiple identifiers.
 
+`PluginContext::register_collected_payload_adapter::<T>(stable_id, adapter)` additionally records
+an adapter factory. `DerivedDataCollector` schedules adapter-created lane ingestors beside its
+built-in lanes. An adapter publishes its retained, type-erased query object through `DerivedLanes`,
+so a later subscriber can discover it by stable payload identity and downcast only to its own
+registered query type. Built-in lanes still use the existing closed storage representations.
+
 The retained-data path is currently closed. `DerivedDataCollector` selects storage and draining
 behavior through the built-in `CollectedDataKind` variants, and `DerivedLaneData` contains the
 corresponding built-in storage representations. The waveform viewer has a renderer extension
@@ -64,22 +70,21 @@ plugins from silently assigning incompatible semantics to one payload.
 
 ### Runtime adapter contract
 
-The future `CollectedPayloadAdapter` registration for `T` creates a typed lane ingestor while
-exposing only an erased, object-safe interface to the collector.
+`CollectedPayloadAdapter` registration for `T` creates a typed lane ingestor while exposing only
+an erased, object-safe interface to the collector.
 
 ```rust
 trait ErasedLaneIngestor: Send {
     fn input_schema(&self, index: usize) -> PortSchema;
     fn ingest(&mut self, input: &InputPort) -> WorkResult<usize>;
     fn is_finished(&self) -> bool;
-    fn query_handle(&self) -> Arc<dyn CollectedLaneQuery>;
 }
 ```
 
 The typed factory captures `T` during plugin registration. It creates the correct `PortSchema`,
 downcasts the `InputPort` only to `Receiver<T>`, and owns all append state. The generic collector
-only schedules ingestors, applies backpressure and retention policy, and publishes their query
-handles.
+only schedules ingestors and applies backpressure and retention policy. The ingestor publishes its
+query handle while it is created, allowing subscribers to appear after data has been collected.
 
 `CollectedLaneQuery` exposes timeline extent, bounded visible-window snapshots, optional activity
 summaries, and optional boundary snapping. Snapshots are immutable and type-erased at the generic
@@ -113,8 +118,8 @@ data rather than receiving the live stream.
 
 ### Migration path
 
-1. Add typed ingest factories to the identity registry and replace collector
-   `CollectedDataKind`/`LaneBuffer` dispatch.
+1. Replace the built-in collector `CollectedDataKind`/`LaneBuffer` dispatch with registered
+   adapters.
 2. Replace `DerivedLaneData` with adapter-owned query handles and snapshots.
 3. Make data-subscription negotiation registry-driven instead of listing built-in `PortKind`s.
 4. Register built-in waveform and table adapters through the same mechanism as plugins.

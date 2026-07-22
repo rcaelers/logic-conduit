@@ -25,22 +25,18 @@ open to plugin-defined socket and value types. A plugin-defined camera frame, fo
 be able to register timestamp extraction, storage/sampling, a thumbnail lane, and its default
 presentation without editing a generic crate.
 
-- Write the viewer-payload extension design before changing the implementation. Preserve the
-  existing crate boundaries, platform-neutral API, bounded rendering rules, and the invariant
-  that plugin code is never called while a derived-lane lock is held.
-- Add a viewer-payload registry keyed by the existing open `PortKind`/payload `TypeId`. Extend
-  `PluginContext` with one registration operation that associates a plugin payload type with
-  its typed ingest factory, timeline semantics, storage/query adapter, default badge/group, and
-  renderer. Registration must compose with `register_payload::<T>()`; adding a type must not
-  require a match arm in `logic_analyzer_graph`, `signal_processing`, or
-  `logic_analyzer_viewer`.
+- Extend the collected-payload identity registry keyed by the existing open
+  `PortKind`/payload `TypeId` with a typed ingest factory, timeline semantics, storage/query
+  adapter, default badge/group, and renderer. Registration must compose with
+  `register_payload::<T>()`; adding a type must not require a match arm in
+  `logic_analyzer_graph`, `signal_processing`, or `logic_analyzer_viewer`.
 - Replace the Viewer's hardcoded accepted-kind list and the synthetic socket's type-name list
   with registry-driven negotiation or a true viewable-payload wildcard. Keep unsupported output
   types out of the View panel, and report a clear compile error if a saved or explicitly wired
   graph requests viewing for a payload whose adapter is unavailable.
-- Replace `ViewerLaneKind`/`LaneBuffer` dispatch with an object-safe lane-ingest boundary created
+- Replace `CollectedDataKind`/`LaneBuffer` dispatch with an object-safe lane-ingest boundary created
   by a typed registration factory. The factory must still construct the correctly typed runtime
-  `PortSchema` and drain the corresponding `InputPort`, while the generic `ViewerSink` only
+  `PortSchema` and drain the corresponding `InputPort`, while the generic `DerivedDataCollector` only
   schedules lanes, applies backpressure/retention policy, and publishes progress.
 - Replace the closed `DerivedLaneData` and `ViewerValueKind` representation with registered lane
   data/query handles. Separate typed append state from immutable UI snapshots so arbitrary
@@ -68,7 +64,7 @@ presentation without editing a generic crate.
   extent, renderer lock release, native/wasm compilation, and removal of hardcoded built-in type
   checks from the generic viewer path.
 
-Related design: [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN.md) and [Pipeline Design](docs/PIPELINE_DESIGN.md).
+Related design: [Plugin-Extensible Collected Payload Design](docs/PLUGIN_EXTENSIBLE_PAYLOAD_DESIGN.md), [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN.md), and [Pipeline Design](docs/PIPELINE_DESIGN.md).
 
 ## Capture sources
 

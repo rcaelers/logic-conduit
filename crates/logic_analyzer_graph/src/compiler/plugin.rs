@@ -89,6 +89,19 @@ impl<'a> PluginContext<'a> {
         self.builders.register_collected_payload::<T>(stable_id)?;
         Ok(self)
     }
+
+    /// Registers a payload's typed collector adapter. The adapter owns its
+    /// input draining and retained query state; generic runtime code only
+    /// schedules it and publishes the opaque query handle.
+    pub fn register_collected_payload_adapter<T: PortValue>(
+        &mut self,
+        stable_id: impl Into<String>,
+        adapter: std::sync::Arc<dyn signal_processing::CollectedPayloadAdapter>,
+    ) -> Result<&mut Self, signal_processing::CollectedPayloadRegistrationError> {
+        self.builders
+            .register_collected_payload_adapter::<T>(stable_id, adapter)?;
+        Ok(self)
+    }
 }
 
 #[cfg(test)]

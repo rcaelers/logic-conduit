@@ -92,6 +92,7 @@ pub use capture_policy::{
     TriggerPlacementCapability, TriggerTimeout, TriggerTimeoutAction,
 };
 pub use collected_payload::{
+    CollectedLaneIngestor, CollectedLaneRequest, CollectedPayloadAdapter,
     CollectedPayloadDescriptor, CollectedPayloadRegistrationError, CollectedPayloadRegistry,
 };
 pub use cooperative_manager::CooperativeManager;
@@ -99,7 +100,8 @@ pub use derived_data_collector::{
     AnnotationFold, CollectedDataKind, CollectedValue, CollectedValueKind, CollectedValueLane,
     DEFAULT_DERIVED_DATA_MAX_ENTRIES, DerivedDataCollector, DerivedDataCollectorMetrics,
     DerivedDataCollectorMetricsSnapshot, DerivedDataRetention, DerivedLane, DerivedLaneData,
-    DerivedLanes, DigitalFold, IndexedAnnotationLane, LaneSummary, MarkerFold, ValueFold,
+    DerivedLanes, DigitalFold, IndexedAnnotationLane, LaneSummary, MarkerFold, OpaqueCollectedLane,
+    ValueFold,
 };
 pub use derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 pub use derived_word_store::{

@@ -1,11 +1,13 @@
 //! Presentation-neutral collection of typed derived streams into retained storage.
 
+use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use web_time::Instant;
 
+use crate::collected_payload::{CollectedLaneIngestor, CollectedPayloadDescriptor};
 use crate::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 use crate::derived_word_store::{
     AnnotationQuery, AnnotationStoreBackend, AnnotationStoreMetadata, AnnotationStoreWriterBackend,
@@ -338,12 +340,46 @@ pub struct DerivedLane {
     pub word_display_format: Option<String>,
 }
 
+/// An adapter-owned retained query handle that generic consumers can discover
+/// without knowing its concrete payload type.
+#[derive(Clone)]
+pub struct OpaqueCollectedLane {
+    name: String,
+    payload: CollectedPayloadDescriptor,
+    query: Arc<dyn Any + Send + Sync>,
+}
+
+impl OpaqueCollectedLane {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn payload(&self) -> &CollectedPayloadDescriptor {
+        &self.payload
+    }
+
+    pub fn query<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        Arc::downcast::<T>(Arc::clone(&self.query)).ok()
+    }
+}
+
+impl std::fmt::Debug for OpaqueCollectedLane {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OpaqueCollectedLane")
+            .field("name", &self.name)
+            .field("payload", &self.payload)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Shared, append-only store of derived lanes. Producers and subscribers hold
 /// independent clones, so subscribers may attach after collection has begun or
 /// completed. A re-run swaps in a fresh store so stale lanes vanish atomically.
 #[derive(Debug, Clone, Default)]
 pub struct DerivedLanes {
     inner: Arc<RwLock<Vec<DerivedLane>>>,
+    opaque: Arc<RwLock<Vec<OpaqueCollectedLane>>>,
 }
 
 impl DerivedLanes {
@@ -388,6 +424,33 @@ impl DerivedLanes {
     /// Read access for rendering.
     pub fn read(&self) -> RwLockReadGuard<'_, Vec<DerivedLane>> {
         self.inner.read().unwrap()
+    }
+
+    /// Publishes an adapter-owned retained query. A later subscriber can
+    /// attach after collection has completed and downcast only to the payload
+    /// type it registered.
+    pub fn publish_opaque_lane<T: Send + Sync + 'static>(
+        &self,
+        name: impl Into<String>,
+        payload: CollectedPayloadDescriptor,
+        query: Arc<T>,
+    ) {
+        let name = name.into();
+        let lane = OpaqueCollectedLane {
+            name: name.clone(),
+            payload,
+            query,
+        };
+        let mut lanes = self.opaque.write().unwrap();
+        if let Some(index) = lanes.iter().position(|existing| existing.name == name) {
+            lanes[index] = lane;
+        } else {
+            lanes.push(lane);
+        }
+    }
+
+    pub fn opaque_lanes(&self) -> Vec<OpaqueCollectedLane> {
+        self.opaque.read().unwrap().clone()
     }
 
     fn set_word_display_format(&self, index: usize, format: Option<String>) {
@@ -559,6 +622,20 @@ struct Lane {
     word_indexed: bool,
 }
 
+enum CollectorLane {
+    BuiltIn(Box<Lane>),
+    Adapter(Box<dyn CollectedLaneIngestor>),
+}
+
+impl CollectorLane {
+    fn is_finished(&self) -> bool {
+        match self {
+            Self::BuiltIn(lane) => lane.eos,
+            Self::Adapter(lane) => lane.is_finished(),
+        }
+    }
+}
+
 /// Sink with one typed input per lane. Never blocks *waiting* on any single
 /// input — lanes drain round-robin with `try_recv` so a quiet lane cannot
 /// stall a busy one — but each lane's channel is drained in bounded batches
@@ -569,7 +646,7 @@ struct Lane {
 pub struct DerivedDataCollector {
     name: String,
     store: DerivedLanes,
-    lanes: Vec<Lane>,
+    lanes: Vec<CollectorLane>,
     retention: DerivedDataRetention,
     metrics: Option<DerivedDataCollectorMetrics>,
     indexed_words: bool,
@@ -630,14 +707,14 @@ impl DerivedDataCollector {
                                 IndexedAnnotationLane::from_store(store),
                             );
                             let store_index = self.store.register(name, data);
-                            self.lanes.push(Lane {
+                            self.lanes.push(CollectorLane::BuiltIn(Box::new(Lane {
                                 kind,
                                 store_index,
                                 buffer: LaneBuffer::Words(VecDeque::new()),
                                 eos: false,
                                 word_writer: None,
                                 word_indexed: true,
-                            });
+                            })));
                             return self;
                         }
                         Ok(None) => {}
@@ -692,14 +769,22 @@ impl DerivedDataCollector {
             CollectedDataKind::Text => LaneBuffer::Text(VecDeque::new()),
         };
         let store_index = self.store.register(name, data);
-        self.lanes.push(Lane {
+        self.lanes.push(CollectorLane::BuiltIn(Box::new(Lane {
             kind,
             store_index,
             buffer,
             eos: false,
             word_writer,
             word_indexed,
-        });
+        })));
+        self
+    }
+
+    /// Adds a lane implemented by a registered payload adapter. The adapter
+    /// owns typed draining and retained storage; this collector only
+    /// schedules it alongside the built-in lanes.
+    pub fn with_ingestor(mut self, ingestor: Box<dyn CollectedLaneIngestor>) -> Self {
+        self.lanes.push(CollectorLane::Adapter(ingestor));
         self
     }
 
@@ -710,7 +795,7 @@ impl DerivedDataCollector {
         format: Option<String>,
     ) -> Self {
         let sink = self.with_lane(kind, name);
-        if let Some(last) = sink.lanes.last() {
+        if let Some(CollectorLane::BuiltIn(last)) = sink.lanes.last() {
             sink.store.set_word_display_format(last.store_index, format);
         }
         sink
@@ -723,7 +808,7 @@ impl ProcessNode for DerivedDataCollector {
     }
 
     fn should_stop(&self) -> bool {
-        !self.lanes.is_empty() && self.lanes.iter().all(|lane| lane.eos)
+        !self.lanes.is_empty() && self.lanes.iter().all(CollectorLane::is_finished)
     }
 
     fn input_scheduling(&self) -> crate::node::InputScheduling {
@@ -744,22 +829,25 @@ impl ProcessNode for DerivedDataCollector {
             .enumerate()
             .map(|(index, lane)| {
                 let name = format!("in{index}");
-                match lane.kind {
-                    CollectedDataKind::Signal => {
-                        PortSchema::new::<Sample>(name, index, PortDirection::Input)
-                    }
-                    CollectedDataKind::Words => {
-                        PortSchema::new::<Word>(name, index, PortDirection::Input)
-                    }
-                    CollectedDataKind::Trigger => {
-                        PortSchema::new::<Trigger>(name, index, PortDirection::Input)
-                    }
-                    CollectedDataKind::Number => {
-                        PortSchema::new::<NumberSample>(name, index, PortDirection::Input)
-                    }
-                    CollectedDataKind::Text => {
-                        PortSchema::new::<TextSample>(name, index, PortDirection::Input)
-                    }
+                match lane {
+                    CollectorLane::BuiltIn(lane) => match lane.kind {
+                        CollectedDataKind::Signal => {
+                            PortSchema::new::<Sample>(name, index, PortDirection::Input)
+                        }
+                        CollectedDataKind::Words => {
+                            PortSchema::new::<Word>(name, index, PortDirection::Input)
+                        }
+                        CollectedDataKind::Trigger => {
+                            PortSchema::new::<Trigger>(name, index, PortDirection::Input)
+                        }
+                        CollectedDataKind::Number => {
+                            PortSchema::new::<NumberSample>(name, index, PortDirection::Input)
+                        }
+                        CollectedDataKind::Text => {
+                            PortSchema::new::<TextSample>(name, index, PortDirection::Input)
+                        }
+                    },
+                    CollectorLane::Adapter(lane) => lane.input_schema(index),
                 }
             })
             .collect()
@@ -777,12 +865,28 @@ impl ProcessNode for DerivedDataCollector {
         let mut progress = 0usize;
 
         for (index, lane) in self.lanes.iter_mut().enumerate() {
-            if lane.eos {
+            if lane.is_finished() {
                 continue;
             }
             let port = inputs
                 .get(index)
                 .ok_or_else(|| WorkError::NodeError(format!("missing collector input {index}")))?;
+
+            let CollectorLane::BuiltIn(lane) = lane else {
+                let CollectorLane::Adapter(lane) = lane else {
+                    unreachable!("collector lane variant is exhaustive")
+                };
+                let started = metrics.as_ref().map(|_| Instant::now());
+                let lane_progress = lane.drain(port, self.retention)?;
+                progress += lane_progress;
+                if let (Some(metrics), Some(started)) = (&metrics, started) {
+                    metrics.record_drain(started, lane_progress);
+                    if lane_progress > 0 {
+                        metrics.record_append(started);
+                    }
+                }
+                continue;
+            };
 
             // Bounded, not drained to exhaustion: letting a burst fill this
             // lane's channel (rather than racing to empty it every call) is
@@ -922,7 +1026,7 @@ impl ProcessNode for DerivedDataCollector {
         }
 
         if progress == 0 {
-            if self.lanes.iter().all(|lane| lane.eos) {
+            if self.lanes.iter().all(CollectorLane::is_finished) {
                 return Err(WorkError::Shutdown);
             }
             // Native thread-driven execution backs off here; cooperative wasm
@@ -938,6 +1042,49 @@ mod tests {
     use crossbeam_channel::bounded;
 
     use super::*;
+
+    #[derive(Clone)]
+    struct PluginEvent(u64);
+
+    struct PluginEventIngestor {
+        values: Arc<std::sync::Mutex<Vec<u64>>>,
+        buffer: VecDeque<PluginEvent>,
+        finished: bool,
+    }
+
+    impl CollectedLaneIngestor for PluginEventIngestor {
+        fn input_schema(&self, index: usize) -> PortSchema {
+            PortSchema::new::<PluginEvent>(format!("in{index}"), index, PortDirection::Input)
+        }
+
+        fn drain(
+            &mut self,
+            input: &InputPort,
+            _retention: DerivedDataRetention,
+        ) -> WorkResult<usize> {
+            use crossbeam_channel::TryRecvError;
+
+            let mut batch = Vec::new();
+            if let Some(mut receiver) = input.get(&mut self.buffer) {
+                match receiver.try_recv_many(&mut batch, DRAIN_BATCH_SIZE) {
+                    Ok(_) | Err(TryRecvError::Empty) => {}
+                    Err(TryRecvError::Disconnected) => self.finished = true,
+                }
+            } else {
+                self.finished = true;
+            }
+            let count = batch.len();
+            self.values
+                .lock()
+                .unwrap()
+                .extend(batch.into_iter().map(|event| event.0));
+            Ok(count)
+        }
+
+        fn is_finished(&self) -> bool {
+            self.finished
+        }
+    }
     use crate::ports::OutputPort as OutPort;
     use crate::sender::ChannelMessage;
     use crate::watchdog::Watchdog;
@@ -986,6 +1133,59 @@ mod tests {
                 Err(e) => panic!("unexpected error: {e}"),
             }
         }
+    }
+
+    #[test]
+    fn adapter_lane_collects_and_publishes_an_opaque_query() {
+        let lanes = DerivedLanes::new();
+        let mut payloads = crate::CollectedPayloadRegistry::new();
+        payloads
+            .register::<PluginEvent>("org.example.plugin-event/v1")
+            .unwrap();
+        let values = Arc::new(std::sync::Mutex::new(Vec::new()));
+        lanes.publish_opaque_lane(
+            "plugin.events",
+            payloads.descriptor::<PluginEvent>().unwrap().clone(),
+            Arc::clone(&values),
+        );
+        let mut collector =
+            DerivedDataCollector::new(lanes.clone()).with_ingestor(Box::new(PluginEventIngestor {
+                values: Arc::clone(&values),
+                buffer: VecDeque::new(),
+                finished: false,
+            }));
+
+        let watchdog = Watchdog::new();
+        let (sender, receiver) = bounded::<ChannelMessage<PluginEvent>>(4);
+        sender
+            .send(ChannelMessage::Batch(vec![PluginEvent(2), PluginEvent(5)]))
+            .unwrap();
+        drop(sender);
+        run_sink(
+            &mut collector,
+            vec![InputPort::new_with_watchdog(
+                receiver,
+                &watchdog,
+                "collector",
+                "in0",
+            )],
+        );
+
+        assert_eq!(*values.lock().unwrap(), vec![2, 5]);
+        let opaque = lanes.opaque_lanes();
+        assert_eq!(opaque[0].name(), "plugin.events");
+        assert_eq!(
+            opaque[0].payload().stable_id(),
+            "org.example.plugin-event/v1"
+        );
+        assert_eq!(
+            *opaque[0]
+                .query::<std::sync::Mutex<Vec<u64>>>()
+                .unwrap()
+                .lock()
+                .unwrap(),
+            vec![2, 5]
+        );
     }
 
     #[test]
@@ -1429,7 +1629,10 @@ mod tests {
             .with_word_store_config(config)
             .with_lane(CollectedDataKind::Words, "words");
 
-        assert!(sink.lanes[0].word_writer.is_none());
+        assert!(matches!(
+            &sink.lanes[0],
+            CollectorLane::BuiltIn(lane) if lane.word_writer.is_none()
+        ));
         assert!(matches!(
             store.read()[0].data,
             DerivedLaneData::Annotations(_)
@@ -1578,8 +1781,10 @@ mod tests {
         let mut sink = DerivedDataCollector::new(lanes.clone())
             .with_word_store_config(config)
             .with_lane(CollectedDataKind::Words, "words");
-        assert!(sink.lanes[0].word_writer.is_none());
-        assert!(sink.lanes[0].word_indexed);
+        assert!(matches!(
+            &sink.lanes[0],
+            CollectorLane::BuiltIn(lane) if lane.word_writer.is_none() && lane.word_indexed
+        ));
         let wd = Watchdog::new();
         let (tx, rx) = bounded::<ChannelMessage<Word>>(4);
         tx.send(ChannelMessage::Batch(vec![

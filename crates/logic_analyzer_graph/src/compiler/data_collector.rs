@@ -6,8 +6,8 @@ use serde_json::Value;
 
 use node_graph::Socket;
 use signal_processing::{
-    CollectedDataKind, DerivedDataCollector, LiveStoreConfig, NumberSample, ProcessNode, Sample,
-    TextSample, Trigger, Word,
+    CollectedDataKind, CollectedLaneRequest, CollectedPayloadRegistry, DerivedDataCollector,
+    LiveStoreConfig, NumberSample, ProcessNode, Sample, TextSample, Trigger, Word,
 };
 
 use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
@@ -21,6 +21,7 @@ impl DataCollectorBuilder {
         name: &str,
         resolved: &ResolvedInputs,
         lane_names: &[(usize, String)],
+        collected_payloads: &CollectedPayloadRegistry,
         ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let mut collector = DerivedDataCollector::new(ctx.derived_lanes().clone())
@@ -30,6 +31,28 @@ impl DataCollectorBuilder {
             let input = resolved
                 .get(0, *member)
                 .ok_or_else(|| format!("collector input {member} is unresolved"))?;
+            if let Some(adapter) = collected_payloads.adapter_by_type_id(input.kind.type_id()) {
+                let descriptor = collected_payloads
+                    .descriptor_by_type_id(input.kind.type_id())
+                    .expect("an adapter always has a registered payload identity")
+                    .clone();
+                let ingestor = adapter
+                    .create_ingestor(CollectedLaneRequest::new(
+                        lane_name,
+                        *member,
+                        ctx.derived_lanes().clone(),
+                        descriptor,
+                    ))
+                    .map_err(|error| {
+                        format!(
+                            "collector adapter for '{}' could not create '{}': {error}",
+                            input.kind.name(),
+                            lane_name
+                        )
+                    })?;
+                collector = collector.with_ingestor(ingestor);
+                continue;
+            }
             collector = if input.kind == PortKind::of::<Sample>() {
                 collector.with_lane(CollectedDataKind::Signal, lane_name.clone())
             } else if input.kind == PortKind::of::<Word>() {
@@ -51,6 +74,14 @@ impl DataCollectorBuilder {
                 collector.with_lane(CollectedDataKind::Number, lane_name.clone())
             } else if input.kind == PortKind::of::<TextSample>() {
                 collector.with_lane(CollectedDataKind::Text, lane_name.clone())
+            } else if let Some(descriptor) =
+                collected_payloads.descriptor_by_type_id(input.kind.type_id())
+            {
+                return Err(format!(
+                    "collected payload '{}' ({}) has no ingestion adapter",
+                    input.kind.name(),
+                    descriptor.stable_id()
+                ));
             } else {
                 return Err(format!("collector cannot retain {:?}", input.kind));
             };
@@ -133,6 +164,12 @@ impl RuntimeBuilder for DataCollectorBuilder {
         resolved: &ResolvedInputs,
         ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
-        Self::build_with_lane_names(name, resolved, &Self::default_lane_names(resolved), ctx)
+        Self::build_with_lane_names(
+            name,
+            resolved,
+            &Self::default_lane_names(resolved),
+            &CollectedPayloadRegistry::new(),
+            ctx,
+        )
     }
 }

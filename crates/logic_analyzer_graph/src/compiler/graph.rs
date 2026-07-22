@@ -31,11 +31,11 @@ use node_graph::{
 use signal_processing::{
     AcquisitionContext, AcquisitionError, AcquisitionResult, AppManager, CaptureChannelId,
     CaptureIndexFactory, CaptureProviderCapabilities, CaptureSessionPlan, CaptureStartMode,
-    CaptureStoreCursor, CollectedPayloadRegistrationError, CollectedPayloadRegistry,
-    ConfigurationBoundary, DerivedDataRetention, DerivedLanes, DisconnectEvent, InputSub,
-    NodeConfig, NumberSample, OverflowPolicy, PersistentStoreConfig, PreparedAcquisition,
-    ProcessNode, Sample, SampleBlock, SamplingActivity, SimpleTriggerCondition, TextSample,
-    Trigger, TriggerEditorSchema, TriggerProgram, Word,
+    CaptureStoreCursor, CollectedPayloadAdapter, CollectedPayloadRegistrationError,
+    CollectedPayloadRegistry, ConfigurationBoundary, DerivedDataRetention, DerivedLanes,
+    DisconnectEvent, InputSub, NodeConfig, NumberSample, OverflowPolicy, PersistentStoreConfig,
+    PreparedAcquisition, ProcessNode, Sample, SampleBlock, SamplingActivity,
+    SimpleTriggerCondition, TextSample, Trigger, TriggerEditorSchema, TriggerProgram, Word,
 };
 
 use super::cache_platform;
@@ -655,6 +655,17 @@ impl BuilderRegistry {
     ) -> Result<&mut Self, CollectedPayloadRegistrationError> {
         signal_processing::register_type::<T>();
         self.collected_payloads.register::<T>(stable_id)?;
+        Ok(self)
+    }
+
+    /// Registers a typed retained-data adapter for a payload identity.
+    pub fn register_collected_payload_adapter<T: PortValue>(
+        &mut self,
+        stable_id: impl Into<String>,
+        adapter: std::sync::Arc<dyn CollectedPayloadAdapter>,
+    ) -> Result<&mut Self, CollectedPayloadRegistrationError> {
+        self.register_collected_payload::<T>(stable_id)?;
+        self.collected_payloads.register_adapter::<T>(adapter)?;
         Ok(self)
     }
 
@@ -1674,6 +1685,7 @@ fn materialize_compiled_node(
     node: &CompiledNode,
     builder: &dyn RuntimeBuilder,
     runtime_name: &str,
+    collected_payloads: &CollectedPayloadRegistry,
     ctx: &mut CompileCtx,
 ) -> Result<Box<dyn ProcessNode>, String> {
     if builder.is_data_subscription() {
@@ -1681,6 +1693,7 @@ fn materialize_compiled_node(
             runtime_name,
             &node.resolved,
             &builder.collected_lane_names(&node.state, &node.resolved),
+            collected_payloads,
             ctx,
         );
     }
@@ -2007,8 +2020,14 @@ fn start_live_inner(
         let process = if let Some(process) = source_overrides.remove(&id) {
             process
         } else {
-            materialize_compiled_node(node, builder, &node.runtime_name, ctx)
-                .map_err(|message| vec![CompileError::on(id, message)])?
+            materialize_compiled_node(
+                node,
+                builder,
+                &node.runtime_name,
+                registry.collected_payloads(),
+                ctx,
+            )
+            .map_err(|message| vec![CompileError::on(id, message)])?
         };
         let inputs = input_subs(&execution, id, process.as_ref(), &names)
             .map_err(|message| vec![CompileError::on(id, message)])?;
@@ -2105,9 +2124,14 @@ impl LiveRun {
                         .clone_from(&node.derived_word_caches);
                     register_collected_subscribers(node, builder, &node.runtime_name, &ctx)
                         .map_err(ApplyError::Apply)?;
-                    let process =
-                        materialize_compiled_node(node, builder, &node.runtime_name, &mut ctx)
-                            .map_err(ApplyError::Apply)?;
+                    let process = materialize_compiled_node(
+                        node,
+                        builder,
+                        &node.runtime_name,
+                        registry.collected_payloads(),
+                        &mut ctx,
+                    )
+                    .map_err(ApplyError::Apply)?;
                     let inputs = input_subs(&new, id, process.as_ref(), &self.names)
                         .map_err(ApplyError::Apply)?;
                     self.manager
@@ -2144,8 +2168,14 @@ impl LiveRun {
                         .clone_from(&node.derived_word_caches);
                     register_collected_subscribers(node, builder, &name, &ctx)
                         .map_err(ApplyError::Apply)?;
-                    let process = materialize_compiled_node(node, builder, &name, &mut ctx)
-                        .map_err(ApplyError::Apply)?;
+                    let process = materialize_compiled_node(
+                        node,
+                        builder,
+                        &name,
+                        registry.collected_payloads(),
+                        &mut ctx,
+                    )
+                    .map_err(ApplyError::Apply)?;
                     let inputs = input_subs(&new, id, process.as_ref(), &self.names)
                         .map_err(ApplyError::Apply)?;
                     self.manager
@@ -2979,8 +3009,14 @@ mod tests {
             ctx.derived_word_caches
                 .clone_from(&node.derived_word_caches);
             register_collected_subscribers(node, builder, &node.runtime_name, &ctx).unwrap();
-            let process =
-                materialize_compiled_node(node, builder, &node.runtime_name, &mut ctx).unwrap();
+            let process = materialize_compiled_node(
+                node,
+                builder,
+                &node.runtime_name,
+                registry.collected_payloads(),
+                &mut ctx,
+            )
+            .unwrap();
             let inputs = input_subs(&compiled, id, process.as_ref(), &names).unwrap();
             manager
                 .add_node_deferred(NodeSpec {
@@ -3591,8 +3627,14 @@ mod tests {
         assert!(viewer.data_collector, "lowering must plan retained storage");
 
         let mut ctx = CompileCtx::default();
-        let process =
-            materialize_compiled_node(viewer, builder, &viewer.runtime_name, &mut ctx).unwrap();
+        let process = materialize_compiled_node(
+            viewer,
+            builder,
+            &viewer.runtime_name,
+            registry.collected_payloads(),
+            &mut ctx,
+        )
+        .unwrap();
         assert_eq!(process.num_inputs(), viewer.resolved.member_count(0));
         assert_eq!(process.num_outputs(), 0);
     }
