@@ -276,6 +276,18 @@ impl CollectedLaneQuery for WordLaneQuery {
             .ok()
             .flatten()
     }
+
+    fn timeline_extent_end_ns(&self) -> Option<u64> {
+        let lanes = self.store.read();
+        let lane = lanes.iter().find(|lane| lane.name == self.name)?;
+        match &lane.data {
+            DerivedLaneData::Annotations(annotations) => annotations
+                .last()
+                .map(|annotation| annotation.end_ns.max(annotation.start_ns)),
+            DerivedLaneData::IndexedAnnotations(indexed) => indexed.metadata().extent_end_ns,
+            _ => None,
+        }
+    }
 }
 
 fn nearest_annotation_boundary(
@@ -561,6 +573,12 @@ impl OpaqueCollectedLane {
     pub fn nearest_time_boundary(&self, timestamp_ns: u64, max_distance_ns: u64) -> Option<u64> {
         self.query
             .nearest_time_boundary(timestamp_ns, max_distance_ns)
+    }
+
+    /// Returns the adapter-defined retained timeline extent without exposing
+    /// the concrete lane storage.
+    pub fn timeline_extent_end_ns(&self) -> Option<u64> {
+        self.query.timeline_extent_end_ns()
     }
 }
 
@@ -1674,6 +1692,7 @@ mod tests {
         ));
         assert_eq!(query.nearest_time_boundary(19, 3), Some(20));
         assert_eq!(query.nearest_time_boundary(25, 3), None);
+        assert_eq!(query.timeline_extent_end_ns(), Some(60));
     }
 
     #[test]

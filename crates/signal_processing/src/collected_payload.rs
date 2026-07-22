@@ -81,6 +81,13 @@ pub trait CollectedLaneQuery: Send + Sync {
     fn nearest_time_boundary(&self, _timestamp_ns: u64, _max_distance_ns: u64) -> Option<u64> {
         None
     }
+
+    /// Returns the greatest timeline timestamp retained by this lane. The
+    /// adapter owns the exact span semantics for its payload; a query without
+    /// timeline data returns `None`.
+    fn timeline_extent_end_ns(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// Context supplied when a payload adapter creates one retained lane.

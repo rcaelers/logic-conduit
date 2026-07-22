@@ -749,9 +749,18 @@ impl LogicAnalyzerViewer {
         let Some(derived) = self.derived.as_ref() else {
             return 0.0;
         };
+        let opaque_lanes = derived.opaque_lanes();
+        let opaque_lane_names: std::collections::HashSet<_> =
+            opaque_lanes.iter().map(|lane| lane.name()).collect();
+        let opaque_end_ns = opaque_lanes
+            .iter()
+            .filter_map(|lane| lane.timeline_extent_end_ns())
+            .max()
+            .unwrap_or(0);
         let lanes = derived.read();
         let end_ns = lanes
             .iter()
+            .filter(|lane| !opaque_lane_names.contains(lane.name.as_str()))
             .filter_map(|lane| match &lane.data {
                 signal_processing::DerivedLaneData::Digital(samples) => {
                     samples.last().map(|sample| sample.start_time_ns)
@@ -769,7 +778,8 @@ impl LogicAnalyzerViewer {
                 }
             })
             .max()
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .max(opaque_end_ns);
         end_ns as f64 / 1_000.0
     }
 
@@ -805,8 +815,8 @@ mod tests {
 
     use signal_processing::{
         CaptureIndex, CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow,
-        DerivedLaneData, DerivedLanes, IndexedAnnotationLane, IndexedAnnotationWriter,
-        LiveStoreConfig, Word,
+        CollectedLaneQuery, CollectedPayloadRegistry, DerivedLaneData, DerivedLanes,
+        IndexedAnnotationLane, IndexedAnnotationWriter, LiveStoreConfig, Word,
     };
 
     use super::{ChannelSignal, LogicAnalyzerViewer};
@@ -936,6 +946,44 @@ mod tests {
 
         assert_eq!(viewer.visible_start_us, 0.0);
         assert_eq!(viewer.visible_span_us, 300.0);
+    }
+
+    #[test]
+    fn reset_time_view_uses_the_adapter_owned_timeline_extent() {
+        struct ExtentQuery;
+
+        impl CollectedLaneQuery for ExtentQuery {
+            fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+                self
+            }
+
+            fn timeline_extent_end_ns(&self) -> Option<u64> {
+                Some(400_000)
+            }
+        }
+
+        let lanes = DerivedLanes::new();
+        lanes.register(
+            "words",
+            DerivedLaneData::Annotations(vec![signal_processing::Annotation {
+                start_ns: 10_000,
+                end_ns: 10_000,
+                value: 0x27,
+            }]),
+        );
+        let mut payloads = CollectedPayloadRegistry::new();
+        payloads.register::<Word>("org.example.word/v1").unwrap();
+        lanes.publish_opaque_lane(
+            "words",
+            payloads.descriptor::<Word>().unwrap().clone(),
+            Arc::new(ExtentQuery),
+        );
+
+        let mut viewer = LogicAnalyzerViewer::new();
+        viewer.set_derived_lanes(lanes);
+        viewer.reset_time_view();
+
+        assert_eq!(viewer.visible_span_us, 400.0);
     }
 
     #[test]
