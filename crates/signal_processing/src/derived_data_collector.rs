@@ -149,6 +149,7 @@ pub enum WordLaneSnapshot {
     Exact {
         annotations: Vec<Annotation>,
         last_timestamp_ns: Option<u64>,
+        display_format: Option<String>,
     },
     Presence(Vec<WordPresenceBucket>),
     Activity,
@@ -164,7 +165,10 @@ impl WordLaneQuery {
     fn snapshot(&self, request: CollectedLaneSnapshotRequest) -> WordLaneSnapshot {
         enum Source {
             InMemory(WordLaneSnapshot),
-            Indexed(Arc<dyn AnnotationQuery>),
+            Indexed {
+                query: Arc<dyn AnnotationQuery>,
+                display_format: Option<String>,
+            },
             Missing,
         }
 
@@ -188,12 +192,14 @@ impl WordLaneQuery {
                             last_timestamp_ns: annotations
                                 .last()
                                 .map(|annotation| annotation.start_ns),
+                            display_format: lane.word_display_format.clone(),
                         })
                     }
                 }
-                DerivedLaneData::IndexedAnnotations(indexed) => {
-                    Source::Indexed(Arc::clone(indexed.query()))
-                }
+                DerivedLaneData::IndexedAnnotations(indexed) => Source::Indexed {
+                    query: Arc::clone(indexed.query()),
+                    display_format: lane.word_display_format.clone(),
+                },
                 _ => Source::Missing,
             }
         };
@@ -201,7 +207,10 @@ impl WordLaneQuery {
         match source {
             Source::InMemory(snapshot) => snapshot,
             Source::Missing => WordLaneSnapshot::Error,
-            Source::Indexed(query) => {
+            Source::Indexed {
+                query,
+                display_format,
+            } => {
                 let target_points = request.max_items.max(1);
                 let Ok(buckets) = query.coarse_presence_window(
                     request.start_time_ns,
@@ -225,6 +234,7 @@ impl WordLaneQuery {
                     Ok(window) if window.complete => WordLaneSnapshot::Exact {
                         annotations: window.annotations,
                         last_timestamp_ns: query.metadata().last_timestamp_ns,
+                        display_format,
                     },
                     Ok(_) => WordLaneSnapshot::Presence(buckets),
                     Err(_) => WordLaneSnapshot::Error,

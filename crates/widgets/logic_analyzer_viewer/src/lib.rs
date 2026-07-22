@@ -22,6 +22,7 @@ std::cfg_select! {
     }
 }
 
+pub use draw::{default_annotation_visual, draw_annotation_presence, draw_annotation_snapshot};
 pub use lanes::{
     AnnotationVisual, DefaultViewerLaneRenderer, DerivedLaneId, OpaqueLaneDrawContext,
     ViewerLaneBadge, ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneRenderer, ViewerLaneTrack,

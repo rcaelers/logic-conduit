@@ -102,6 +102,18 @@ pub struct OpaqueLaneDrawContext<'a> {
     pub visible_end_ns: u64,
 }
 
+impl OpaqueLaneDrawContext<'_> {
+    /// Maps an absolute timeline position into the clipped waveform region.
+    pub fn time_to_x(&self, time_ns: u64) -> f32 {
+        let span_ns = self
+            .visible_end_ns
+            .saturating_sub(self.visible_start_ns)
+            .max(1);
+        let fraction = time_ns.saturating_sub(self.visible_start_ns) as f64 / span_ns as f64;
+        self.wave_rect.left() + self.wave_rect.width() * fraction as f32
+    }
+}
+
 /// Protocol-neutral extension point for a displayed derived-lane row.
 ///
 /// The viewer retains ownership of waveform queries and drawing geometry.

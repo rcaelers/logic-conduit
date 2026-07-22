@@ -243,8 +243,15 @@ impl LogicAnalyzerViewer {
                     else {
                         continue;
                     };
-                    let annotation_visuals =
-                        self.prepare_builtin_annotation_visuals(&group, wave_rect);
+                    let uses_legacy_fallback = group
+                        .tracks
+                        .iter()
+                        .any(|track| !group.renderer.uses_opaque_snapshot(track));
+                    let annotation_visuals = if uses_legacy_fallback {
+                        self.prepare_builtin_annotation_visuals(&group, wave_rect)
+                    } else {
+                        HashMap::new()
+                    };
                     let empty_visuals = HashMap::new();
                     let opaque_lanes = store.opaque_lanes();
                     let (visible_start_ns, visible_end_ns) = self.visible_window_ns();

@@ -53,10 +53,24 @@ impl LogicAnalyzerViewer {
             self.indexed_annotation_cache.clear();
             return;
         };
+        let opaque_tracks: HashSet<String> = self
+            .waveform_presentations
+            .read()
+            .iter()
+            .flat_map(|group| {
+                group
+                    .tracks
+                    .iter()
+                    .filter(|track| group.renderer.uses_opaque_snapshot(track))
+                    .map(|track| track.lane.as_str().to_owned())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
         let queries: Vec<(String, Arc<dyn AnnotationQuery>)> = {
             let lanes = derived.read();
             lanes
                 .iter()
+                .filter(|lane| !opaque_tracks.contains(&lane.name))
                 .filter_map(|lane| match &lane.data {
                     DerivedLaneData::IndexedAnnotations(indexed) => {
                         Some((lane.name.clone(), Arc::clone(indexed.query())))

@@ -7,7 +7,7 @@ use signal_processing::{
     WordPresenceBucket,
 };
 
-use crate::lanes::AnnotationVisual;
+use crate::lanes::{AnnotationVisual, OpaqueLaneDrawContext};
 use crate::viewer::LogicAnalyzerViewer;
 
 const MIN_ANNOTATION_WIDTH_PX: f32 = 8.0;
@@ -466,10 +466,7 @@ impl LogicAnalyzerViewer {
     }
 }
 
-pub(crate) fn default_annotation_visual(
-    value: u64,
-    display_format: Option<&str>,
-) -> AnnotationVisual {
+pub fn default_annotation_visual(value: u64, display_format: Option<&str>) -> AnnotationVisual {
     AnnotationVisual {
         label: format_value(value, display_format),
         fill: Color32::from_rgb(88, 58, 28),
@@ -506,6 +503,92 @@ struct DenseRun {
     first_index: usize,
     /// Words whose start falls inside the run.
     count: usize,
+}
+
+/// Draws a bounded, exact annotation snapshot supplied by a payload-owned
+/// query. The callback keeps value formatting and protocol semantics owned by
+/// the concrete presentation adapter.
+pub fn draw_annotation_snapshot<F>(
+    context: &OpaqueLaneDrawContext<'_>,
+    annotations: &[Annotation],
+    last_timestamp_ns: Option<u64>,
+    mut visual_for: F,
+) where
+    F: FnMut(u64) -> AnnotationVisual,
+{
+    let box_top = context.top + context.height * 0.12;
+    let box_bottom = context.top + context.height * 0.88;
+    for (index, annotation) in annotations.iter().enumerate() {
+        if annotation.end_ns < context.visible_start_ns {
+            continue;
+        }
+        let is_last_ever =
+            index == annotations.len() - 1 && last_timestamp_ns == Some(annotation.start_ns);
+        let previous_duration_ns = (index > 0).then(|| {
+            let previous = &annotations[index - 1];
+            previous.end_ns.saturating_sub(previous.start_ns)
+        });
+        let effective_end = annotation_box_end(annotation, is_last_ever, previous_duration_ns);
+        let x0 = context.time_to_x(annotation.start_ns);
+        let natural_x1 = annotation_right_x(x0, context.time_to_x(effective_end));
+        let visual = visual_for(annotation.value);
+        let label_width = annotation_label_width(&visual.label);
+        let rect = Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(natural_x1, box_bottom));
+        let bevel = (rect.height() * 0.20)
+            .min(rect.width() * 0.18)
+            .clamp(1.0, 10.0);
+        context.painter.add(Shape::convex_polygon(
+            vec![
+                Pos2::new(rect.left() + bevel, rect.top()),
+                Pos2::new(rect.right() - bevel, rect.top()),
+                Pos2::new(rect.right(), rect.center().y),
+                Pos2::new(rect.right() - bevel, rect.bottom()),
+                Pos2::new(rect.left() + bevel, rect.bottom()),
+                Pos2::new(rect.left(), rect.center().y),
+            ],
+            visual.fill,
+            visual.border,
+        ));
+        if let Some(label_position) =
+            annotation_label_position(rect, context.wave_rect, label_width)
+        {
+            context.painter.text(
+                label_position,
+                Align2::CENTER_CENTER,
+                visual.label,
+                FontId::monospace(10.0),
+                Color32::from_rgb(235, 220, 200),
+            );
+        }
+    }
+}
+
+/// Draws a bounded coarse presence snapshot supplied by a payload-owned
+/// query.
+pub fn draw_annotation_presence<I>(context: &OpaqueLaneDrawContext<'_>, buckets: I)
+where
+    I: IntoIterator<Item = (u64, u64, u64)>,
+{
+    let color = Color32::from_rgb(215, 140, 60);
+    let top = context.top + context.height * 0.12;
+    let bottom = context.top + context.height * 0.88;
+    for (bucket_start_ns, bucket_end_ns, item_count) in buckets {
+        let start_ns = bucket_start_ns.max(context.visible_start_ns);
+        let end_ns = bucket_end_ns.min(context.visible_end_ns);
+        if start_ns > end_ns || item_count == 0 {
+            continue;
+        }
+        let x0 = context.time_to_x(start_ns);
+        let x1 = context
+            .time_to_x(end_ns)
+            .max(x0 + 1.0)
+            .min(context.wave_rect.right());
+        context.painter.rect_filled(
+            Rect::from_min_max(Pos2::new(x0, top), Pos2::new(x1, bottom)),
+            0.0,
+            color,
+        );
+    }
 }
 
 /// Buckets `visible` (sorted by `start_ns`, all within the window) into

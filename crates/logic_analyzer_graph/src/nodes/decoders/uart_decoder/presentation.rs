@@ -10,6 +10,7 @@ use logic_analyzer_viewer::{
 };
 
 use crate::decoder_table::{DecoderTableCellMode, DecoderTableColumnPresentation};
+use crate::nodes::sinks::WordSnapshotRenderer;
 
 const START: u64 = u64::MAX;
 const STOP: u64 = u64::MAX - 1;
@@ -59,7 +60,8 @@ impl ViewerLaneRenderer for UartLaneRenderer {
 }
 
 pub(crate) fn uart_output_presentation(def_index: usize) -> Option<ViewerOutputPresentation> {
-    let renderer: Arc<dyn ViewerLaneRenderer> = Arc::new(UartLaneRenderer);
+    let renderer: Arc<dyn ViewerLaneRenderer> =
+        Arc::new(WordSnapshotRenderer::new(Arc::new(UartLaneRenderer)));
     let badge = ViewerLaneBadge::new("W", Color32::from_rgb(215, 140, 60));
     match def_index {
         2 => Some(ViewerOutputPresentation::new(

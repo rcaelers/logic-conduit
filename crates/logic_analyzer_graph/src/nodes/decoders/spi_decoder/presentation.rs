@@ -10,6 +10,7 @@ use logic_analyzer_viewer::{
 };
 
 use crate::decoder_table::{DecoderTableCellMode, DecoderTableColumnPresentation};
+use crate::nodes::sinks::WordSnapshotRenderer;
 
 struct SpiLaneRenderer;
 
@@ -36,7 +37,8 @@ impl ViewerLaneRenderer for SpiLaneRenderer {
 }
 
 pub(crate) fn spi_output_presentation(def_index: usize) -> Option<ViewerOutputPresentation> {
-    let renderer: Arc<dyn ViewerLaneRenderer> = Arc::new(SpiLaneRenderer);
+    let renderer: Arc<dyn ViewerLaneRenderer> =
+        Arc::new(WordSnapshotRenderer::new(Arc::new(SpiLaneRenderer)));
     match def_index {
         2 => Some(ViewerOutputPresentation::new(
             "mosi",

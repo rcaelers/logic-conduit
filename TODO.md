@@ -31,11 +31,12 @@ fallback representation and completes the payload capabilities required by arbit
   information, and interaction hooks. Renderers must continue to receive only bounded,
   type-safe-or-contract-checked snapshots and no `LogicAnalyzerViewer` internals or locked
   runtime storage.
-- Retain reusable built-in adapters for digital signals, words, triggers, numbers, and text, but
-  replace their shared `CollectedDataKind`/`LaneBuffer` implementation with adapter-owned typed
-  append state and query handles. Default singleton presentation, cursor snapping, timeline
-  fitting, row activity, retention, and native/wasm behavior must be capabilities of the
-  registered adapter rather than exhaustive matches over built-in variants.
+- Complete the word-lane migration by moving its remaining legacy storage, cursor, and table
+  fallback paths onto its adapter-owned query. Migrate digital signals, triggers, numbers, and
+  text from the shared `CollectedDataKind`/`LaneBuffer` implementation in the same way. Default
+  singleton presentation, cursor snapping, timeline fitting, row activity, retention, and
+  native/wasm behavior must be capabilities of the registered adapter rather than exhaustive
+  matches over built-in variants.
 - Define saved-graph compatibility for Viewer sockets and `show_in_view` outputs. Migrate legacy
   built-in lanes explicitly, preserve their visual behavior, and show a user-visible warning for
   missing plugin payload/presentation registrations.

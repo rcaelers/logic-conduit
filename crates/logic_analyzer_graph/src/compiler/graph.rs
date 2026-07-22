@@ -43,6 +43,7 @@ use super::data_collector::DataCollectorBuilder;
 use super::errors::{ApplyError, CompileError};
 use super::port_kind::{PortKind, PortValue};
 use crate::decoder_table::{DecoderTableColumnPresentation, DecoderTableRegistry};
+use crate::nodes::sinks::WordSnapshotRenderer;
 
 /// Shared resources handed to builders. A fresh `DerivedLanes` store per
 /// run makes stale collected data vanish atomically on re-run.
@@ -688,10 +689,12 @@ impl BuilderRegistry {
             .expect("built-in digital payload must be viewable");
         registry
             .register_viewable_collected_payload::<signal_processing::Word>(
-                DefaultViewerPayloadPresentation::new(ViewerLaneBadge::new(
-                    "W",
-                    Color32::from_rgb(215, 140, 60),
-                )),
+                DefaultViewerPayloadPresentation::with_renderer(
+                    ViewerLaneBadge::new("W", Color32::from_rgb(215, 140, 60)),
+                    Arc::new(WordSnapshotRenderer::new(Arc::new(
+                        DefaultViewerLaneRenderer,
+                    ))),
+                ),
             )
             .expect("built-in word payload must be viewable");
         registry
@@ -2502,6 +2505,7 @@ mod tests {
 
     use logic_analyzer_processing::nodes::sinks::binary_file_writer::BinaryFileWriter;
     use logic_analyzer_processing::test_support::{BufferedFakeConfig, BufferedFakeProvider};
+    use logic_analyzer_viewer::{DerivedLaneId, ViewerLaneTrack};
     use node_graph::{NodeDef, NodeGraphWidget};
     use signal_processing::{
         AcquisitionContext, AcquisitionResult, CaptureAnalysisChannel, CaptureAnalysisSource,
@@ -2546,6 +2550,18 @@ mod tests {
                 .badge()
                 .text,
             "W"
+        );
+        let word_presentation = registry
+            .viewable_payload_presentation(PortKind::of::<Word>())
+            .unwrap();
+        assert!(
+            word_presentation
+                .renderer()
+                .uses_opaque_snapshot(&ViewerLaneTrack::new(
+                    "words",
+                    DerivedLaneId::new("words"),
+                    1.0,
+                ))
         );
         registry
             .register_collected_payload::<SampleBlock>("org.example.block/v1")
