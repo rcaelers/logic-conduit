@@ -7,7 +7,6 @@ use signal_processing::NativeFinalizedCapture;
 use super::implementation::{
     CaptureExportObserver as RawCaptureExportObserver,
     CaptureExportProgress as RawCaptureExportProgress, CaptureExportRequest,
-    RawCaptureExportFormat,
 };
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaptureExportFormat {
@@ -78,11 +77,11 @@ pub fn export_finalized_capture(
     destination: &Path,
     observer: &mut dyn CaptureExportObserver,
 ) -> Result<CaptureExportReport, String> {
+    match format {
+        CaptureExportFormat::Portable => {}
+    }
     let request = CaptureExportRequest {
         destination: destination.to_owned(),
-        format: match format {
-            CaptureExportFormat::Portable => RawCaptureExportFormat::SigrokV2,
-        },
         overwrite: true,
     };
     let report = super::implementation::export_finalized_capture(

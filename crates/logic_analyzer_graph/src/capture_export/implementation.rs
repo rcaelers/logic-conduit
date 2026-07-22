@@ -14,18 +14,9 @@ use signal_processing::{
     NativeFinalizedCapture,
 };
 
-const DSL_SAMPLES_PER_BLOCK: u64 = 1 << 20;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RawCaptureExportFormat {
-    Dsl,
-    SigrokV2,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureExportRequest {
     pub destination: PathBuf,
-    pub format: RawCaptureExportFormat,
     pub overwrite: bool,
 }
 
@@ -66,7 +57,6 @@ impl CaptureExportWarning {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureExportReport {
     pub destination: PathBuf,
-    pub format: RawCaptureExportFormat,
     pub samples_written: u64,
     pub encoded_bytes: u64,
     pub warnings: Vec<CaptureExportWarning>,
@@ -143,16 +133,9 @@ pub fn export_finalized_capture(
     let mut warnings = Vec::new();
     {
         let mut archive = ZipWriter::new(temporary.as_file_mut());
-        match request.format {
-            RawCaptureExportFormat::Dsl => {
-                write_dsl(capture, &metadata, &mut archive, observer)?;
-            }
-            RawCaptureExportFormat::SigrokV2 => {
-                write_sigrok_v2(capture, &metadata, &mut archive, observer)?;
-                if metadata.trigger_sample().is_some() {
-                    warnings.push(CaptureExportWarning::PortableTriggerMetadataExtension);
-                }
-            }
+        write_sigrok_v2(capture, &metadata, &mut archive, observer)?;
+        if metadata.trigger_sample().is_some() {
+            warnings.push(CaptureExportWarning::PortableTriggerMetadataExtension);
         }
         archive.finish()?.sync_all()?;
     }
@@ -168,110 +151,10 @@ pub fn export_finalized_capture(
     let encoded_bytes = fs::metadata(&request.destination)?.len();
     Ok(CaptureExportReport {
         destination: request.destination.clone(),
-        format: request.format,
         samples_written: manifest.committed_samples,
         encoded_bytes,
         warnings,
     })
-}
-
-fn write_dsl(
-    capture: &NativeFinalizedCapture,
-    metadata: &signal_processing::CaptureTimelineMetadata,
-    archive: &mut ZipWriter<&mut std::fs::File>,
-    observer: &mut dyn CaptureExportObserver,
-) -> Result<(), CaptureExportError> {
-    let manifest = capture.manifest();
-    let total_samples = manifest.committed_samples;
-    let samples_per_block = DSL_SAMPLES_PER_BLOCK.min(total_samples).max(1);
-    let total_blocks = total_samples.div_ceil(samples_per_block);
-    let options = zip_options();
-    archive.start_file("header", options)?;
-    writeln!(archive, "total probes = {}", metadata.channel_names().len())?;
-    writeln!(archive, "samplerate = {} Hz", metadata.sample_rate_hz())?;
-    writeln!(archive, "total samples = {total_samples}")?;
-    writeln!(archive, "total blocks = {total_blocks}")?;
-    if let Some(trigger_sample) = metadata.trigger_sample() {
-        writeln!(archive, "trigger sample = {trigger_sample}")?;
-    }
-    for (channel, name) in metadata.channel_names().iter().enumerate() {
-        writeln!(archive, "probe{channel} = {name}")?;
-    }
-
-    let channel_count = metadata.channel_names().len();
-    let block_bytes = usize::try_from(samples_per_block.div_ceil(8))
-        .map_err(|_| CaptureExportError::InconsistentCapture("DSL block is too large".into()))?;
-    let mut channel_data = (0..channel_count)
-        .map(|_| vec![0_u8; block_bytes])
-        .collect::<Vec<_>>();
-    let mut block = 0_u64;
-    let mut samples_in_block = 0_u64;
-    let mut samples_written = 0_u64;
-    let mut cursor = capture.open_cursor()?;
-    loop {
-        match cursor.next()? {
-            CaptureCursorItem::Chunk(chunk) => {
-                for relative_sample in 0..chunk.sample_count() {
-                    if samples_written.is_multiple_of(16_384) && observer.is_cancelled() {
-                        return Err(CaptureExportError::Cancelled);
-                    }
-                    let byte = usize::try_from(samples_in_block / 8).map_err(|_| {
-                        CaptureExportError::InconsistentCapture(
-                            "DSL output offset is too large".into(),
-                        )
-                    })?;
-                    let mask = 1_u8 << (samples_in_block % 8);
-                    for (channel, output) in channel_data.iter_mut().enumerate() {
-                        if packed_level(&chunk, relative_sample, channel)? {
-                            output[byte] |= mask;
-                        }
-                    }
-                    samples_in_block += 1;
-                    samples_written += 1;
-                    if samples_in_block == samples_per_block {
-                        write_dsl_block(archive, options, block, samples_in_block, &channel_data)?;
-                        block += 1;
-                        samples_in_block = 0;
-                        channel_data.iter_mut().for_each(|data| data.fill(0));
-                        observer.on_progress(CaptureExportProgress {
-                            samples_written,
-                            total_samples,
-                        });
-                    }
-                }
-            }
-            CaptureCursorItem::Pending => {
-                return Err(CaptureExportError::InconsistentCapture(
-                    "finalized capture cursor reported pending data".into(),
-                ));
-            }
-            CaptureCursorItem::End => break,
-        }
-    }
-    if samples_in_block != 0 {
-        write_dsl_block(archive, options, block, samples_in_block, &channel_data)?;
-        observer.on_progress(CaptureExportProgress {
-            samples_written,
-            total_samples,
-        });
-    }
-    validate_exported_extent(samples_written, total_samples)
-}
-
-fn write_dsl_block(
-    archive: &mut ZipWriter<&mut std::fs::File>,
-    options: SimpleFileOptions,
-    block: u64,
-    sample_count: u64,
-    channel_data: &[Vec<u8>],
-) -> Result<(), CaptureExportError> {
-    let byte_count = usize::try_from(sample_count.div_ceil(8))
-        .map_err(|_| CaptureExportError::InconsistentCapture("DSL block is too large".into()))?;
-    for (channel, data) in channel_data.iter().enumerate() {
-        archive.start_file(format!("L-{channel}/{block}"), options)?;
-        archive.write_all(&data[..byte_count])?;
-    }
-    Ok(())
 }
 
 fn write_sigrok_v2(
@@ -521,31 +404,6 @@ mod tests {
     }
 
     #[test]
-    fn dsl_export_reopens_with_identical_timeline_and_samples() {
-        let store_dir = tempfile::tempdir().unwrap();
-        let capture = capture(store_dir.path());
-        let output_dir = tempfile::tempdir().unwrap();
-        let output = output_dir.path().join("capture.dsl");
-        let report = export_finalized_capture(
-            &capture,
-            &CaptureExportRequest {
-                destination: output.clone(),
-                format: RawCaptureExportFormat::Dsl,
-                overwrite: false,
-            },
-            &mut IgnoreCaptureExportProgress,
-        )
-        .unwrap();
-        assert!(report.warnings.is_empty());
-
-        let header = archive_entry(&output, "header");
-        assert!(header.contains("samplerate = 12500000 Hz"));
-        assert!(header.contains("total samples = 10"));
-        assert!(header.contains("trigger sample = 4"));
-        assert!(header.contains("probe0 = Clock"));
-    }
-
-    #[test]
     fn portable_export_reopens_with_identical_timeline_and_samples() {
         let store_dir = tempfile::tempdir().unwrap();
         let capture = capture(store_dir.path());
@@ -555,7 +413,6 @@ mod tests {
             &capture,
             &CaptureExportRequest {
                 destination: output.clone(),
-                format: RawCaptureExportFormat::SigrokV2,
                 overwrite: false,
             },
             &mut IgnoreCaptureExportProgress,
@@ -578,12 +435,11 @@ mod tests {
         let store_dir = tempfile::tempdir().unwrap();
         let capture = capture(store_dir.path());
         let output_dir = tempfile::tempdir().unwrap();
-        let output = output_dir.path().join("cancelled.dsl");
+        let output = output_dir.path().join("cancelled.sr");
         let error = export_finalized_capture(
             &capture,
             &CaptureExportRequest {
                 destination: output.clone(),
-                format: RawCaptureExportFormat::Dsl,
                 overwrite: false,
             },
             &mut CancelImmediately,
