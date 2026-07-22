@@ -3,7 +3,9 @@ use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
-use egui::{Color32, Stroke};
+use egui::{Color32, Painter, Rect, Stroke};
+
+use signal_processing::OpaqueCollectedLane;
 
 /// Explicit identity of one payload in [`signal_processing::DerivedLanes`].
 ///
@@ -106,6 +108,17 @@ pub struct AnnotationVisual {
     pub border: Stroke,
 }
 
+/// Geometry and drawing access supplied to an adapter-owned opaque payload
+/// renderer. The painter is already clipped to the waveform region.
+pub struct OpaqueLaneDrawContext<'a> {
+    pub painter: &'a Painter,
+    pub wave_rect: Rect,
+    pub top: f32,
+    pub height: f32,
+    pub visible_start_ns: u64,
+    pub visible_end_ns: u64,
+}
+
 /// Protocol-neutral extension point for a displayed derived-lane row.
 ///
 /// The viewer retains ownership of waveform queries and drawing geometry.
@@ -129,6 +142,19 @@ pub trait ViewerLaneRenderer: Send + Sync {
         default: AnnotationVisual,
     ) -> AnnotationVisual {
         default
+    }
+
+    /// Draws an adapter-owned opaque lane. Returning `true` means the
+    /// renderer handled the track; returning `false` allows the built-in
+    /// retained-lane fallback to proceed. The viewer invokes this only after
+    /// releasing all derived-data locks.
+    fn draw_opaque_lane(
+        &self,
+        _track: &ViewerLaneTrack,
+        _query: &OpaqueCollectedLane,
+        _context: OpaqueLaneDrawContext<'_>,
+    ) -> bool {
+        false
     }
 
     fn snap_lanes(&self, group: &ViewerLaneGroup, pointer_fraction: f32) -> Vec<DerivedLaneId> {

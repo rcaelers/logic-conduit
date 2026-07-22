@@ -128,24 +128,19 @@ impl RuntimeBuilder for ViewerSubscriptionBuilder {
                     });
                 }
             } else {
-                let badge = input
-                    .default_viewer_presentation
-                    .as_ref()
-                    .ok_or_else(|| {
-                        format!(
-                            "viewable payload '{}' has no default presentation",
-                            input.kind.name()
-                        )
-                    })?
-                    .badge()
-                    .clone();
-                ctx.waveform_presentations()
-                    .register(ViewerLaneGroup::singleton(
-                        ViewerLaneGroupId::new(format!("{name}:lane:{member}")),
-                        lane_name.clone(),
-                        badge,
-                        lane_id,
-                    ));
+                let presentation = input.default_viewer_presentation.as_ref().ok_or_else(|| {
+                    format!(
+                        "viewable payload '{}' has no default presentation",
+                        input.kind.name()
+                    )
+                })?;
+                ctx.waveform_presentations().register(ViewerLaneGroup {
+                    id: ViewerLaneGroupId::new(format!("{name}:lane:{member}")),
+                    label: lane_name.clone(),
+                    badge: presentation.badge().clone(),
+                    tracks: vec![ViewerLaneTrack::new("primary", lane_id, 1.0)],
+                    renderer: presentation.renderer(),
+                });
             }
         }
         for mut pending in pending_groups {

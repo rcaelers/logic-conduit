@@ -21,8 +21,8 @@ use egui::{Color32, Pos2};
 use serde_json::Value;
 
 use logic_analyzer_viewer::{
-    SamplingEdge, SamplingOverlay, SamplingQualifier, ViewerLaneBadge, ViewerOutputPresentation,
-    WaveformPresentationRegistry,
+    DefaultViewerLaneRenderer, SamplingEdge, SamplingOverlay, SamplingQualifier, ViewerLaneBadge,
+    ViewerLaneRenderer, ViewerOutputPresentation, WaveformPresentationRegistry,
 };
 use node_graph::{
     Connection, GraphState, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId, SocketShape,
@@ -169,18 +169,36 @@ pub struct ResolvedInput {
 ///
 /// This is used only when the producing node has not supplied a richer
 /// output-specific presentation contract.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DefaultViewerPayloadPresentation {
     badge: ViewerLaneBadge,
+    renderer: Arc<dyn ViewerLaneRenderer>,
 }
 
 impl DefaultViewerPayloadPresentation {
     pub fn new(badge: ViewerLaneBadge) -> Self {
-        Self { badge }
+        Self::with_renderer(badge, Arc::new(DefaultViewerLaneRenderer))
+    }
+
+    pub fn with_renderer(badge: ViewerLaneBadge, renderer: Arc<dyn ViewerLaneRenderer>) -> Self {
+        Self { badge, renderer }
     }
 
     pub fn badge(&self) -> &ViewerLaneBadge {
         &self.badge
+    }
+
+    pub fn renderer(&self) -> Arc<dyn ViewerLaneRenderer> {
+        Arc::clone(&self.renderer)
+    }
+}
+
+impl std::fmt::Debug for DefaultViewerPayloadPresentation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DefaultViewerPayloadPresentation")
+            .field("badge", &self.badge)
+            .finish_non_exhaustive()
     }
 }
 

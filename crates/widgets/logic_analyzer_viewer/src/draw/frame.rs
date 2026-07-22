@@ -9,7 +9,8 @@ use crate::cursor::{cursor_color, cursor_flag_geometry, cursor_flag_label};
 use crate::format::{badge_text_color, format_time, nice_step};
 use crate::indexed_annotations::IndexedAnnotationSamples;
 use crate::lanes::{
-    AnnotationVisual, ViewerLaneFrame, ViewerLaneGroup, ViewerLaneTrackFrame, ViewerLaneTrackId,
+    AnnotationVisual, OpaqueLaneDrawContext, ViewerLaneFrame, ViewerLaneGroup,
+    ViewerLaneTrackFrame, ViewerLaneTrackId,
 };
 use crate::types::{AnalyzerLayout, RowKey};
 use crate::viewer::LogicAnalyzerViewer;
@@ -248,9 +249,29 @@ impl LogicAnalyzerViewer {
                     let (_frame, annotation_visuals) =
                         self.prepare_viewer_lane_frame(&group, wave_rect);
                     let empty_visuals = HashMap::new();
-                    let lanes = store.read();
+                    let opaque_lanes = store.opaque_lanes();
+                    let (visible_start_ns, visible_end_ns) = self.visible_window_ns();
                     for (track, track_top, track_height) in group.track_rects(y_top, display_height)
                     {
+                        if let Some(query) = opaque_lanes
+                            .iter()
+                            .find(|lane| lane.name() == track.lane.as_str())
+                            && group.renderer.draw_opaque_lane(
+                                &track,
+                                query,
+                                OpaqueLaneDrawContext {
+                                    painter: &clip,
+                                    wave_rect,
+                                    top: track_top,
+                                    height: track_height,
+                                    visible_start_ns,
+                                    visible_end_ns,
+                                },
+                            )
+                        {
+                            continue;
+                        }
+                        let lanes = store.read();
                         let Some(lane) = lanes.iter().find(|lane| lane.name == track.lane.as_str())
                         else {
                             continue;
