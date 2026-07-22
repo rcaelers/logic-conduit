@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use logic_analyzer_processing::{
+use logic_analyzer_processing::support::capture_export::{
     CaptureExportObserver as ProcessingCaptureExportObserver,
     CaptureExportProgress as ProcessingCaptureExportProgress, CaptureExportRequest,
     RawCaptureExportFormat,
@@ -85,7 +85,7 @@ pub fn export_finalized_capture(
         },
         overwrite: true,
     };
-    let report = logic_analyzer_processing::export_finalized_capture(
+    let report = logic_analyzer_processing::support::capture_export::export_finalized_capture(
         capture,
         &request,
         &mut ObserverAdapter(observer),
