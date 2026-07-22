@@ -33,7 +33,7 @@ The viewer renders three independent kinds of rows:
    `CaptureIndexFactory`; concrete graph-source builders own format-specific construction and the
    widget never depends on a file format.
 2. **In-memory channels** — raw `(time, level)` transition lists handed in wholesale
-   (`set_channels`), used for demo signals and any host-provided data.
+   (`set_channels`), used for host-provided data.
 3. **Derived lanes** — a shared `DerivedLanes` store (`Arc<RwLock<…>>`) that running
    pipeline `Viewer` nodes push into (`set_derived_lanes`); rendered live as digital,
    annotation (boxed word), marker, or labeled number/text level rows beneath the channels.
