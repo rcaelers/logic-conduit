@@ -2,6 +2,4 @@
 
 mod implementation;
 
-#[cfg(test)]
-pub(crate) use implementation::SigrokCaptureReader;
 pub(crate) use implementation::{SigrokCapture, SigrokFileCaptureDataSource};

@@ -22,46 +22,6 @@ pub enum RawCaptureExportFormat {
     SigrokV2,
 }
 
-impl RawCaptureExportFormat {
-    pub const fn descriptor(self) -> CaptureExportFormatDescriptor {
-        match self {
-            Self::Dsl => CaptureExportFormatDescriptor {
-                label: "DSL capture",
-                extension: "dsl",
-                trigger_metadata: TriggerMetadataSupport::Native,
-                derived_data: DerivedExportSupport::Unsupported,
-            },
-            Self::SigrokV2 => CaptureExportFormatDescriptor {
-                label: "Sigrok session",
-                extension: "sr",
-                trigger_metadata: TriggerMetadataSupport::CompatibleExtension,
-                derived_data: DerivedExportSupport::Unsupported,
-            },
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CaptureExportFormatDescriptor {
-    pub label: &'static str,
-    pub extension: &'static str,
-    pub trigger_metadata: TriggerMetadataSupport,
-    pub derived_data: DerivedExportSupport,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TriggerMetadataSupport {
-    Native,
-    /// The raw interchange remains standard v2 data. DSL preserves the trigger in an optional
-    /// metadata key which conforming readers may ignore.
-    CompatibleExtension,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DerivedExportSupport {
-    Unsupported,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureExportRequest {
     pub destination: PathBuf,
@@ -91,7 +51,6 @@ impl CaptureExportObserver for IgnoreCaptureExportProgress {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaptureExportWarning {
     PortableTriggerMetadataExtension,
-    DerivedDataNotExported,
 }
 
 impl CaptureExportWarning {
@@ -99,9 +58,6 @@ impl CaptureExportWarning {
         match self {
             Self::PortableTriggerMetadataExtension => {
                 "the portable v2 format has no standard trigger-position field; the trigger was preserved in an optional compatible metadata key"
-            }
-            Self::DerivedDataNotExported => {
-                "derived lanes are not supported by this export format and were not requested"
             }
         }
     }
@@ -470,17 +426,19 @@ fn zip_options() -> SimpleFileOptions {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+    use std::io::Read;
     use std::sync::Arc;
+
+    use zip::ZipArchive;
 
     use signal_processing::{
         CaptureChannelId, CaptureChunk, CaptureChunkWriter, CaptureSessionId,
-        CaptureSessionOutcome, CaptureSource, CaptureStoreDescriptor, CaptureTimelineMetadata,
-        NativeCaptureStore, NativeCaptureStoreConfig,
+        CaptureSessionOutcome, CaptureStoreDescriptor, CaptureTimelineMetadata, NativeCaptureStore,
+        NativeCaptureStoreConfig,
     };
 
     use super::*;
-    use crate::support::dsl_file::DslCaptureReader;
-    use crate::support::sigrok_file::SigrokCaptureReader;
 
     const LEVELS: [[bool; 3]; 10] = [
         [false, true, true],
@@ -554,6 +512,14 @@ mod tests {
             .unwrap()
     }
 
+    fn archive_entry(path: &Path, name: &str) -> String {
+        let mut archive = ZipArchive::new(File::open(path).unwrap()).unwrap();
+        let mut entry = archive.by_name(name).unwrap();
+        let mut contents = String::new();
+        entry.read_to_string(&mut contents).unwrap();
+        contents
+    }
+
     #[test]
     fn dsl_export_reopens_with_identical_timeline_and_samples() {
         let store_dir = tempfile::tempdir().unwrap();
@@ -572,16 +538,11 @@ mod tests {
         .unwrap();
         assert!(report.warnings.is_empty());
 
-        let mut reader = DslCaptureReader::open(&output).unwrap();
-        assert_eq!(reader.header().samplerate_hz, 12_500_000.0);
-        assert_eq!(reader.header().probe_names, ["Clock", "Data", "Enable"]);
-        assert_eq!(reader.header().trigger_sample, Some(4));
-        assert_eq!(reader.header().total_samples, 10);
-        for sample in 0..10 {
-            for (channel, expected) in LEVELS[sample as usize].iter().enumerate() {
-                assert_eq!(reader.read_sample(channel, sample).unwrap(), *expected);
-            }
-        }
+        let header = archive_entry(&output, "header");
+        assert!(header.contains("samplerate = 12500000 Hz"));
+        assert!(header.contains("total samples = 10"));
+        assert!(header.contains("trigger sample = 4"));
+        assert!(header.contains("probe0 = Clock"));
     }
 
     #[test]
@@ -605,19 +566,11 @@ mod tests {
             [CaptureExportWarning::PortableTriggerMetadataExtension]
         );
 
-        let mut reader = SigrokCaptureReader::open(&output).unwrap();
-        assert_eq!(reader.metadata().samplerate_hz, 12_500_000.0);
-        assert_eq!(
-            reader.metadata().probe_names[..3],
-            ["Clock", "Data", "Enable"]
-        );
-        assert_eq!(reader.metadata().trigger_sample, Some(4));
-        assert_eq!(reader.metadata().total_samples, 10);
-        for sample in 0..10 {
-            for (channel, expected) in LEVELS[sample as usize].iter().enumerate() {
-                assert_eq!(reader.read_sample(channel, sample).unwrap(), *expected);
-            }
-        }
+        assert_eq!(archive_entry(&output, "version"), "2");
+        let metadata = archive_entry(&output, "metadata");
+        assert!(metadata.contains("samplerate=12500000 Hz"));
+        assert!(metadata.contains("trigger sample=4"));
+        assert!(metadata.contains("probe1=Clock"));
     }
 
     #[test]

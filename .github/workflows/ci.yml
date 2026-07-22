@@ -18,6 +18,14 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
+      - name: Check Rust module structure
+        run: ruby scripts/check_rust_module_structure.rb
+      - name: Check UI processing boundary
+        run: |
+          if rg -n 'logic-analyzer-processing|logic_analyzer_processing' crates/logic_analyzer_ui; then
+            echo 'logic_analyzer_ui must consume concrete processing behavior through logic_analyzer_graph'
+            exit 1
+          fi
       - name: Check architectural visibility
         env:
           RUSTFLAGS: -D unreachable-pub

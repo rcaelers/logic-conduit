@@ -2,13 +2,13 @@
 
 use std::path::{Path, PathBuf};
 
-use logic_analyzer_processing::support::capture_export::{
-    CaptureExportObserver as ProcessingCaptureExportObserver,
-    CaptureExportProgress as ProcessingCaptureExportProgress, CaptureExportRequest,
-    RawCaptureExportFormat,
-};
 use signal_processing::NativeFinalizedCapture;
 
+use super::implementation::{
+    CaptureExportObserver as RawCaptureExportObserver,
+    CaptureExportProgress as RawCaptureExportProgress, CaptureExportRequest,
+    RawCaptureExportFormat,
+};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaptureExportFormat {
     Portable,
@@ -59,12 +59,12 @@ pub struct CaptureExportReport {
 
 struct ObserverAdapter<'a>(&'a mut dyn CaptureExportObserver);
 
-impl ProcessingCaptureExportObserver for ObserverAdapter<'_> {
+impl RawCaptureExportObserver for ObserverAdapter<'_> {
     fn is_cancelled(&self) -> bool {
         self.0.is_cancelled()
     }
 
-    fn on_progress(&mut self, progress: ProcessingCaptureExportProgress) {
+    fn on_progress(&mut self, progress: RawCaptureExportProgress) {
         self.0.on_progress(CaptureExportProgress {
             samples_written: progress.samples_written,
             total_samples: progress.total_samples,
@@ -85,7 +85,7 @@ pub fn export_finalized_capture(
         },
         overwrite: true,
     };
-    let report = logic_analyzer_processing::support::capture_export::export_finalized_capture(
+    let report = super::implementation::export_finalized_capture(
         capture,
         &request,
         &mut ObserverAdapter(observer),
