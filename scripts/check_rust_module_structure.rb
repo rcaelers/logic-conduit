@@ -79,6 +79,38 @@ if graph_nodes_production_manifest.match?(/^logic-analyzer-graph\s*=/)
   errors << "crates/logic_analyzer_graph_nodes/Cargo.toml: built-in nodes submit graph API contracts and must not depend on the compiler"
 end
 
+def production_path_dependencies(manifest_path)
+  manifest = File.read(manifest_path).split(/^\[dev-dependencies\]\s*$/, 2).first
+  manifest.scan(/^([A-Za-z0-9_-]+)\s*=\s*\{[^}]*\bpath\s*=\s*"([^"]+)"[^}]*\}/)
+end
+
+def production_rust_source(crate_directory)
+  Dir.glob(File.join(crate_directory, "src/**/*.rs"))
+    .sort
+    .map { |path| implementation_source(File.read(path)) }
+    .join("\n")
+end
+
+%w[crates/app_native crates/app_web].each do |application|
+  manifest_path = File.join(ROOT, application, "Cargo.toml")
+  application_source = production_rust_source(File.join(ROOT, application))
+  production_path_dependencies(manifest_path).each do |dependency, relative_path|
+    dependency_directory = File.expand_path(relative_path, File.dirname(manifest_path))
+    next unless File.directory?(dependency_directory)
+
+    dependency_source = production_rust_source(dependency_directory)
+    next unless dependency_source.include?("inventory::submit!")
+
+    rust_name = dependency.tr("-", "_")
+    unless dependency_source.match?(/\bpub\s+fn\s+link\s*\(\s*\)\s*->\s*usize\b/)
+      errors << "#{relative(manifest_path)}: inventory submitter #{dependency} must expose pub fn link() -> usize"
+    end
+    unless application_source.match?(/\b#{Regexp.escape(rust_name)}::link\s*\(\s*\)/)
+      errors << "#{application}: enabled inventory submitter #{dependency} has no explicit linker anchor"
+    end
+  end
+end
+
 files.each do |path|
   rel = relative(path)
   source = File.read(path)

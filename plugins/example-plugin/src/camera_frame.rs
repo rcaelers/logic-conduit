@@ -545,6 +545,7 @@ mod camera_frame_tests {
     #[test]
     fn custom_source_collects_bounded_typed_frames_through_an_explicit_viewer() {
         std::hint::black_box(logic_analyzer_graph_nodes::link());
+        std::hint::black_box(crate::link());
         let compiler = GraphCompiler::new();
         let node_types = compiler.build_node_registry();
         let mut widget = NodeGraphWidget::new(node_types);

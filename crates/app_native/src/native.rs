@@ -73,8 +73,14 @@ fn application_icon() -> egui::IconData {
     .expect("embedded LogicConduit application icon is valid PNG")
 }
 
-pub(crate) fn run() -> MainResult {
+fn link_compile_time_inventories() {
     std::hint::black_box(logic_analyzer_graph_nodes::link());
+    #[cfg(feature = "example-plugin")]
+    std::hint::black_box(example_plugin::link());
+}
+
+pub(crate) fn run() -> MainResult {
+    link_compile_time_inventories();
     tracing_subscriber::fmt()
         .with_env_filter(application_env_filter())
         .init();
@@ -95,8 +101,6 @@ pub(crate) fn run() -> MainResult {
         APPLICATION_NAME,
         options,
         Box::new(move |cc| {
-            #[cfg(feature = "example-plugin")]
-            std::hint::black_box(example_plugin::force_link());
             let app = logic_analyzer_ui::App::new_with_file(cc, args.file.as_deref());
             #[cfg(target_os = "macos")]
             macos_menu::install(app.recent_files());
@@ -143,8 +147,8 @@ mod tests {
 
     #[cfg(feature = "example-plugin")]
     #[test]
-    fn force_link_makes_example_plugin_inventories_visible_to_the_native_host() {
-        std::hint::black_box(example_plugin::force_link());
+    fn enabled_plugin_link_makes_its_inventories_visible_to_the_native_host() {
+        link_compile_time_inventories();
 
         let compiler = logic_analyzer_graph::host::GraphCompiler::new();
         let nodes = compiler.build_node_registry();
@@ -161,7 +165,7 @@ mod tests {
 
     #[test]
     fn built_in_link_makes_node_and_payload_inventories_visible() {
-        std::hint::black_box(logic_analyzer_graph_nodes::link());
+        link_compile_time_inventories();
 
         let compiler = logic_analyzer_graph::host::GraphCompiler::new();
         let nodes = compiler.build_node_registry();

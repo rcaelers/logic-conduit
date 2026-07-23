@@ -11,6 +11,6 @@ static LINK_ANCHOR: u8 = 0;
 
 /// Linker anchor used by a host that enables this compile-time plugin.
 #[inline(never)]
-pub fn force_link() -> usize {
+pub fn link() -> usize {
     std::ptr::addr_of!(LINK_ANCHOR) as usize
 }

@@ -147,7 +147,7 @@ order; update this single checklist as slices land:
   and application composition away from independent compiler free functions.
 - [x] Extract `logic_analyzer_graph_nodes`, including built-in socket definitions, concrete graph
   nodes, migrations, payload presentations, registrations, and isolated tests.
-- [ ] Add explicit native and wasm linker anchors for the built-in-node crate and every enabled
+- [x] Add explicit native and wasm linker anchors for the built-in-node crate and every enabled
   plugin; retain inventory-only registration.
 - [ ] Extract `logic_analyzer_capture_export` and remove format, ZIP, tempfile, and native export
   dependencies from graph API/compiler crates.
