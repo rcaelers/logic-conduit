@@ -24,7 +24,7 @@ PUBLIC_MODULES = {
   "crates/logic_analyzer_processing/src/nodes/sources/mod.rs" => %w[
     dsl_file dslogic_u3pro16 sigrok_file synthetic_capture_source synthetic_uart_source
   ],
-  "crates/logic_analyzer_graph/src/lib.rs" => %w[nodes test_support]
+  "crates/logic_analyzer_graph/src/lib.rs" => %w[host node node_support nodes test_support]
 }.freeze
 
 errors = []

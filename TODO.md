@@ -127,6 +127,35 @@
 
 ## Graph and runtime
 
+### Graph crate responsibility split
+
+The definitive migration design is
+[Graph Crate Responsibility Split](docs/GRAPH_CRATE_SPLIT_DESIGN.md). Complete these steps in
+order; update this single checklist as slices land:
+
+- [x] Introduce explicit `node`, `node_support`, and `host` facades in
+  `logic_analyzer_graph`; classify every current public symbol and stop adding new crate-root
+  exports.
+- [ ] Replace plugin-visible `CompileCtx` parameters with a narrow `NodeBuildContext` contract;
+  keep compiler result extraction on private host state.
+- [ ] Make inventory construction independent of the built-in node module. The compiler reads
+  `GraphNodeRegistration` and `CollectedPayloadRegistration` submissions without calling
+  `crate::nodes`.
+- [ ] Extract `logic_analyzer_graph_api` with only the `node` and `node_support` namespaces, then
+  update the compiler, built-in nodes, and example plugin to use those paths.
+- [ ] Introduce `GraphCompiler` as the stateful `logic_analyzer_graph::host` facade and migrate UI
+  and application composition away from independent compiler free functions.
+- [ ] Extract `logic_analyzer_graph_nodes`, including built-in socket definitions, concrete graph
+  nodes, migrations, payload presentations, registrations, and isolated tests.
+- [ ] Add explicit native and wasm linker anchors for the built-in-node crate and every enabled
+  plugin; retain inventory-only registration.
+- [ ] Extract `logic_analyzer_capture_export` and remove format, ZIP, tempfile, and native export
+  dependencies from graph API/compiler crates.
+- [ ] Move processing-backed public fake providers to `logic_analyzer_test_support`; keep
+  node-isolation mocks private to the built-in-node crate.
+- [ ] Remove transitional re-exports and obsolete dependencies, enforce the final dependency
+  graph in architecture checks, and pass workspace Clippy/tests plus native and wasm builds.
+
 - Define how several source clocks and trigger positions map onto the shared viewer timeline.
 - Add graph-level source grouping/alignment metadata and preserve it in saved graphs.
 - Prepare `node-graph` for an eventual separate repository: replace workspace-inherited

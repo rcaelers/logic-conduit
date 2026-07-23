@@ -8,6 +8,9 @@
 mod collected_payloads;
 mod compiler;
 mod decoder_table;
+pub mod host;
+pub mod node;
+pub mod node_support;
 pub mod nodes;
 
 #[cfg(not(target_arch = "wasm32"))]
