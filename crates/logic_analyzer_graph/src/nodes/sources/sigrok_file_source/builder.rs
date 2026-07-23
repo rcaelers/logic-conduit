@@ -2,15 +2,15 @@
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::RuntimeBuilder;
+use logic_analyzer_graph_api::node_support::{
+    CaptureCacheIdentity, CapturePresentation, CapturePresentationSignal, NodeBuildContext,
+    PortKind, ResolvedInputs, parse_state,
+};
 use logic_analyzer_processing::nodes::sources::sigrok_file::SigrokFileSource;
 use logic_analyzer_processing::nodes::sources::synthetic_capture_source::SyntheticCaptureSource;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock};
-
-use crate::{
-    CaptureCacheIdentity, CapturePresentation, CapturePresentationSignal, NodeBuildContext,
-    PortKind, ResolvedInputs, RuntimeBuilder, parse_state,
-};
 
 #[derive(Default)]
 pub(crate) struct SigrokFileSourceBuilder;

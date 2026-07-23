@@ -1,5 +1,5 @@
 inventory::submit! {
-    crate::GraphNodeRegistration::runnable::<
+    logic_analyzer_graph_api::node::GraphNodeRegistration::runnable::<
         super::definition::SpiDecoder,
         super::builder::SpiDecoderBuilder,
     >("org.logicconduit.graph-node.spi-decoder/v1").requiring_payloads(&[

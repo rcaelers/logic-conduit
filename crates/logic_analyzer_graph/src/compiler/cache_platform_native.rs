@@ -5,14 +5,13 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::RuntimeBuilder;
+use logic_analyzer_graph_api::node_support::CaptureCacheIdentity;
 use node_graph::{GraphState, NodeId};
 use signal_processing::{IndexedAnnotationStore, PersistentStoreConfig};
 
 use super::errors::CompileError;
-use super::graph::{
-    BuilderRegistry, CaptureCacheIdentity, CompiledEdge, CompiledGraph, RuntimeBuilder,
-    compiled_node,
-};
+use super::graph::{BuilderRegistry, CompiledEdge, CompiledGraph, compiled_node};
 const DERIVED_CACHE_ABI_VERSION: u32 = 2;
 
 pub(crate) fn assign_derived_word_caches(compiled: &mut CompiledGraph, registry: &BuilderRegistry) {

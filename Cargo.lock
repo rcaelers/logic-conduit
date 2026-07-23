@@ -1242,6 +1242,7 @@ dependencies = [
  "egui",
  "inventory",
  "logic-analyzer-graph",
+ "logic-analyzer-graph-api",
  "logic-analyzer-ui",
  "logic-analyzer-viewer",
  "node-graph",
@@ -2178,6 +2179,7 @@ dependencies = [
  "crossbeam-channel",
  "egui",
  "inventory",
+ "logic-analyzer-graph-api",
  "logic-analyzer-processing",
  "logic-analyzer-viewer",
  "node-graph",
@@ -2187,6 +2189,18 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "zip",
+]
+
+[[package]]
+name = "logic-analyzer-graph-api"
+version = "0.1.0"
+dependencies = [
+ "inventory",
+ "logic-analyzer-viewer",
+ "node-graph",
+ "serde",
+ "serde_json",
+ "signal-processing",
 ]
 
 [[package]]

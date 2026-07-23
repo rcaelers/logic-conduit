@@ -1,5 +1,5 @@
 inventory::submit! {
-    crate::GraphNodeRegistration::runnable::<
+    logic_analyzer_graph_api::node::GraphNodeRegistration::runnable::<
         super::definition::Buffer,
         super::builder::BufferBuilder,
     >("org.logicconduit.graph-node.buffer/v1").requiring_payloads(&[

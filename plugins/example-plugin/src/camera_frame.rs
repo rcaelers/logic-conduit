@@ -7,10 +7,10 @@ use std::sync::{Arc, RwLock};
 use egui::{Color32, Rect, Stroke, StrokeKind};
 use serde_json::Value;
 
-use logic_analyzer_graph::node::{
+use logic_analyzer_graph_api::node::{
     CollectedPayloadRegistration, GraphNodeRegistration, RuntimeBuilder,
 };
-use logic_analyzer_graph::node_support::{
+use logic_analyzer_graph_api::node_support::{
     DefaultViewerPayloadPresentation, NodeBuildContext, PortKind, PortValue, ResolvedInputs,
 };
 use logic_analyzer_ui::{PluginPanel, PluginPanelContext, PluginPanelIcon, UiPanelRegistration};
@@ -539,7 +539,7 @@ mod camera_frame_tests {
     use logic_analyzer_graph::host::{
         BuilderRegistry, CompileCtx, build_node_registry, lower, start_app_run,
     };
-    use logic_analyzer_graph::node_support::PortKind;
+    use logic_analyzer_graph_api::node_support::PortKind;
     use node_graph::{NodeGraphWidget, SocketDirection, SocketId};
 
     use super::*;

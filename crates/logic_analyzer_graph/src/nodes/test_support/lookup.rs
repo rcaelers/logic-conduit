@@ -1,4 +1,4 @@
-use crate::RuntimeBuilder;
+use logic_analyzer_graph_api::node::RuntimeBuilder;
 
 fn registration(stable_id: &str) -> &'static super::super::GraphNodeRegistration {
     crate::compiler::graph_node_registrations()

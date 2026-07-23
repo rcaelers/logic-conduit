@@ -23,7 +23,6 @@ pub use capture_export::{
     CaptureExportDescriptor, CaptureExportFormat, CaptureExportObserver, CaptureExportProgress,
     CaptureExportReport, export_finalized_capture,
 };
-pub(crate) use compiler::parse_state;
 pub use compiler::{
     ApplyError, ApplySummary, BuilderRegistry, CaptureCacheIdentity, CaptureGraphSourceFactory,
     CapturePresentation, CapturePresentationSignal, CollectedPayloadRegistration, CompileCtx,

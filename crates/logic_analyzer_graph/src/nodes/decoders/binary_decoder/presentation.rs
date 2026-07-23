@@ -2,9 +2,10 @@
 
 use std::sync::Arc;
 
+use logic_analyzer_graph_api::node_support::{
+    DecoderTableCellMode, DecoderTableColumnPresentation,
+};
 use logic_analyzer_viewer::DefaultViewerLaneRenderer;
-
-use crate::decoder_table::{DecoderTableCellMode, DecoderTableColumnPresentation};
 
 pub(crate) fn binary_table_column(def_index: usize) -> Option<DecoderTableColumnPresentation> {
     (def_index == 0).then(|| {

@@ -2,13 +2,13 @@
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::RuntimeBuilder;
+use logic_analyzer_graph_api::node_support::{
+    CapturePresentation, NodeBuildContext, PortKind, ResolvedInputs, parse_state,
+};
 use logic_analyzer_processing::nodes::sources::synthetic_capture_source::SyntheticCaptureSource;
 use node_graph::Socket;
 use signal_processing::{DerivedDataRetention, ProcessNode, Sample, SampleBlock, TextSample};
-
-use crate::{
-    CapturePresentation, NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, parse_state,
-};
 
 #[derive(Default)]
 pub(crate) struct FileSourceBuilder;

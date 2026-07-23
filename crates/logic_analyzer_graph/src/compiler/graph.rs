@@ -14,35 +14,41 @@
 //! same `Word` runtime type regardless of which decoder produced it.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::{Color32, Pos2};
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::{
+    CaptureGraphSourceFactory, LiveCaptureFeature, RuntimeBuilder,
+};
+use logic_analyzer_graph_api::node_support::{
+    CaptureCacheIdentity, CapturePresentation, DefaultViewerPayloadPresentation, LiveCaptureEdit,
+    NodeBuildContext, PortKind, ResolvedInput, ResolvedInputs, SimpleTriggerChannel,
+    TriggerConfigurationFeature,
+};
 use logic_analyzer_viewer::{
-    DefaultViewerLaneRenderer, SamplingEdge, SamplingOverlay, SamplingQualifier, ViewerLaneBadge,
-    ViewerLaneGroup, ViewerLaneRenderer, ViewerOutputPresentation, WaveformPresentationRegistry,
+    SamplingOverlay, SamplingQualifier, ViewerLaneGroup, WaveformPresentationRegistry,
 };
 use node_graph::{
     Connection, GraphState, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId, SocketShape,
     VariadicInfo,
 };
+#[cfg(test)]
+use signal_processing::CollectedPayloadRegistrationError;
 use signal_processing::{
-    AcquisitionContext, AcquisitionError, AcquisitionResult, AppManager, CaptureChannelId,
-    CaptureIndexFactory, CaptureProviderCapabilities, CaptureSessionPlan, CaptureStartMode,
-    CaptureStoreCursor, CollectedLaneRequest, CollectedPayloadAdapter,
-    CollectedPayloadRegistrationError, CollectedPayloadRegistry, ConfigurationBoundary,
-    DerivedDataRetention, DerivedLanes, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy,
-    PersistentStoreConfig, PreparedAcquisition, ProcessNode, SampleBlock, SamplingActivity,
-    SimpleTriggerCondition, TriggerEditorSchema, TriggerProgram,
+    AcquisitionContext, AcquisitionResult, AppManager, CaptureChannelId,
+    CaptureProviderCapabilities, CaptureSessionPlan, CaptureStartMode, CollectedLaneRequest,
+    CollectedPayloadRegistry, ConfigurationBoundary, DerivedDataRetention, DerivedLanes,
+    DisconnectEvent, InputSub, NodeConfig, OverflowPolicy, PersistentStoreConfig,
+    PreparedAcquisition, ProcessNode, SampleBlock, SamplingActivity, SimpleTriggerCondition,
+    TriggerProgram,
 };
 
 use super::cache_platform;
 use super::data_collector::DataCollectorBuilder;
 use super::errors::{ApplyError, CompileError};
-use super::port_kind::{PortKind, PortValue};
-use crate::decoder_table::{DecoderTableColumnPresentation, DecoderTableRegistry};
+use crate::decoder_table::DecoderTableRegistry;
 
 /// Shared resources handed to builders. A fresh `DerivedLanes` store per
 /// run makes stale collected data vanish atomically on re-run.
@@ -90,23 +96,6 @@ impl CompileCtx {
     }
 }
 
-/// Restricted compiler services available while a graph node is materialized.
-///
-/// The compiler owns the concrete context and its host-facing result state.
-/// Node builders receive only this contract and cannot extract or replace the
-/// compiler's presentation registries or resolved host results.
-pub trait NodeBuildContext {
-    fn derived_lanes(&self) -> &DerivedLanes;
-
-    fn derived_data_retention(&self) -> DerivedDataRetention;
-
-    fn derived_word_cache(&self, member: usize) -> Option<&PersistentStoreConfig>;
-
-    fn register_waveform_presentation(&self, presentation: ViewerLaneGroup);
-
-    fn sampling_activity(&self, runtime_name: &str, input: usize) -> Option<SamplingActivity>;
-}
-
 impl NodeBuildContext for CompileCtx {
     fn derived_lanes(&self) -> &DerivedLanes {
         &self.derived_lanes
@@ -133,26 +122,6 @@ impl NodeBuildContext for CompileCtx {
     }
 }
 
-/// Input-definition references supplied by a concrete clocked builder. The
-/// compiler resolves these references without interpreting socket names or
-/// protocol semantics.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SamplingOverlayDescriptor {
-    pub clock_input: usize,
-    pub sampled_input_groups: Vec<usize>,
-    pub edge: SamplingEdge,
-    pub qualifiers: Vec<SamplingQualifierDescriptor>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SamplingQualifierDescriptor {
-    pub input: usize,
-    pub active_level: bool,
-    /// Whether the concrete runtime can publish this input's activity when
-    /// it is not backed directly by a displayed capture channel.
-    pub runtime_fallback: bool,
-}
-
 /// A fully resolved, selectable sampling overlay belonging to one graph node.
 #[derive(Debug, Clone)]
 pub struct SamplingOverlayCandidate {
@@ -176,233 +145,13 @@ impl SamplingOverlayCandidate {
     }
 }
 
-/// What one input edge settled on: the negotiated stream kind plus a
-/// human-readable producer label (`"{node title}.{socket}"`, used for
-/// retained derived-lane identities).
-#[derive(Debug, Clone)]
-pub struct ResolvedInput {
-    pub kind: PortKind,
-    pub source: String,
-    pub source_node: NodeId,
-    pub source_node_title: String,
-    pub word_display_format: Option<String>,
-    pub viewer_presentation: Option<ViewerOutputPresentation>,
-    /// Registry-owned fallback presentation for a subscribed payload. Concrete
-    /// producers may still provide a richer multi-track presentation above.
-    pub default_viewer_presentation: Option<DefaultViewerPayloadPresentation>,
-    pub decoder_table_column: Option<DecoderTableColumnPresentation>,
-    /// Displayed capture channel from which this edge originates. Concrete
-    /// source builders provide it explicitly; generic lowering never parses
-    /// runtime port names or display labels.
-    pub capture_channel: Option<usize>,
-}
-
-/// Default singleton presentation supplied by a subscribed payload owner.
-///
-/// This is used only when the producing node has not supplied a richer
-/// output-specific presentation contract.
-#[derive(Clone)]
-pub struct DefaultViewerPayloadPresentation {
-    badge: ViewerLaneBadge,
-    renderer: Arc<dyn ViewerLaneRenderer>,
-}
-
-impl DefaultViewerPayloadPresentation {
-    pub fn new(badge: ViewerLaneBadge) -> Self {
-        Self::with_renderer(badge, Arc::new(DefaultViewerLaneRenderer))
-    }
-
-    pub fn with_renderer(badge: ViewerLaneBadge, renderer: Arc<dyn ViewerLaneRenderer>) -> Self {
-        Self { badge, renderer }
-    }
-
-    pub fn badge(&self) -> &ViewerLaneBadge {
-        &self.badge
-    }
-
-    pub fn renderer(&self) -> Arc<dyn ViewerLaneRenderer> {
-        Arc::clone(&self.renderer)
-    }
-}
-
-impl std::fmt::Debug for DefaultViewerPayloadPresentation {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("DefaultViewerPayloadPresentation")
-            .field("badge", &self.badge)
-            .finish_non_exhaustive()
-    }
-}
-
-/// Per input socket, keyed `(def_index, member_index)`. Keys are
-/// def-relative so variadic growth does not shift them.
-#[derive(Debug, Clone, Default)]
-pub struct ResolvedInputs(HashMap<(usize, usize), ResolvedInput>);
-
-impl ResolvedInputs {
-    pub fn get(&self, def_index: usize, member_index: usize) -> Option<&ResolvedInput> {
-        self.0.get(&(def_index, member_index))
-    }
-    pub fn kind(&self, def_index: usize) -> Option<PortKind> {
-        self.0.get(&(def_index, 0)).map(|input| input.kind)
-    }
-    pub fn member_count(&self, def_index: usize) -> usize {
-        self.0.keys().filter(|(def, _)| *def == def_index).count()
-    }
-    /// Members of a variadic group in port order.
-    pub fn members(&self, def_index: usize) -> Vec<(usize, &ResolvedInput)> {
-        let mut members: Vec<(usize, &ResolvedInput)> = self
-            .0
-            .iter()
-            .filter(|((def, _), _)| *def == def_index)
-            .map(|((_, member), input)| (*member, input))
-            .collect();
-        members.sort_by_key(|(member, _)| *member);
-        members
-    }
-}
-
 // ── Builder trait & registry ─────────────────────────────────────────────────
-
-/// Reusable concrete lowering contract for one captured source.
-///
-/// The feature creates this factory before handing provider ownership to the
-/// acquisition worker. It therefore preserves the captured channel-to-port
-/// mapping and timebase without retaining or rediscovering the provider.
-pub trait CaptureGraphSourceFactory: Send + Sync {
-    fn create(&self, cursor: Box<dyn CaptureStoreCursor>) -> Result<Box<dyn ProcessNode>, String>;
-}
-
-/// Portable simple-trigger presentation and edit identity for one captured input.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SimpleTriggerChannel {
-    pub channel_id: CaptureChannelId,
-    pub viewer_channel: usize,
-    pub name: String,
-    pub enabled: bool,
-    pub condition: SimpleTriggerCondition,
-}
-
-/// Pure graph-state trigger configuration exposed independently of acquisition availability.
-///
-/// This contract is available on native and wasm targets. It contains only opaque channel
-/// identities, generic schema metadata, and the neutral saved program.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TriggerConfigurationFeature {
-    schema: Arc<TriggerEditorSchema>,
-    program: Option<TriggerProgram>,
-    channels: Vec<SimpleTriggerChannel>,
-}
-
-impl TriggerConfigurationFeature {
-    pub fn new(
-        schema: TriggerEditorSchema,
-        program: Option<TriggerProgram>,
-        channels: Vec<SimpleTriggerChannel>,
-    ) -> Result<Self, String> {
-        let all_channel_ids: Vec<_> = channels
-            .iter()
-            .map(|channel| channel.channel_id.clone())
-            .collect();
-        let channel_ids: Vec<_> = channels
-            .iter()
-            .filter(|channel| channel.enabled)
-            .map(|channel| channel.channel_id.clone())
-            .collect();
-        if all_channel_ids.iter().collect::<HashSet<_>>().len() != all_channel_ids.len() {
-            return Err("trigger configuration channel identities must be unique".into());
-        }
-        if channels
-            .iter()
-            .map(|channel| channel.viewer_channel)
-            .collect::<HashSet<_>>()
-            .len()
-            != channels.len()
-        {
-            return Err("trigger configuration viewer channels must be unique".into());
-        }
-        if let Some(program) = &program {
-            schema
-                .validate_program(program, &channel_ids)
-                .map_err(|error| error.to_string())?;
-        }
-        Ok(Self {
-            schema: Arc::new(schema),
-            program,
-            channels,
-        })
-    }
-
-    pub fn schema(&self) -> &TriggerEditorSchema {
-        &self.schema
-    }
-
-    pub fn program(&self) -> Option<&TriggerProgram> {
-        self.program.as_ref()
-    }
-
-    pub fn channels(&self) -> &[SimpleTriggerChannel] {
-        &self.channels
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiscoveredTriggerConfiguration {
     pub source_node: NodeId,
     pub source_title: String,
     pub feature: TriggerConfigurationFeature,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LiveCaptureEdit {
-    SetSimpleTrigger {
-        channel_id: CaptureChannelId,
-        condition: SimpleTriggerCondition,
-    },
-    SetTriggerProgram {
-        program: Option<TriggerProgram>,
-    },
-}
-
-/// State-bound live-acquisition capability supplied by a concrete graph node.
-///
-/// The compiler and application treat channel identities as opaque and do not
-/// know which provider, transport, or protocol implements this feature.
-pub trait LiveCaptureFeature: Send {
-    fn channels(&self) -> &[CaptureChannelId];
-    fn channel_names(&self) -> &[String];
-    fn sample_rate_hz(&self) -> f64;
-    fn capabilities(&self) -> &CaptureProviderCapabilities;
-    fn simple_trigger_channels(&self) -> &[SimpleTriggerChannel] {
-        &[]
-    }
-    fn trigger_program(&self) -> Option<&TriggerProgram> {
-        None
-    }
-    fn session_plan(&self) -> Option<&CaptureSessionPlan> {
-        None
-    }
-
-    /// Captures the concrete runtime port mapping and timebase independently
-    /// of provider ownership. The same factory creates the live-following
-    /// source and every finalized-session replay source.
-    fn graph_source_factory(&self) -> Arc<dyn CaptureGraphSourceFactory>;
-
-    fn prepare(
-        self: Box<Self>,
-        context: AcquisitionContext,
-    ) -> AcquisitionResult<Box<dyn PreparedAcquisition>>;
-
-    fn prepare_with_mode(
-        self: Box<Self>,
-        context: AcquisitionContext,
-        mode: CaptureStartMode,
-    ) -> AcquisitionResult<Box<dyn PreparedAcquisition>> {
-        if mode == CaptureStartMode::CaptureNow {
-            return Err(AcquisitionError::UnsupportedOperation("capture now".into()));
-        }
-        self.prepare(context)
-    }
 }
 
 pub struct DiscoveredLiveCaptureFeature {
@@ -489,220 +238,27 @@ pub struct LiveCaptureDiscoveryError {
     pub message: String,
 }
 
-pub trait RuntimeBuilder {
-    /// Produces the graph's time domain (exactly one per graph).
-    fn is_source(&self) -> bool {
-        false
-    }
-    /// Retention policy for exact derived-data entries in this source's time
-    /// domain. Summaries remain complete under bounded retention.
-    fn derived_data_retention(&self, _state: &Value) -> DerivedDataRetention {
-        DerivedDataRetention::Unlimited
-    }
-    /// Terminal consumer; pruning keeps only nodes reachable from sinks.
-    fn is_sink(&self) -> bool {
-        false
-    }
-    /// Declares a graph-level subscription to retained data without owning a
-    /// runtime consumer. Lowering materializes a neutral collector for it.
-    fn is_data_subscription(&self) -> bool {
-        false
-    }
-    /// Retains typed output streams independently of any presentation subscriber.
-    fn is_data_collector(&self) -> bool {
-        false
-    }
-    /// Stable retained-lane identities published by this collector.
-    fn collected_lane_names(
-        &self,
-        _state: &Value,
-        _resolved: &ResolvedInputs,
-    ) -> Vec<(usize, String)> {
-        Vec::new()
-    }
-    /// Registers presentation subscribers for retained lane identities.
-    /// Collection has already been planned and is independent of this hook.
-    fn register_presentations(
-        &self,
-        _name: &str,
-        _state: &Value,
-        _resolved: &ResolvedInputs,
-        _lane_names: &[(usize, String)],
-        _ctx: &dyn NodeBuildContext,
-    ) -> Result<(), String> {
-        Ok(())
-    }
-    /// Kinds this input socket can consume, in no particular order.
-    fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind>;
-    /// Kinds this output socket can produce, in preference order.
-    fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind>;
-    /// Runtime port name once the edge kind is fixed. `member_index` numbers
-    /// variadic group members (D 1 → 0, D 2 → 1, …).
-    fn input_port(
-        &self,
-        socket: &Socket,
-        member_index: usize,
-        state: &Value,
-        kind: PortKind,
-    ) -> Option<String>;
-    fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String>;
-    /// Optional display metadata for a decoded-word output. Kept generic so
-    /// the compiler never needs to identify a concrete decoder.
-    fn word_display_format(&self, _socket: &Socket, _state: &Value) -> Option<String> {
-        None
-    }
-    /// Optional protocol-neutral presentation contract for this output when
-    /// it has a waveform subscription. Generic lowering carries the value
-    /// opaquely; concrete producer builders own its semantics.
-    fn viewer_output_presentation(
-        &self,
-        _socket: &Socket,
-        _state: &Value,
-    ) -> Option<ViewerOutputPresentation> {
-        None
-    }
-    /// Optional protocol-neutral table column for retained output data.
-    fn decoder_table_column(
-        &self,
-        _socket: &Socket,
-        _state: &Value,
-    ) -> Option<DecoderTableColumnPresentation> {
-        None
-    }
-    /// Raw capture channel represented by this output, when it corresponds
-    /// directly to a channel displayed by the logic-analyzer viewer.
-    fn viewer_channel_origin(&self, _socket: &Socket, _state: &Value) -> Option<usize> {
-        None
-    }
-    /// Optional pre-run raw-capture presentation supplied by this concrete source.
-    fn capture_presentation(&self, _state: &Value) -> Result<Option<CapturePresentation>, String> {
-        Ok(None)
-    }
-    /// Opaque identity for a finite capture source's raw data. A dynamic
-    /// source cannot safely reuse persistent derived data before its input is
-    /// known at runtime.
-    fn capture_cache_identity(
-        &self,
-        _state: &Value,
-        _resolved: &ResolvedInputs,
-    ) -> CaptureCacheIdentity {
-        CaptureCacheIdentity::NotCapture
-    }
-    /// Optional protocol-neutral description of how this node samples its
-    /// inputs. Concrete builders own the mapping from node state and input
-    /// definitions to this electrical presentation contract.
-    fn sampling_overlay(&self, _state: &Value) -> Option<SamplingOverlayDescriptor> {
-        None
-    }
-    /// Optional state-bound live acquisition exposed by this concrete node.
-    /// Implementations parse their own state and return generic capability
-    /// metadata plus a provider preparation boundary.
-    fn live_capture_feature(
-        &self,
-        _state: &Value,
-    ) -> Result<Option<Box<dyn LiveCaptureFeature>>, String> {
-        Ok(None)
-    }
-    /// Optional trigger configuration owned by this node's serialized state.
-    ///
-    /// Unlike `live_capture_feature`, this pure-data contract must not require a device, native
-    /// backend, or acquisition preparation and can therefore remain available on wasm.
-    fn trigger_configuration(
-        &self,
-        _state: &Value,
-    ) -> Result<Option<TriggerConfigurationFeature>, String> {
-        Ok(None)
-    }
-    /// Applies a portable feature edit to this node's serialized state. Concrete builders own
-    /// channel identity and state evolution; the compiler only routes the opaque request.
-    fn apply_live_capture_edit(
-        &self,
-        _state: &Value,
-        _edit: &LiveCaptureEdit,
-    ) -> Result<Option<Value>, String> {
-        Ok(None)
-    }
-    /// Whether an unconnected input is a compile error (given the state:
-    /// e.g. CS is only required while its polarity isn't Disabled).
-    fn input_required(&self, _socket: &Socket, _state: &Value) -> bool {
-        true
-    }
-    /// Overrides the policy-table buffer size (`docs/APP_DESIGN.md`) for this input's
-    /// incoming edge. `None` (default, every built-in node) keeps today's
-    /// `PortKind`-based sizing. Only a node whose buffer size is a
-    /// user-visible property (the `Buffer` node) needs this.
-    fn input_buffer_override(&self, _socket: &Socket, _state: &Value) -> Option<usize> {
-        None
-    }
-    /// Instantiate the runtime node. `name` is the pipeline node name (used
-    /// for thread naming/logs); `resolved` carries each input's kind so
-    /// polymorphic consumers pick the matching concrete type.
-    fn build(
-        &self,
-        _name: &str,
-        _state: &Value,
-        _resolved: &ResolvedInputs,
-        _ctx: &mut dyn NodeBuildContext,
-    ) -> Result<Box<dyn ProcessNode>, String> {
-        Err("graph-only builder has no runtime node".to_owned())
-    }
-
-    /// Runtime configuration for a *hot* state change, if this node type can
-    /// apply the whole state without restarting (a hot prop change).
-    /// `None` (default) means a state change restarts the node in place.
-    fn hot_config(&self, _state: &Value) -> Option<NodeConfig> {
-        None
-    }
-}
-
-pub struct CapturePresentationSignal {
-    pub index: usize,
-    pub name: String,
-    pub initial: bool,
-    pub transitions: Vec<(f64, bool)>,
-}
-
-pub enum CapturePresentation {
-    Indexed {
-        identity: PathBuf,
-        factory: Box<dyn CaptureIndexFactory>,
-    },
-    InMemory {
-        signals: Vec<CapturePresentationSignal>,
-        duration_us: f64,
-    },
-    Channels(Vec<(usize, String)>),
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum CaptureCacheIdentity {
-    #[default]
-    NotCapture,
-    Dynamic,
-    Stable([u8; 32]),
-}
-
 pub struct DiscoveredCapturePresentation {
     pub identity: String,
     pub presentation: CapturePresentation,
 }
 
 pub struct BuilderRegistry {
-    builders: HashMap<String, Box<dyn RuntimeBuilder>>,
-    collected_payloads: CollectedPayloadRegistry,
-    payload_subscriptions: Vec<CollectedPayloadSubscription>,
+    pub(crate) builders: HashMap<String, Box<dyn RuntimeBuilder>>,
+    pub(crate) collected_payloads: CollectedPayloadRegistry,
+    pub(crate) payload_subscriptions: Vec<CollectedPayloadSubscription>,
 }
 
 #[derive(Clone)]
-struct CollectedPayloadSubscription {
-    kind: PortKind,
-    diagnostic_name: String,
-    presentation: DefaultViewerPayloadPresentation,
-    persistent_cache: bool,
-    configure_request: CollectedPayloadRequestConfigurator,
+pub(crate) struct CollectedPayloadSubscription {
+    pub(crate) kind: PortKind,
+    pub(crate) diagnostic_name: String,
+    pub(crate) presentation: DefaultViewerPayloadPresentation,
+    pub(crate) persistent_cache: bool,
+    pub(crate) configure_request: CollectedPayloadRequestConfigurator,
 }
 
-type CollectedPayloadRequestConfigurator = Arc<
+pub(crate) type CollectedPayloadRequestConfigurator = Arc<
     dyn Fn(
             CollectedLaneRequest,
             usize,
@@ -727,9 +283,11 @@ impl BuilderRegistry {
             payload_subscriptions: Vec::new(),
         };
         for registration in super::collected_payload_registrations() {
-            registration
-                .apply_to(&mut registry)
-                .expect("collected-payload inventory registration must be valid");
+            super::collected_payload_registration::apply_collected_payload_registration(
+                registration,
+                &mut registry,
+            )
+            .expect("collected-payload inventory registration must be valid");
         }
         registry
     }
@@ -754,7 +312,10 @@ impl BuilderRegistry {
     /// factory. The present registry records only the durable identity; a
     /// later adapter registration supplies its typed ingestion and query
     /// behavior.
-    pub(crate) fn register_collected_payload<T: PortValue>(
+    #[cfg(test)]
+    pub(crate) fn register_collected_payload<
+        T: logic_analyzer_graph_api::node_support::PortValue,
+    >(
         &mut self,
         stable_id: impl Into<String>,
     ) -> Result<&mut Self, CollectedPayloadRegistrationError> {
@@ -763,19 +324,9 @@ impl BuilderRegistry {
         Ok(self)
     }
 
-    /// Registers a typed retained-data adapter for a payload identity.
-    pub(crate) fn register_collected_payload_adapter<T: PortValue>(
-        &mut self,
-        stable_id: impl Into<String>,
-        adapter: std::sync::Arc<dyn CollectedPayloadAdapter>,
-    ) -> Result<&mut Self, CollectedPayloadRegistrationError> {
-        self.register_collected_payload::<T>(stable_id)?;
-        self.collected_payloads.register_adapter::<T>(adapter)?;
-        Ok(self)
-    }
-
+    #[cfg(test)]
     pub(crate) fn register_collected_payload_subscription_with_request_configurator<
-        T: PortValue,
+        T: logic_analyzer_graph_api::node_support::PortValue,
     >(
         &mut self,
         presentation: DefaultViewerPayloadPresentation,
@@ -1120,10 +671,6 @@ fn discover_live_capture_feature_from(
             })
         }
     }
-}
-
-pub(crate) fn parse_state<T: serde::de::DeserializeOwned>(state: &Value) -> Result<T, String> {
-    serde_json::from_value(state.clone()).map_err(|e| format!("invalid node state: {e}"))
 }
 
 // ── IR ───────────────────────────────────────────────────────────────────────
@@ -1638,8 +1185,9 @@ pub fn lower(
             continue;
         };
 
-        resolved.entry(wire.to.node).or_default().0.insert(
-            (to_socket.def_index, member),
+        resolved.entry(wire.to.node).or_default().insert(
+            to_socket.def_index,
+            member,
             ResolvedInput {
                 kind,
                 source: format!("{}.{}", from_node.title, from_socket.name),
@@ -2566,8 +2114,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
+    use logic_analyzer_graph_api::node_support::SamplingOverlayDescriptor;
     use logic_analyzer_processing::nodes::sinks::binary_file_writer::BinaryFileWriter;
     use logic_analyzer_processing::test_support::{BufferedFakeConfig, BufferedFakeProvider};
+    use logic_analyzer_viewer::{SamplingEdge, ViewerLaneBadge};
     use node_graph::NodeGraphWidget;
     use signal_processing::{
         AcquisitionContext, AcquisitionResult, CaptureAnalysisChannel, CaptureAnalysisSource,
@@ -4644,8 +4194,9 @@ mod tests {
         assert!(!builder.input_required(&file_socket, &state));
 
         let mut resolved = ResolvedInputs::default();
-        resolved.0.insert(
-            (0, 0),
+        resolved.insert(
+            0,
+            0,
             ResolvedInput {
                 kind: PortKind::of::<TextSample>(),
                 source: "Formatter.Text".into(),

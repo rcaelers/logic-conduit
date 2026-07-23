@@ -1,5 +1,5 @@
 inventory::submit! {
-    crate::GraphNodeRegistration::runnable::<
+    logic_analyzer_graph_api::node::GraphNodeRegistration::runnable::<
         super::definition::WordMatcher,
         super::builder::WordMatcherBuilder,
     >("org.logicconduit.graph-node.word-matcher/v1").requiring_payloads(&[

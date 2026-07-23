@@ -2,6 +2,11 @@
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::RuntimeBuilder;
+use logic_analyzer_graph_api::node_support::{
+    DecoderTableColumnPresentation, NodeBuildContext, PortKind, ResolvedInputs,
+    SamplingOverlayDescriptor, SamplingQualifierDescriptor, parse_state,
+};
 use logic_analyzer_processing::nodes::decoders::parallel_decoder::{
     ParallelDecoder, ParallelInputStrategy, StrobeMode,
 };
@@ -9,12 +14,6 @@ use logic_analyzer_processing::types::{CsPolarity, Endianness};
 use logic_analyzer_viewer::SamplingEdge;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock, Word};
-
-use crate::decoder_table::DecoderTableColumnPresentation;
-use crate::{
-    NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, SamplingOverlayDescriptor,
-    SamplingQualifierDescriptor, parse_state,
-};
 
 #[derive(Default)]
 pub(crate) struct BinaryDecoderBuilder;

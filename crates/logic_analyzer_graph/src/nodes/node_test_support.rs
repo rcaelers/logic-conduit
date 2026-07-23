@@ -1,4 +1,4 @@
-use crate::LiveCaptureEdit;
+use logic_analyzer_graph_api::node_support::LiveCaptureEdit;
 
 fn node_registration(stable_id: &str) -> &'static super::GraphNodeRegistration {
     crate::compiler::graph_node_registrations()

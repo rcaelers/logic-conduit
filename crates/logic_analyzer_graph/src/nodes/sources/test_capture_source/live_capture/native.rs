@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::{CaptureGraphSourceFactory, LiveCaptureFeature};
+use logic_analyzer_graph_api::node_support::SimpleTriggerChannel;
 use logic_analyzer_processing::test_support::{
     DeterministicFakeConfig, DeterministicFakeProvider, DeterministicTrigger,
     DeterministicTriggerCount, DeterministicTriggerCountMode, DeterministicTriggerLogic,
@@ -20,7 +22,6 @@ use signal_processing::{
 };
 
 use super::super::definition::TestCaptureSourceState;
-use crate::{CaptureGraphSourceFactory, LiveCaptureFeature, SimpleTriggerChannel};
 
 const CHUNK_SAMPLES: u64 = 4_096;
 const CHUNK_COUNT: usize = 64;

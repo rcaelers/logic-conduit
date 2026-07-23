@@ -2,8 +2,7 @@
 //! input and emits it as a `Pulse` event. A minimal, deliberately small
 //! example exercising every seam an out-of-tree plugin crate touches:
 //! a new runtime payload type ([`PulseWidth`]), a new compiler `PortValue`,
-//! a new graph `SocketDef`, a `NodeDef` reusing a host-crate socket type
-//! (`logic_analyzer_graph::nodes::Signal`), and a matching `RuntimeBuilder`.
+//! new graph `SocketDef` types, and a matching `RuntimeBuilder`.
 
 use std::collections::VecDeque;
 
@@ -11,9 +10,10 @@ use egui::Color32;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use logic_analyzer_graph::node::{GraphNodeRegistration, RuntimeBuilder};
-use logic_analyzer_graph::node_support::{NodeBuildContext, PortKind, PortValue, ResolvedInputs};
-use logic_analyzer_graph::nodes::Signal;
+use logic_analyzer_graph_api::node::{GraphNodeRegistration, RuntimeBuilder};
+use logic_analyzer_graph_api::node_support::{
+    NodeBuildContext, PortKind, PortValue, ResolvedInputs,
+};
 use node_graph::{InputDef, NodeDef, OutputDef, Socket, SocketDef, SocketShape};
 use signal_processing::{
     InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, Sample, WorkError, WorkResult,
@@ -29,9 +29,7 @@ pub struct PulseWidth {
     pub start_time_ns: u64,
 }
 
-/// Open compiler-layer identity for `PulseWidth` — the plugin-authored
-/// equivalent of the built-in `impl PortValue for Sample` etc. in
-/// `logic_analyzer_graph::port_kind`. No edits to that file were needed.
+/// Open compiler-layer identity for `PulseWidth`.
 impl PortValue for PulseWidth {
     fn kind_name() -> &'static str {
         "Pulse"
@@ -40,10 +38,21 @@ impl PortValue for PulseWidth {
 
 // ── Graph socket type ────────────────────────────────────────────────────────
 
-/// Graph-side identity for [`PulseWidth`]. Same shape as the built-in
-/// socket types in `logic_analyzer_graph::nodes` (`Signal`, `Words`, ...), just defined in
-/// this crate instead — no orphan-rule issue, no registration beyond this
-/// `impl`.
+struct Signal;
+
+impl SocketDef for Signal {
+    type Value = bool;
+
+    fn type_name() -> &'static str {
+        "Signal"
+    }
+
+    fn color() -> Color32 {
+        Color32::from_rgb(0, 205, 160)
+    }
+}
+
+/// Graph-side identity for [`PulseWidth`], owned completely by the plugin.
 pub struct PulseSocket;
 impl SocketDef for PulseSocket {
     type Value = u64;

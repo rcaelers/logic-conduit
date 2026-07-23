@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node_support::{LiveCaptureEdit, parse_state};
 use logic_analyzer_processing::support::logic_analyzer::{
     CaptureMode, ClockEdge, ClockSource, LogicCaptureConfig, LogicEncodingRequest, LogicTrigger,
 };
@@ -12,7 +13,6 @@ use signal_processing::{
 
 use super::definition::{U3Pro16State, capture_duration_limit_ns, channel_rate_validation_error};
 use super::trigger_lowering;
-use crate::{LiveCaptureEdit, parse_state};
 
 fn selected_sample_rate_hz(state: &U3Pro16State) -> Result<u64, String> {
     state

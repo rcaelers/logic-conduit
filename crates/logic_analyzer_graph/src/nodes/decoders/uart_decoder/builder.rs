@@ -2,6 +2,10 @@
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::RuntimeBuilder;
+use logic_analyzer_graph_api::node_support::{
+    DecoderTableColumnPresentation, NodeBuildContext, PortKind, ResolvedInputs, parse_state,
+};
 use logic_analyzer_processing::nodes::decoders::uart_decoder::{
     UartDecoder, UartParity, UartStopBits,
 };
@@ -9,9 +13,6 @@ use logic_analyzer_processing::types::BitOrder;
 use logic_analyzer_viewer::ViewerOutputPresentation;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, Trigger, Word};
-
-use crate::decoder_table::DecoderTableColumnPresentation;
-use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 #[derive(Default)]
 pub(crate) struct UartDecoderBuilder;

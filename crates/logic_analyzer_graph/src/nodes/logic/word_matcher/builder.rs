@@ -4,12 +4,15 @@
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::RuntimeBuilder;
+use logic_analyzer_graph_api::node_support::{
+    NodeBuildContext, PortKind, ResolvedInputs, parse_state,
+};
 use logic_analyzer_processing::nodes::logic::word_matcher::{MatchOp, TriggerAt, WordMatcher};
 use node_graph::Socket;
 use signal_processing::{ConfigValue, NodeConfig, ProcessNode, Sample, Trigger, Word};
 
 use super::definition::parse_hex;
-use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 #[derive(Default)]
 pub(crate) struct WordMatcherBuilder;

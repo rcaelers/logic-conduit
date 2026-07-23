@@ -2,11 +2,13 @@
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::RuntimeBuilder;
+use logic_analyzer_graph_api::node_support::{
+    NodeBuildContext, PortKind, ResolvedInputs, parse_state,
+};
 use logic_analyzer_processing::nodes::logic::logic_gate::{GateOp, LogicGate};
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample};
-
-use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 #[derive(Default)]
 pub(crate) struct LogicGateBuilder;

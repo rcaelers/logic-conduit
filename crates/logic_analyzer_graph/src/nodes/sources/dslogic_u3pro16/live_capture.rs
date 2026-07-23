@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::{CaptureGraphSourceFactory, LiveCaptureFeature};
+use logic_analyzer_graph_api::node_support::{SimpleTriggerChannel, parse_state};
 use logic_analyzer_processing::nodes::sources::dslogic_u3pro16::DsLogicU3Pro16Capture;
 use signal_processing::{
     AcquisitionContext, AcquisitionError, AcquisitionResult, CaptureAnalysisChannel,
@@ -14,7 +16,6 @@ use signal_processing::{
 
 use super::definition::U3Pro16State;
 use super::implementation::{capture_config, requested_capture_policy};
-use crate::{CaptureGraphSourceFactory, LiveCaptureFeature, SimpleTriggerChannel, parse_state};
 
 struct U3Pro16GraphSourceFactory {
     channels: Arc<[CaptureAnalysisChannel]>,

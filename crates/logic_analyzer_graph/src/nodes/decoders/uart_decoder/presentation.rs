@@ -4,13 +4,15 @@ use std::sync::Arc;
 
 use egui::{Color32, Stroke};
 
+use logic_analyzer_graph_api::node_support::{
+    DecoderTableCellMode, DecoderTableColumnPresentation,
+};
 use logic_analyzer_viewer::{
     AnnotationVisual, DerivedLaneId, ViewerLaneBadge, ViewerLaneGroup, ViewerLaneRenderer,
     ViewerLaneTheme, ViewerLaneTrackId, ViewerOutputPresentation,
 };
 
 use crate::collected_payloads::WordSnapshotRenderer;
-use crate::decoder_table::{DecoderTableCellMode, DecoderTableColumnPresentation};
 
 const START: u64 = u64::MAX;
 const STOP: u64 = u64::MAX - 1;

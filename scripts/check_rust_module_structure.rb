@@ -24,6 +24,7 @@ PUBLIC_MODULES = {
   "crates/logic_analyzer_processing/src/nodes/sources/mod.rs" => %w[
     dsl_file dslogic_u3pro16 sigrok_file synthetic_capture_source synthetic_uart_source
   ],
+  "crates/logic_analyzer_graph_api/src/lib.rs" => %w[node node_support],
   "crates/logic_analyzer_graph/src/lib.rs" => %w[host node node_support nodes test_support]
 }.freeze
 
@@ -43,6 +44,13 @@ def implementation_source(source)
 end
 
 files = SOURCE_GLOBS.flat_map { |glob| Dir.glob(File.join(ROOT, glob)) }.sort
+
+graph_api_manifest = File.read(File.join(ROOT, "crates/logic_analyzer_graph_api/Cargo.toml"))
+%w[logic-analyzer-graph logic-analyzer-processing logic-analyzer-ui].each do |dependency|
+  if graph_api_manifest.match?(/^#{Regexp.escape(dependency)}\s*=/)
+    errors << "crates/logic_analyzer_graph_api/Cargo.toml: graph API must not depend on #{dependency}"
+  end
+end
 
 files.each do |path|
   rel = relative(path)

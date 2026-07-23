@@ -2,8 +2,9 @@
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node_support::LiveCaptureEdit;
+
 use super::definition::TestCaptureSourceState;
-use crate::LiveCaptureEdit;
 
 pub(crate) fn apply_live_capture_edit(
     state: &Value,

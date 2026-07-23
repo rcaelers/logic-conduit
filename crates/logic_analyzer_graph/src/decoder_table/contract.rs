@@ -1,66 +1,10 @@
 use std::fmt;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
+pub use logic_analyzer_graph_api::node_support::{
+    DecoderTableCellMode, DecoderTableColumnPresentation,
+};
 use logic_analyzer_viewer::{DerivedLaneId, ViewerLaneRenderer, ViewerLaneTrackId};
-
-/// How multiple annotations overlapping one table row are combined in a cell.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DecoderTableCellMode {
-    Single,
-    Joined(String),
-}
-
-/// Protocol-neutral table metadata supplied by one graph-node output.
-#[derive(Clone)]
-pub struct DecoderTableColumnPresentation {
-    pub source_key: String,
-    pub column_key: String,
-    pub label: String,
-    pub order: usize,
-    pub row_anchor: bool,
-    pub cell_mode: DecoderTableCellMode,
-    pub track_key: String,
-    pub renderer: Arc<dyn ViewerLaneRenderer>,
-}
-
-impl fmt::Debug for DecoderTableColumnPresentation {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DecoderTableColumnPresentation")
-            .field("source_key", &self.source_key)
-            .field("column_key", &self.column_key)
-            .field("label", &self.label)
-            .field("order", &self.order)
-            .field("row_anchor", &self.row_anchor)
-            .field("cell_mode", &self.cell_mode)
-            .field("track_key", &self.track_key)
-            .finish_non_exhaustive()
-    }
-}
-
-impl DecoderTableColumnPresentation {
-    pub fn new(
-        source_key: impl Into<String>,
-        column_key: impl Into<String>,
-        label: impl Into<String>,
-        order: usize,
-        row_anchor: bool,
-        cell_mode: DecoderTableCellMode,
-        track_key: impl Into<String>,
-        renderer: Arc<dyn ViewerLaneRenderer>,
-    ) -> Self {
-        Self {
-            source_key: source_key.into(),
-            column_key: column_key.into(),
-            label: label.into(),
-            order,
-            row_anchor,
-            cell_mode,
-            track_key: track_key.into(),
-            renderer,
-        }
-    }
-}
 
 #[derive(Clone)]
 pub struct DecoderTableColumn {

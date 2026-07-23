@@ -5,13 +5,15 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::RuntimeBuilder;
+use logic_analyzer_graph_api::node_support::{
+    NodeBuildContext, PortKind, ResolvedInputs, parse_state,
+};
 use logic_analyzer_viewer::{
     DerivedLaneId, ViewerLaneBadge, ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneRenderer,
     ViewerLaneTrack,
 };
 use node_graph::Socket;
-
-use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 #[derive(Default)]
 pub(crate) struct ViewerSubscriptionBuilder;

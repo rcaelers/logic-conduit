@@ -141,7 +141,7 @@ order; update this single checklist as slices land:
 - [x] Make inventory construction independent of the built-in node module. The compiler reads
   `GraphNodeRegistration` and `CollectedPayloadRegistration` submissions without calling
   `crate::nodes`.
-- [ ] Extract `logic_analyzer_graph_api` with only the `node` and `node_support` namespaces, then
+- [x] Extract `logic_analyzer_graph_api` with only the `node` and `node_support` namespaces, then
   update the compiler, built-in nodes, and example plugin to use those paths.
 - [ ] Introduce `GraphCompiler` as the stateful `logic_analyzer_graph::host` facade and migrate UI
   and application composition away from independent compiler free functions.

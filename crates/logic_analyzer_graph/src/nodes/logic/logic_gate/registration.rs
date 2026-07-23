@@ -1,5 +1,5 @@
 inventory::submit! {
-    crate::GraphNodeRegistration::runnable::<
+    logic_analyzer_graph_api::node::GraphNodeRegistration::runnable::<
         super::definition::LogicGate,
         super::builder::LogicGateBuilder,
     >("org.logicconduit.graph-node.logic-gate/v1")

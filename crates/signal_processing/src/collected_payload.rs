@@ -299,6 +299,35 @@ impl CollectedPayloadRegistry {
         Ok(())
     }
 
+    /// Registers a payload identity supplied through a compile-time plugin descriptor.
+    pub fn register_erased(
+        &mut self,
+        type_id: TypeId,
+        stable_id: impl Into<String>,
+    ) -> Result<(), CollectedPayloadRegistrationError> {
+        let stable_id = stable_id.into();
+        if stable_id.trim().is_empty() {
+            return Err(CollectedPayloadRegistrationError::EmptyStableId);
+        }
+        if let Some(existing) = self.by_type.get(&type_id) {
+            return if existing.stable_id == stable_id {
+                Ok(())
+            } else {
+                Err(CollectedPayloadRegistrationError::TypeAlreadyRegistered {
+                    existing_stable_id: existing.stable_id.clone(),
+                    requested_stable_id: stable_id,
+                })
+            };
+        }
+        if self.by_stable_id.contains_key(&stable_id) {
+            return Err(CollectedPayloadRegistrationError::StableIdAlreadyRegistered { stable_id });
+        }
+        self.by_stable_id.insert(stable_id.clone(), type_id);
+        self.by_type
+            .insert(type_id, CollectedPayloadDescriptor { stable_id });
+        Ok(())
+    }
+
     pub fn descriptor<T: 'static>(&self) -> Option<&CollectedPayloadDescriptor> {
         self.descriptor_by_type_id(TypeId::of::<T>())
     }
@@ -322,6 +351,29 @@ impl CollectedPayloadRegistry {
         let Some(descriptor) = self.by_type.get(&type_id) else {
             return Err(CollectedPayloadRegistrationError::PayloadNotRegistered {
                 type_name: std::any::type_name::<T>().to_owned(),
+            });
+        };
+        if self.adapters.contains_key(&type_id) {
+            return Err(
+                CollectedPayloadRegistrationError::AdapterAlreadyRegistered {
+                    stable_id: descriptor.stable_id.clone(),
+                },
+            );
+        }
+        self.adapters.insert(type_id, adapter);
+        Ok(())
+    }
+
+    /// Adds a type-erased adapter supplied through a compile-time plugin descriptor.
+    pub fn register_adapter_erased(
+        &mut self,
+        type_id: TypeId,
+        type_name: &str,
+        adapter: Arc<dyn CollectedPayloadAdapter>,
+    ) -> Result<(), CollectedPayloadRegistrationError> {
+        let Some(descriptor) = self.by_type.get(&type_id) else {
+            return Err(CollectedPayloadRegistrationError::PayloadNotRegistered {
+                type_name: type_name.to_owned(),
             });
         };
         if self.adapters.contains_key(&type_id) {
@@ -392,6 +444,25 @@ mod collected_payload_tests {
             registry.descriptor::<First>().unwrap().stable_id(),
             "org.example.first/v1"
         );
+    }
+
+    #[test]
+    fn erased_plugin_registration_preserves_type_identity_and_adapter() {
+        let mut registry = CollectedPayloadRegistry::new();
+        let type_id = TypeId::of::<First>();
+
+        registry
+            .register_erased(type_id, "org.example.first/v1")
+            .unwrap();
+        registry
+            .register_adapter_erased(type_id, "First", Arc::new(FailingAdapter))
+            .unwrap();
+
+        assert_eq!(
+            registry.descriptor_by_type_id(type_id).unwrap().stable_id(),
+            "org.example.first/v1"
+        );
+        assert!(registry.adapter_by_type_id(type_id).is_some());
     }
 
     #[test]

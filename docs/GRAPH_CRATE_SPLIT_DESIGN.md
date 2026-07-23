@@ -9,11 +9,12 @@
 - graph compilation, execution, discovery, and saved-graph handling used by the application host;
 - built-in graph nodes, built-in payload presentations, raw-capture export, and test providers.
 
-The explicit `node`, `node_support`, and `host` facades establish the intended API directions inside
-the combined crate. Inventory assembly is compiler-owned and consumes `GraphNodeRegistration` and
-`CollectedPayloadRegistration` submissions directly, without importing the built-in `nodes`
-module. The remaining crate extraction removes the physical dependency from plugins to the complete
-compiler and separates built-in definitions from host compilation.
+`logic_analyzer_graph_api` owns the compile-time plugin contract through its `node` and
+`node_support` namespaces. Graph-node and collected-payload inventory types are defined there;
+inventory assembly remains compiler-owned and consumes submissions without importing the built-in
+`nodes` module. `logic_analyzer_graph` still combines the compiler, host services, built-in nodes,
+capture export, and test support. The remaining extraction separates those responsibilities while
+the graph crate temporarily retains compatibility re-exports.
 
 ## Proposed future architecture
 

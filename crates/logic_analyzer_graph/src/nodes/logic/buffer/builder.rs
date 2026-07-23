@@ -3,13 +3,15 @@
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::RuntimeBuilder;
+use logic_analyzer_graph_api::node_support::{
+    NodeBuildContext, PortKind, ResolvedInputs, parse_state,
+};
 use logic_analyzer_processing::nodes::logic::buffer::BufferNode;
 use node_graph::Socket;
 use signal_processing::{
     NumberSample, ProcessNode, Sample, SampleBlock, TextSample, Trigger, Word,
 };
-
-use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 /// Maps a `BufferState.kind` selection to
 /// the concrete `PortKind` it names. Falls back to `Signal` for state that

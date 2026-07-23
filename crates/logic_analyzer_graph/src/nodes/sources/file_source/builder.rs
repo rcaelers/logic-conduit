@@ -3,16 +3,16 @@
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::RuntimeBuilder;
+use logic_analyzer_graph_api::node_support::{
+    CaptureCacheIdentity, CapturePresentation, NodeBuildContext, PortKind, ResolvedInputs,
+    parse_state,
+};
 use logic_analyzer_processing::nodes::sources::dsl_file::DslFileSource;
 use node_graph::Socket;
 use signal_processing::{
     DEFAULT_DERIVED_DATA_MAX_ENTRIES, DerivedDataRetention, ProcessNode, Sample, SampleBlock,
     TextSample,
-};
-
-use crate::{
-    CaptureCacheIdentity, CapturePresentation, NodeBuildContext, PortKind, ResolvedInputs,
-    RuntimeBuilder, parse_state,
 };
 
 #[derive(Default)]

@@ -2,14 +2,15 @@
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::{LiveCaptureFeature, RuntimeBuilder};
+use logic_analyzer_graph_api::node_support::{
+    CapturePresentation, LiveCaptureEdit, NodeBuildContext, PortKind, ResolvedInputs,
+    SimpleTriggerChannel, TriggerConfigurationFeature,
+};
 use node_graph::Socket;
 use signal_processing::{ProcessNode, SimpleTriggerCondition, TriggerPredicate, TriggerProgram};
 
 use super::builder::TestCaptureSourceBuilder;
-use crate::{
-    CapturePresentation, LiveCaptureEdit, LiveCaptureFeature, NodeBuildContext, PortKind,
-    ResolvedInputs, RuntimeBuilder, SimpleTriggerChannel, TriggerConfigurationFeature,
-};
 
 #[derive(Default)]
 pub(crate) struct TestLiveCaptureSourceBuilder;

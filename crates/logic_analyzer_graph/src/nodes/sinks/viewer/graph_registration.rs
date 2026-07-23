@@ -1,5 +1,5 @@
 inventory::submit! {
-    crate::GraphNodeRegistration::runnable::<
+    logic_analyzer_graph_api::node::GraphNodeRegistration::runnable::<
         super::definition::Viewer,
         super::builder::ViewerSubscriptionBuilder,
     >("org.logicconduit.graph-node.viewer/v1")

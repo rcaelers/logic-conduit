@@ -1,5 +1,5 @@
 inventory::submit! {
-    crate::GraphNodeRegistration::runnable::<
+    logic_analyzer_graph_api::node::GraphNodeRegistration::runnable::<
         super::definition::StringFormatter,
         super::builder::FormatterBuilder,
     >("org.logicconduit.graph-node.string-formatter/v1").requiring_payloads(&[

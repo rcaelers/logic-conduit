@@ -2,11 +2,11 @@
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::RuntimeBuilder;
+use logic_analyzer_graph_api::node_support::{NodeBuildContext, PortKind, ResolvedInputs};
 use logic_analyzer_processing::nodes::sinks::discard_writer::DiscardTextWriter;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, TextSample};
-
-use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder};
 
 #[derive(Default)]
 pub(crate) struct TextFileWriterBuilder;

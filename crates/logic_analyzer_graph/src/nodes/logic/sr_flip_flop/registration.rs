@@ -1,5 +1,5 @@
 inventory::submit! {
-    crate::GraphNodeRegistration::runnable::<
+    logic_analyzer_graph_api::node::GraphNodeRegistration::runnable::<
         super::definition::SrFlipFlop,
         super::builder::SrFlipFlopBuilder,
     >("org.logicconduit.graph-node.sr-flip-flop/v1").requiring_payloads(&[

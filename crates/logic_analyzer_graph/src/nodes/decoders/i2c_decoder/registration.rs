@@ -1,5 +1,5 @@
 inventory::submit! {
-    crate::GraphNodeRegistration::definition::<super::definition::I2cDecoder>(
+    logic_analyzer_graph_api::node::GraphNodeRegistration::definition::<super::definition::I2cDecoder>(
         "org.logicconduit.graph-node.i2c-decoder/v1",
     )
 }

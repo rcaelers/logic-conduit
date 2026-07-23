@@ -2,15 +2,16 @@
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::RuntimeBuilder;
+use logic_analyzer_graph_api::node_support::{
+    CapturePresentation, NodeBuildContext, PortKind, ResolvedInputs, TriggerConfigurationFeature,
+    parse_state,
+};
 use logic_analyzer_processing::nodes::sources::synthetic_capture_source::SyntheticCaptureSource;
 use node_graph::Socket;
 use signal_processing::{DerivedDataRetention, ProcessNode, Sample, SampleBlock};
 
 use super::definition::U3Pro16State;
-use crate::{
-    CapturePresentation, NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder,
-    TriggerConfigurationFeature, parse_state,
-};
 
 #[derive(Default)]
 pub(crate) struct DsLogicU3Pro16Builder;

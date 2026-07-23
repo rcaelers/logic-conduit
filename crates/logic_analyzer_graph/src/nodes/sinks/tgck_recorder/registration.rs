@@ -1,5 +1,5 @@
 inventory::submit! {
-    crate::GraphNodeRegistration::runnable::<
+    logic_analyzer_graph_api::node::GraphNodeRegistration::runnable::<
         super::definition::TgckRecorder,
         super::builder::TgckRecorderBuilder,
     >("org.logicconduit.graph-node.tgck-recorder/v1").requiring_payloads(&[

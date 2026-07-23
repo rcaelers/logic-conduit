@@ -1,5 +1,5 @@
 inventory::submit! {
-    crate::GraphNodeRegistration::runnable::<
+    logic_analyzer_graph_api::node::GraphNodeRegistration::runnable::<
         super::definition::BinaryDecoder,
         super::builder::BinaryDecoderBuilder,
     >("org.logicconduit.graph-node.binary-decoder/v1").requiring_payloads(&[

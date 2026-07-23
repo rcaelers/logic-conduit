@@ -4,15 +4,16 @@ use std::sync::Arc;
 
 use egui::Color32;
 
+use logic_analyzer_graph_api::node::CollectedPayloadRegistration;
+use logic_analyzer_graph_api::node_support::{
+    DefaultViewerPayloadPresentation, NodeBuildContext, ResolvedInput,
+};
 use logic_analyzer_viewer::{DefaultViewerLaneRenderer, ViewerLaneBadge};
 use signal_processing::{CollectedLaneRequest, CollectedWordLaneOptions, LiveStoreConfig};
 
 use super::presentation::{
     DigitalSnapshotRenderer, NumberSnapshotRenderer, TextSnapshotRenderer, TriggerSnapshotRenderer,
     WordSnapshotRenderer,
-};
-use crate::{
-    CollectedPayloadRegistration, DefaultViewerPayloadPresentation, NodeBuildContext, ResolvedInput,
 };
 
 fn digital_presentation() -> DefaultViewerPayloadPresentation {

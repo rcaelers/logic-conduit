@@ -1,5 +1,5 @@
 inventory::submit! {
-    crate::GraphNodeRegistration::runnable::<
+    logic_analyzer_graph_api::node::GraphNodeRegistration::runnable::<
         super::definition::TestUartSource,
         super::builder::TestUartSourceBuilder,
     >("org.logicconduit.graph-node.test-uart-source/v1")

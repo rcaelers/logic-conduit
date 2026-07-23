@@ -1,0 +1,17 @@
+[package]
+name = "logic-analyzer-graph-api"
+version.workspace = true
+edition = "2024"
+authors = ["Rob Caelers <rob.caelers@gmail.com>"]
+
+[lib]
+name = "logic_analyzer_graph_api"
+path = "src/lib.rs"
+
+[dependencies]
+signal-processing = { path = "../signal_processing" }
+logic-analyzer-viewer = { path = "../widgets/logic_analyzer_viewer" }
+node-graph = { path = "../widgets/node_graph" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+inventory = { workspace = true }

@@ -9,7 +9,7 @@ path = "src/lib.rs"
 
 [dependencies]
 signal-processing = { path = "../../crates/signal_processing" }
-logic-analyzer-graph = { path = "../../crates/logic_analyzer_graph" }
+logic-analyzer-graph-api = { path = "../../crates/logic_analyzer_graph_api" }
 logic-analyzer-ui = { path = "../../crates/logic_analyzer_ui" }
 logic-analyzer-viewer = { path = "../../crates/widgets/logic_analyzer_viewer" }
 node-graph = { path = "../../crates/widgets/node_graph" }
@@ -20,3 +20,4 @@ crossbeam-channel = { workspace = true }
 inventory = { workspace = true }
 
 [dev-dependencies]
+logic-analyzer-graph = { path = "../../crates/logic_analyzer_graph" }
