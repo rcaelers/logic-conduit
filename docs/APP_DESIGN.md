@@ -225,8 +225,8 @@ machinery.
 
 Compile-time plugin crates submit independently discoverable payload, graph-node, and UI-panel
 capabilities through `inventory`. The host enables and force-links the plugin crate; application
-composition then applies payloads, graph nodes, and panels in deterministic stable-ID order without
-a plugin registration callback. [plugins/example-plugin](../plugins/example-plugin) demonstrates
+composition applies payloads, graph nodes, and panels in deterministic stable-ID order.
+[plugins/example-plugin](../plugins/example-plugin) demonstrates
 custom channel and collected payload types, socket types, graph definitions and runtime builders,
 a waveform renderer, and an independently openable panel. Native hosts retain an explicit symbol
 anchor for every enabled plugin. The web entry point invokes the module constructors exactly once

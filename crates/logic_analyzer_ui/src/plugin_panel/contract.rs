@@ -39,19 +39,19 @@ pub enum PluginPanelIcon {
     Table,
 }
 
-/// Stable registration metadata for one plugin-defined panel kind.
+/// Runtime registration metadata built from an inventory submission.
 #[derive(Clone, Debug, PartialEq)]
-pub struct PluginPanelDescriptor {
-    pub stable_id: String,
-    pub title: String,
-    pub icon: PluginPanelIcon,
-    pub minimum_width: f32,
-    pub minimum_height: f32,
-    pub singleton: bool,
+pub(crate) struct PluginPanelDescriptor {
+    pub(crate) stable_id: String,
+    pub(crate) title: String,
+    pub(crate) icon: PluginPanelIcon,
+    pub(crate) minimum_width: f32,
+    pub(crate) minimum_height: f32,
+    pub(crate) singleton: bool,
 }
 
 impl PluginPanelDescriptor {
-    pub fn new(stable_id: impl Into<String>, title: impl Into<String>) -> Self {
+    pub(crate) fn new(stable_id: impl Into<String>, title: impl Into<String>) -> Self {
         Self {
             stable_id: stable_id.into(),
             title: title.into(),
@@ -62,18 +62,18 @@ impl PluginPanelDescriptor {
         }
     }
 
-    pub fn icon(mut self, icon: PluginPanelIcon) -> Self {
+    pub(crate) fn icon(mut self, icon: PluginPanelIcon) -> Self {
         self.icon = icon;
         self
     }
 
-    pub fn minimum_size(mut self, width: f32, height: f32) -> Self {
+    pub(crate) fn minimum_size(mut self, width: f32, height: f32) -> Self {
         self.minimum_width = width;
         self.minimum_height = height;
         self
     }
 
-    pub fn singleton(mut self) -> Self {
+    pub(crate) fn singleton(mut self) -> Self {
         self.singleton = true;
         self
     }

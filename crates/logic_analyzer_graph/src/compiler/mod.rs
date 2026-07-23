@@ -2,7 +2,6 @@ mod collected_payload_registration;
 mod data_collector;
 mod errors;
 mod graph;
-mod plugin;
 mod port_kind;
 mod saved_graph;
 
@@ -34,6 +33,5 @@ pub use graph::{
     lower, sampling_overlay_candidates, start_app_run, start_app_run_with_source_overrides,
     start_live_analysis,
 };
-pub use plugin::PluginContext;
 pub use port_kind::{PortKind, PortValue};
 pub use saved_graph::{GraphCompatibilityWarning, synchronize_payload_subscriptions};

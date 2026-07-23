@@ -32,6 +32,8 @@ jobs:
         run: cargo check --workspace --all-targets
       - name: Test workspace
         run: cargo test --workspace
+      - name: Test native compile-time plugin linking
+        run: cargo test -p logic-analyzer-app-native --features example-plugin
 
   check-wasm:
     runs-on: ubuntu-latest
@@ -43,7 +45,7 @@ jobs:
           targets: wasm32-unknown-unknown
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
-      - name: Check wasm UI, dependencies, and plugin contracts
+      - name: Build wasm UI with compile-time plugin constructors
         env:
           RUSTFLAGS: -D unreachable-pub
-        run: cargo check -p logic-analyzer-app-web -p example-plugin --target wasm32-unknown-unknown
+        run: cargo build -p logic-analyzer-app-web --target wasm32-unknown-unknown --features example-plugin

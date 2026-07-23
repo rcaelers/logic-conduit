@@ -692,26 +692,13 @@ impl BuilderRegistry {
         registry
     }
 
-    /// Adds (or overwrites) one builder, keyed the same way `standard()`
-    /// keys its own entries — the string must match the corresponding
-    /// `NodeDef::name()`. Lets a plugin crate extend the registry `standard()`
-    /// builds, without touching `standard()` itself.
-    pub fn insert(
-        &mut self,
-        name: impl Into<String>,
-        builder: Box<dyn RuntimeBuilder>,
-    ) -> &mut Self {
-        self.builders.insert(name.into(), builder);
-        self
-    }
-
     /// Registers a payload that has explicit retained-data semantics.
     ///
     /// This also registers the payload with the generic runtime channel
     /// factory. The present registry records only the durable identity; a
     /// later adapter registration supplies its typed ingestion and query
     /// behavior.
-    pub fn register_collected_payload<T: PortValue>(
+    pub(crate) fn register_collected_payload<T: PortValue>(
         &mut self,
         stable_id: impl Into<String>,
     ) -> Result<&mut Self, CollectedPayloadRegistrationError> {
@@ -721,7 +708,7 @@ impl BuilderRegistry {
     }
 
     /// Registers a typed retained-data adapter for a payload identity.
-    pub fn register_collected_payload_adapter<T: PortValue>(
+    pub(crate) fn register_collected_payload_adapter<T: PortValue>(
         &mut self,
         stable_id: impl Into<String>,
         adapter: std::sync::Arc<dyn CollectedPayloadAdapter>,
@@ -729,19 +716,6 @@ impl BuilderRegistry {
         self.register_collected_payload::<T>(stable_id)?;
         self.collected_payloads.register_adapter::<T>(adapter)?;
         Ok(self)
-    }
-
-    /// Marks a registered collected payload as eligible for graph-level data
-    /// subscriptions. A payload remains non-viewable until its owner opts in.
-    pub fn register_collected_payload_subscription<T: PortValue>(
-        &mut self,
-        presentation: DefaultViewerPayloadPresentation,
-    ) -> Result<&mut Self, CollectedPayloadRegistrationError> {
-        self.register_collected_payload_subscription_with_request_configurator::<T>(
-            presentation,
-            Arc::new(|request, _, _, _| request),
-            false,
-        )
     }
 
     pub(crate) fn register_collected_payload_subscription_with_request_configurator<
@@ -789,18 +763,6 @@ impl BuilderRegistry {
                 });
         }
         Ok(self)
-    }
-
-    /// Registers a collected adapter and makes the payload eligible for data
-    /// subscriptions in one explicit plugin-facing operation.
-    pub fn register_collected_payload_subscription_adapter<T: PortValue>(
-        &mut self,
-        stable_id: impl Into<String>,
-        adapter: std::sync::Arc<dyn CollectedPayloadAdapter>,
-        presentation: DefaultViewerPayloadPresentation,
-    ) -> Result<&mut Self, CollectedPayloadRegistrationError> {
-        self.register_collected_payload_adapter::<T>(stable_id, adapter)?;
-        self.register_collected_payload_subscription::<T>(presentation)
     }
 
     /// Registered retained-payload identities, keyed by runtime `TypeId` and
@@ -2614,9 +2576,15 @@ mod tests {
             "a durable payload identity alone must not create a subscription contract"
         );
         assert!(matches!(
-            registry.register_collected_payload_subscription::<SampleBlock>(
-                DefaultViewerPayloadPresentation::new(ViewerLaneBadge::new("B", Color32::WHITE))
-            ),
+            registry
+                .register_collected_payload_subscription_with_request_configurator::<SampleBlock>(
+                    DefaultViewerPayloadPresentation::new(ViewerLaneBadge::new(
+                        "B",
+                        Color32::WHITE
+                    )),
+                    Arc::new(|request, _, _, _| request),
+                    false,
+                ),
             Err(CollectedPayloadRegistrationError::PayloadHasNoAdapter { .. })
         ));
         assert!(registry.payload_uses_persistent_cache(PortKind::of::<Word>()));
@@ -3135,8 +3103,8 @@ mod tests {
         assert_eq!(captured_feature.source_node, source_node);
         let graph_source_factory = captured_feature.graph_source_factory();
         let mut registry = BuilderRegistry::standard();
-        registry.insert(
-            nodes::BinaryDecoder::name(),
+        registry.builders.insert(
+            nodes::BinaryDecoder::name().to_owned(),
             Box::new(ThrottledBinaryBuilder {
                 delay: Duration::from_millis(3),
             }),
@@ -3209,8 +3177,8 @@ mod tests {
         let discovery_calls = Arc::new(AtomicUsize::new(0));
         let provider_build_calls = Arc::new(AtomicUsize::new(0));
         let mut reference_registry = BuilderRegistry::standard();
-        reference_registry.insert(
-            nodes::TestCaptureSource::name(),
+        reference_registry.builders.insert(
+            nodes::TestCaptureSource::name().to_owned(),
             Box::new(InstrumentedCaptureBuilder {
                 discovery_calls: Arc::clone(&discovery_calls),
                 provider_build_calls: Arc::clone(&provider_build_calls),
@@ -3496,10 +3464,10 @@ mod tests {
 
     #[test]
     fn trigger_configuration_discovery_does_not_require_acquisition() {
-        let mut node_types = nodes::build_registry();
+        let node_types = nodes::build_registry();
         let mut builders = BuilderRegistry::standard();
-        crate::PluginContext::new(&mut node_types, &mut builders).register_builder(
-            nodes::TestCaptureSource::name(),
+        builders.builders.insert(
+            nodes::TestCaptureSource::name().to_owned(),
             Box::new(TriggerOnlyPluginBuilder),
         );
         let mut widget = NodeGraphWidget::new(node_types);
@@ -4414,10 +4382,10 @@ mod tests {
             }
         }
 
-        let mut node_types = nodes::build_registry();
         let mut builders = BuilderRegistry::standard();
-        crate::PluginContext::new(&mut node_types, &mut builders)
-            .register_builder("Plugin Presenter", Box::new(PluginBuilder));
+        builders
+            .builders
+            .insert("Plugin Presenter".into(), Box::new(PluginBuilder));
         let widget = uart_demo_widget();
         let socket = &widget
             .graph()
@@ -4438,10 +4406,10 @@ mod tests {
 
     #[test]
     fn buffered_provider_registers_through_the_existing_live_feature_contract() {
-        let mut node_types = nodes::build_registry();
+        let node_types = nodes::build_registry();
         let mut builders = BuilderRegistry::standard();
-        crate::PluginContext::new(&mut node_types, &mut builders).register_builder(
-            nodes::TestCaptureSource::name(),
+        builders.builders.insert(
+            nodes::TestCaptureSource::name().to_owned(),
             Box::new(BufferedPluginBuilder),
         );
         let mut widget = NodeGraphWidget::new(node_types);
@@ -4477,10 +4445,10 @@ mod tests {
 
     #[test]
     fn advanced_trigger_program_routes_unchanged_to_the_registered_builder() {
-        let mut node_types = nodes::build_registry();
+        let node_types = nodes::build_registry();
         let mut builders = BuilderRegistry::standard();
-        crate::PluginContext::new(&mut node_types, &mut builders).register_builder(
-            nodes::TestCaptureSource::name(),
+        builders.builders.insert(
+            nodes::TestCaptureSource::name().to_owned(),
             Box::new(BufferedPluginBuilder),
         );
         let mut widget = NodeGraphWidget::new(node_types);

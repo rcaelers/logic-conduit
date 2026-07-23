@@ -17,9 +17,7 @@ pub use app_platform::{
     NativeMenuCommand, dispatch_native_menu_command, set_recent_files_listener,
 };
 use input_bindings::InputBindings;
-pub use plugin_panel::{
-    PluginPanel, PluginPanelContext, PluginPanelDescriptor, PluginPanelIcon, UiPanelRegistration,
-};
+pub use plugin_panel::{PluginPanel, PluginPanelContext, PluginPanelIcon, UiPanelRegistration};
 pub use product::{APPLICATION_ID, APPLICATION_NAME};
 
 pub fn application_input_bindings() -> &'static InputBindings {

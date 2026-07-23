@@ -103,8 +103,8 @@ a persistent compatibility warning when a saved payload, ingestion subscription,
 registration is unavailable and retains the unresolved identity on subsequent saves.
 
 The identity registry accepts an identical repeat registration, but rejects a Rust type assigned a
-different identifier or an identifier assigned to a different Rust type. The future adapter
-registration uses the same rule for its storage and presentation definition. This prevents two
+different identifier or an identifier assigned to a different Rust type. Adapter registration
+uses the same rule for its storage and presentation definition. This prevents two
 plugins from silently assigning incompatible semantics to one payload.
 
 ### Runtime adapter contract

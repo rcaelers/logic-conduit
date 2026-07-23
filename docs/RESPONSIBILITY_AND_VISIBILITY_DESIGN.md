@@ -115,7 +115,7 @@ nearest owning facade. The allowlist names canonical public namespaces.
 | `logic_analyzer_viewer` | none | The reusable viewer exposes one curated crate-root API; drawing, sampling, input, cursor, lane, worker, and indexing modules remain private. |
 | `logic_analyzer_ui` | none | The application-composition crate exposes only its host-facing crate-root facade. |
 | `input_bindings`, `panel_layout`, `trigger_editor`, `widget_support` | none | Each crate already represents one cohesive public component and does not need a second namespace level. |
-| Native/web application crates and example plugins | none | Binary integration and plugin registration are crate-root entry points; implementation modules remain private. |
+| Native/web application crates and example plugins | none | Binary integration and plugin linker anchors are crate-root entry points; inventory submissions and other implementation modules remain private. |
 
 Changing this allowlist is an API-design decision. A new public module requires a documented
 domain boundary, more than import convenience, and review of its native and wasm surface.

@@ -27,7 +27,7 @@ pub use compiler::{
     CompileError, CompiledEdge, CompiledGraph, CompiledNode, DefaultViewerPayloadPresentation,
     DiscoveredCapturePresentation, DiscoveredLiveCaptureFeature, DiscoveredTriggerConfiguration,
     GraphCompatibilityWarning, LiveAnalysisSource, LiveCaptureDiscoveryError, LiveCaptureEdit,
-    LiveCaptureFeature, LiveRun, PluginContext, PortKind, PortValue, ResolvedInput, ResolvedInputs,
+    LiveCaptureFeature, LiveRun, PortKind, PortValue, ResolvedInput, ResolvedInputs,
     RuntimeBuilder, SamplingOverlayCandidate, SamplingOverlayDescriptor,
     SamplingQualifierDescriptor, SimpleTriggerChannel, SourceProcessOverrides,
     TriggerConfigurationFeature, apply_live_capture_edit, derived_cache_configs_by_node,
