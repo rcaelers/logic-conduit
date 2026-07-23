@@ -100,11 +100,11 @@ pub use collected_payload::{
 pub use cooperative_manager::CooperativeManager;
 pub use derived_data_collector::{
     AnnotationFold, CollectedValue, CollectedValueKind, CollectedValueLane,
-    CollectedWordLaneOptions, DEFAULT_DERIVED_DATA_MAX_ENTRIES, DerivedDataCollector,
-    DerivedDataCollectorMetrics, DerivedDataCollectorMetricsSnapshot, DerivedDataRetention,
-    DerivedLane, DerivedLaneData, DerivedLanes, DigitalFold, DigitalLaneSnapshot,
-    IndexedAnnotationLane, LaneSummary, MarkerFold, NumberLaneSnapshot, OpaqueCollectedLane,
-    TextLaneSnapshot, TriggerLaneSnapshot, ValueFold, WordLaneSnapshot,
+    CollectedWordLaneOptions, CollectedWordLaneQuery, DEFAULT_DERIVED_DATA_MAX_ENTRIES,
+    DerivedDataCollector, DerivedDataCollectorMetrics, DerivedDataCollectorMetricsSnapshot,
+    DerivedDataRetention, DerivedLane, DerivedLaneData, DerivedLanes, DigitalFold,
+    DigitalLaneSnapshot, IndexedAnnotationLane, LaneSummary, MarkerFold, NumberLaneSnapshot,
+    OpaqueCollectedLane, TextLaneSnapshot, TriggerLaneSnapshot, ValueFold, WordLaneSnapshot,
     built_in_word_lane_ingestor, register_builtin_collected_payload_adapters,
 };
 pub use derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};

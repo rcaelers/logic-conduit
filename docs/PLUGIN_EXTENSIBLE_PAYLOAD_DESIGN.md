@@ -16,15 +16,12 @@ stable identifier assigned to multiple Rust types, and a Rust type assigned mult
 an adapter factory. `DerivedDataCollector` schedules adapter-created lane ingestors beside its
 built-in lanes. An adapter publishes its retained, type-erased query object through `DerivedLanes`,
 so a later subscriber can discover it by stable payload identity and downcast only to its own
-registered query type. Built-in payloads are registered through this same path while preserving
-their existing digital, indexed-word, marker, and value storage representations behind their
-adapters.
+registered query type. Built-in payloads are registered through this same path and retain their
+digital, indexed-word, marker, numeric, and text data behind their adapters.
 
 The built-in digital adapter publishes an opaque query with bounded exact-transition and dense
 activity snapshots, cursor-boundary lookup, and timeline extent. Its viewer presentation consumes
-those snapshots through the same renderer contract as a plugin payload. The legacy digital lane
-storage remains only as a compatibility fallback while row interactions migrate to query
-capabilities.
+those snapshots through the same renderer contract as a plugin payload.
 
 The built-in trigger adapter provides the same query capabilities with exact marker timestamps or
 dense marker-activity snapshots. Its presentation is likewise adapter-owned; neither the generic
@@ -34,6 +31,11 @@ The built-in numeric and text adapters retain their respective `i64` and `String
 their queries. Their graph-owned presentation adapters format bounded values only while rendering;
 the generic collector does not convert a payload into display text.
 
+The built-in word adapter exposes `CollectedWordLaneQuery` as its concrete query contract. Generic
+subscribers use its bounded waveform and table capabilities through `CollectedLaneQuery`; concrete
+word diagnostics may downcast the query and inspect its indexed store without accessing generic
+collector storage.
+
 `CollectedLaneQuery` supplies an immutable snapshot only when its payload has waveform
 semantics. The request is bounded by a visible time window and item limit. The viewer passes the
 returned `OpaqueCollectedLaneSnapshot` to the payload's renderer only after it has released
@@ -41,9 +43,9 @@ retained-data locks; the renderer downcasts the snapshot only to its own registe
 opaque lane is sufficient to activate an explicitly registered viewer row, so a payload does not
 need a parallel `DerivedLaneData` entry merely to be visualized.
 
-`DerivedLaneData`, `CollectedDataKind`, and `LaneBuffer` remain the implementation of the
-built-in fallback lanes. They are not part of the collected-payload contract and are being
-replaced incrementally by adapter-owned query and snapshot storage.
+`DerivedLaneData` and `LaneSummary` remain a temporary fallback representation for legacy viewer
+rows and explicit compatibility fixtures. They are not part of the collected-payload contract;
+built-in adapters do not write to them.
 
 ## Collected-payload adapters
 

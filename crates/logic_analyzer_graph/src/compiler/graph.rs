@@ -3081,31 +3081,23 @@ mod tests {
     fn captured_words(
         lanes: &signal_processing::DerivedLanes,
     ) -> Vec<signal_processing::Annotation> {
-        let lanes = lanes.read();
         lanes
-            .iter()
-            .find_map(|lane| match &lane.data {
-                DerivedLaneData::Annotations(words) => Some(words.clone()),
-                DerivedLaneData::IndexedAnnotations(indexed) => {
-                    let metadata = indexed.metadata();
-                    let end = metadata.extent_end_ns.unwrap_or(0);
-                    Some(
-                        indexed
-                            .query()
-                            .exact_window(
-                                0,
-                                end,
-                                usize::try_from(metadata.total_word_count)
-                                    .unwrap_or(usize::MAX)
-                                    .saturating_add(1),
-                            )
-                            .unwrap()
-                            .annotations,
-                    )
-                }
-                _ => None,
+            .opaque_lanes()
+            .into_iter()
+            .find(|lane| lane.payload().stable_id() == "org.logicconduit.word/v1")
+            .and_then(|lane| lane.table_snapshot(1_000_000))
+            .map(|snapshot| {
+                snapshot
+                    .rows
+                    .into_iter()
+                    .map(|row| signal_processing::Annotation {
+                        start_ns: row.start_time_ns,
+                        end_ns: row.end_time_ns,
+                        value: row.value,
+                    })
+                    .collect()
             })
-            .unwrap_or_else(|| panic!("binary decoder word lane; actual lanes: {lanes:?}"))
+            .unwrap_or_else(|| panic!("binary decoder word adapter was not published"))
     }
 
     fn annotation_bytes(annotations: &[signal_processing::Annotation]) -> Vec<u8> {
@@ -3776,20 +3768,35 @@ mod tests {
         let mut run = start_live(widget.graph(), &BuilderRegistry::standard(), &mut ctx)
             .expect("watched value levels should run");
         run.wait();
-        let lanes = derived.read();
-        for (suffix, expected_kind) in [
-            (".Count", signal_processing::CollectedValueKind::Number),
-            (".Text", signal_processing::CollectedValueKind::Text),
-        ] {
-            let lane = lanes
-                .iter()
-                .find(|lane| lane.name.ends_with(suffix))
+        for suffix in [".Count", ".Text"] {
+            let lane = derived
+                .opaque_lanes()
+                .into_iter()
+                .find(|lane| lane.name().ends_with(suffix))
                 .unwrap_or_else(|| panic!("missing {suffix} viewer lane"));
-            let signal_processing::DerivedLaneData::Values(values) = &lane.data else {
-                panic!("{suffix} should be a value lane");
-            };
-            assert_eq!(values.kind, expected_kind);
-            assert!(values.values.len() > 1, "{suffix} should contain changes");
+            let snapshot = lane
+                .snapshot(signal_processing::CollectedLaneSnapshotRequest {
+                    start_time_ns: 0,
+                    end_time_ns: u64::MAX,
+                    max_items: usize::MAX,
+                })
+                .unwrap();
+            let changes = snapshot
+                .value::<signal_processing::NumberLaneSnapshot>()
+                .map(|snapshot| match snapshot.as_ref() {
+                    signal_processing::NumberLaneSnapshot::Exact(samples) => samples.len(),
+                    signal_processing::NumberLaneSnapshot::Activity(_) => 0,
+                })
+                .or_else(|| {
+                    snapshot
+                        .value::<signal_processing::TextLaneSnapshot>()
+                        .map(|snapshot| match snapshot.as_ref() {
+                            signal_processing::TextLaneSnapshot::Exact(samples) => samples.len(),
+                            signal_processing::TextLaneSnapshot::Activity(_) => 0,
+                        })
+                })
+                .unwrap_or_else(|| panic!("{suffix} should publish a typed value snapshot"));
+            assert!(changes > 1, "{suffix} should contain changes");
         }
     }
 
@@ -3832,9 +3839,9 @@ mod tests {
                 .flat_map(|source| &source.columns)
                 .all(|column| {
                     lanes
-                        .read()
+                        .opaque_lanes()
                         .iter()
-                        .any(|lane| lane.name == column.lane.as_str())
+                        .any(|lane| lane.name() == column.lane.as_str())
                 })
         );
     }
@@ -4054,10 +4061,11 @@ mod tests {
         assert!(!second.names.contains_key(&decoder_id));
         second.wait();
 
-        let lanes = lanes.read();
-        assert!(lanes.iter().any(|lane| {
-            matches!(lane.data, signal_processing::DerivedLaneData::Annotations(ref words) if words.len() >= 6)
-                || matches!(lane.data, signal_processing::DerivedLaneData::IndexedAnnotations(_))
+        assert!(lanes.opaque_lanes().iter().any(|lane| {
+            lane.payload().stable_id() == "org.logicconduit.word/v1"
+                && lane
+                    .table_metadata()
+                    .is_some_and(|metadata| metadata.total_rows >= 6)
         }));
     }
 
@@ -4182,13 +4190,22 @@ mod tests {
         let mut run = start_live(widget.graph(), &BuilderRegistry::standard(), &mut ctx).unwrap();
         run.wait();
 
-        let lanes = lanes.read();
         let q = lanes
-            .iter()
-            .find(|lane| lane.name == "SR Flip-Flop.Q")
+            .opaque_lanes()
+            .into_iter()
+            .find(|lane| lane.name() == "SR Flip-Flop.Q")
             .expect("latch output should be visible");
-        let signal_processing::DerivedLaneData::Digital(samples) = &q.data else {
-            panic!("latch output should be a digital lane");
+        let snapshot = q
+            .snapshot(signal_processing::CollectedLaneSnapshotRequest {
+                start_time_ns: 0,
+                end_time_ns: u64::MAX,
+                max_items: usize::MAX,
+            })
+            .and_then(|snapshot| snapshot.value::<signal_processing::DigitalLaneSnapshot>())
+            .expect("latch output should publish a digital snapshot");
+        let signal_processing::DigitalLaneSnapshot::Exact { samples, .. } = snapshot.as_ref()
+        else {
+            panic!("latch output should retain an exact digital snapshot");
         };
         assert_eq!(samples.len(), 25);
         assert!(

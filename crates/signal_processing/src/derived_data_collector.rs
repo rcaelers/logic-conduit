@@ -204,9 +204,20 @@ struct TextLaneStorage {
     summary: AppendOnlyMipmap<TextSample, TextFold>,
 }
 
+#[derive(Default)]
+struct DigitalLaneStorage {
+    samples: Vec<Sample>,
+    summary: AppendOnlyMipmap<Sample, DigitalFold>,
+}
+
+#[derive(Default)]
+struct TriggerLaneStorage {
+    timestamps: Vec<u64>,
+    summary: AppendOnlyMipmap<u64, MarkerFold>,
+}
+
 struct DigitalLaneQuery {
-    store: DerivedLanes,
-    name: String,
+    storage: Arc<RwLock<DigitalLaneStorage>>,
 }
 
 impl CollectedLaneQuery for DigitalLaneQuery {
@@ -219,29 +230,25 @@ impl CollectedLaneQuery for DigitalLaneQuery {
         request: CollectedLaneSnapshotRequest,
     ) -> Option<OpaqueCollectedLaneSnapshot> {
         let snapshot = {
-            let lanes = self.store.read();
-            let lane = lanes.iter().find(|lane| lane.name == self.name)?;
-            let (DerivedLaneData::Digital(samples), LaneSummary::Digital(summary)) =
-                (&lane.data, &lane.summary)
-            else {
-                return None;
-            };
-            let first =
-                samples.partition_point(|sample| sample.start_time_ns < request.start_time_ns);
-            let last =
-                samples.partition_point(|sample| sample.start_time_ns <= request.end_time_ns);
+            let storage = self.storage.read().unwrap();
+            let first = storage
+                .samples
+                .partition_point(|sample| sample.start_time_ns < request.start_time_ns);
+            let last = storage
+                .samples
+                .partition_point(|sample| sample.start_time_ns <= request.end_time_ns);
             let initial = first
                 .checked_sub(1)
-                .and_then(|index| samples.get(index))
+                .and_then(|index| storage.samples.get(index))
                 .is_some_and(|sample| sample.value);
             if last - first <= request.max_items {
                 DigitalLaneSnapshot::Exact {
-                    samples: samples[first..last].to_vec(),
+                    samples: storage.samples[first..last].to_vec(),
                     initial,
                 }
             } else {
                 DigitalLaneSnapshot::Activity {
-                    records: summary.sampled_window(
+                    records: storage.summary.sampled_window(
                         request.start_time_ns,
                         request.end_time_ns,
                         request.max_items,
@@ -254,13 +261,11 @@ impl CollectedLaneQuery for DigitalLaneQuery {
     }
 
     fn nearest_time_boundary(&self, timestamp_ns: u64, max_distance_ns: u64) -> Option<u64> {
-        let lanes = self.store.read();
-        let lane = lanes.iter().find(|lane| lane.name == self.name)?;
-        let DerivedLaneData::Digital(samples) = &lane.data else {
-            return None;
-        };
-        let index = samples.partition_point(|sample| sample.start_time_ns <= timestamp_ns);
-        samples[index.saturating_sub(1)..(index + 1).min(samples.len())]
+        let storage = self.storage.read().unwrap();
+        let index = storage
+            .samples
+            .partition_point(|sample| sample.start_time_ns <= timestamp_ns);
+        storage.samples[index.saturating_sub(1)..(index + 1).min(storage.samples.len())]
             .iter()
             .map(|sample| sample.start_time_ns)
             .filter(|candidate| candidate.abs_diff(timestamp_ns) <= max_distance_ns)
@@ -268,18 +273,17 @@ impl CollectedLaneQuery for DigitalLaneQuery {
     }
 
     fn timeline_extent_end_ns(&self) -> Option<u64> {
-        let lanes = self.store.read();
-        let lane = lanes.iter().find(|lane| lane.name == self.name)?;
-        let DerivedLaneData::Digital(samples) = &lane.data else {
-            return None;
-        };
-        samples.last().map(|sample| sample.start_time_ns)
+        self.storage
+            .read()
+            .unwrap()
+            .samples
+            .last()
+            .map(|sample| sample.start_time_ns)
     }
 }
 
 struct TriggerLaneQuery {
-    store: DerivedLanes,
-    name: String,
+    storage: Arc<RwLock<TriggerLaneStorage>>,
 }
 
 impl CollectedLaneQuery for TriggerLaneQuery {
@@ -292,19 +296,17 @@ impl CollectedLaneQuery for TriggerLaneQuery {
         request: CollectedLaneSnapshotRequest,
     ) -> Option<OpaqueCollectedLaneSnapshot> {
         let snapshot = {
-            let lanes = self.store.read();
-            let lane = lanes.iter().find(|lane| lane.name == self.name)?;
-            let (DerivedLaneData::Markers(markers), LaneSummary::Markers(summary)) =
-                (&lane.data, &lane.summary)
-            else {
-                return None;
-            };
-            let first = markers.partition_point(|timestamp| *timestamp < request.start_time_ns);
-            let last = markers.partition_point(|timestamp| *timestamp <= request.end_time_ns);
+            let storage = self.storage.read().unwrap();
+            let first = storage
+                .timestamps
+                .partition_point(|timestamp| *timestamp < request.start_time_ns);
+            let last = storage
+                .timestamps
+                .partition_point(|timestamp| *timestamp <= request.end_time_ns);
             if last - first <= request.max_items {
-                TriggerLaneSnapshot::Exact(markers[first..last].to_vec())
+                TriggerLaneSnapshot::Exact(storage.timestamps[first..last].to_vec())
             } else {
-                TriggerLaneSnapshot::Activity(summary.sampled_window(
+                TriggerLaneSnapshot::Activity(storage.summary.sampled_window(
                     request.start_time_ns,
                     request.end_time_ns,
                     request.max_items,
@@ -315,13 +317,11 @@ impl CollectedLaneQuery for TriggerLaneQuery {
     }
 
     fn nearest_time_boundary(&self, timestamp_ns: u64, max_distance_ns: u64) -> Option<u64> {
-        let lanes = self.store.read();
-        let lane = lanes.iter().find(|lane| lane.name == self.name)?;
-        let DerivedLaneData::Markers(markers) = &lane.data else {
-            return None;
-        };
-        let index = markers.partition_point(|marker| *marker <= timestamp_ns);
-        markers[index.saturating_sub(1)..(index + 1).min(markers.len())]
+        let storage = self.storage.read().unwrap();
+        let index = storage
+            .timestamps
+            .partition_point(|marker| *marker <= timestamp_ns);
+        storage.timestamps[index.saturating_sub(1)..(index + 1).min(storage.timestamps.len())]
             .iter()
             .copied()
             .filter(|candidate| candidate.abs_diff(timestamp_ns) <= max_distance_ns)
@@ -329,12 +329,7 @@ impl CollectedLaneQuery for TriggerLaneQuery {
     }
 
     fn timeline_extent_end_ns(&self) -> Option<u64> {
-        let lanes = self.store.read();
-        let lane = lanes.iter().find(|lane| lane.name == self.name)?;
-        let DerivedLaneData::Markers(markers) = &lane.data else {
-            return None;
-        };
-        markers.last().copied()
+        self.storage.read().unwrap().timestamps.last().copied()
     }
 }
 
@@ -448,12 +443,35 @@ impl CollectedLaneQuery for TextLaneQuery {
     }
 }
 
-struct WordLaneQuery {
-    store: DerivedLanes,
-    name: String,
+struct InMemoryWordLaneStorage {
+    annotations: Vec<Annotation>,
+    summary: ChunkedMipmap<Annotation, AnnotationFold>,
 }
 
-impl WordLaneQuery {
+enum WordLaneStorage {
+    InMemory(InMemoryWordLaneStorage),
+    Indexed(IndexedAnnotationLane),
+}
+
+/// Adapter-owned retained query for the built-in word payload.
+///
+/// Generic subscribers use [`CollectedLaneQuery`]. Concrete diagnostics such
+/// as the decoder benchmark may additionally inspect the indexed store owned
+/// by this adapter without reaching through the legacy lane representation.
+pub struct CollectedWordLaneQuery {
+    storage: Arc<RwLock<WordLaneStorage>>,
+    display_format: Option<String>,
+}
+
+impl CollectedWordLaneQuery {
+    pub fn indexed_lane(&self) -> Option<IndexedAnnotationLane> {
+        let storage = self.storage.read().unwrap();
+        let WordLaneStorage::Indexed(indexed) = &*storage else {
+            return None;
+        };
+        Some(indexed.clone())
+    }
+
     fn snapshot(&self, request: CollectedLaneSnapshotRequest) -> WordLaneSnapshot {
         enum Source {
             InMemory(WordLaneSnapshot),
@@ -461,44 +479,41 @@ impl WordLaneQuery {
                 query: Arc<dyn AnnotationQuery>,
                 display_format: Option<String>,
             },
-            Missing,
         }
 
         let source = {
-            let lanes = self.store.read();
-            let Some(lane) = lanes.iter().find(|lane| lane.name == self.name) else {
-                return WordLaneSnapshot::Error;
-            };
-            match &lane.data {
-                DerivedLaneData::Annotations(annotations) => {
-                    let first = annotations
+            let storage = self.storage.read().unwrap();
+            match &*storage {
+                WordLaneStorage::InMemory(storage) => {
+                    let first = storage
+                        .annotations
                         .partition_point(|annotation| annotation.end_ns < request.start_time_ns);
-                    let last = annotations
+                    let last = storage
+                        .annotations
                         .partition_point(|annotation| annotation.start_ns <= request.end_time_ns);
-                    let visible = &annotations[first..last];
+                    let visible = &storage.annotations[first..last];
                     if visible.len() > request.max_items {
                         Source::InMemory(WordLaneSnapshot::Activity)
                     } else {
                         Source::InMemory(WordLaneSnapshot::Exact {
                             annotations: visible.to_vec(),
-                            last_timestamp_ns: annotations
+                            last_timestamp_ns: storage
+                                .annotations
                                 .last()
                                 .map(|annotation| annotation.start_ns),
-                            display_format: lane.word_display_format.clone(),
+                            display_format: self.display_format.clone(),
                         })
                     }
                 }
-                DerivedLaneData::IndexedAnnotations(indexed) => Source::Indexed {
+                WordLaneStorage::Indexed(indexed) => Source::Indexed {
                     query: Arc::clone(indexed.query()),
-                    display_format: lane.word_display_format.clone(),
+                    display_format: self.display_format.clone(),
                 },
-                _ => Source::Missing,
             }
         };
 
         match source {
             Source::InMemory(snapshot) => snapshot,
-            Source::Missing => WordLaneSnapshot::Error,
             Source::Indexed {
                 query,
                 display_format,
@@ -536,7 +551,7 @@ impl WordLaneQuery {
     }
 }
 
-impl CollectedLaneQuery for WordLaneQuery {
+impl CollectedLaneQuery for CollectedWordLaneQuery {
     fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
         self
     }
@@ -552,14 +567,16 @@ impl CollectedLaneQuery for WordLaneQuery {
 
     fn nearest_time_boundary(&self, timestamp_ns: u64, max_distance_ns: u64) -> Option<u64> {
         let indexed_query = {
-            let lanes = self.store.read();
-            let lane = lanes.iter().find(|lane| lane.name == self.name)?;
-            match &lane.data {
-                DerivedLaneData::Annotations(annotations) => {
-                    return nearest_annotation_boundary(annotations, timestamp_ns, max_distance_ns);
+            let storage = self.storage.read().unwrap();
+            match &*storage {
+                WordLaneStorage::InMemory(storage) => {
+                    return nearest_annotation_boundary(
+                        &storage.annotations,
+                        timestamp_ns,
+                        max_distance_ns,
+                    );
                 }
-                DerivedLaneData::IndexedAnnotations(indexed) => Arc::clone(indexed.query()),
-                _ => return None,
+                WordLaneStorage::Indexed(indexed) => Arc::clone(indexed.query()),
             }
         };
 
@@ -570,33 +587,33 @@ impl CollectedLaneQuery for WordLaneQuery {
     }
 
     fn timeline_extent_end_ns(&self) -> Option<u64> {
-        let lanes = self.store.read();
-        let lane = lanes.iter().find(|lane| lane.name == self.name)?;
-        match &lane.data {
-            DerivedLaneData::Annotations(annotations) => annotations
+        let storage = self.storage.read().unwrap();
+        match &*storage {
+            WordLaneStorage::InMemory(storage) => storage
+                .annotations
                 .last()
                 .map(|annotation| annotation.end_ns.max(annotation.start_ns)),
-            DerivedLaneData::IndexedAnnotations(indexed) => indexed.metadata().extent_end_ns,
-            _ => None,
+            WordLaneStorage::Indexed(indexed) => indexed.metadata().extent_end_ns,
         }
     }
 
     fn table_metadata(&self) -> Option<CollectedLaneTableMetadata> {
-        let lanes = self.store.read();
-        let lane = lanes.iter().find(|lane| lane.name == self.name)?;
-        match &lane.data {
-            DerivedLaneData::Annotations(annotations) => Some(CollectedLaneTableMetadata {
-                generation: annotations.last().map_or(0, |annotation| annotation.end_ns),
-                total_rows: annotations.len() as u64,
+        let storage = self.storage.read().unwrap();
+        match &*storage {
+            WordLaneStorage::InMemory(storage) => Some(CollectedLaneTableMetadata {
+                generation: storage
+                    .annotations
+                    .last()
+                    .map_or(0, |annotation| annotation.end_ns),
+                total_rows: storage.annotations.len() as u64,
             }),
-            DerivedLaneData::IndexedAnnotations(indexed) => {
+            WordLaneStorage::Indexed(indexed) => {
                 let metadata = indexed.metadata();
                 Some(CollectedLaneTableMetadata {
                     generation: metadata.generation,
                     total_rows: metadata.total_word_count,
                 })
             }
-            _ => None,
         }
     }
 
@@ -614,23 +631,22 @@ impl CollectedLaneQuery for WordLaneQuery {
         }
 
         let source = {
-            let lanes = self.store.read();
-            let lane = lanes.iter().find(|lane| lane.name == self.name)?;
-            match &lane.data {
-                DerivedLaneData::Annotations(annotations) => Source::InMemory {
-                    rows: annotations
+            let storage = self.storage.read().unwrap();
+            match &*storage {
+                WordLaneStorage::InMemory(storage) => Source::InMemory {
+                    rows: storage
+                        .annotations
                         .iter()
                         .take(max_rows)
                         .map(annotation_table_row)
                         .collect(),
-                    complete: annotations.len() <= max_rows,
-                    format_hint: lane.word_display_format.clone(),
+                    complete: storage.annotations.len() <= max_rows,
+                    format_hint: self.display_format.clone(),
                 },
-                DerivedLaneData::IndexedAnnotations(indexed) => Source::Indexed {
+                WordLaneStorage::Indexed(indexed) => Source::Indexed {
                     query: Arc::clone(indexed.query()),
-                    format_hint: lane.word_display_format.clone(),
+                    format_hint: self.display_format.clone(),
                 },
-                _ => return None,
             }
         };
 
@@ -1124,6 +1140,7 @@ impl DerivedLanes {
         self.opaque.read().unwrap().clone()
     }
 
+    #[cfg(test)]
     fn set_word_display_format(&self, index: usize, format: Option<String>) {
         if let Some(lane) = self.inner.write().unwrap().get_mut(index) {
             lane.word_display_format = format;
@@ -1134,6 +1151,7 @@ impl DerivedLanes {
     /// once per `DerivedDataCollector::work()` invocation per lane, rather than once
     /// per item, so a burst of decoded entries doesn't take (and contend
     /// the UI thread's `read()` for) the lock once per item.
+    #[cfg(test)]
     fn append_digital_batch_retained(
         &self,
         lane: usize,
@@ -1159,6 +1177,7 @@ impl DerivedLanes {
     }
 
     /// Items are `(start_ns, duration_ns, value)` — [`Word`]'s shape.
+    #[cfg(test)]
     fn append_word_batch_retained(
         &self,
         lane: usize,
@@ -1216,6 +1235,7 @@ impl DerivedLanes {
         }
     }
 
+    #[cfg(test)]
     fn append_marker_batch_retained(
         &self,
         lane: usize,
@@ -1240,6 +1260,7 @@ impl DerivedLanes {
         }
     }
 
+    #[cfg(test)]
     fn append_value_batch_retained(
         &self,
         lane: usize,
@@ -1266,13 +1287,10 @@ impl DerivedLanes {
 }
 
 /// Typed append state for the built-in digital payload.
-///
-/// The opaque query is published when this lane is created. The legacy
-/// `DerivedLaneData::Digital` entry remains a temporary storage fallback for
-/// callers that have not yet moved to the query contract.
 struct DigitalLane {
-    store: DerivedLanes,
-    store_index: usize,
+    storage: Arc<RwLock<DigitalLaneStorage>>,
+    #[cfg(test)]
+    legacy_store: Option<(DerivedLanes, usize)>,
     buffer: VecDeque<Sample>,
     eos: bool,
     retention: DerivedDataRetention,
@@ -1280,20 +1298,14 @@ struct DigitalLane {
 
 impl DigitalLane {
     fn new(request: CollectedLaneRequest) -> Self {
-        let name = request.name().to_owned();
-        let store = request.lanes().clone();
-        let store_index = store.register_with_payload(
-            name.clone(),
-            Some(request.payload().clone()),
-            DerivedLaneData::Digital(Vec::new()),
-        );
+        let storage = Arc::new(RwLock::new(DigitalLaneStorage::default()));
         request.publish_query(Arc::new(DigitalLaneQuery {
-            store: store.clone(),
-            name,
+            storage: Arc::clone(&storage),
         }));
         Self {
-            store,
-            store_index,
+            storage,
+            #[cfg(test)]
+            legacy_store: None,
             buffer: VecDeque::new(),
             eos: false,
             retention: request.retention(),
@@ -1304,8 +1316,8 @@ impl DigitalLane {
     fn with_store(name: String, store: DerivedLanes, retention: DerivedDataRetention) -> Self {
         let store_index = store.register(name, DerivedLaneData::Digital(Vec::new()));
         Self {
-            store,
-            store_index,
+            storage: Arc::new(RwLock::new(DigitalLaneStorage::default())),
+            legacy_store: Some((store, store_index)),
             buffer: VecDeque::new(),
             eos: false,
             retention,
@@ -1332,8 +1344,20 @@ impl CollectedLaneIngestor for DigitalLane {
         }
         let batch_len = batch.len();
         if !batch.is_empty() {
-            self.store
-                .append_digital_batch_retained(self.store_index, batch, self.retention);
+            let mut storage = self.storage.write().unwrap();
+            for sample in &batch {
+                storage.summary.push(sample);
+            }
+            storage.samples.extend(batch.iter().copied());
+            if let Some(target) = self.retention.trim_target(storage.samples.len()) {
+                let excess = storage.samples.len() - target;
+                storage.samples.drain(..excess);
+            }
+            drop(storage);
+            #[cfg(test)]
+            if let Some((store, store_index)) = &self.legacy_store {
+                store.append_digital_batch_retained(*store_index, batch, self.retention);
+            }
         }
         Ok(batch_len)
     }
@@ -1345,8 +1369,9 @@ impl CollectedLaneIngestor for DigitalLane {
 
 /// Typed append state for the built-in trigger payload.
 struct TriggerLane {
-    store: DerivedLanes,
-    store_index: usize,
+    storage: Arc<RwLock<TriggerLaneStorage>>,
+    #[cfg(test)]
+    legacy_store: Option<(DerivedLanes, usize)>,
     buffer: VecDeque<Trigger>,
     eos: bool,
     retention: DerivedDataRetention,
@@ -1354,20 +1379,14 @@ struct TriggerLane {
 
 impl TriggerLane {
     fn new(request: CollectedLaneRequest) -> Self {
-        let name = request.name().to_owned();
-        let store = request.lanes().clone();
-        let store_index = store.register_with_payload(
-            name.clone(),
-            Some(request.payload().clone()),
-            DerivedLaneData::Markers(Vec::new()),
-        );
+        let storage = Arc::new(RwLock::new(TriggerLaneStorage::default()));
         request.publish_query(Arc::new(TriggerLaneQuery {
-            store: store.clone(),
-            name,
+            storage: Arc::clone(&storage),
         }));
         Self {
-            store,
-            store_index,
+            storage,
+            #[cfg(test)]
+            legacy_store: None,
             buffer: VecDeque::new(),
             eos: false,
             retention: request.retention(),
@@ -1378,8 +1397,8 @@ impl TriggerLane {
     fn with_store(name: String, store: DerivedLanes, retention: DerivedDataRetention) -> Self {
         let store_index = store.register(name, DerivedLaneData::Markers(Vec::new()));
         Self {
-            store,
-            store_index,
+            storage: Arc::new(RwLock::new(TriggerLaneStorage::default())),
+            legacy_store: Some((store, store_index)),
             buffer: VecDeque::new(),
             eos: false,
             retention,
@@ -1406,11 +1425,24 @@ impl CollectedLaneIngestor for TriggerLane {
         }
         let batch_len = batch.len();
         if !batch.is_empty() {
-            self.store.append_marker_batch_retained(
-                self.store_index,
-                batch.into_iter().map(|trigger| trigger.timestamp_ns),
-                self.retention,
-            );
+            let timestamps = batch
+                .iter()
+                .map(|trigger| trigger.timestamp_ns)
+                .collect::<Vec<_>>();
+            let mut storage = self.storage.write().unwrap();
+            for timestamp_ns in &timestamps {
+                storage.summary.push(timestamp_ns);
+            }
+            storage.timestamps.extend(timestamps.iter().copied());
+            if let Some(target) = self.retention.trim_target(storage.timestamps.len()) {
+                let excess = storage.timestamps.len() - target;
+                storage.timestamps.drain(..excess);
+            }
+            drop(storage);
+            #[cfg(test)]
+            if let Some((store, store_index)) = &self.legacy_store {
+                store.append_marker_batch_retained(*store_index, timestamps, self.retention);
+            }
         }
         Ok(batch_len)
     }
@@ -1422,9 +1454,9 @@ impl CollectedLaneIngestor for TriggerLane {
 
 /// Typed append state for the built-in numeric-level payload.
 struct NumberLane {
-    store: DerivedLanes,
-    store_index: usize,
     storage: Arc<RwLock<NumberLaneStorage>>,
+    #[cfg(test)]
+    legacy_store: Option<(DerivedLanes, usize)>,
     buffer: VecDeque<NumberSample>,
     eos: bool,
     retention: DerivedDataRetention,
@@ -1432,23 +1464,14 @@ struct NumberLane {
 
 impl NumberLane {
     fn new(request: CollectedLaneRequest) -> Self {
-        let store = request.lanes().clone();
         let storage = Arc::new(RwLock::new(NumberLaneStorage::default()));
-        let store_index = store.register_with_payload(
-            request.name().to_owned(),
-            Some(request.payload().clone()),
-            DerivedLaneData::Values(CollectedValueLane {
-                kind: CollectedValueKind::Number,
-                values: Vec::new(),
-            }),
-        );
         request.publish_query(Arc::new(NumberLaneQuery {
             storage: Arc::clone(&storage),
         }));
         Self {
-            store,
-            store_index,
             storage,
+            #[cfg(test)]
+            legacy_store: None,
             buffer: VecDeque::new(),
             eos: false,
             retention: request.retention(),
@@ -1466,9 +1489,8 @@ impl NumberLane {
             }),
         );
         Self {
-            store,
-            store_index,
             storage,
+            legacy_store: Some((store, store_index)),
             buffer: VecDeque::new(),
             eos: false,
             retention,
@@ -1505,14 +1527,17 @@ impl CollectedLaneIngestor for NumberLane {
                 storage.values.drain(..excess);
             }
             drop(storage);
-            self.store.append_value_batch_retained(
-                self.store_index,
-                batch.into_iter().map(|sample| CollectedValue {
-                    value: sample.value.to_string(),
-                    start_time_ns: sample.start_time_ns,
-                }),
-                self.retention,
-            );
+            #[cfg(test)]
+            if let Some((store, store_index)) = &self.legacy_store {
+                store.append_value_batch_retained(
+                    *store_index,
+                    batch.into_iter().map(|sample| CollectedValue {
+                        value: sample.value.to_string(),
+                        start_time_ns: sample.start_time_ns,
+                    }),
+                    self.retention,
+                );
+            }
         }
         Ok(batch_len)
     }
@@ -1524,9 +1549,9 @@ impl CollectedLaneIngestor for NumberLane {
 
 /// Typed append state for the built-in text-level payload.
 struct TextLane {
-    store: DerivedLanes,
-    store_index: usize,
     storage: Arc<RwLock<TextLaneStorage>>,
+    #[cfg(test)]
+    legacy_store: Option<(DerivedLanes, usize)>,
     buffer: VecDeque<TextSample>,
     eos: bool,
     retention: DerivedDataRetention,
@@ -1534,23 +1559,14 @@ struct TextLane {
 
 impl TextLane {
     fn new(request: CollectedLaneRequest) -> Self {
-        let store = request.lanes().clone();
         let storage = Arc::new(RwLock::new(TextLaneStorage::default()));
-        let store_index = store.register_with_payload(
-            request.name().to_owned(),
-            Some(request.payload().clone()),
-            DerivedLaneData::Values(CollectedValueLane {
-                kind: CollectedValueKind::Text,
-                values: Vec::new(),
-            }),
-        );
         request.publish_query(Arc::new(TextLaneQuery {
             storage: Arc::clone(&storage),
         }));
         Self {
-            store,
-            store_index,
             storage,
+            #[cfg(test)]
+            legacy_store: None,
             buffer: VecDeque::new(),
             eos: false,
             retention: request.retention(),
@@ -1568,9 +1584,8 @@ impl TextLane {
             }),
         );
         Self {
-            store,
-            store_index,
             storage,
+            legacy_store: Some((store, store_index)),
             buffer: VecDeque::new(),
             eos: false,
             retention,
@@ -1607,14 +1622,17 @@ impl CollectedLaneIngestor for TextLane {
                 storage.values.drain(..excess);
             }
             drop(storage);
-            self.store.append_value_batch_retained(
-                self.store_index,
-                batch.into_iter().map(|sample| CollectedValue {
-                    value: sample.value,
-                    start_time_ns: sample.start_time_ns,
-                }),
-                self.retention,
-            );
+            #[cfg(test)]
+            if let Some((store, store_index)) = &self.legacy_store {
+                store.append_value_batch_retained(
+                    *store_index,
+                    batch.into_iter().map(|sample| CollectedValue {
+                        value: sample.value,
+                        start_time_ns: sample.start_time_ns,
+                    }),
+                    self.retention,
+                );
+            }
         }
         Ok(batch_len)
     }
@@ -1656,12 +1674,13 @@ impl CollectedWordLaneOptions {
 /// writer and fallback in-memory storage policy independently of the other
 /// built-in payload adapters.
 struct WordLane {
-    store: DerivedLanes,
-    store_index: usize,
+    name: String,
+    storage: Arc<RwLock<WordLaneStorage>>,
+    #[cfg(test)]
+    legacy_store: Option<(DerivedLanes, usize)>,
     buffer: VecDeque<Word>,
     eos: bool,
     writer: Option<IndexedAnnotationWriter>,
-    indexed: bool,
     retention: DerivedDataRetention,
 }
 
@@ -1671,45 +1690,58 @@ impl WordLane {
             .options::<CollectedWordLaneOptions>()
             .cloned()
             .unwrap_or_default();
-        let name = request.name().to_owned();
-        let store = request.lanes().clone();
-        let lane = Self::with_options(
-            name.clone(),
-            store.clone(),
-            request.retention(),
-            Some(request.payload().clone()),
-            options,
-        );
-        request.publish_query(Arc::new(WordLaneQuery { store, name }));
+        let lane =
+            Self::with_options_inner(request.name().to_owned(), request.retention(), options);
+        request.publish_query(Arc::new(CollectedWordLaneQuery {
+            storage: Arc::clone(&lane.storage),
+            display_format: request
+                .options::<CollectedWordLaneOptions>()
+                .and_then(|options| options.display_format.clone()),
+        }));
         lane
     }
 
-    fn with_options(
+    #[cfg(test)]
+    fn with_legacy_store(
         name: String,
         store: DerivedLanes,
         retention: DerivedDataRetention,
         payload: Option<CollectedPayloadDescriptor>,
         options: CollectedWordLaneOptions,
     ) -> Self {
+        let legacy_store = Some(store.clone());
+        let mut lane = Self::with_options_inner(name.clone(), retention, options.clone());
+        let data = match &*lane.storage.read().unwrap() {
+            WordLaneStorage::InMemory(_) => DerivedLaneData::Annotations(Vec::new()),
+            WordLaneStorage::Indexed(indexed) => {
+                DerivedLaneData::IndexedAnnotations(indexed.clone())
+            }
+        };
+        let store_index = store.register_with_payload(name, payload, data);
+        store.set_word_display_format(store_index, options.display_format);
+        lane.legacy_store = legacy_store.map(|store| (store, store_index));
+        lane
+    }
+
+    fn with_options_inner(
+        name: String,
+        retention: DerivedDataRetention,
+        options: CollectedWordLaneOptions,
+    ) -> Self {
         if options.indexed {
             if let Some(persistent) = options.store_config.persistence.as_ref() {
                 match IndexedAnnotationStore::open_persistent(persistent) {
                     Ok(Some(indexed_store)) => {
-                        let store_index = store.register_with_payload(
-                            name,
-                            payload,
-                            DerivedLaneData::IndexedAnnotations(IndexedAnnotationLane::from_store(
-                                indexed_store,
-                            )),
-                        );
-                        store.set_word_display_format(store_index, options.display_format);
                         return Self {
-                            store,
-                            store_index,
+                            name,
+                            storage: Arc::new(RwLock::new(WordLaneStorage::Indexed(
+                                IndexedAnnotationLane::from_store(indexed_store),
+                            ))),
+                            #[cfg(test)]
+                            legacy_store: None,
                             buffer: VecDeque::new(),
                             eos: false,
                             writer: None,
-                            indexed: true,
                             retention,
                         };
                     }
@@ -1723,21 +1755,16 @@ impl WordLane {
             }
             match IndexedAnnotationWriter::create(options.store_config) {
                 Ok((writer, indexed_store)) => {
-                    let store_index = store.register_with_payload(
-                        name,
-                        payload,
-                        DerivedLaneData::IndexedAnnotations(IndexedAnnotationLane::from_store(
-                            indexed_store,
-                        )),
-                    );
-                    store.set_word_display_format(store_index, options.display_format);
                     return Self {
-                        store,
-                        store_index,
+                        name,
+                        storage: Arc::new(RwLock::new(WordLaneStorage::Indexed(
+                            IndexedAnnotationLane::from_store(indexed_store),
+                        ))),
+                        #[cfg(test)]
+                        legacy_store: None,
                         buffer: VecDeque::new(),
                         eos: false,
                         writer: Some(writer),
-                        indexed: true,
                         retention,
                     };
                 }
@@ -1749,16 +1776,19 @@ impl WordLane {
             }
         }
 
-        let store_index =
-            store.register_with_payload(name, payload, DerivedLaneData::Annotations(Vec::new()));
-        store.set_word_display_format(store_index, options.display_format);
         Self {
-            store,
-            store_index,
+            name,
+            storage: Arc::new(RwLock::new(WordLaneStorage::InMemory(
+                InMemoryWordLaneStorage {
+                    annotations: Vec::new(),
+                    summary: ChunkedMipmap::new(),
+                },
+            ))),
+            #[cfg(test)]
+            legacy_store: None,
             buffer: VecDeque::new(),
             eos: false,
             writer: None,
-            indexed: false,
             retention,
         }
     }
@@ -1786,12 +1816,18 @@ impl CollectedLaneIngestor for WordLane {
             if let Some(writer) = self.writer.as_mut()
                 && let Err(error) = AnnotationStoreWriterBackend::append_batch(writer, &batch)
             {
-                tracing::warn!(lane = self.store_index, %error, "indexed derived-data word lane failed; disabling further appends");
+                tracing::warn!(lane = %self.name, %error, "indexed derived-data word lane failed; disabling further appends");
                 self.writer = None;
             }
-            if !self.indexed {
-                self.store.append_word_batch_retained(
-                    self.store_index,
+            if let WordLaneStorage::InMemory(storage) = &mut *self.storage.write().unwrap() {
+                append_words_to_in_memory_storage(storage, &batch, self.retention);
+            }
+            #[cfg(test)]
+            if let Some((store, store_index)) = &self.legacy_store
+                && matches!(&*self.storage.read().unwrap(), WordLaneStorage::InMemory(_))
+            {
+                store.append_word_batch_retained(
+                    *store_index,
                     batch
                         .into_iter()
                         .map(|word| (word.timestamp_ns, word.duration_ns, word.value)),
@@ -1803,13 +1839,50 @@ impl CollectedLaneIngestor for WordLane {
             && let Some(mut writer) = self.writer.take()
             && let Err(error) = AnnotationStoreWriterBackend::finish(&mut writer)
         {
-            tracing::warn!(lane = self.store_index, %error, "could not finish indexed derived-data word lane");
+            tracing::warn!(lane = %self.name, %error, "could not finish indexed derived-data word lane");
         }
         Ok(batch_len)
     }
 
     fn is_finished(&self) -> bool {
         self.eos
+    }
+}
+
+fn append_words_to_in_memory_storage(
+    storage: &mut InMemoryWordLaneStorage,
+    words: &[Word],
+    retention: DerivedDataRetention,
+) {
+    for word in words {
+        let previous_start_ns = storage
+            .annotations
+            .len()
+            .checked_sub(2)
+            .map(|index| storage.annotations[index].start_ns);
+        if let Some(previous) = storage.annotations.last_mut()
+            && previous.end_ns == previous.start_ns
+        {
+            previous.end_ns = crate::events::instantaneous_word_end_ns(
+                previous_start_ns,
+                previous.start_ns,
+                word.timestamp_ns,
+            );
+            storage.summary.push(previous);
+        }
+        let annotation = Annotation {
+            start_ns: word.timestamp_ns,
+            end_ns: word.timestamp_ns + word.duration_ns,
+            value: word.value,
+        };
+        if word.duration_ns > 0 {
+            storage.summary.push(&annotation);
+        }
+        storage.annotations.push(annotation);
+    }
+    if let Some(target) = retention.trim_target(storage.annotations.len()) {
+        let excess = storage.annotations.len() - target;
+        storage.annotations.drain(..excess);
     }
 }
 
@@ -1822,12 +1895,15 @@ pub fn built_in_word_lane_ingestor(
     retention: DerivedDataRetention,
     options: CollectedWordLaneOptions,
 ) -> Box<dyn CollectedLaneIngestor> {
-    Box::new(WordLane::with_options(
-        name.into(),
-        lanes,
-        retention,
-        None,
-        options,
+    let mut payloads = CollectedPayloadRegistry::new();
+    register_builtin_collected_payload_adapters(&mut payloads)
+        .expect("built-in collected payload registration must be valid");
+    let payload = payloads
+        .descriptor::<Word>()
+        .expect("built-in word payload must be registered")
+        .clone();
+    Box::new(WordLane::new(
+        CollectedLaneRequest::new(name, 0, lanes, payload, retention).with_options(options),
     ))
 }
 
@@ -2085,7 +2161,7 @@ mod tests {
         }
 
         fn with_words(mut self, name: impl Into<String>) -> Self {
-            self.lanes.push(Box::new(WordLane::with_options(
+            self.lanes.push(Box::new(WordLane::with_legacy_store(
                 name.into(),
                 self.test_lanes.clone(),
                 self.retention,
@@ -2282,12 +2358,10 @@ mod tests {
             .unwrap();
 
         let _collector = DerivedDataCollector::new().with_ingestor(ingestor);
+        assert!(lanes.read().is_empty());
         assert_eq!(
-            lanes.read()[0]
-                .payload
-                .as_ref()
-                .map(CollectedPayloadDescriptor::stable_id),
-            Some("org.logicconduit.word/v1")
+            lanes.opaque_lanes()[0].payload().stable_id(),
+            "org.logicconduit.word/v1"
         );
         let snapshot = lanes.opaque_lanes()[0]
             .snapshot(CollectedLaneSnapshotRequest {
@@ -2300,6 +2374,29 @@ mod tests {
             snapshot.value::<WordLaneSnapshot>().as_deref(),
             Some(WordLaneSnapshot::Exact { annotations, .. }) if annotations.is_empty()
         ));
+    }
+
+    #[test]
+    fn standalone_word_ingestor_publishes_query_without_a_legacy_mirror() {
+        let lanes = DerivedLanes::new();
+        let options = CollectedWordLaneOptions {
+            indexed: false,
+            ..CollectedWordLaneOptions::default()
+        };
+
+        let _ingestor = built_in_word_lane_ingestor(
+            "words",
+            lanes.clone(),
+            DerivedDataRetention::Unlimited,
+            options,
+        );
+
+        assert!(lanes.read().is_empty());
+        assert!(
+            lanes.opaque_lanes()[0]
+                .query::<CollectedWordLaneQuery>()
+                .is_some()
+        );
     }
 
     #[test]
@@ -2321,6 +2418,7 @@ mod tests {
             .unwrap();
 
         let _collector = DerivedDataCollector::new().with_ingestor(ingestor);
+        assert!(lanes.read().is_empty());
         let snapshot = lanes.opaque_lanes()[0]
             .snapshot(CollectedLaneSnapshotRequest {
                 start_time_ns: 0,
@@ -2353,6 +2451,7 @@ mod tests {
             .unwrap();
 
         let _collector = DerivedDataCollector::new().with_ingestor(ingestor);
+        assert!(lanes.read().is_empty());
         let snapshot = lanes.opaque_lanes()[0]
             .snapshot(CollectedLaneSnapshotRequest {
                 start_time_ns: 0,
@@ -2442,30 +2541,30 @@ mod tests {
 
     #[test]
     fn word_query_returns_only_a_bounded_visible_snapshot() {
-        let lanes = DerivedLanes::new();
-        lanes.register(
-            "words",
-            DerivedLaneData::Annotations(vec![
-                Annotation {
-                    start_ns: 10,
-                    end_ns: 20,
-                    value: 1,
+        let query = CollectedWordLaneQuery {
+            storage: Arc::new(RwLock::new(WordLaneStorage::InMemory(
+                InMemoryWordLaneStorage {
+                    annotations: vec![
+                        Annotation {
+                            start_ns: 10,
+                            end_ns: 20,
+                            value: 1,
+                        },
+                        Annotation {
+                            start_ns: 30,
+                            end_ns: 40,
+                            value: 2,
+                        },
+                        Annotation {
+                            start_ns: 50,
+                            end_ns: 60,
+                            value: 3,
+                        },
+                    ],
+                    summary: ChunkedMipmap::new(),
                 },
-                Annotation {
-                    start_ns: 30,
-                    end_ns: 40,
-                    value: 2,
-                },
-                Annotation {
-                    start_ns: 50,
-                    end_ns: 60,
-                    value: 3,
-                },
-            ]),
-        );
-        let query = WordLaneQuery {
-            store: lanes,
-            name: "words".to_owned(),
+            ))),
+            display_format: None,
         };
 
         assert!(matches!(
@@ -2768,19 +2867,17 @@ mod tests {
 
     #[test]
     fn digital_query_returns_bounded_exact_or_activity_snapshots() {
-        let store = DerivedLanes::new();
-        let lane = store.register("d", DerivedLaneData::Digital(Vec::new()));
-        store.append_digital_batch(
-            lane,
-            [
-                Sample::new(true, 100),
-                Sample::new(false, 200),
-                Sample::new(true, 300),
-            ],
-        );
+        let mut storage = DigitalLaneStorage::default();
+        for sample in [
+            Sample::new(true, 100),
+            Sample::new(false, 200),
+            Sample::new(true, 300),
+        ] {
+            storage.summary.push(&sample);
+            storage.samples.push(sample);
+        }
         let query = DigitalLaneQuery {
-            store,
-            name: "d".to_owned(),
+            storage: Arc::new(RwLock::new(storage)),
         };
 
         let exact = query
@@ -2815,12 +2912,13 @@ mod tests {
 
     #[test]
     fn trigger_query_returns_bounded_exact_or_activity_snapshots() {
-        let store = DerivedLanes::new();
-        let lane = store.register("trigger", DerivedLaneData::Markers(Vec::new()));
-        store.append_marker_batch(lane, [100, 200, 300]);
+        let mut storage = TriggerLaneStorage::default();
+        for timestamp_ns in [100, 200, 300] {
+            storage.summary.push(&timestamp_ns);
+            storage.timestamps.push(timestamp_ns);
+        }
         let query = TriggerLaneQuery {
-            store,
-            name: "trigger".to_owned(),
+            storage: Arc::new(RwLock::new(storage)),
         };
 
         let exact = query

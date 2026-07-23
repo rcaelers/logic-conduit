@@ -24,12 +24,11 @@ std::cfg_select! {
     use logic_analyzer_processing::nodes::sources::dsl_file::DslFileSource;
     use logic_analyzer_processing::types::CsPolarity;
     use signal_processing::{
-        built_in_word_lane_ingestor, CollectedWordLaneOptions, DecodedBlockCacheStats,
-        DerivedLaneData, DerivedLanes, InputPort, LiveStoreConfig, OutputPort,
-        PersistentStoreConfig, Pipeline, PortSchema, ProcessNode, ProtocolKind,
-        DerivedDataRetention, DerivedDataCollector, DerivedDataCollectorMetrics, Word, WorkError,
-        WorkResult, configure_decoded_block_cache, decoded_block_cache_stats,
-        reset_decoded_block_cache_stats,
+        CollectedWordLaneOptions, CollectedWordLaneQuery, DecodedBlockCacheStats,
+        DerivedDataCollector, DerivedDataCollectorMetrics, DerivedDataRetention, DerivedLanes,
+        InputPort, LiveStoreConfig, OutputPort, PersistentStoreConfig, Pipeline, PortSchema,
+        ProcessNode, ProtocolKind, Word, WorkError, WorkResult, built_in_word_lane_ingestor,
+        configure_decoded_block_cache, decoded_block_cache_stats, reset_decoded_block_cache_stats,
     };
 
     const DEFAULT_MAX_WORDS_PER_BLOCK: usize = 32_768;
@@ -313,13 +312,13 @@ std::cfg_select! {
             self.count += words.len() as u64;
         }
 
-        fn extend_annotations(&mut self, annotations: &[signal_processing::Annotation]) {
-            for annotation in annotations {
-                self.fingerprint = fingerprint_u64(self.fingerprint, annotation.value);
-                self.fingerprint = fingerprint_u64(self.fingerprint, annotation.start_ns);
-                self.fingerprint = fingerprint_u64(self.fingerprint, annotation.end_ns);
+        fn extend_table_rows(&mut self, rows: &[signal_processing::CollectedLaneTableRow]) {
+            for row in rows {
+                self.fingerprint = fingerprint_u64(self.fingerprint, row.value);
+                self.fingerprint = fingerprint_u64(self.fingerprint, row.start_time_ns);
+                self.fingerprint = fingerprint_u64(self.fingerprint, row.end_time_ns);
             }
-            self.count += annotations.len() as u64;
+            self.count += rows.len() as u64;
         }
     }
 
@@ -823,19 +822,28 @@ std::cfg_select! {
 
         let mut indexed_store = None;
         let (stats, fingerprint_scope) = if let Some(store) = viewer_store {
-            let lanes = store.read();
-            match lanes.first().map(|lane| &lane.data) {
-                Some(DerivedLaneData::Annotations(annotations)) => {
-                    let mut stats = OutputStats::default();
-                    stats.extend_annotations(annotations);
-                    (stats, Some("retained-annotations"))
+            let lane = store
+                .opaque_lanes()
+                .into_iter()
+                .find(|lane| lane.payload().stable_id() == "org.logicconduit.word/v1")
+                .ok_or("viewer benchmark did not publish its word query")?;
+            let query = lane
+                .query::<CollectedWordLaneQuery>()
+                .ok_or("viewer benchmark published an unexpected word query type")?;
+            if let Some(indexed) = query.indexed_lane() {
+                let (stats, metrics) = benchmark_indexed_store(&indexed, args.query_samples)?;
+                indexed_store = Some(metrics);
+                (stats, Some("indexed-store"))
+            } else {
+                let snapshot = lane
+                    .table_snapshot(args.viewer_max_entries.max(1).saturating_add(1))
+                    .ok_or("in-memory word query has no table projection")?;
+                if !snapshot.complete {
+                    return Err("in-memory word diagnostics exceeded the retention bound".into());
                 }
-                Some(DerivedLaneData::IndexedAnnotations(indexed)) => {
-                    let (stats, metrics) = benchmark_indexed_store(indexed, args.query_samples)?;
-                    indexed_store = Some(metrics);
-                    (stats, Some("indexed-store"))
-                }
-                _ => (OutputStats::default(), Some("retained-annotations")),
+                let mut stats = OutputStats::default();
+                stats.extend_table_rows(&snapshot.rows);
+                (stats, Some("retained-annotations"))
             }
         } else if matches!(args.sink, SinkKind::Count) {
             (*output_stats.lock().unwrap(), Some("decoded-words"))
