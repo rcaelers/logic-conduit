@@ -8,10 +8,11 @@ use logic_analyzer_viewer::{
     AnnotationVisual, DerivedLaneId, OpaqueLaneDrawContext, ViewerLaneGroup, ViewerLaneRenderer,
     ViewerLaneTrack, ViewerLaneTrackId, default_annotation_visual, draw_annotation_presence,
     draw_annotation_snapshot, draw_digital_activity, draw_digital_snapshot, draw_trigger_activity,
-    draw_trigger_snapshot,
+    draw_trigger_snapshot, draw_value_activity, draw_value_snapshot,
 };
 use signal_processing::{
-    DigitalLaneSnapshot, OpaqueCollectedLaneSnapshot, TriggerLaneSnapshot, WordLaneSnapshot,
+    DigitalLaneSnapshot, NumberLaneSnapshot, OpaqueCollectedLaneSnapshot, TextLaneSnapshot,
+    TriggerLaneSnapshot, WordLaneSnapshot,
 };
 
 /// Renders the built-in digital payload from its adapter-owned snapshot.
@@ -65,6 +66,72 @@ impl ViewerLaneRenderer for TriggerSnapshotRenderer {
         match snapshot.as_ref() {
             TriggerLaneSnapshot::Exact(markers) => draw_trigger_snapshot(&context, markers),
             TriggerLaneSnapshot::Activity(records) => draw_trigger_activity(&context, records),
+        }
+        true
+    }
+}
+
+/// Renders the built-in numeric-level payload from its typed snapshot.
+pub(crate) struct NumberSnapshotRenderer;
+
+impl ViewerLaneRenderer for NumberSnapshotRenderer {
+    fn uses_opaque_snapshot(&self, _track: &ViewerLaneTrack) -> bool {
+        true
+    }
+
+    fn draw_opaque_lane(
+        &self,
+        _track: &ViewerLaneTrack,
+        snapshot: Option<&OpaqueCollectedLaneSnapshot>,
+        context: OpaqueLaneDrawContext<'_>,
+    ) -> bool {
+        let Some(snapshot) = snapshot.and_then(|snapshot| snapshot.value::<NumberLaneSnapshot>())
+        else {
+            return false;
+        };
+        let color = Color32::from_rgb(95, 145, 210);
+        match snapshot.as_ref() {
+            NumberLaneSnapshot::Exact(samples) => {
+                let values = samples
+                    .iter()
+                    .map(|sample| (sample.start_time_ns, sample.value.to_string()))
+                    .collect::<Vec<_>>();
+                draw_value_snapshot(&context, &values, color);
+            }
+            NumberLaneSnapshot::Activity(records) => draw_value_activity(&context, records, color),
+        }
+        true
+    }
+}
+
+/// Renders the built-in text-level payload from its typed snapshot.
+pub(crate) struct TextSnapshotRenderer;
+
+impl ViewerLaneRenderer for TextSnapshotRenderer {
+    fn uses_opaque_snapshot(&self, _track: &ViewerLaneTrack) -> bool {
+        true
+    }
+
+    fn draw_opaque_lane(
+        &self,
+        _track: &ViewerLaneTrack,
+        snapshot: Option<&OpaqueCollectedLaneSnapshot>,
+        context: OpaqueLaneDrawContext<'_>,
+    ) -> bool {
+        let Some(snapshot) = snapshot.and_then(|snapshot| snapshot.value::<TextLaneSnapshot>())
+        else {
+            return false;
+        };
+        let color = Color32::from_rgb(215, 150, 170);
+        match snapshot.as_ref() {
+            TextLaneSnapshot::Exact(samples) => {
+                let values = samples
+                    .iter()
+                    .map(|sample| (sample.start_time_ns, sample.value.clone()))
+                    .collect::<Vec<_>>();
+                draw_value_snapshot(&context, &values, color);
+            }
+            TextLaneSnapshot::Activity(records) => draw_value_activity(&context, records, color),
         }
         true
     }

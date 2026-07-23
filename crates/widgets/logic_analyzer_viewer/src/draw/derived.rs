@@ -175,6 +175,95 @@ pub fn draw_trigger_activity(context: &OpaqueLaneDrawContext<'_>, records: &[Mip
     }
 }
 
+/// Draws exact labeled value spans supplied by a lane presentation adapter.
+pub fn draw_value_snapshot(
+    context: &OpaqueLaneDrawContext<'_>,
+    values: &[(u64, String)],
+    color: Color32,
+) {
+    if values.is_empty() {
+        return;
+    }
+    let box_top = context.top + context.height * 0.12;
+    let box_bottom = context.top + context.height * 0.88;
+    if values.len() > context.wave_rect.width().max(1.0) as usize * 2 {
+        let x0 = context
+            .time_to_x(values[0].0.max(context.visible_start_ns))
+            .max(context.wave_rect.left());
+        context.painter.rect_filled(
+            Rect::from_min_max(
+                Pos2::new(x0, box_top),
+                Pos2::new(context.wave_rect.right(), box_bottom),
+            ),
+            0.0,
+            color,
+        );
+        return;
+    }
+    for (index, (start_time_ns, value)) in values.iter().enumerate() {
+        let segment_start = (*start_time_ns).max(context.visible_start_ns);
+        let segment_end = values
+            .get(index + 1)
+            .map_or(context.visible_end_ns, |next| next.0)
+            .min(context.visible_end_ns);
+        if segment_end < segment_start {
+            continue;
+        }
+        let x0 = context
+            .time_to_x(segment_start)
+            .max(context.wave_rect.left());
+        let x1 = context
+            .time_to_x(segment_end)
+            .max(x0 + 2.0)
+            .min(context.wave_rect.right());
+        let rect = Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(x1, box_bottom));
+        context
+            .painter
+            .rect_filled(rect, 2.0, color.linear_multiply(0.35));
+        context
+            .painter
+            .rect_stroke(rect, 2.0, Stroke::new(1.2, color), egui::StrokeKind::Inside);
+        if let Some(position) =
+            annotation_label_position(rect, context.wave_rect, annotation_label_width(value))
+        {
+            context.painter.text(
+                position,
+                Align2::CENTER_CENTER,
+                value,
+                FontId::monospace(12.0),
+                Color32::WHITE,
+            );
+        }
+    }
+}
+
+/// Draws bounded dense value activity supplied by a lane query.
+pub fn draw_value_activity(
+    context: &OpaqueLaneDrawContext<'_>,
+    records: &[MipmapRecord],
+    color: Color32,
+) {
+    let box_top = context.top + context.height * 0.12;
+    let box_bottom = context.top + context.height * 0.88;
+    for record in records {
+        let start_ns = record.start_ns.max(context.visible_start_ns);
+        let end_ns = record.end_ns.min(context.visible_end_ns);
+        if start_ns > end_ns || record.count == 0 {
+            continue;
+        }
+        let x0 = context.time_to_x(start_ns).max(context.wave_rect.left());
+        let x1 = context
+            .time_to_x(end_ns)
+            .max(x0 + 1.0)
+            .min(context.wave_rect.right());
+        context.painter.rect_filled(
+            Rect::from_min_max(Pos2::new(x0, box_top), Pos2::new(x1, box_bottom)),
+            0.0,
+            color,
+        );
+    }
+}
+
 impl LogicAnalyzerViewer {
     // ── Derived lanes ─────────────────────────────────────────────────
     //

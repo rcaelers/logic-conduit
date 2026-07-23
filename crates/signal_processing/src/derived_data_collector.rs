@@ -178,6 +178,32 @@ pub enum TriggerLaneSnapshot {
     Activity(Vec<MipmapRecord>),
 }
 
+/// Immutable bounded result of a built-in numeric-level lane query.
+#[derive(Clone, Debug)]
+pub enum NumberLaneSnapshot {
+    Exact(Vec<NumberSample>),
+    Activity(Vec<MipmapRecord>),
+}
+
+/// Immutable bounded result of a built-in text-level lane query.
+#[derive(Clone, Debug)]
+pub enum TextLaneSnapshot {
+    Exact(Vec<TextSample>),
+    Activity(Vec<MipmapRecord>),
+}
+
+#[derive(Default)]
+struct NumberLaneStorage {
+    values: Vec<NumberSample>,
+    summary: AppendOnlyMipmap<NumberSample, NumberFold>,
+}
+
+#[derive(Default)]
+struct TextLaneStorage {
+    values: Vec<TextSample>,
+    summary: AppendOnlyMipmap<TextSample, TextFold>,
+}
+
 struct DigitalLaneQuery {
     store: DerivedLanes,
     name: String,
@@ -309,6 +335,116 @@ impl CollectedLaneQuery for TriggerLaneQuery {
             return None;
         };
         markers.last().copied()
+    }
+}
+
+struct NumberLaneQuery {
+    storage: Arc<RwLock<NumberLaneStorage>>,
+}
+
+impl CollectedLaneQuery for NumberLaneQuery {
+    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+        self
+    }
+
+    fn snapshot(
+        &self,
+        request: CollectedLaneSnapshotRequest,
+    ) -> Option<OpaqueCollectedLaneSnapshot> {
+        let storage = self.storage.read().unwrap();
+        let first = storage
+            .values
+            .partition_point(|value| value.start_time_ns < request.start_time_ns)
+            .saturating_sub(1);
+        let last = storage
+            .values
+            .partition_point(|value| value.start_time_ns <= request.end_time_ns);
+        let snapshot = if last.saturating_sub(first) <= request.max_items {
+            NumberLaneSnapshot::Exact(storage.values[first..last].to_vec())
+        } else {
+            NumberLaneSnapshot::Activity(storage.summary.sampled_window(
+                request.start_time_ns,
+                request.end_time_ns,
+                request.max_items,
+            ))
+        };
+        Some(OpaqueCollectedLaneSnapshot::new(Arc::new(snapshot)))
+    }
+
+    fn nearest_time_boundary(&self, timestamp_ns: u64, max_distance_ns: u64) -> Option<u64> {
+        let storage = self.storage.read().unwrap();
+        let index = storage
+            .values
+            .partition_point(|value| value.start_time_ns <= timestamp_ns);
+        storage.values[index.saturating_sub(1)..(index + 1).min(storage.values.len())]
+            .iter()
+            .map(|value| value.start_time_ns)
+            .filter(|candidate| candidate.abs_diff(timestamp_ns) <= max_distance_ns)
+            .min_by_key(|candidate| candidate.abs_diff(timestamp_ns))
+    }
+
+    fn timeline_extent_end_ns(&self) -> Option<u64> {
+        self.storage
+            .read()
+            .unwrap()
+            .values
+            .last()
+            .map(|value| value.start_time_ns)
+    }
+}
+
+struct TextLaneQuery {
+    storage: Arc<RwLock<TextLaneStorage>>,
+}
+
+impl CollectedLaneQuery for TextLaneQuery {
+    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+        self
+    }
+
+    fn snapshot(
+        &self,
+        request: CollectedLaneSnapshotRequest,
+    ) -> Option<OpaqueCollectedLaneSnapshot> {
+        let storage = self.storage.read().unwrap();
+        let first = storage
+            .values
+            .partition_point(|value| value.start_time_ns < request.start_time_ns)
+            .saturating_sub(1);
+        let last = storage
+            .values
+            .partition_point(|value| value.start_time_ns <= request.end_time_ns);
+        let snapshot = if last.saturating_sub(first) <= request.max_items {
+            TextLaneSnapshot::Exact(storage.values[first..last].to_vec())
+        } else {
+            TextLaneSnapshot::Activity(storage.summary.sampled_window(
+                request.start_time_ns,
+                request.end_time_ns,
+                request.max_items,
+            ))
+        };
+        Some(OpaqueCollectedLaneSnapshot::new(Arc::new(snapshot)))
+    }
+
+    fn nearest_time_boundary(&self, timestamp_ns: u64, max_distance_ns: u64) -> Option<u64> {
+        let storage = self.storage.read().unwrap();
+        let index = storage
+            .values
+            .partition_point(|value| value.start_time_ns <= timestamp_ns);
+        storage.values[index.saturating_sub(1)..(index + 1).min(storage.values.len())]
+            .iter()
+            .map(|value| value.start_time_ns)
+            .filter(|candidate| candidate.abs_diff(timestamp_ns) <= max_distance_ns)
+            .min_by_key(|candidate| candidate.abs_diff(timestamp_ns))
+    }
+
+    fn timeline_extent_end_ns(&self) -> Option<u64> {
+        self.storage
+            .read()
+            .unwrap()
+            .values
+            .last()
+            .map(|value| value.start_time_ns)
     }
 }
 
@@ -723,6 +859,50 @@ impl LaneFold<CollectedValue> for ValueFold {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct NumberFold;
+impl LaneFold<NumberSample> for NumberFold {
+    fn leaf(entry: &NumberSample) -> MipmapRecord {
+        MipmapRecord {
+            start_ns: entry.start_time_ns,
+            end_ns: entry.start_time_ns,
+            count: 1,
+            level_hint: None,
+        }
+    }
+
+    fn combine(records: &[MipmapRecord]) -> MipmapRecord {
+        MipmapRecord {
+            start_ns: records[0].start_ns,
+            end_ns: records[records.len() - 1].end_ns,
+            count: records.iter().map(|record| record.count).sum(),
+            level_hint: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TextFold;
+impl LaneFold<TextSample> for TextFold {
+    fn leaf(entry: &TextSample) -> MipmapRecord {
+        MipmapRecord {
+            start_ns: entry.start_time_ns,
+            end_ns: entry.start_time_ns,
+            count: 1,
+            level_hint: None,
+        }
+    }
+
+    fn combine(records: &[MipmapRecord]) -> MipmapRecord {
+        MipmapRecord {
+            start_ns: records[0].start_ns,
+            end_ns: records[records.len() - 1].end_ns,
+            count: records.iter().map(|record| record.count).sum(),
+            level_hint: None,
+        }
+    }
+}
+
 /// The multi-resolution index kept alongside an in-memory lane's raw data.
 /// Indexed annotations own their presence index behind the query handle, so
 /// their summary variant is only a lane-kind marker.
@@ -1085,148 +1265,6 @@ impl DerivedLanes {
     }
 }
 
-/// Legacy built-in fallback shapes retained for existing viewer and table
-/// presentations while payload adapters migrate to owned query handles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CollectedDataKind {
-    Number,
-    Text,
-}
-
-enum LaneBuffer {
-    Number(VecDeque<NumberSample>),
-    Text(VecDeque<TextSample>),
-}
-
-struct Lane {
-    kind: CollectedDataKind,
-    store: DerivedLanes,
-    store_index: usize,
-    buffer: LaneBuffer,
-    eos: bool,
-    retention: DerivedDataRetention,
-}
-
-impl Lane {
-    fn new(kind: CollectedDataKind, request: CollectedLaneRequest) -> Self {
-        Self::with_store(
-            kind,
-            request.name().to_owned(),
-            request.lanes().clone(),
-            request.retention(),
-            Some(request.payload().clone()),
-        )
-    }
-
-    fn with_store(
-        kind: CollectedDataKind,
-        name: String,
-        store: DerivedLanes,
-        retention: DerivedDataRetention,
-        payload: Option<CollectedPayloadDescriptor>,
-    ) -> Self {
-        let data = match kind {
-            CollectedDataKind::Number | CollectedDataKind::Text => {
-                let value_kind = if kind == CollectedDataKind::Number {
-                    CollectedValueKind::Number
-                } else {
-                    CollectedValueKind::Text
-                };
-                DerivedLaneData::Values(CollectedValueLane {
-                    kind: value_kind,
-                    values: Vec::new(),
-                })
-            }
-        };
-        let buffer = match kind {
-            CollectedDataKind::Number => LaneBuffer::Number(VecDeque::new()),
-            CollectedDataKind::Text => LaneBuffer::Text(VecDeque::new()),
-        };
-        let store_index = store.register_with_payload(name, payload, data);
-        Self {
-            kind,
-            store,
-            store_index,
-            buffer,
-            eos: false,
-            retention,
-        }
-    }
-}
-
-impl CollectedLaneIngestor for Lane {
-    fn input_schema(&self, index: usize) -> PortSchema {
-        let name = format!("in{index}");
-        match self.kind {
-            CollectedDataKind::Number => {
-                PortSchema::new::<NumberSample>(name, index, PortDirection::Input)
-            }
-            CollectedDataKind::Text => {
-                PortSchema::new::<TextSample>(name, index, PortDirection::Input)
-            }
-        }
-    }
-
-    fn drain(&mut self, input: &InputPort, _retention: DerivedDataRetention) -> WorkResult<usize> {
-        use crossbeam_channel::TryRecvError;
-
-        macro_rules! drain_batch {
-            ($ty:ty, $buffer:expr) => {{
-                let mut batch: Vec<$ty> = Vec::with_capacity(DRAIN_BATCH_SIZE);
-                if let Some(mut receiver) = input.get::<$ty>($buffer) {
-                    match receiver.try_recv_many(&mut batch, DRAIN_BATCH_SIZE) {
-                        Ok(_) | Err(TryRecvError::Empty) => {}
-                        Err(TryRecvError::Disconnected) => self.eos = true,
-                    }
-                } else {
-                    self.eos = true;
-                }
-                batch
-            }};
-        }
-
-        let store = self.store.clone();
-        let retention = self.retention;
-        let batch_len = match &mut self.buffer {
-            LaneBuffer::Number(buffer) => {
-                let batch = drain_batch!(NumberSample, buffer);
-                let len = batch.len();
-                if !batch.is_empty() {
-                    store.append_value_batch_retained(
-                        self.store_index,
-                        batch.into_iter().map(|sample| CollectedValue {
-                            value: sample.value.to_string(),
-                            start_time_ns: sample.start_time_ns,
-                        }),
-                        retention,
-                    );
-                }
-                len
-            }
-            LaneBuffer::Text(buffer) => {
-                let batch = drain_batch!(TextSample, buffer);
-                let len = batch.len();
-                if !batch.is_empty() {
-                    store.append_value_batch_retained(
-                        self.store_index,
-                        batch.into_iter().map(|sample| CollectedValue {
-                            value: sample.value,
-                            start_time_ns: sample.start_time_ns,
-                        }),
-                        retention,
-                    );
-                }
-                len
-            }
-        };
-        Ok(batch_len)
-    }
-
-    fn is_finished(&self) -> bool {
-        self.eos
-    }
-}
-
 /// Typed append state for the built-in digital payload.
 ///
 /// The opaque query is published when this lane is created. The legacy
@@ -1371,6 +1409,210 @@ impl CollectedLaneIngestor for TriggerLane {
             self.store.append_marker_batch_retained(
                 self.store_index,
                 batch.into_iter().map(|trigger| trigger.timestamp_ns),
+                self.retention,
+            );
+        }
+        Ok(batch_len)
+    }
+
+    fn is_finished(&self) -> bool {
+        self.eos
+    }
+}
+
+/// Typed append state for the built-in numeric-level payload.
+struct NumberLane {
+    store: DerivedLanes,
+    store_index: usize,
+    storage: Arc<RwLock<NumberLaneStorage>>,
+    buffer: VecDeque<NumberSample>,
+    eos: bool,
+    retention: DerivedDataRetention,
+}
+
+impl NumberLane {
+    fn new(request: CollectedLaneRequest) -> Self {
+        let store = request.lanes().clone();
+        let storage = Arc::new(RwLock::new(NumberLaneStorage::default()));
+        let store_index = store.register_with_payload(
+            request.name().to_owned(),
+            Some(request.payload().clone()),
+            DerivedLaneData::Values(CollectedValueLane {
+                kind: CollectedValueKind::Number,
+                values: Vec::new(),
+            }),
+        );
+        request.publish_query(Arc::new(NumberLaneQuery {
+            storage: Arc::clone(&storage),
+        }));
+        Self {
+            store,
+            store_index,
+            storage,
+            buffer: VecDeque::new(),
+            eos: false,
+            retention: request.retention(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_store(name: String, store: DerivedLanes, retention: DerivedDataRetention) -> Self {
+        let storage = Arc::new(RwLock::new(NumberLaneStorage::default()));
+        let store_index = store.register(
+            name,
+            DerivedLaneData::Values(CollectedValueLane {
+                kind: CollectedValueKind::Number,
+                values: Vec::new(),
+            }),
+        );
+        Self {
+            store,
+            store_index,
+            storage,
+            buffer: VecDeque::new(),
+            eos: false,
+            retention,
+        }
+    }
+}
+
+impl CollectedLaneIngestor for NumberLane {
+    fn input_schema(&self, index: usize) -> PortSchema {
+        PortSchema::new::<NumberSample>(format!("in{index}"), index, PortDirection::Input)
+    }
+
+    fn drain(&mut self, input: &InputPort, _retention: DerivedDataRetention) -> WorkResult<usize> {
+        use crossbeam_channel::TryRecvError;
+
+        let mut batch = Vec::with_capacity(DRAIN_BATCH_SIZE);
+        if let Some(mut receiver) = input.get::<NumberSample>(&mut self.buffer) {
+            match receiver.try_recv_many(&mut batch, DRAIN_BATCH_SIZE) {
+                Ok(_) | Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => self.eos = true,
+            }
+        } else {
+            self.eos = true;
+        }
+        let batch_len = batch.len();
+        if !batch.is_empty() {
+            let mut storage = self.storage.write().unwrap();
+            for sample in &batch {
+                storage.summary.push(sample);
+            }
+            storage.values.extend(batch.iter().copied());
+            if let Some(target) = self.retention.trim_target(storage.values.len()) {
+                let excess = storage.values.len() - target;
+                storage.values.drain(..excess);
+            }
+            drop(storage);
+            self.store.append_value_batch_retained(
+                self.store_index,
+                batch.into_iter().map(|sample| CollectedValue {
+                    value: sample.value.to_string(),
+                    start_time_ns: sample.start_time_ns,
+                }),
+                self.retention,
+            );
+        }
+        Ok(batch_len)
+    }
+
+    fn is_finished(&self) -> bool {
+        self.eos
+    }
+}
+
+/// Typed append state for the built-in text-level payload.
+struct TextLane {
+    store: DerivedLanes,
+    store_index: usize,
+    storage: Arc<RwLock<TextLaneStorage>>,
+    buffer: VecDeque<TextSample>,
+    eos: bool,
+    retention: DerivedDataRetention,
+}
+
+impl TextLane {
+    fn new(request: CollectedLaneRequest) -> Self {
+        let store = request.lanes().clone();
+        let storage = Arc::new(RwLock::new(TextLaneStorage::default()));
+        let store_index = store.register_with_payload(
+            request.name().to_owned(),
+            Some(request.payload().clone()),
+            DerivedLaneData::Values(CollectedValueLane {
+                kind: CollectedValueKind::Text,
+                values: Vec::new(),
+            }),
+        );
+        request.publish_query(Arc::new(TextLaneQuery {
+            storage: Arc::clone(&storage),
+        }));
+        Self {
+            store,
+            store_index,
+            storage,
+            buffer: VecDeque::new(),
+            eos: false,
+            retention: request.retention(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_store(name: String, store: DerivedLanes, retention: DerivedDataRetention) -> Self {
+        let storage = Arc::new(RwLock::new(TextLaneStorage::default()));
+        let store_index = store.register(
+            name,
+            DerivedLaneData::Values(CollectedValueLane {
+                kind: CollectedValueKind::Text,
+                values: Vec::new(),
+            }),
+        );
+        Self {
+            store,
+            store_index,
+            storage,
+            buffer: VecDeque::new(),
+            eos: false,
+            retention,
+        }
+    }
+}
+
+impl CollectedLaneIngestor for TextLane {
+    fn input_schema(&self, index: usize) -> PortSchema {
+        PortSchema::new::<TextSample>(format!("in{index}"), index, PortDirection::Input)
+    }
+
+    fn drain(&mut self, input: &InputPort, _retention: DerivedDataRetention) -> WorkResult<usize> {
+        use crossbeam_channel::TryRecvError;
+
+        let mut batch = Vec::with_capacity(DRAIN_BATCH_SIZE);
+        if let Some(mut receiver) = input.get::<TextSample>(&mut self.buffer) {
+            match receiver.try_recv_many(&mut batch, DRAIN_BATCH_SIZE) {
+                Ok(_) | Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => self.eos = true,
+            }
+        } else {
+            self.eos = true;
+        }
+        let batch_len = batch.len();
+        if !batch.is_empty() {
+            let mut storage = self.storage.write().unwrap();
+            for sample in &batch {
+                storage.summary.push(sample);
+            }
+            storage.values.extend(batch.iter().cloned());
+            if let Some(target) = self.retention.trim_target(storage.values.len()) {
+                let excess = storage.values.len() - target;
+                storage.values.drain(..excess);
+            }
+            drop(storage);
+            self.store.append_value_batch_retained(
+                self.store_index,
+                batch.into_iter().map(|sample| CollectedValue {
+                    value: sample.value,
+                    start_time_ns: sample.start_time_ns,
+                }),
                 self.retention,
             );
         }
@@ -1589,13 +1831,13 @@ pub fn built_in_word_lane_ingestor(
     ))
 }
 
-struct BuiltinPayloadAdapter {
-    kind: CollectedDataKind,
-}
-
 struct DigitalPayloadAdapter;
 
 struct TriggerPayloadAdapter;
+
+struct NumberPayloadAdapter;
+
+struct TextPayloadAdapter;
 
 struct WordPayloadAdapter;
 
@@ -1617,6 +1859,24 @@ impl CollectedPayloadAdapter for TriggerPayloadAdapter {
     }
 }
 
+impl CollectedPayloadAdapter for NumberPayloadAdapter {
+    fn create_ingestor(
+        &self,
+        request: CollectedLaneRequest,
+    ) -> Result<Box<dyn CollectedLaneIngestor>, String> {
+        Ok(Box::new(NumberLane::new(request)))
+    }
+}
+
+impl CollectedPayloadAdapter for TextPayloadAdapter {
+    fn create_ingestor(
+        &self,
+        request: CollectedLaneRequest,
+    ) -> Result<Box<dyn CollectedLaneIngestor>, String> {
+        Ok(Box::new(TextLane::new(request)))
+    }
+}
+
 impl CollectedPayloadAdapter for WordPayloadAdapter {
     fn create_ingestor(
         &self,
@@ -1626,45 +1886,21 @@ impl CollectedPayloadAdapter for WordPayloadAdapter {
     }
 }
 
-impl CollectedPayloadAdapter for BuiltinPayloadAdapter {
-    fn create_ingestor(
-        &self,
-        request: CollectedLaneRequest,
-    ) -> Result<Box<dyn CollectedLaneIngestor>, String> {
-        Ok(Box::new(Lane::new(self.kind, request)))
-    }
-}
-
 /// Registers built-in retained payloads through the same adapter contract
 /// used by compile-time plugins.
 pub fn register_builtin_collected_payload_adapters(
     registry: &mut CollectedPayloadRegistry,
 ) -> Result<(), CollectedPayloadRegistrationError> {
-    fn register<T: Clone + Send + Sync + 'static>(
-        registry: &mut CollectedPayloadRegistry,
-        stable_id: &str,
-        kind: CollectedDataKind,
-    ) -> Result<(), CollectedPayloadRegistrationError> {
-        registry.register::<T>(stable_id)?;
-        registry.register_adapter::<T>(Arc::new(BuiltinPayloadAdapter { kind }))
-    }
-
     registry.register::<Sample>("org.logicconduit.digital-sample/v1")?;
     registry.register_adapter::<Sample>(Arc::new(DigitalPayloadAdapter))?;
     registry.register::<Word>("org.logicconduit.word/v1")?;
     registry.register_adapter::<Word>(Arc::new(WordPayloadAdapter))?;
     registry.register::<Trigger>("org.logicconduit.trigger/v1")?;
     registry.register_adapter::<Trigger>(Arc::new(TriggerPayloadAdapter))?;
-    register::<NumberSample>(
-        registry,
-        "org.logicconduit.number-sample/v1",
-        CollectedDataKind::Number,
-    )?;
-    register::<TextSample>(
-        registry,
-        "org.logicconduit.text-sample/v1",
-        CollectedDataKind::Text,
-    )
+    registry.register::<NumberSample>("org.logicconduit.number-sample/v1")?;
+    registry.register_adapter::<NumberSample>(Arc::new(NumberPayloadAdapter))?;
+    registry.register::<TextSample>("org.logicconduit.text-sample/v1")?;
+    registry.register_adapter::<TextSample>(Arc::new(TextPayloadAdapter))
 }
 
 /// Sink with one typed input per lane. Never blocks *waiting* on any single
@@ -1812,13 +2048,20 @@ mod tests {
             self
         }
 
-        fn with_lane(mut self, kind: CollectedDataKind, name: impl Into<String>) -> Self {
-            self.lanes.push(Box::new(Lane::with_store(
-                kind,
+        fn with_number(mut self, name: impl Into<String>) -> Self {
+            self.lanes.push(Box::new(NumberLane::with_store(
                 name.into(),
                 self.test_lanes.clone(),
                 self.retention,
-                None,
+            )));
+            self
+        }
+
+        fn with_text(mut self, name: impl Into<String>) -> Self {
+            self.lanes.push(Box::new(TextLane::with_store(
+                name.into(),
+                self.test_lanes.clone(),
+                self.retention,
             )));
             self
         }
@@ -2124,6 +2367,80 @@ mod tests {
     }
 
     #[test]
+    fn level_adapters_publish_typed_snapshots_after_collection() {
+        let lanes = DerivedLanes::new();
+        let mut payloads = crate::CollectedPayloadRegistry::new();
+        register_builtin_collected_payload_adapters(&mut payloads).unwrap();
+        let number = payloads
+            .adapter_by_type_id(std::any::TypeId::of::<NumberSample>())
+            .unwrap()
+            .create_ingestor(CollectedLaneRequest::new(
+                "number",
+                0,
+                lanes.clone(),
+                payloads.descriptor::<NumberSample>().unwrap().clone(),
+                DerivedDataRetention::Unlimited,
+            ))
+            .unwrap();
+        let text = payloads
+            .adapter_by_type_id(std::any::TypeId::of::<TextSample>())
+            .unwrap()
+            .create_ingestor(CollectedLaneRequest::new(
+                "text",
+                1,
+                lanes.clone(),
+                payloads.descriptor::<TextSample>().unwrap().clone(),
+                DerivedDataRetention::Unlimited,
+            ))
+            .unwrap();
+        let mut collector = DerivedDataCollector::new()
+            .with_ingestor(number)
+            .with_ingestor(text);
+        let watchdog = Watchdog::new();
+        let (number_sender, number_receiver) = bounded::<ChannelMessage<NumberSample>>(4);
+        number_sender
+            .send(ChannelMessage::Sample(NumberSample::new(-7, 100)))
+            .unwrap();
+        drop(number_sender);
+        let (text_sender, text_receiver) = bounded::<ChannelMessage<TextSample>>(4);
+        text_sender
+            .send(ChannelMessage::Sample(TextSample::new("ready", 100)))
+            .unwrap();
+        drop(text_sender);
+        run_sink(
+            &mut collector,
+            vec![
+                InputPort::new_with_watchdog(number_receiver, &watchdog, "collector", "in0"),
+                InputPort::new_with_watchdog(text_receiver, &watchdog, "collector", "in1"),
+            ],
+        );
+
+        let opaque = lanes.opaque_lanes();
+        assert!(matches!(
+            opaque[0]
+                .snapshot(CollectedLaneSnapshotRequest {
+                    start_time_ns: 0,
+                    end_time_ns: 200,
+                    max_items: 8,
+                })
+                .and_then(|snapshot| snapshot.value::<NumberLaneSnapshot>())
+                .as_deref(),
+            Some(NumberLaneSnapshot::Exact(samples)) if samples == &[NumberSample::new(-7, 100)]
+        ));
+        assert!(matches!(
+            opaque[1]
+                .snapshot(CollectedLaneSnapshotRequest {
+                    start_time_ns: 0,
+                    end_time_ns: 200,
+                    max_items: 8,
+                })
+                .and_then(|snapshot| snapshot.value::<TextLaneSnapshot>())
+                .as_deref(),
+            Some(TextLaneSnapshot::Exact(samples)) if samples == &[TextSample::new("ready", 100)]
+        ));
+    }
+
+    #[test]
     fn word_query_returns_only_a_bounded_visible_snapshot() {
         let lanes = DerivedLanes::new();
         lanes.register(
@@ -2287,8 +2604,8 @@ mod tests {
     fn lanes_collect_number_and_text_levels() {
         let store = DerivedLanes::new();
         let mut sink = test_collector(store.clone())
-            .with_lane(CollectedDataKind::Number, "counter.count")
-            .with_lane(CollectedDataKind::Text, "formatter.text");
+            .with_number("counter.count")
+            .with_text("formatter.text");
 
         let wd = Watchdog::new();
         let (number_tx, number_rx) = bounded::<ChannelMessage<NumberSample>>(16);
@@ -2533,6 +2850,85 @@ mod tests {
         ));
         assert_eq!(query.timeline_extent_end_ns(), Some(300));
         assert_eq!(query.nearest_time_boundary(190, 20), Some(200));
+    }
+
+    #[test]
+    fn number_and_text_queries_preserve_typed_values_and_bound_dense_windows() {
+        let number_storage = Arc::new(RwLock::new(NumberLaneStorage::default()));
+        {
+            let mut storage = number_storage.write().unwrap();
+            for sample in [NumberSample::new(-2, 100), NumberSample::new(3, 200)] {
+                storage.summary.push(&sample);
+                storage.values.push(sample);
+            }
+        }
+        let number_query = NumberLaneQuery {
+            storage: Arc::clone(&number_storage),
+        };
+        let number_exact = number_query
+            .snapshot(CollectedLaneSnapshotRequest {
+                start_time_ns: 150,
+                end_time_ns: 250,
+                max_items: 2,
+            })
+            .and_then(|snapshot| snapshot.value::<NumberLaneSnapshot>())
+            .expect("numeric exact snapshot");
+        assert!(matches!(
+            number_exact.as_ref(),
+            NumberLaneSnapshot::Exact(samples)
+                if samples == &[NumberSample::new(-2, 100), NumberSample::new(3, 200)]
+        ));
+        let number_activity = number_query
+            .snapshot(CollectedLaneSnapshotRequest {
+                start_time_ns: 0,
+                end_time_ns: 300,
+                max_items: 1,
+            })
+            .and_then(|snapshot| snapshot.value::<NumberLaneSnapshot>())
+            .expect("numeric activity snapshot");
+        assert!(matches!(
+            number_activity.as_ref(),
+            NumberLaneSnapshot::Activity(records) if !records.is_empty()
+        ));
+
+        let text_storage = Arc::new(RwLock::new(TextLaneStorage::default()));
+        {
+            let mut storage = text_storage.write().unwrap();
+            for sample in [TextSample::new("one", 100), TextSample::new("two", 200)] {
+                storage.summary.push(&sample);
+                storage.values.push(sample);
+            }
+        }
+        let text_query = TextLaneQuery {
+            storage: Arc::clone(&text_storage),
+        };
+        let text_exact = text_query
+            .snapshot(CollectedLaneSnapshotRequest {
+                start_time_ns: 150,
+                end_time_ns: 250,
+                max_items: 2,
+            })
+            .and_then(|snapshot| snapshot.value::<TextLaneSnapshot>())
+            .expect("text exact snapshot");
+        assert!(matches!(
+            text_exact.as_ref(),
+            TextLaneSnapshot::Exact(samples)
+                if samples == &[TextSample::new("one", 100), TextSample::new("two", 200)]
+        ));
+        let text_activity = text_query
+            .snapshot(CollectedLaneSnapshotRequest {
+                start_time_ns: 0,
+                end_time_ns: 300,
+                max_items: 1,
+            })
+            .and_then(|snapshot| snapshot.value::<TextLaneSnapshot>())
+            .expect("text activity snapshot");
+        assert!(matches!(
+            text_activity.as_ref(),
+            TextLaneSnapshot::Activity(records) if !records.is_empty()
+        ));
+        assert_eq!(text_query.timeline_extent_end_ns(), Some(200));
+        assert_eq!(text_query.nearest_time_boundary(190, 20), Some(200));
     }
 
     #[test]

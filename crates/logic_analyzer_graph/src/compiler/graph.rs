@@ -43,7 +43,10 @@ use super::data_collector::DataCollectorBuilder;
 use super::errors::{ApplyError, CompileError};
 use super::port_kind::{PortKind, PortValue};
 use crate::decoder_table::{DecoderTableColumnPresentation, DecoderTableRegistry};
-use crate::nodes::sinks::{DigitalSnapshotRenderer, TriggerSnapshotRenderer, WordSnapshotRenderer};
+use crate::nodes::sinks::{
+    DigitalSnapshotRenderer, NumberSnapshotRenderer, TextSnapshotRenderer, TriggerSnapshotRenderer,
+    WordSnapshotRenderer,
+};
 
 /// Shared resources handed to builders. A fresh `DerivedLanes` store per
 /// run makes stale collected data vanish atomically on re-run.
@@ -707,18 +710,18 @@ impl BuilderRegistry {
             .expect("built-in trigger payload must be viewable");
         registry
             .register_viewable_collected_payload::<signal_processing::NumberSample>(
-                DefaultViewerPayloadPresentation::new(ViewerLaneBadge::new(
-                    "N",
-                    Color32::from_rgb(95, 145, 210),
-                )),
+                DefaultViewerPayloadPresentation::with_renderer(
+                    ViewerLaneBadge::new("N", Color32::from_rgb(95, 145, 210)),
+                    Arc::new(NumberSnapshotRenderer),
+                ),
             )
             .expect("built-in number payload must be viewable");
         registry
             .register_viewable_collected_payload::<signal_processing::TextSample>(
-                DefaultViewerPayloadPresentation::new(ViewerLaneBadge::new(
-                    "TXT",
-                    Color32::from_rgb(215, 150, 170),
-                )),
+                DefaultViewerPayloadPresentation::with_renderer(
+                    ViewerLaneBadge::new("TXT", Color32::from_rgb(215, 150, 170)),
+                    Arc::new(TextSnapshotRenderer),
+                ),
             )
             .expect("built-in text payload must be viewable");
         registry
@@ -2512,9 +2515,9 @@ mod tests {
         CaptureChannelId, CaptureChunk, CaptureChunkWriter, CaptureDataDelivery,
         CaptureProviderCapabilities, CaptureSessionId, CaptureStoreCursor, ConfigValue,
         CooperativeManager, DerivedLaneData, NativeCaptureStore, NativeCaptureStoreConfig,
-        NodeSpec, Pipeline, PreparedAcquisition, Sample, Trigger, TriggerCount, TriggerCountMode,
-        TriggerEditorSchema, TriggerIdentifier, TriggerLogicOperator, TriggerPlacement,
-        TriggerPredicate, TriggerStage, Word,
+        NodeSpec, NumberSample, Pipeline, PreparedAcquisition, Sample, TextSample, Trigger,
+        TriggerCount, TriggerCountMode, TriggerEditorSchema, TriggerIdentifier,
+        TriggerLogicOperator, TriggerPlacement, TriggerPredicate, TriggerStage, Word,
     };
 
     use super::*;
@@ -2587,6 +2590,22 @@ mod tests {
                     1.0,
                 ))
         );
+        for (kind, lane) in [
+            (PortKind::of::<NumberSample>(), "number"),
+            (PortKind::of::<TextSample>(), "text"),
+        ] {
+            assert!(
+                registry
+                    .viewable_payload_presentation(kind)
+                    .unwrap()
+                    .renderer()
+                    .uses_opaque_snapshot(&ViewerLaneTrack::new(
+                        lane,
+                        DerivedLaneId::new(lane),
+                        1.0,
+                    ))
+            );
+        }
         registry
             .register_collected_payload::<SampleBlock>("org.example.block/v1")
             .unwrap();

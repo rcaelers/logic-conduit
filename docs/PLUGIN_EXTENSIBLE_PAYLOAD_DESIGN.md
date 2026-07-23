@@ -30,6 +30,10 @@ The built-in trigger adapter provides the same query capabilities with exact mar
 dense marker-activity snapshots. Its presentation is likewise adapter-owned; neither the generic
 collector nor the generic viewer interprets trigger values to render the normal subscribed row.
 
+The built-in numeric and text adapters retain their respective `i64` and `String` payload values in
+their queries. Their graph-owned presentation adapters format bounded values only while rendering;
+the generic collector does not convert a payload into display text.
+
 `CollectedLaneQuery` supplies an immutable snapshot only when its payload has waveform
 semantics. The request is bounded by a visible time window and item limit. The viewer passes the
 returned `OpaqueCollectedLaneSnapshot` to the payload's renderer only after it has released
