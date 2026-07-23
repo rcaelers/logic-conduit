@@ -299,10 +299,33 @@ impl App {
     pub fn new_with_graph(cc: &eframe::CreationContext, graph: node_graph::GraphState) -> Self {
         let mut app = Self::build(cc, |_ctx| {});
         app.node_graph.set_graph(graph);
+        app.synchronize_payload_subscription_manifest(true);
         app.restore_sampling_overlay_setting();
         app.restore_viewer_lane_order_setting();
         app.restore_panel_layout_setting();
         app
+    }
+
+    pub(crate) fn synchronize_payload_subscription_manifest(&mut self, report_warnings: bool) {
+        match compiler::synchronize_payload_subscriptions(
+            self.node_graph.graph_mut(),
+            &self.builders,
+        ) {
+            Ok(warnings) if report_warnings => {
+                for warning in warnings {
+                    if let Some(node) = warning.node {
+                        self.node_graph
+                            .set_node_badge(node, Some(NodeBadge::warning(&warning.message)));
+                        self.error_badges.push(node);
+                    }
+                    self.toasts.warning(warning.message);
+                }
+            }
+            Ok(_) => {}
+            Err(error) => self.toasts.error(format!(
+                "Could not update saved payload subscriptions: {error}"
+            )),
+        }
     }
 
     /// The persisted MRU list, most recent first — read once at startup by

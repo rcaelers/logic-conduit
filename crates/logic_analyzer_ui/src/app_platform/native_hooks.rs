@@ -199,6 +199,7 @@ impl App {
                 self.capture.clear_completed();
                 self.run_message = None;
                 self.error_badges.clear();
+                self.synchronize_payload_subscription_manifest(true);
                 self.restore_sampling_overlay_setting();
                 self.restore_viewer_lane_order_setting();
                 self.restore_panel_layout_setting();
@@ -312,6 +313,7 @@ impl App {
                 .error(format!("Could not save the panel layout: {error}"));
             return false;
         }
+        self.synchronize_payload_subscription_manifest(false);
         match self.node_graph.save_to_path(&path) {
             Ok(()) => {
                 self.platform.current_file = Some(path.clone());
@@ -359,6 +361,7 @@ impl App {
                 .error(format!("Could not save the panel layout: {error}"));
             return;
         }
+        self.synchronize_payload_subscription_manifest(false);
         match self.node_graph.snapshot_value() {
             Ok(graph) => self.platform.saved_graph = graph,
             Err(error) => self.toasts.error(error),
@@ -369,6 +372,7 @@ impl App {
         if self.sync_panel_layout_setting().is_err() {
             return true;
         }
+        self.synchronize_payload_subscription_manifest(false);
         self.node_graph
             .snapshot_value()
             .map_or(true, |graph| graph != self.platform.saved_graph)

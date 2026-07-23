@@ -3,6 +3,7 @@ mod errors;
 mod graph;
 mod plugin;
 mod port_kind;
+mod saved_graph;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "cache_platform_native.rs"]
@@ -29,3 +30,4 @@ pub use graph::{
 };
 pub use plugin::PluginContext;
 pub use port_kind::{PortKind, PortValue};
+pub use saved_graph::{GraphCompatibilityWarning, synchronize_payload_subscriptions};

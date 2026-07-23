@@ -93,6 +93,15 @@ as `"org.logicconduit.camera-frame/v1"` with its typed ingest and presentation c
 panel state, persistent caches, and missing-plugin diagnostics use the stable identifier; they
 never serialize `TypeId`.
 
+Graph documents store a versioned `logic_analyzer_graph.payload_subscriptions` extension for every
+explicit Viewer input and every `show_in_view` output. Each entry identifies its endpoint and the
+payload owner's stable identifier. Socket indices and `show_in_view` remain in the generic graph
+model, while the namespaced extension supplies the domain-specific compatibility contract. On
+load, legacy built-in lanes are assigned their registered stable identities without changing
+their connections, selection state, ordering, grouping, badge, or renderer. The application shows
+a persistent compatibility warning when a saved payload, ingestion subscription, or presentation
+registration is unavailable and retains the unresolved identity on subsequent saves.
+
 The identity registry accepts an identical repeat registration, but rejects a Rust type assigned a
 different identifier or an identifier assigned to a different Rust type. The future adapter
 registration uses the same rule for its storage and presentation definition. This prevents two

@@ -27,13 +27,10 @@ required by arbitrary plugins.
 
 This is the definitive completion checklist for the plugin migration:
 
-1. Define saved-graph compatibility for Viewer sockets and `show_in_view` outputs. Explicitly
-   migrate legacy built-in lanes, preserve their visual behavior, and show a user-visible warning
-   for missing payload or presentation registrations.
-2. Add UI panel registration, then prove the complete contract with a `CameraFrame` plugin payload
+1. Add UI panel registration, then prove the complete contract with a `CameraFrame` plugin payload
    carrying a timestamp and image: custom socket, source node, bounded sampler, thumbnail renderer,
    explicit Viewer connection, and View-panel discovery without generic-source edits.
-3. Add architecture and contract coverage for registration collisions and absence, typed channel
+2. Add architecture and contract coverage for registration collisions and absence, typed channel
    construction, negotiation, retention, dense snapshots, timeline extent, renderer lock release,
    saved-state diagnostics, native/wasm compilation, and absence of hardcoded built-in checks in
    generic viewer, compiler, and runtime paths.

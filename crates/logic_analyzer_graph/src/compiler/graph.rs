@@ -808,7 +808,7 @@ impl BuilderRegistry {
         &self.collected_payloads
     }
 
-    fn subscribable_payload_kinds(&self) -> Vec<PortKind> {
+    pub(crate) fn subscribable_payload_kinds(&self) -> Vec<PortKind> {
         self.payload_subscriptions
             .iter()
             .map(|payload| payload.kind)
@@ -823,6 +823,25 @@ impl BuilderRegistry {
             .iter()
             .find(|payload| payload.kind == kind)
             .map(|payload| payload.presentation.clone())
+    }
+
+    pub(crate) fn payload_subscription_stable_id(&self, kind: PortKind) -> Option<&str> {
+        self.payload_subscriptions
+            .iter()
+            .find(|payload| payload.kind == kind)
+            .and_then(|payload| {
+                self.collected_payloads
+                    .descriptor_by_type_id(payload.kind.type_id())
+            })
+            .map(|descriptor| descriptor.stable_id())
+    }
+
+    pub(crate) fn has_payload_subscription(&self, stable_id: &str) -> bool {
+        self.payload_subscriptions.iter().any(|payload| {
+            self.collected_payloads
+                .descriptor_by_type_id(payload.kind.type_id())
+                .is_some_and(|descriptor| descriptor.stable_id() == stable_id)
+        })
     }
 
     pub(crate) fn payload_uses_persistent_cache(&self, kind: PortKind) -> bool {
@@ -1241,6 +1260,14 @@ fn resolve_reroute_edges(graph: &GraphState) -> (Vec<Wire>, Vec<CompileError>) {
         }
     }
     (wires, errors)
+}
+
+pub(crate) fn resolved_wire_endpoints(graph: &GraphState) -> Vec<(SocketId, SocketId)> {
+    resolve_reroute_edges(graph)
+        .0
+        .into_iter()
+        .map(|wire| (wire.from, wire.to))
+        .collect()
 }
 
 /// Position of a variadic member within its group (0-based); 0 for plain
