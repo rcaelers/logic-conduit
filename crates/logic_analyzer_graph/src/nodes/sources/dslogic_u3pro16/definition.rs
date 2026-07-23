@@ -131,7 +131,7 @@ fn duration_presets(max_nanoseconds: u64) -> Vec<u64> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CaptureDurationValue {
+pub(crate) struct CaptureDurationValue {
     nanoseconds: u64,
     #[serde(skip, default = "CaptureDurationValue::default_max_nanoseconds")]
     max_nanoseconds: u64,
@@ -143,22 +143,23 @@ impl CaptureDurationValue {
         u64::MAX
     }
 
-    pub fn from_nanoseconds(nanoseconds: u64) -> Self {
+    pub(crate) fn from_nanoseconds(nanoseconds: u64) -> Self {
         Self {
             nanoseconds: nanoseconds.max(Self::MIN_NS),
             max_nanoseconds: Self::default_max_nanoseconds(),
         }
     }
 
-    pub fn from_milliseconds(milliseconds: u64) -> Self {
+    pub(crate) fn from_milliseconds(milliseconds: u64) -> Self {
         Self::from_nanoseconds(milliseconds.saturating_mul(1_000_000))
     }
 
-    pub fn set_milliseconds(&mut self, milliseconds: u64) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn set_milliseconds(&mut self, milliseconds: u64) {
         *self = Self::from_milliseconds(milliseconds);
     }
 
-    pub fn nanoseconds(&self) -> u64 {
+    pub(crate) fn nanoseconds(&self) -> u64 {
         self.nanoseconds
     }
 
@@ -226,8 +227,8 @@ impl InlineControl for CaptureDurationValue {
 /// Read-only single-line text, recomputed by `on_update` (e.g. the U3Pro16
 /// body summary "10 ch @ 250 MHz · 1.0 V").
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct LabelValue {
-    pub text: String,
+pub(crate) struct LabelValue {
+    pub(crate) text: String,
 }
 
 impl InlineControl for LabelValue {
@@ -254,16 +255,16 @@ impl InlineControl for LabelValue {
 /// The DSView-style 16-channel enable grid, drawn as two rows of eight
 /// numbered checkboxes. Sized for a panel row (`panel_height(GRID_HEIGHT)`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChannelGridValue {
-    pub enabled: Vec<bool>,
+pub(crate) struct ChannelGridValue {
+    pub(crate) enabled: Vec<bool>,
     #[serde(skip)]
-    pub supported_width: Option<usize>,
+    pub(crate) supported_width: Option<usize>,
     #[serde(skip)]
-    pub validation_error: Option<String>,
+    pub(crate) validation_error: Option<String>,
     #[serde(skip)]
-    pub selection_anchor: Option<(usize, bool)>,
+    pub(crate) selection_anchor: Option<(usize, bool)>,
     #[serde(skip)]
-    pub drag_value: Option<bool>,
+    pub(crate) drag_value: Option<bool>,
 }
 
 impl ChannelGridValue {
@@ -271,9 +272,9 @@ impl ChannelGridValue {
     const ROW_HEIGHT: f32 = 52.0;
     const ERROR_HEIGHT: f32 = 42.0;
     const HORIZONTAL_INSET: f32 = 8.0;
-    pub const HEIGHT: f32 = Self::ROW_HEIGHT * 2.0 + Self::ERROR_HEIGHT;
+    pub(crate) const HEIGHT: f32 = Self::ROW_HEIGHT * 2.0 + Self::ERROR_HEIGHT;
 
-    pub fn new(count: usize, enabled_up_to: usize) -> Self {
+    pub(crate) fn new(count: usize, enabled_up_to: usize) -> Self {
         Self {
             enabled: (0..count).map(|i| i < enabled_up_to).collect(),
             supported_width: None,
@@ -283,7 +284,7 @@ impl ChannelGridValue {
         }
     }
 
-    pub fn enabled_count(&self) -> usize {
+    pub(crate) fn enabled_count(&self) -> usize {
         self.enabled.iter().filter(|enabled| **enabled).count()
     }
 
@@ -458,30 +459,30 @@ impl InlineControl for ChannelGridValue {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct U3Pro16State {
+pub(crate) struct U3Pro16State {
     #[serde(flatten)]
-    pub metadata: U3Pro16Metadata,
-    pub mode: EnumValue,
-    pub sample_rate: EnumValue,
-    pub duration: CaptureDurationValue,
-    pub recording_start: EnumValue,
-    pub trigger_position_percent: IntValue,
-    pub retention: EnumValue,
-    pub retention_duration_ms: IntValue,
-    pub retention_megabytes: IntValue,
-    pub trigger_timeout_action: EnumValue,
-    pub trigger_timeout_ms: IntValue,
-    pub rle: BoolValue,
-    pub threshold: FloatValue,
-    pub filter: BoolValue,
-    pub ext_clock: BoolValue,
-    pub clock_edge: EnumValue,
-    pub channels: ChannelGridValue,
-    pub summary: LabelValue,
+    pub(crate) metadata: U3Pro16Metadata,
+    pub(crate) mode: EnumValue,
+    pub(crate) sample_rate: EnumValue,
+    pub(crate) duration: CaptureDurationValue,
+    pub(crate) recording_start: EnumValue,
+    pub(crate) trigger_position_percent: IntValue,
+    pub(crate) retention: EnumValue,
+    pub(crate) retention_duration_ms: IntValue,
+    pub(crate) retention_megabytes: IntValue,
+    pub(crate) trigger_timeout_action: EnumValue,
+    pub(crate) trigger_timeout_ms: IntValue,
+    pub(crate) rle: BoolValue,
+    pub(crate) threshold: FloatValue,
+    pub(crate) filter: BoolValue,
+    pub(crate) ext_clock: BoolValue,
+    pub(crate) clock_edge: EnumValue,
+    pub(crate) channels: ChannelGridValue,
+    pub(crate) summary: LabelValue,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
-pub struct U3Pro16Metadata {
+pub(crate) struct U3Pro16Metadata {
     schema_version: u16,
     trigger_program: Option<TriggerProgram>,
     #[serde(skip)]
@@ -519,11 +520,33 @@ impl Default for U3Pro16State {
 }
 
 impl U3Pro16State {
-    pub fn trigger_program(&self) -> Option<&TriggerProgram> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn configure_test_capture(
+        &mut self,
+        mode: &str,
+        sample_rate: &str,
+        duration_ms: u64,
+        enabled_channels: &[usize],
+    ) {
+        self.mode.select(mode);
+        self.sample_rate.select(sample_rate);
+        self.duration.set_milliseconds(duration_ms);
+        self.channels.enabled.fill(false);
+        for &channel in enabled_channels {
+            if let Some(enabled) = self.channels.enabled.get_mut(channel) {
+                *enabled = true;
+            }
+        }
+    }
+
+    pub(crate) fn trigger_program(&self) -> Option<&TriggerProgram> {
         self.metadata.trigger_program.as_ref()
     }
 
-    pub fn set_trigger_program(&mut self, program: Option<TriggerProgram>) -> Result<(), String> {
+    pub(crate) fn set_trigger_program(
+        &mut self,
+        program: Option<TriggerProgram>,
+    ) -> Result<(), String> {
         super::trigger::validate_program(self, program.as_ref())?;
         self.metadata.trigger_program = program;
         self.sync_recording_start_to_trigger_program();
@@ -531,7 +554,7 @@ impl U3Pro16State {
         Ok(())
     }
 
-    pub fn set_trigger_condition(
+    pub(crate) fn set_trigger_condition(
         &mut self,
         physical_channel: usize,
         condition: SimpleTriggerCondition,
@@ -717,7 +740,7 @@ impl<'de> Deserialize<'de> for U3Pro16State {
     }
 }
 
-pub struct DsLogicU3Pro16;
+pub(crate) struct DsLogicU3Pro16;
 impl NodeDef for DsLogicU3Pro16 {
     type State = U3Pro16State;
 

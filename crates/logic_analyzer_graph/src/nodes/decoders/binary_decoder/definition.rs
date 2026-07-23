@@ -8,22 +8,22 @@ use node_graph::{EnumValue, InputDef, IntValue, NodeDef, OutputDef, PanelSection
 use crate::nodes::registry::{COLOR_DECODERS, Signal, Words};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BinaryDecoderState {
-    #[serde(default = "crate::nodes::decoders::default_display_format")]
-    pub display_format: EnumValue,
-    pub sample_on: EnumValue,
+pub(crate) struct BinaryDecoderState {
+    #[serde(default = "super::super::display_format::default_display_format")]
+    pub(crate) display_format: EnumValue,
+    pub(crate) sample_on: EnumValue,
     #[serde(default = "default_input_strategy")]
-    pub input_strategy: EnumValue,
-    pub word_size: IntValue,
-    pub endianness: EnumValue,
-    pub cs_polarity: EnumValue,
+    pub(crate) input_strategy: EnumValue,
+    pub(crate) word_size: IntValue,
+    pub(crate) endianness: EnumValue,
+    pub(crate) cs_polarity: EnumValue,
 }
 
 pub(crate) fn default_input_strategy() -> EnumValue {
     EnumValue::new(0, &["Auto", "Packed stream", "Indexed"])
 }
 
-pub struct BinaryDecoder;
+pub(crate) struct BinaryDecoder;
 impl NodeDef for BinaryDecoder {
     type State = BinaryDecoderState;
 
@@ -52,7 +52,7 @@ impl NodeDef for BinaryDecoder {
 
     fn state() -> Self::State {
         BinaryDecoderState {
-            display_format: crate::nodes::decoders::default_display_format(),
+            display_format: super::super::display_format::default_display_format(),
             sample_on: EnumValue::new(
                 0,
                 &[

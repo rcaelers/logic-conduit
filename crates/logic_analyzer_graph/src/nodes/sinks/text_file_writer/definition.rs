@@ -7,7 +7,7 @@ use node_graph::{InputDef, NodeDef, OutputDef};
 
 use crate::nodes::registry::{COLOR_OUTPUT, Text};
 
-pub struct TextFileWriter;
+pub(crate) struct TextFileWriter;
 impl NodeDef for TextFileWriter {
     type State = ();
 

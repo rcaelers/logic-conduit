@@ -2,4 +2,5 @@ mod builder;
 mod definition;
 mod registration;
 
-pub use definition::{LogicGate, LogicGateState};
+#[cfg(test)]
+pub(crate) use definition::LogicGate;

@@ -7,29 +7,25 @@ use node_graph::{
     BoolValue, EnumValue, InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef, Socket,
 };
 
+use super::super::display_format::default_display_format;
 use crate::nodes::registry::{COLOR_DECODERS, Signal, Trigger, Words};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UartDecoderState {
+pub(crate) struct UartDecoderState {
     #[serde(default = "default_display_format")]
-    pub display_format: EnumValue,
+    pub(crate) display_format: EnumValue,
     /// A common baud-rate preset, or `Custom` to use `baud_rate` below.
     #[serde(default = "default_baud_preset")]
-    pub baud_preset: EnumValue,
+    pub(crate) baud_preset: EnumValue,
     /// Custom baud rate retained for saved-graph compatibility.
-    pub baud_rate: IntValue,
-    pub data_bits: IntValue,
-    pub parity: EnumValue,
-    pub check_parity: BoolValue,
-    pub stop_bits: EnumValue,
-    pub bit_order: EnumValue,
-    pub invert: BoolValue,
-    pub error_output: BoolValue,
-}
-
-const DISPLAY_FORMATS: &[&str] = &["Hex", "Binary", "Octal", "Decimal", "ASCII", "Hex + ASCII"];
-pub(crate) fn default_display_format() -> EnumValue {
-    EnumValue::new(0, DISPLAY_FORMATS)
+    pub(crate) baud_rate: IntValue,
+    pub(crate) data_bits: IntValue,
+    pub(crate) parity: EnumValue,
+    pub(crate) check_parity: BoolValue,
+    pub(crate) stop_bits: EnumValue,
+    pub(crate) bit_order: EnumValue,
+    pub(crate) invert: BoolValue,
+    pub(crate) error_output: BoolValue,
 }
 
 const BAUD_PRESETS: &[&str] = &[
@@ -74,7 +70,7 @@ pub(crate) fn selected_baud_rate(state: &UartDecoderState) -> i32 {
     }
 }
 
-pub struct UartDecoder;
+pub(crate) struct UartDecoder;
 impl NodeDef for UartDecoder {
     type State = UartDecoderState;
 

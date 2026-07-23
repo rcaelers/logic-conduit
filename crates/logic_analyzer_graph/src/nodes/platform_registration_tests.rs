@@ -3,9 +3,8 @@ use egui::Pos2;
 use node_graph::{NodeDef, NodeGraphWidget, SocketDirection, SocketId};
 use signal_processing::{CaptureChannelId, CaptureDataDelivery, SimpleTriggerCondition};
 
-use crate::nodes::{
-    DsLogicU3Pro16, DslFileSource, U3Pro16State, Viewer, build_registry, test_graphs_tests,
-};
+use super::sources::{DsLogicU3Pro16, U3Pro16State};
+use crate::nodes::{DslFileSource, Viewer, build_registry, test_graphs_tests};
 use crate::{
     BuilderRegistry, LiveCaptureEdit, apply_live_capture_edit, discover_live_capture_feature, lower,
 };

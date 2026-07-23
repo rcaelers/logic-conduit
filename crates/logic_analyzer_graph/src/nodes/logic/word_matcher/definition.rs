@@ -34,19 +34,19 @@ pub(crate) fn parse_hex(text: &str) -> Result<u64, String> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WordMatcherState {
-    pub pattern: StringValue,
-    pub mask: StringValue,
+pub(crate) struct WordMatcherState {
+    pub(crate) pattern: StringValue,
+    pub(crate) mask: StringValue,
     /// Comparison of the masked word against the masked pattern.
     #[serde(default = "default_match_op")]
-    pub op: EnumValue,
+    pub(crate) op: EnumValue,
     /// Whether the trigger lands at the matched word's start or end.
     #[serde(default = "default_trigger_at")]
-    pub trigger_at: EnumValue,
-    pub pulse_output: BoolValue,
+    pub(crate) trigger_at: EnumValue,
+    pub(crate) pulse_output: BoolValue,
 }
 
-pub struct WordMatcher;
+pub(crate) struct WordMatcher;
 impl NodeDef for WordMatcher {
     type State = WordMatcherState;
 

@@ -8,14 +8,14 @@ use node_graph::{EnumValue, InputDef, NodeBadge, NodeDef, OutputDef, PropDef, So
 use crate::nodes::registry::{COLOR_LOGIC, Signal};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogicGateState {
-    pub op: EnumValue,
+pub(crate) struct LogicGateState {
+    pub(crate) op: EnumValue,
     /// Set by `on_update` when extra inputs are connected to a NOT gate.
     #[serde(skip)]
-    pub note: Option<String>,
+    pub(crate) note: Option<String>,
 }
 
-pub struct LogicGate;
+pub(crate) struct LogicGate;
 impl NodeDef for LogicGate {
     type State = LogicGateState;
 

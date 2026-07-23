@@ -19,16 +19,16 @@ fn default_csv_writer_filename() -> FileValue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CsvWriterState {
+pub(crate) struct CsvWriterState {
     /// Static fallback for an unconnected `Filename` input.
     #[serde(default = "default_csv_writer_filename")]
-    pub filename: FileValue,
-    pub header: StringValue,
-    pub value_format: EnumValue,
-    pub hex_digits: IntValue,
+    pub(crate) filename: FileValue,
+    pub(crate) header: StringValue,
+    pub(crate) value_format: EnumValue,
+    pub(crate) hex_digits: IntValue,
 }
 
-pub struct CsvWriter;
+pub(crate) struct CsvWriter;
 impl NodeDef for CsvWriter {
     type State = CsvWriterState;
 

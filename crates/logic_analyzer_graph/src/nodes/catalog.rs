@@ -14,9 +14,12 @@ pub(crate) fn standard_builders() -> HashMap<String, Box<dyn RuntimeBuilder>> {
 
     for registration in super::graph_node_registrations() {
         registration.apply_runtime_setup();
+        let Some(builder) = registration.builder() else {
+            continue;
+        };
         assert!(
             builders
-                .insert(registration.name().to_owned(), registration.builder())
+                .insert(registration.name().to_owned(), builder)
                 .is_none(),
             "graph-node inventory builder '{}' conflicts with an explicit catalog entry",
             registration.name()

@@ -19,8 +19,6 @@ use egui::Color32;
 
 use node_graph::{NodeTypeRegistry, SocketDef, SocketShape};
 
-use super::decoders::I2cDecoder;
-
 // ── Stream socket types (`docs/APP_DESIGN.md`) ───────────────────────────────────────────────
 
 /// Logic level stream (`Sample` at runtime): defined at every instant.
@@ -141,7 +139,6 @@ pub(crate) const COLOR_OUTPUT: Color32 = Color32::from_rgb(160, 80, 60);
 
 pub fn build_registry() -> NodeTypeRegistry {
     let mut registry = NodeTypeRegistry::new();
-    registry.register::<I2cDecoder>();
     for registration in super::graph_node_registrations() {
         assert!(
             registry.category_of(registration.name()).is_none(),

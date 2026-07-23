@@ -8,11 +8,11 @@ use node_graph::{BoolValue, InputDef, NodeDef, OutputDef, PanelSection, PropDef}
 use crate::nodes::registry::{COLOR_LOGIC, Signal, Trigger};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SrFlipFlopState {
-    pub initial: BoolValue,
+pub(crate) struct SrFlipFlopState {
+    pub(crate) initial: BoolValue,
 }
 
-pub struct SrFlipFlop;
+pub(crate) struct SrFlipFlop;
 impl NodeDef for SrFlipFlop {
     type State = SrFlipFlopState;
 

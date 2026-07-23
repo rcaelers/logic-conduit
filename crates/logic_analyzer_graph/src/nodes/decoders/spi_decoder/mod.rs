@@ -3,4 +3,7 @@ mod definition;
 mod presentation;
 mod registration;
 
-pub use definition::{SpiDecoder, SpiDecoderMetadata, SpiDecoderState};
+#[cfg(test)]
+pub(crate) use definition::SpiDecoder;
+#[cfg(test)]
+pub(crate) use definition::{SpiDecoderMetadata, SpiDecoderState};

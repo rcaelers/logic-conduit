@@ -6,8 +6,7 @@ mod text_file_writer;
 mod tgck_recorder;
 mod viewer;
 
-pub use csv_writer::{CsvWriter, CsvWriterState};
-pub use file_writer::{FileWriter, FileWriterState};
-pub use text_file_writer::TextFileWriter;
-pub use tgck_recorder::TgckRecorder;
-pub use viewer::{Viewer, ViewerState};
+#[cfg(test)]
+pub(crate) use file_writer::{FileWriter, FileWriterState};
+#[cfg(test)]
+pub(crate) use viewer::Viewer;

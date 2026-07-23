@@ -6,7 +6,7 @@ use node_graph::{InputDef, NodeDef, OutputDef};
 
 use crate::nodes::registry::{COLOR_OUTPUT, Signal, Text, Words};
 
-pub struct TgckRecorder;
+pub(crate) struct TgckRecorder;
 impl NodeDef for TgckRecorder {
     type State = ();
 

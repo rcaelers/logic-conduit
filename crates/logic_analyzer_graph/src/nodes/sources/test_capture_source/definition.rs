@@ -13,7 +13,7 @@ pub(crate) const TEST_CAPTURE_CHANNELS: usize = 11;
 const DEMO_CAPTURE_STATE_VERSION: u16 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct TestCaptureSourceState {
+pub(crate) struct TestCaptureSourceState {
     schema_version: u16,
     trigger_program: Option<TriggerProgram>,
     #[serde(skip)]
@@ -31,18 +31,21 @@ impl Default for TestCaptureSourceState {
 }
 
 impl TestCaptureSourceState {
-    pub fn trigger_program(&self) -> Option<&TriggerProgram> {
+    pub(crate) fn trigger_program(&self) -> Option<&TriggerProgram> {
         self.trigger_program.as_ref()
     }
 
-    pub fn set_trigger_program(&mut self, program: Option<TriggerProgram>) -> Result<(), String> {
+    pub(crate) fn set_trigger_program(
+        &mut self,
+        program: Option<TriggerProgram>,
+    ) -> Result<(), String> {
         super::trigger::validate_program(program.as_ref())?;
         self.trigger_program = program;
         self.compatibility_warning = None;
         Ok(())
     }
 
-    pub fn set_trigger_condition(
+    pub(crate) fn set_trigger_condition(
         &mut self,
         channel: usize,
         condition: SimpleTriggerCondition,
@@ -156,9 +159,9 @@ impl<'de> Deserialize<'de> for TestCaptureSourceState {
     }
 }
 
-pub struct TestCaptureSource;
+pub(crate) struct TestCaptureSource;
 
-pub struct TestLiveCaptureSource;
+pub(crate) struct TestLiveCaptureSource;
 
 fn outputs() -> Vec<OutputDef<TestCaptureSourceState>> {
     (0..TEST_CAPTURE_CHANNELS)

@@ -8,12 +8,12 @@ use node_graph::{InputDef, IntValue, NodeDef, OutputDef, PanelSection, PropDef};
 use crate::nodes::registry::{COLOR_LOGIC, Number, Trigger};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CounterState {
-    pub start: IntValue,
-    pub step: IntValue,
+pub(crate) struct CounterState {
+    pub(crate) start: IntValue,
+    pub(crate) step: IntValue,
 }
 
-pub struct Counter;
+pub(crate) struct Counter;
 impl NodeDef for Counter {
     type State = CounterState;
 

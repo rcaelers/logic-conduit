@@ -10,4 +10,5 @@ mod trigger;
 #[cfg(not(target_arch = "wasm32"))]
 mod trigger_lowering;
 
-pub use definition::{CaptureDurationValue, DsLogicU3Pro16, U3Pro16Metadata, U3Pro16State};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use definition::{DsLogicU3Pro16, U3Pro16State};

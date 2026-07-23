@@ -24,6 +24,8 @@ mod registration_tests {
             registration.stable_id(),
             "org.logicconduit.graph-node.buffer/v1"
         );
-        let _builder = registration.builder();
+        let _builder = registration
+            .builder()
+            .expect("Buffer inventory submission must include its builder");
     }
 }

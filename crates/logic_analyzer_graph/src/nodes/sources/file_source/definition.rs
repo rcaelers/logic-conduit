@@ -8,12 +8,12 @@ use node_graph::{FileValue, InputDef, IntValue, NodeDef, OutputDef, Socket};
 use crate::nodes::registry::{COLOR_SOURCES, Signal, TextOpenPath};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DslFileSourceState {
-    pub file: FileValue,
-    pub channels: IntValue,
+pub(crate) struct DslFileSourceState {
+    pub(crate) file: FileValue,
+    pub(crate) channels: IntValue,
 }
 
-pub struct DslFileSource;
+pub(crate) struct DslFileSource;
 impl NodeDef for DslFileSource {
     type State = DslFileSourceState;
 

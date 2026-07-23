@@ -3,4 +3,5 @@ mod builder;
 mod definition;
 mod registration;
 
-pub use definition::{FileWriter, FileWriterState};
+#[cfg(test)]
+pub(crate) use definition::{FileWriter, FileWriterState};

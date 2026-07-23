@@ -2,4 +2,5 @@ mod builder;
 mod definition;
 mod registration;
 
-pub use definition::{Buffer, BufferState};
+#[cfg(test)]
+pub(crate) use definition::Buffer;

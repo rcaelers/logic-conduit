@@ -3,4 +3,5 @@ mod builder;
 mod definition;
 mod registration;
 
-pub use definition::{SigrokFileSource, SigrokFileSourceState};
+#[cfg(test)]
+pub(crate) use definition::SigrokFileSource;

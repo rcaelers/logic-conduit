@@ -167,7 +167,7 @@ pub(crate) trait CaptureCoordinatorContract {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use logic_analyzer_graph::nodes;
-    use node_graph::{NodeDef, NodeGraphWidget};
+    use node_graph::NodeGraphWidget;
 
     use super::*;
 
@@ -175,7 +175,7 @@ mod tests {
     fn source_only_graph_is_available_for_raw_capture() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         graph
-            .add_node_at(nodes::TestLiveCaptureSource::name(), egui::Pos2::ZERO)
+            .add_node_at(nodes::test_live_capture_source_name(), egui::Pos2::ZERO)
             .expect("test capture source is registered");
 
         assert!(matches!(
@@ -188,7 +188,7 @@ mod tests {
     fn preloaded_demo_capture_is_not_a_live_capture_source() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         graph
-            .add_node_at(nodes::TestCaptureSource::name(), egui::Pos2::ZERO)
+            .add_node_at(nodes::test_capture_source_name(), egui::Pos2::ZERO)
             .expect("test capture source is registered");
 
         assert!(matches!(

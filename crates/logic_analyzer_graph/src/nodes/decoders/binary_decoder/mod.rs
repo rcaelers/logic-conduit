@@ -7,4 +7,5 @@ mod registration;
 pub(crate) use builder::BinaryDecoderBuilder;
 #[cfg(test)]
 pub(crate) use definition::default_input_strategy;
-pub use definition::{BinaryDecoder, BinaryDecoderState};
+#[cfg(test)]
+pub(crate) use definition::{BinaryDecoder, BinaryDecoderState};

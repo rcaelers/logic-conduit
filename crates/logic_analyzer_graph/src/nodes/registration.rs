@@ -6,12 +6,13 @@ use node_graph::{NodeDef, NodeTypeRegistry};
 
 use crate::RuntimeBuilder;
 
-/// One independently discoverable graph node paired with its runtime builder.
+/// One independently discoverable graph-node definition, optionally paired
+/// with the runtime builder that makes it runnable.
 pub struct GraphNodeRegistration {
     stable_id: &'static str,
     node_name: fn() -> &'static str,
     register_node: fn(&mut NodeTypeRegistry),
-    create_builder: fn() -> Box<dyn RuntimeBuilder>,
+    create_builder: Option<fn() -> Box<dyn RuntimeBuilder>>,
     required_payloads: &'static [&'static str],
     runtime_setup: &'static [fn()],
 }
@@ -28,7 +29,22 @@ impl GraphNodeRegistration {
             stable_id,
             node_name: node_name::<N>,
             register_node: register_node::<N>,
-            create_builder: create_builder::<B>,
+            create_builder: Some(create_builder::<B>),
+            required_payloads: &[],
+            runtime_setup: &[],
+        }
+    }
+
+    /// Declares an editor-only graph node with no processing implementation.
+    pub const fn definition<N>(stable_id: &'static str) -> Self
+    where
+        N: NodeDef,
+    {
+        Self {
+            stable_id,
+            node_name: node_name::<N>,
+            register_node: register_node::<N>,
+            create_builder: None,
             required_payloads: &[],
             runtime_setup: &[],
         }
@@ -68,8 +84,8 @@ impl GraphNodeRegistration {
         (self.register_node)(registry);
     }
 
-    pub(crate) fn builder(&self) -> Box<dyn RuntimeBuilder> {
-        (self.create_builder)()
+    pub(crate) fn builder(&self) -> Option<Box<dyn RuntimeBuilder>> {
+        self.create_builder.map(|create_builder| create_builder())
     }
 }
 
@@ -161,7 +177,7 @@ mod registration_tests {
         stable_id: "org.logicconduit.test.missing-payload/v1",
         node_name: missing_payload_node_name,
         register_node: unused_register_node,
-        create_builder: unused_builder,
+        create_builder: Some(unused_builder),
         required_payloads: &["org.logicconduit.test.absent-payload/v1"],
         runtime_setup: &[],
     };

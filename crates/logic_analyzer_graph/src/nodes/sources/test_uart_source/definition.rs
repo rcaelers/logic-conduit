@@ -8,12 +8,12 @@ use node_graph::{InputDef, IntValue, NodeDef, OutputDef, StringValue};
 use crate::nodes::registry::{COLOR_SOURCES, Signal};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TestUartSourceState {
-    pub message: StringValue,
-    pub baud_rate: IntValue,
+pub(crate) struct TestUartSourceState {
+    pub(crate) message: StringValue,
+    pub(crate) baud_rate: IntValue,
 }
 
-pub struct TestUartSource;
+pub(crate) struct TestUartSource;
 impl NodeDef for TestUartSource {
     type State = TestUartSourceState;
 

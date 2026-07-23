@@ -8,11 +8,11 @@ use node_graph::{InputDef, NodeDef, OutputDef, PanelSection, PropDef, StringValu
 use crate::nodes::registry::{COLOR_OUTPUT, Number, Signal, Text, Trigger, Words};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ViewerState {
-    pub label: StringValue,
+pub(crate) struct ViewerState {
+    pub(crate) label: StringValue,
 }
 
-pub struct Viewer;
+pub(crate) struct Viewer;
 impl NodeDef for Viewer {
     type State = ViewerState;
 

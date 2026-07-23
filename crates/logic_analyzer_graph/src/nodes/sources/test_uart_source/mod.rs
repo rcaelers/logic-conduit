@@ -4,4 +4,5 @@ mod builder;
 mod definition;
 mod registration;
 
-pub use definition::{TestUartSource, TestUartSourceState};
+#[cfg(test)]
+pub(crate) use definition::{TestUartSource, TestUartSourceState};

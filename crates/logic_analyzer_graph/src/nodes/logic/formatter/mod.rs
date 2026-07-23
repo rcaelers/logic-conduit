@@ -2,4 +2,5 @@ mod builder;
 mod definition;
 mod registration;
 
-pub use definition::{StringFormatter, StringFormatterState};
+#[cfg(test)]
+pub(crate) use definition::{StringFormatter, StringFormatterState};

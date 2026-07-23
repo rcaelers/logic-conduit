@@ -1,6 +1,8 @@
 //! Concrete graph nodes and their registry infrastructure.
 
 mod catalog;
+#[cfg(feature = "test-support")]
+mod node_test_support;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod platform_registration_tests;
 #[cfg(all(test, target_arch = "wasm32"))]
@@ -8,19 +10,22 @@ mod platform_registration_web_tests;
 mod registration;
 mod registry;
 
-pub mod decoders;
-pub mod logic;
-pub mod sinks;
-pub mod sources;
+pub(crate) mod decoders;
+pub(crate) mod logic;
+pub(crate) mod sinks;
+pub(crate) mod sources;
 
 pub(crate) use catalog::standard_builders;
-pub use decoders::{
-    BinaryDecoder, BinaryDecoderState, I2cDecoder, SpiDecoder, SpiDecoderMetadata, SpiDecoderState,
-    UartDecoder, UartDecoderState,
+#[cfg(test)]
+pub(crate) use decoders::{
+    BinaryDecoder, SpiDecoderMetadata, SpiDecoderState, UartDecoder, UartDecoderState,
 };
-pub use logic::{
-    Buffer, BufferState, Counter, CounterState, LogicGate, LogicGateState, SrFlipFlop,
-    SrFlipFlopState, StringFormatter, StringFormatterState, WordMatcher, WordMatcherState,
+#[cfg(test)]
+pub(crate) use logic::{Buffer, Counter, StringFormatter, StringFormatterState, WordMatcherState};
+#[cfg(feature = "test-support")]
+pub use node_test_support::{
+    configure_u3pro16_test_capture, dslogic_u3pro16_name, set_test_capture_trigger_condition,
+    test_capture_source_name, test_live_capture_source_name,
 };
 pub use registration::GraphNodeRegistration;
 pub(crate) use registration::{graph_node_registrations, validate_graph_node_payload_requirements};
@@ -29,16 +34,11 @@ pub(crate) use registry::test_graphs_tests;
 pub use registry::{
     Number, Signal, Text, TextOpenPath, TextSavePath, Trigger, Words, build_registry,
 };
-pub use sinks::{
-    CsvWriter, CsvWriterState, FileWriter, FileWriterState, TextFileWriter, TgckRecorder, Viewer,
-    ViewerState,
-};
-pub use sources::{
-    CaptureDurationValue, DsLogicU3Pro16, DslFileSource, DslFileSourceState, SigrokFileSource,
-    SigrokFileSourceState, U3Pro16Metadata, U3Pro16State,
-};
-#[cfg(any(test, feature = "test-support"))]
-pub use sources::{
-    TestCaptureSource, TestCaptureSourceState, TestLiveCaptureSource, TestUartSource,
-    TestUartSourceState,
-};
+#[cfg(test)]
+pub(crate) use sinks::{FileWriterState, Viewer};
+#[cfg(test)]
+pub(crate) use sources::TestUartSource;
+#[cfg(test)]
+pub(crate) use sources::{DslFileSource, DslFileSourceState};
+#[cfg(test)]
+pub(crate) use sources::{TestCaptureSource, TestLiveCaptureSource};

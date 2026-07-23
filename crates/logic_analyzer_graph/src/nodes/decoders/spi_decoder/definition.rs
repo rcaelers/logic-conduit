@@ -11,21 +11,21 @@ use node_graph::{
 use crate::nodes::registry::{COLOR_DECODERS, Signal, Words};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpiDecoderState {
+pub(crate) struct SpiDecoderState {
     #[serde(flatten)]
-    pub metadata: SpiDecoderMetadata,
-    #[serde(default = "crate::nodes::decoders::default_display_format")]
-    pub display_format: EnumValue,
-    pub word_size: IntValue,
-    pub cpol: EnumValue,
-    pub cpha: EnumValue,
-    pub bit_order: EnumValue,
-    pub cs_polarity: EnumValue,
-    pub has_miso: BoolValue,
+    pub(crate) metadata: SpiDecoderMetadata,
+    #[serde(default = "super::super::display_format::default_display_format")]
+    pub(crate) display_format: EnumValue,
+    pub(crate) word_size: IntValue,
+    pub(crate) cpol: EnumValue,
+    pub(crate) cpha: EnumValue,
+    pub(crate) bit_order: EnumValue,
+    pub(crate) cs_polarity: EnumValue,
+    pub(crate) has_miso: BoolValue,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SpiDecoderMetadata {
+pub(crate) struct SpiDecoderMetadata {
     #[serde(default)]
     schema_version: u8,
     #[serde(skip)]
@@ -41,7 +41,7 @@ impl SpiDecoderMetadata {
     }
 }
 
-pub struct SpiDecoder;
+pub(crate) struct SpiDecoder;
 impl NodeDef for SpiDecoder {
     type State = SpiDecoderState;
 
@@ -82,7 +82,7 @@ impl NodeDef for SpiDecoder {
     fn state() -> Self::State {
         SpiDecoderState {
             metadata: SpiDecoderMetadata::current(),
-            display_format: crate::nodes::decoders::default_display_format(),
+            display_format: super::super::display_format::default_display_format(),
             word_size: IntValue::new(8, 1, 64),
             cpol: EnumValue::new(0, &["0", "1"]),
             cpha: EnumValue::new(0, &["0", "1"]),

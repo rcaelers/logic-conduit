@@ -20,12 +20,12 @@ use crate::nodes::registry::COLOR_LOGIC;
 const KIND_LABELS: &[&str] = &["Signal", "Block", "Word", "Number", "Text", "Trigger"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BufferState {
-    pub kind: EnumValue,
-    pub capacity: IntValue,
+pub(crate) struct BufferState {
+    pub(crate) kind: EnumValue,
+    pub(crate) capacity: IntValue,
 }
 
-pub struct Buffer;
+pub(crate) struct Buffer;
 impl NodeDef for Buffer {
     type State = BufferState;
 

@@ -8,7 +8,7 @@ use node_graph::{InputDef, NodeDef, OutputDef};
 
 use crate::nodes::registry::{COLOR_DECODERS, Signal, Words};
 
-pub struct I2cDecoder;
+pub(crate) struct I2cDecoder;
 impl NodeDef for I2cDecoder {
     type State = ();
 

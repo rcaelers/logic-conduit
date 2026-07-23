@@ -7,11 +7,17 @@ mod logic_gate;
 mod sr_flip_flop;
 mod word_matcher;
 
-pub use buffer::{Buffer, BufferState};
-pub use counter::{Counter, CounterState};
-pub use formatter::{StringFormatter, StringFormatterState};
-pub use logic_gate::{LogicGate, LogicGateState};
-pub use sr_flip_flop::{SrFlipFlop, SrFlipFlopState};
-pub use word_matcher::{WordMatcher, WordMatcherState};
+#[cfg(test)]
+pub(crate) use buffer::Buffer;
+#[cfg(test)]
+pub(crate) use counter::Counter;
+#[cfg(test)]
+pub(crate) use formatter::{StringFormatter, StringFormatterState};
+#[cfg(test)]
+pub(crate) use logic_gate::LogicGate;
+#[cfg(test)]
+pub(crate) use sr_flip_flop::SrFlipFlop;
+#[cfg(test)]
+pub(crate) use word_matcher::{WordMatcher, WordMatcherState};
 #[cfg(test)]
 pub(crate) use word_matcher::{default_match_op, default_trigger_at};

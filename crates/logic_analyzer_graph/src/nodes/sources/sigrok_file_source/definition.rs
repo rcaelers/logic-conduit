@@ -8,14 +8,14 @@ use node_graph::{FileValue, InputDef, IntValue, NodeDef, OutputDef, Socket};
 use crate::nodes::registry::{COLOR_SOURCES, Signal, TextOpenPath};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SigrokFileSourceState {
-    pub file: FileValue,
-    pub channels: IntValue,
+pub(crate) struct SigrokFileSourceState {
+    pub(crate) file: FileValue,
+    pub(crate) channels: IntValue,
     #[serde(default)]
-    pub demo_data: bool,
+    pub(crate) demo_data: bool,
 }
 
-pub struct SigrokFileSource;
+pub(crate) struct SigrokFileSource;
 
 impl NodeDef for SigrokFileSource {
     type State = SigrokFileSourceState;

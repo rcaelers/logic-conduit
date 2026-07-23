@@ -8,11 +8,11 @@ use node_graph::{InputDef, NodeDef, OutputDef, PropDef, StringValue};
 use crate::nodes::registry::{COLOR_LOGIC, Number, Text};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StringFormatterState {
-    pub template: StringValue,
+pub(crate) struct StringFormatterState {
+    pub(crate) template: StringValue,
 }
 
-pub struct StringFormatter;
+pub(crate) struct StringFormatter;
 impl NodeDef for StringFormatter {
     type State = StringFormatterState;
 

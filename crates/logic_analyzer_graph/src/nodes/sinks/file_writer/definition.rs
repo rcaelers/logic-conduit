@@ -16,15 +16,15 @@ fn default_writer_filename() -> FileValue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileWriterState {
+pub(crate) struct FileWriterState {
     /// Static fallback for an unconnected `Filename` input.
     #[serde(default = "default_writer_filename")]
-    pub filename: FileValue,
-    pub write_width: EnumValue,
-    pub index_csv: BoolValue,
+    pub(crate) filename: FileValue,
+    pub(crate) write_width: EnumValue,
+    pub(crate) index_csv: BoolValue,
 }
 
-pub struct FileWriter;
+pub(crate) struct FileWriter;
 impl NodeDef for FileWriter {
     type State = FileWriterState;
 
