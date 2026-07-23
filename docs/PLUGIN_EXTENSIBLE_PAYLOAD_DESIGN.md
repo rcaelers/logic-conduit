@@ -138,14 +138,5 @@ data rather than receiving the live stream.
 - The application-level plugin registration entry point composes the lower-level registries without
   making `signal_processing` depend on UI crates.
 
-### Migration path
-
-1. Move the remaining built-in `CollectedDataKind`/`LaneBuffer` implementation behind the
-   adapters and remove the collector's closed lane representation.
-2. Replace `DerivedLaneData` with adapter-owned query handles and snapshots.
-3. Make data-subscription negotiation registry-driven instead of listing built-in `PortKind`s.
-4. Register built-in waveform and table adapters through the same mechanism as plugins.
-5. Add UI panel registration and an end-to-end plugin payload such as `CameraFrame`.
-
 Compile-time Rust plugins are the initial extension mechanism. Runtime-loaded native plugins need
 an additional ABI-stable boundary and are outside this design phase.

@@ -22,34 +22,35 @@ Collected payloads already register typed ingestion adapters, stable identities,
 presentations, and bounded opaque snapshots. The remaining work removes the legacy built-in
 fallback representation and completes the payload capabilities required by arbitrary plugins.
 
-- Replace the closed `DerivedLaneData` and `ViewerValueKind` representation with registered lane
-  data/query handles. Separate typed append state from immutable UI snapshots so arbitrary
-  values do not require conversion to strings or integers. Each adapter supplies timestamp/span
-  extraction, timeline extent, bounded visible-window sampling, dense/activity fallback, and an
-  optional indexed or custom storage capability.
-- Extend the opaque-snapshot `ViewerLaneRenderer` contract with time transforms, theme
-  information, and interaction hooks. Renderers must continue to receive only bounded,
-  type-safe-or-contract-checked snapshots and no `LogicAnalyzerViewer` internals or locked
-  runtime storage.
-- Complete the built-in lane migration in dependency order. Word already exposes viewer snapshots,
-  cursor snapping, timeline extent, and table rows through its query. Digital signals and trigger
-  markers now have dedicated ingestors/queries plus exact and dense viewer snapshots. Migrate
-  numeric and text values next. Then move each adapter's remaining legacy storage behind its
-  query and remove the shared `CollectedDataKind`/`LaneBuffer` implementation. Default
-  singleton presentation, cursor snapping, timeline fitting, row activity, retention, and
-  native/wasm behavior must be capabilities of the registered adapter rather than exhaustive
-  matches over built-in variants.
-- Define saved-graph compatibility for Viewer sockets and `show_in_view` outputs. Migrate legacy
-  built-in lanes explicitly, preserve their visual behavior, and show a user-visible warning for
-  missing plugin payload/presentation registrations.
-- Add an example plugin payload such as `CameraFrame { timestamp_ns, image }` with a custom socket,
-  source node, bounded in-memory sampler, and thumbnail renderer. Use it as the end-to-end proof
-  that a new value type is viewable through both an explicit Viewer connection and the View panel
-  without modifying generic source files.
-- Add architecture and contract tests covering plugin registration, duplicate/missing adapters,
-  typed channel construction, auto-view negotiation, retention and dense snapshots, timeline
-  extent, renderer lock release, native/wasm compilation, and removal of hardcoded built-in type
-  checks from the generic viewer path.
+This is the definitive completion checklist for the plugin migration:
+
+1. Migrate `NumberSample` and `TextSample` to dedicated adapter-owned ingestors, retained queries,
+   bounded exact/dense snapshots, and default renderers. Preserve their distinct typed values until
+   their presentation adapter formats them; do not pre-convert arbitrary plugin values to strings.
+2. Move the remaining storage of Word, digital, trigger, number, and text lanes behind their
+   adapter-owned queries. Remove `CollectedDataKind`, `LaneBuffer`, `DerivedLaneData`, and
+   `LaneSummary` only when every built-in adapter supplies its own retention and bounded-query
+   behavior.
+3. Replace the generic viewer's remaining legacy-lane fallbacks: implicit/default row discovery,
+   row activity and measurement, event-row behavior, and rendering. These must be explicit
+   payload/presentation capabilities, so a registered lane can be discovered after collection
+   without the viewer matching a built-in payload representation.
+4. Complete the `ViewerLaneRenderer` contract with the required theme and interaction context.
+   Renderers continue to receive only bounded immutable snapshots, time transforms, and explicit
+   commands; they never receive `LogicAnalyzerViewer` internals or locked runtime storage.
+5. Make collection and subscription negotiation fully registry-driven. Remove the built-in
+   `PortKind` list from the data collector and require registered collection, presentation, and
+   diagnostic contracts for every subscribable payload.
+6. Define saved-graph compatibility for Viewer sockets and `show_in_view` outputs. Explicitly
+   migrate legacy built-in lanes, preserve their visual behavior, and show a user-visible warning
+   for missing payload or presentation registrations.
+7. Add UI panel registration, then prove the complete contract with a `CameraFrame` plugin payload
+   carrying a timestamp and image: custom socket, source node, bounded sampler, thumbnail renderer,
+   explicit Viewer connection, and View-panel discovery without generic-source edits.
+8. Add architecture and contract coverage for registration collisions and absence, typed channel
+   construction, negotiation, retention, dense snapshots, timeline extent, renderer lock release,
+   saved-state diagnostics, native/wasm compilation, and absence of hardcoded built-in checks in
+   generic viewer, compiler, and runtime paths.
 
 Related design: [Plugin-Extensible Collected Payload Design](docs/PLUGIN_EXTENSIBLE_PAYLOAD_DESIGN.md), [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN.md), and [Pipeline Design](docs/PIPELINE_DESIGN.md).
 
