@@ -13,6 +13,7 @@ use signal_processing::{ProcessNode, Sample, Trigger, Word};
 use crate::decoder_table::DecoderTableColumnPresentation;
 use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
+#[derive(Default)]
 pub(crate) struct UartDecoderBuilder;
 
 impl RuntimeBuilder for UartDecoderBuilder {

@@ -13,6 +13,7 @@ use node_graph::Socket;
 
 use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
+#[derive(Default)]
 pub(crate) struct ViewerSubscriptionBuilder;
 
 struct PendingGroup {

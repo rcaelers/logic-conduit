@@ -8,6 +8,7 @@ use signal_processing::{NumberSample, ProcessNode, Trigger};
 
 use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
+#[derive(Default)]
 pub(crate) struct CounterBuilder;
 
 impl RuntimeBuilder for CounterBuilder {

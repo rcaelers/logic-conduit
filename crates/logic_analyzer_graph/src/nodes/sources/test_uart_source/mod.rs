@@ -2,6 +2,6 @@
 
 mod builder;
 mod definition;
+mod registration;
 
-pub(crate) use builder::TestUartSourceBuilder;
 pub use definition::{TestUartSource, TestUartSourceState};

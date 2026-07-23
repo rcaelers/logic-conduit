@@ -1,6 +1,6 @@
 mod builder;
 mod definition;
 mod presentation;
+mod registration;
 
-pub(crate) use builder::SpiDecoderBuilder;
 pub use definition::{SpiDecoder, SpiDecoderMetadata, SpiDecoderState};

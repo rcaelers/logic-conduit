@@ -11,6 +11,7 @@ use signal_processing::{ProcessNode, Sample, TextSample, Word};
 
 use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
 
+#[derive(Default)]
 pub(crate) struct TgckRecorderBuilder;
 
 impl RuntimeBuilder for TgckRecorderBuilder {

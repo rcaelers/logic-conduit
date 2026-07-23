@@ -19,11 +19,7 @@ use egui::Color32;
 
 use node_graph::{NodeTypeRegistry, SocketDef, SocketShape};
 
-use super::decoders::{BinaryDecoder, I2cDecoder, SpiDecoder, UartDecoder};
-use super::logic::{Counter, LogicGate, SrFlipFlop, StringFormatter, WordMatcher};
-use super::sinks::{TgckRecorder, Viewer};
-#[cfg(any(test, feature = "test-support"))]
-use super::sources::{TestCaptureSource, TestUartSource};
+use super::decoders::I2cDecoder;
 
 // ── Stream socket types (`docs/APP_DESIGN.md`) ───────────────────────────────────────────────
 
@@ -146,22 +142,7 @@ pub(crate) const COLOR_OUTPUT: Color32 = Color32::from_rgb(160, 80, 60);
 pub fn build_registry() -> NodeTypeRegistry {
     let mut registry = NodeTypeRegistry::new();
     super::registry_platform::register_nodes(&mut registry);
-    #[cfg(any(test, feature = "test-support"))]
-    {
-        registry.register::<TestCaptureSource>();
-        registry.register::<TestUartSource>();
-    }
-    registry.register::<SpiDecoder>();
-    registry.register::<UartDecoder>();
     registry.register::<I2cDecoder>();
-    registry.register::<BinaryDecoder>();
-    registry.register::<WordMatcher>();
-    registry.register::<SrFlipFlop>();
-    registry.register::<LogicGate>();
-    registry.register::<Counter>();
-    registry.register::<StringFormatter>();
-    registry.register::<TgckRecorder>();
-    registry.register::<Viewer>();
     for registration in super::graph_node_registrations() {
         assert!(
             registry.category_of(registration.name()).is_none(),
@@ -180,13 +161,17 @@ pub(crate) mod test_graphs_tests {
     use node_graph::NodeDef;
 
     use super::super::decoders::{
-        BinaryDecoderState, SpiDecoderState, UartDecoderState, default_baud_preset,
-        default_display_format, default_input_strategy,
+        BinaryDecoder, BinaryDecoderState, SpiDecoder, SpiDecoderState, UartDecoder,
+        UartDecoderState, default_baud_preset, default_display_format, default_input_strategy,
     };
-    use super::super::logic::{WordMatcherState, default_match_op, default_trigger_at};
-    use super::super::sinks::FileWriter;
-    use super::super::sources::{DslFileSource, SigrokFileSource, TestUartSourceState};
-    use super::*;
+    use super::super::logic::{
+        Counter, LogicGate, SrFlipFlop, StringFormatter, WordMatcher, WordMatcherState,
+        default_match_op, default_trigger_at,
+    };
+    use super::super::sinks::{FileWriter, Viewer};
+    use super::super::sources::{
+        DslFileSource, SigrokFileSource, TestUartSource, TestUartSourceState,
+    };
 
     fn output_index(
         widget: &node_graph::NodeGraphWidget,
@@ -555,7 +540,8 @@ pub(crate) mod test_graphs_tests {
 mod tests {
     use node_graph::{NodeDef, NodeGraphWidget};
 
-    use super::*;
+    use super::super::sinks::Viewer;
+    use super::{build_registry, test_graphs_tests};
 
     #[test]
     fn startup_graph_builds_with_compatible_wiring() {

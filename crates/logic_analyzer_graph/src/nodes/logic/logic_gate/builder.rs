@@ -8,6 +8,7 @@ use signal_processing::{ProcessNode, Sample};
 
 use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
+#[derive(Default)]
 pub(crate) struct LogicGateBuilder;
 
 impl RuntimeBuilder for LogicGateBuilder {

@@ -8,6 +8,7 @@ use signal_processing::{ConfigValue, NodeConfig, NumberSample, ProcessNode, Text
 
 use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
+#[derive(Default)]
 pub(crate) struct FormatterBuilder;
 
 impl RuntimeBuilder for FormatterBuilder {

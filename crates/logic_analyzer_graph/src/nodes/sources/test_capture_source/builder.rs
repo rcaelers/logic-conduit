@@ -11,6 +11,7 @@ use crate::{
     RuntimeBuilder,
 };
 
+#[derive(Default)]
 pub(crate) struct TestCaptureSourceBuilder;
 
 impl RuntimeBuilder for TestCaptureSourceBuilder {

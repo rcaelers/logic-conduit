@@ -8,6 +8,7 @@ use signal_processing::{ProcessNode, Sample, Trigger};
 
 use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
+#[derive(Default)]
 pub(crate) struct SrFlipFlopBuilder;
 
 impl RuntimeBuilder for SrFlipFlopBuilder {

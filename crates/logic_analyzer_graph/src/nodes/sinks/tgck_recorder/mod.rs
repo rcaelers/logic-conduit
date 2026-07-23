@@ -1,5 +1,5 @@
 mod builder;
 mod definition;
+mod registration;
 
-pub(crate) use builder::TgckRecorderBuilder;
 pub use definition::TgckRecorder;

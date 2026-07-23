@@ -11,6 +11,7 @@ use signal_processing::{ConfigValue, NodeConfig, ProcessNode, Sample, Trigger, W
 use super::definition::parse_hex;
 use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
+#[derive(Default)]
 pub(crate) struct WordMatcherBuilder;
 
 impl WordMatcherBuilder {

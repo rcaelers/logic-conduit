@@ -17,11 +17,11 @@ pub(crate) use file_source::FileSourceBuilder;
 pub use file_source::{DslFileSource, DslFileSourceState};
 pub(crate) use sigrok_file_source::SigrokFileSourceBuilder;
 pub use sigrok_file_source::{SigrokFileSource, SigrokFileSourceState};
+#[cfg(test)]
+pub(crate) use test_capture_source::TestCaptureSourceBuilder;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use test_capture_source::TestLiveCaptureSourceBuilder;
 #[cfg(any(test, feature = "test-support"))]
 pub use test_capture_source::{TestCaptureSource, TestCaptureSourceState, TestLiveCaptureSource};
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use test_capture_source::{TestCaptureSourceBuilder, TestLiveCaptureSourceBuilder};
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use test_uart_source::TestUartSourceBuilder;
 #[cfg(any(test, feature = "test-support"))]
 pub use test_uart_source::{TestUartSource, TestUartSourceState};

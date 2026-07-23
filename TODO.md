@@ -30,8 +30,10 @@ Delivery plan:
 
 1. **Graph-node contract and proof — complete:** add the inventory-backed atomic graph-node
    descriptor, deterministic validation/application, and migrate Buffer as the first built-in node.
-2. Migrate the remaining platform-neutral graph nodes one directory at a time and remove their
-   entries from the central node and builder catalogs.
+2. **Platform-neutral graph nodes — complete:** each runnable built-in node directory submits its
+   definition and builder atomically, and the central node and builder catalogs no longer name
+   those features. The editor-only I²C definition remains explicit because it has no runtime
+   builder and is therefore not a runnable graph-node feature.
 3. Move platform-sensitive nodes to whole-module native/WASM submissions with the same stable
    feature identities, then remove `registry_native.rs` and `registry_web.rs`.
 4. Add the collected-payload inventory and migrate built-in payload/channel/adapter/default-renderer
