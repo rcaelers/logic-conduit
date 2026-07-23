@@ -59,7 +59,7 @@ impl RuntimeBuilder for ViewerSubscriptionBuilder {
             .collect()
     }
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        // `lower()` supplies the registry's viewable payload kinds for a
+        // `lower()` supplies the registry's subscribed payload kinds for a
         // data subscription. Keeping this empty prevents a second, fixed
         // built-in list from becoming the source of truth.
         Vec::new()
@@ -130,7 +130,7 @@ impl RuntimeBuilder for ViewerSubscriptionBuilder {
             } else {
                 let presentation = input.default_viewer_presentation.as_ref().ok_or_else(|| {
                     format!(
-                        "viewable payload '{}' has no default presentation",
+                        "subscribed payload '{}' has no default presentation",
                         input.kind.name()
                     )
                 })?;

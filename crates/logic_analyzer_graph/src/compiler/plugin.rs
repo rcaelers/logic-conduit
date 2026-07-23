@@ -106,14 +106,18 @@ impl<'a> PluginContext<'a> {
     /// Registers a collected payload adapter and opts its payload into
     /// generic data subscriptions such as the Viewer. The payload owner must
     /// supply any presentation metadata required by its own renderer.
-    pub fn register_viewable_collected_payload_adapter<T: PortValue>(
+    pub fn register_collected_payload_subscription_adapter<T: PortValue>(
         &mut self,
         stable_id: impl Into<String>,
         adapter: std::sync::Arc<dyn signal_processing::CollectedPayloadAdapter>,
         presentation: crate::DefaultViewerPayloadPresentation,
     ) -> Result<&mut Self, signal_processing::CollectedPayloadRegistrationError> {
         self.builders
-            .register_viewable_collected_payload_adapter::<T>(stable_id, adapter, presentation)?;
+            .register_collected_payload_subscription_adapter::<T>(
+                stable_id,
+                adapter,
+                presentation,
+            )?;
         Ok(self)
     }
 }

@@ -14,10 +14,18 @@ stable identifier assigned to multiple Rust types, and a Rust type assigned mult
 
 `PluginContext::register_collected_payload_adapter::<T>(stable_id, adapter)` additionally records
 an adapter factory. `DerivedDataCollector` schedules adapter-created lane ingestors beside its
-built-in lanes. An adapter publishes its retained, type-erased query object through `DerivedLanes`,
+other lanes. An adapter publishes its retained, type-erased query object through `DerivedLanes`,
 so a later subscriber can discover it by stable payload identity and downcast only to its own
 registered query type. Built-in payloads are registered through this same path and retain their
 digital, indexed-word, marker, numeric, and text data behind their adapters.
+
+`BuilderRegistry` owns one collection-subscription contract per subscribable payload. The contract
+binds the open `PortKind` to its adapter descriptor, diagnostic name, default waveform
+presentation, request configuration, and optional persistent-cache policy. Lowering obtains the
+accepted kinds from these contracts. Materialization invokes the selected contract and adapter;
+the generic data-collector builder contains no built-in payload list, type comparison, adapter
+registry construction, or payload-specific request setup. Registering a payload identity or an
+adapter alone therefore does not make it subscribable.
 
 The built-in digital adapter publishes an opaque query with bounded exact-transition and dense
 activity snapshots, cursor-boundary lookup, and timeline extent. Its viewer presentation consumes
@@ -142,7 +150,8 @@ data rather than receiving the live stream.
 - `signal_processing` owns type-erased ingestion, retained query, snapshot, and storage contracts.
 - `logic_analyzer_viewer` owns presentation adapters and drawing contracts for those snapshots.
 - `logic_analyzer_graph` owns compiler negotiation: it accepts only registered collectable payloads
-  for a data subscription and reports a targeted error for an unavailable adapter.
+  for a data subscription and reports a targeted error for an unavailable subscription contract
+  or adapter.
 - `logic_analyzer_ui` owns panel factories, panel state, and application command capabilities.
 - The application-level plugin registration entry point composes the lower-level registries without
   making `signal_processing` depend on UI crates.

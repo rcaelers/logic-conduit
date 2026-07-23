@@ -12,7 +12,14 @@ use signal_processing::PersistentStoreConfig;
 use super::errors::CompileError;
 use super::graph::{BuilderRegistry, CompiledGraph};
 
-pub(crate) fn assign_derived_word_caches(_compiled: &mut CompiledGraph) {}
+pub(crate) fn assign_derived_word_caches(compiled: &mut CompiledGraph, registry: &BuilderRegistry) {
+    // Keep cache policy part of the common subscription contract even though
+    // this platform has no persistent-cache implementation.
+    let _ = compiled
+        .edges
+        .iter()
+        .any(|edge| registry.payload_uses_persistent_cache(edge.kind));
+}
 
 pub(crate) fn configure_directory(_compiled: &mut CompiledGraph, _directory: Option<&Path>) {}
 

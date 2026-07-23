@@ -6,18 +6,16 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use node_graph::{GraphState, NodeId};
-use signal_processing::{IndexedAnnotationStore, PersistentStoreConfig, Word};
+use signal_processing::{IndexedAnnotationStore, PersistentStoreConfig};
 
 use super::errors::CompileError;
 use super::graph::{
     BuilderRegistry, CaptureCacheIdentity, CompiledEdge, CompiledGraph, RuntimeBuilder,
     compiled_node,
 };
-use super::port_kind::PortKind;
-
 const DERIVED_CACHE_ABI_VERSION: u32 = 2;
 
-pub(crate) fn assign_derived_word_caches(compiled: &mut CompiledGraph) {
+pub(crate) fn assign_derived_word_caches(compiled: &mut CompiledGraph, registry: &BuilderRegistry) {
     let collector_ids: Vec<_> = compiled
         .nodes
         .iter()
@@ -35,7 +33,7 @@ pub(crate) fn assign_derived_word_caches(compiled: &mut CompiledGraph) {
             let Some(edge) = compiled.edges.iter().find(|edge| {
                 edge.to.0 == collector_id
                     && edge.to.1 == input_name
-                    && edge.kind == PortKind::of::<Word>()
+                    && registry.payload_uses_persistent_cache(edge.kind)
             }) else {
                 continue;
             };
@@ -152,11 +150,11 @@ pub(crate) fn cache_configs_by_node(
                 continue;
             };
             let input_name = format!("in{member}");
-            let Some(edge) = compiled.edges.iter().find(|edge| {
-                edge.to.0 == collector.id
-                    && edge.to.1 == input_name
-                    && edge.kind == PortKind::of::<Word>()
-            }) else {
+            let Some(edge) = compiled
+                .edges
+                .iter()
+                .find(|edge| edge.to.0 == collector.id && edge.to.1 == input_name)
+            else {
                 continue;
             };
 

@@ -5,12 +5,9 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use node_graph::Socket;
-use signal_processing::{
-    CollectedLaneRequest, CollectedPayloadRegistry, CollectedWordLaneOptions, DerivedDataCollector,
-    LiveStoreConfig, NumberSample, ProcessNode, Sample, TextSample, Trigger, Word,
-};
+use signal_processing::{CollectedLaneRequest, DerivedDataCollector, ProcessNode};
 
-use super::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
+use super::{BuilderRegistry, CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
 
 pub(crate) const BUILDER_NAME: &str = "Derived Data Collector";
 
@@ -21,7 +18,7 @@ impl DataCollectorBuilder {
         name: &str,
         resolved: &ResolvedInputs,
         lane_names: &[(usize, String)],
-        collected_payloads: &CollectedPayloadRegistry,
+        registry: &BuilderRegistry,
         ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let mut collector = DerivedDataCollector::new()
@@ -31,46 +28,34 @@ impl DataCollectorBuilder {
             let input = resolved
                 .get(0, *member)
                 .ok_or_else(|| format!("collector input {member} is unresolved"))?;
-            let descriptor = collected_payloads
+            let descriptor = registry
+                .collected_payloads()
                 .descriptor_by_type_id(input.kind.type_id())
                 .ok_or_else(|| format!("collector cannot retain {:?}", input.kind))?
                 .clone();
-            let mut request = CollectedLaneRequest::new(
+            let request = CollectedLaneRequest::new(
                 lane_name,
                 *member,
                 ctx.derived_lanes().clone(),
                 descriptor,
                 ctx.derived_data_retention(),
             );
-            if input.kind == PortKind::of::<Word>() {
-                let store_config = if let Some(persistent) = ctx.derived_word_cache(*member) {
-                    LiveStoreConfig {
-                        directory: persistent.directory.clone(),
-                        persistence: Some(persistent.clone()),
-                        ..LiveStoreConfig::default()
-                    }
-                } else {
-                    LiveStoreConfig::default()
-                };
-                request = request.with_options(CollectedWordLaneOptions::new(
-                    store_config,
-                    input.word_display_format.clone(),
-                ));
-            }
-            let adapter = collected_payloads
+            let (request, diagnostic_name) = registry
+                .configure_collected_lane_request(input.kind, request, *member, input, ctx)?;
+            let adapter = registry
+                .collected_payloads()
                 .adapter_by_type_id(input.kind.type_id())
                 .ok_or_else(|| {
                     format!(
                         "collected payload '{}' ({}) has no ingestion adapter",
-                        input.kind.name(),
+                        diagnostic_name,
                         request.payload().stable_id()
                     )
                 })?;
             let ingestor = adapter.create_ingestor(request).map_err(|error| {
                 format!(
                     "collector adapter for '{}' could not create '{}': {error}",
-                    input.kind.name(),
-                    lane_name
+                    diagnostic_name, lane_name
                 )
             })?;
             collector = collector.with_ingestor(ingestor);
@@ -115,13 +100,7 @@ impl RuntimeBuilder for DataCollectorBuilder {
     }
 
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![
-            PortKind::of::<Sample>(),
-            PortKind::of::<Word>(),
-            PortKind::of::<Trigger>(),
-            PortKind::of::<NumberSample>(),
-            PortKind::of::<TextSample>(),
-        ]
+        Vec::new()
     }
 
     fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
@@ -148,20 +127,11 @@ impl RuntimeBuilder for DataCollectorBuilder {
 
     fn build(
         &self,
-        name: &str,
+        _name: &str,
         _state: &Value,
-        resolved: &ResolvedInputs,
-        ctx: &mut CompileCtx,
+        _resolved: &ResolvedInputs,
+        _ctx: &mut CompileCtx,
     ) -> Result<Box<dyn ProcessNode>, String> {
-        let mut collected_payloads = CollectedPayloadRegistry::new();
-        signal_processing::register_builtin_collected_payload_adapters(&mut collected_payloads)
-            .expect("built-in collected payload adapters must be valid");
-        Self::build_with_lane_names(
-            name,
-            resolved,
-            &Self::default_lane_names(resolved),
-            &collected_payloads,
-            ctx,
-        )
+        Err("data collectors must be materialized through the payload registry".to_owned())
     }
 }

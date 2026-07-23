@@ -31,11 +31,11 @@ use node_graph::{
 use signal_processing::{
     AcquisitionContext, AcquisitionError, AcquisitionResult, AppManager, CaptureChannelId,
     CaptureIndexFactory, CaptureProviderCapabilities, CaptureSessionPlan, CaptureStartMode,
-    CaptureStoreCursor, CollectedPayloadAdapter, CollectedPayloadRegistrationError,
-    CollectedPayloadRegistry, ConfigurationBoundary, DerivedDataRetention, DerivedLanes,
-    DisconnectEvent, InputSub, NodeConfig, OverflowPolicy, PersistentStoreConfig,
-    PreparedAcquisition, ProcessNode, SampleBlock, SamplingActivity, SimpleTriggerCondition,
-    TriggerEditorSchema, TriggerProgram,
+    CaptureStoreCursor, CollectedLaneRequest, CollectedPayloadAdapter,
+    CollectedPayloadRegistrationError, CollectedPayloadRegistry, ConfigurationBoundary,
+    DerivedDataRetention, DerivedLanes, DisconnectEvent, InputSub, NodeConfig, OverflowPolicy,
+    PersistentStoreConfig, PreparedAcquisition, ProcessNode, SampleBlock, SamplingActivity,
+    SimpleTriggerCondition, TriggerEditorSchema, TriggerProgram,
 };
 
 use super::cache_platform;
@@ -43,10 +43,6 @@ use super::data_collector::DataCollectorBuilder;
 use super::errors::{ApplyError, CompileError};
 use super::port_kind::{PortKind, PortValue};
 use crate::decoder_table::{DecoderTableColumnPresentation, DecoderTableRegistry};
-use crate::nodes::sinks::{
-    DigitalSnapshotRenderer, NumberSnapshotRenderer, TextSnapshotRenderer, TriggerSnapshotRenderer,
-    WordSnapshotRenderer,
-};
 
 /// Shared resources handed to builders. A fresh `DerivedLanes` store per
 /// run makes stale collected data vanish atomically on re-run.
@@ -159,7 +155,7 @@ pub struct ResolvedInput {
     pub source_node_title: String,
     pub word_display_format: Option<String>,
     pub viewer_presentation: Option<ViewerOutputPresentation>,
-    /// Registry-owned fallback presentation for a viewable payload. Concrete
+    /// Registry-owned fallback presentation for a subscribed payload. Concrete
     /// producers may still provide a richer multi-track presentation above.
     pub default_viewer_presentation: Option<DefaultViewerPayloadPresentation>,
     pub decoder_table_column: Option<DecoderTableColumnPresentation>,
@@ -169,7 +165,7 @@ pub struct ResolvedInput {
     pub capture_channel: Option<usize>,
 }
 
-/// Default singleton presentation supplied by a viewable payload owner.
+/// Default singleton presentation supplied by a subscribed payload owner.
 ///
 /// This is used only when the producing node has not supplied a richer
 /// output-specific presentation contract.
@@ -662,68 +658,36 @@ pub struct DiscoveredCapturePresentation {
 pub struct BuilderRegistry {
     builders: HashMap<String, Box<dyn RuntimeBuilder>>,
     collected_payloads: CollectedPayloadRegistry,
-    viewable_payloads: Vec<ViewablePayload>,
+    payload_subscriptions: Vec<CollectedPayloadSubscription>,
 }
 
 #[derive(Clone)]
-struct ViewablePayload {
+struct CollectedPayloadSubscription {
     kind: PortKind,
+    diagnostic_name: String,
     presentation: DefaultViewerPayloadPresentation,
+    persistent_cache: bool,
+    configure_request: CollectedPayloadRequestConfigurator,
 }
+
+type CollectedPayloadRequestConfigurator = Arc<
+    dyn Fn(CollectedLaneRequest, usize, &ResolvedInput, &CompileCtx) -> CollectedLaneRequest
+        + Send
+        + Sync,
+>;
 
 impl BuilderRegistry {
     pub fn standard() -> Self {
         let mut registry = Self {
             builders: crate::nodes::standard_builders(),
             collected_payloads: CollectedPayloadRegistry::new(),
-            viewable_payloads: Vec::new(),
+            payload_subscriptions: Vec::new(),
         };
         signal_processing::register_builtin_collected_payload_adapters(
             &mut registry.collected_payloads,
         )
         .expect("built-in collected payload adapters must be valid");
-        registry
-            .register_viewable_collected_payload::<signal_processing::Sample>(
-                DefaultViewerPayloadPresentation::with_renderer(
-                    ViewerLaneBadge::new("S", Color32::from_rgb(95, 175, 95)),
-                    Arc::new(DigitalSnapshotRenderer),
-                ),
-            )
-            .expect("built-in digital payload must be viewable");
-        registry
-            .register_viewable_collected_payload::<signal_processing::Word>(
-                DefaultViewerPayloadPresentation::with_renderer(
-                    ViewerLaneBadge::new("W", Color32::from_rgb(215, 140, 60)),
-                    Arc::new(WordSnapshotRenderer::new(Arc::new(
-                        DefaultViewerLaneRenderer,
-                    ))),
-                ),
-            )
-            .expect("built-in word payload must be viewable");
-        registry
-            .register_viewable_collected_payload::<signal_processing::Trigger>(
-                DefaultViewerPayloadPresentation::with_renderer(
-                    ViewerLaneBadge::new("T", Color32::from_rgb(230, 190, 80)),
-                    Arc::new(TriggerSnapshotRenderer),
-                ),
-            )
-            .expect("built-in trigger payload must be viewable");
-        registry
-            .register_viewable_collected_payload::<signal_processing::NumberSample>(
-                DefaultViewerPayloadPresentation::with_renderer(
-                    ViewerLaneBadge::new("N", Color32::from_rgb(95, 145, 210)),
-                    Arc::new(NumberSnapshotRenderer),
-                ),
-            )
-            .expect("built-in number payload must be viewable");
-        registry
-            .register_viewable_collected_payload::<signal_processing::TextSample>(
-                DefaultViewerPayloadPresentation::with_renderer(
-                    ViewerLaneBadge::new("TXT", Color32::from_rgb(215, 150, 170)),
-                    Arc::new(TextSnapshotRenderer),
-                ),
-            )
-            .expect("built-in text payload must be viewable");
+        crate::nodes::sinks::register_collected_payload_subscriptions(&mut registry);
         registry
     }
 
@@ -768,9 +732,24 @@ impl BuilderRegistry {
 
     /// Marks a registered collected payload as eligible for graph-level data
     /// subscriptions. A payload remains non-viewable until its owner opts in.
-    pub fn register_viewable_collected_payload<T: PortValue>(
+    pub fn register_collected_payload_subscription<T: PortValue>(
         &mut self,
         presentation: DefaultViewerPayloadPresentation,
+    ) -> Result<&mut Self, CollectedPayloadRegistrationError> {
+        self.register_collected_payload_subscription_with_request_configurator::<T>(
+            presentation,
+            Arc::new(|request, _, _, _| request),
+            false,
+        )
+    }
+
+    pub(crate) fn register_collected_payload_subscription_with_request_configurator<
+        T: PortValue,
+    >(
+        &mut self,
+        presentation: DefaultViewerPayloadPresentation,
+        configure_request: CollectedPayloadRequestConfigurator,
+        persistent_cache: bool,
     ) -> Result<&mut Self, CollectedPayloadRegistrationError> {
         let type_id = std::any::TypeId::of::<T>();
         let descriptor = self
@@ -790,28 +769,37 @@ impl BuilderRegistry {
         }
         let kind = PortKind::of::<T>();
         if let Some(existing) = self
-            .viewable_payloads
+            .payload_subscriptions
             .iter_mut()
             .find(|existing| existing.kind == kind)
         {
             existing.presentation = presentation;
+            existing.diagnostic_name = T::kind_name().to_owned();
+            existing.persistent_cache = persistent_cache;
+            existing.configure_request = configure_request;
         } else {
-            self.viewable_payloads
-                .push(ViewablePayload { kind, presentation });
+            self.payload_subscriptions
+                .push(CollectedPayloadSubscription {
+                    kind,
+                    diagnostic_name: T::kind_name().to_owned(),
+                    presentation,
+                    persistent_cache,
+                    configure_request,
+                });
         }
         Ok(self)
     }
 
     /// Registers a collected adapter and makes the payload eligible for data
     /// subscriptions in one explicit plugin-facing operation.
-    pub fn register_viewable_collected_payload_adapter<T: PortValue>(
+    pub fn register_collected_payload_subscription_adapter<T: PortValue>(
         &mut self,
         stable_id: impl Into<String>,
         adapter: std::sync::Arc<dyn CollectedPayloadAdapter>,
         presentation: DefaultViewerPayloadPresentation,
     ) -> Result<&mut Self, CollectedPayloadRegistrationError> {
         self.register_collected_payload_adapter::<T>(stable_id, adapter)?;
-        self.register_viewable_collected_payload::<T>(presentation)
+        self.register_collected_payload_subscription::<T>(presentation)
     }
 
     /// Registered retained-payload identities, keyed by runtime `TypeId` and
@@ -820,28 +808,54 @@ impl BuilderRegistry {
         &self.collected_payloads
     }
 
-    fn viewable_payload_kinds(&self) -> Vec<PortKind> {
-        self.viewable_payloads
+    fn subscribable_payload_kinds(&self) -> Vec<PortKind> {
+        self.payload_subscriptions
             .iter()
             .map(|payload| payload.kind)
             .collect()
     }
 
-    fn viewable_payload_presentation(
+    fn payload_subscription_presentation(
         &self,
         kind: PortKind,
     ) -> Option<DefaultViewerPayloadPresentation> {
-        self.viewable_payloads
+        self.payload_subscriptions
             .iter()
             .find(|payload| payload.kind == kind)
             .map(|payload| payload.presentation.clone())
+    }
+
+    pub(crate) fn payload_uses_persistent_cache(&self, kind: PortKind) -> bool {
+        self.payload_subscriptions
+            .iter()
+            .find(|payload| payload.kind == kind)
+            .is_some_and(|payload| payload.persistent_cache)
+    }
+
+    pub(crate) fn configure_collected_lane_request(
+        &self,
+        kind: PortKind,
+        request: CollectedLaneRequest,
+        member: usize,
+        input: &ResolvedInput,
+        ctx: &CompileCtx,
+    ) -> Result<(CollectedLaneRequest, &str), String> {
+        let contract = self
+            .payload_subscriptions
+            .iter()
+            .find(|payload| payload.kind == kind)
+            .ok_or_else(|| format!("payload {kind:?} has no data-subscription contract"))?;
+        Ok((
+            (contract.configure_request)(request, member, input, ctx),
+            &contract.diagnostic_name,
+        ))
     }
 
     fn register_default_waveform_presentations(
         &self,
         presentations: &WaveformPresentationRegistry,
     ) {
-        for payload in &self.viewable_payloads {
+        for payload in &self.payload_subscriptions {
             let Some(descriptor) = self
                 .collected_payloads
                 .descriptor_by_type_id(payload.kind.type_id())
@@ -1550,15 +1564,16 @@ pub fn lower(
 
         let offered = from_builder.offered_kinds(from_socket, &from_node.state);
         let data_subscription = to_builder.is_data_subscription();
-        let accepted = if data_subscription {
-            registry.viewable_payload_kinds()
+        let registered_collection = data_subscription || to_builder.is_data_collector();
+        let accepted = if registered_collection {
+            registry.subscribable_payload_kinds()
         } else {
             to_builder.accepted_kinds(to_socket, &to_node.state)
         };
         let Some(kind) = offered.iter().copied().find(|k| accepted.contains(k)) else {
-            let message = if data_subscription {
+            let message = if registered_collection {
                 format!(
-                    "data subscription cannot display '{}' because its payload is not registered as viewable",
+                    "collected-data input cannot retain '{}' because its payload has no registered subscription contract",
                     from_socket.name
                 )
             } else {
@@ -1599,7 +1614,7 @@ pub fn lower(
                 viewer_presentation: from_builder
                     .viewer_output_presentation(from_socket, &from_node.state),
                 default_viewer_presentation: data_subscription
-                    .then(|| registry.viewable_payload_presentation(kind))
+                    .then(|| registry.payload_subscription_presentation(kind))
                     .flatten(),
                 decoder_table_column: from_builder
                     .decoder_table_column(from_socket, &from_node.state),
@@ -1744,7 +1759,7 @@ pub fn lower(
         sampling_overlays,
     };
     let mut compiled = compiled;
-    cache_platform::assign_derived_word_caches(&mut compiled);
+    cache_platform::assign_derived_word_caches(&mut compiled, registry);
     Ok(compiled)
 }
 
@@ -1866,15 +1881,15 @@ fn materialize_compiled_node(
     node: &CompiledNode,
     builder: &dyn RuntimeBuilder,
     runtime_name: &str,
-    collected_payloads: &CollectedPayloadRegistry,
+    registry: &BuilderRegistry,
     ctx: &mut CompileCtx,
 ) -> Result<Box<dyn ProcessNode>, String> {
-    if builder.is_data_subscription() {
+    if builder.is_data_subscription() || builder.is_data_collector() {
         return DataCollectorBuilder::build_with_lane_names(
             runtime_name,
             &node.resolved,
             &builder.collected_lane_names(&node.state, &node.resolved),
-            collected_payloads,
+            registry,
             ctx,
         );
     }
@@ -2202,14 +2217,8 @@ fn start_live_inner(
         let process = if let Some(process) = source_overrides.remove(&id) {
             process
         } else {
-            materialize_compiled_node(
-                node,
-                builder,
-                &node.runtime_name,
-                registry.collected_payloads(),
-                ctx,
-            )
-            .map_err(|message| vec![CompileError::on(id, message)])?
+            materialize_compiled_node(node, builder, &node.runtime_name, registry, ctx)
+                .map_err(|message| vec![CompileError::on(id, message)])?
         };
         let inputs = input_subs(&execution, id, process.as_ref(), &names)
             .map_err(|message| vec![CompileError::on(id, message)])?;
@@ -2310,7 +2319,7 @@ impl LiveRun {
                         node,
                         builder,
                         &node.runtime_name,
-                        registry.collected_payloads(),
+                        registry,
                         &mut ctx,
                     )
                     .map_err(ApplyError::Apply)?;
@@ -2350,14 +2359,9 @@ impl LiveRun {
                         .clone_from(&node.derived_word_caches);
                     register_collected_subscribers(node, builder, &name, &ctx)
                         .map_err(ApplyError::Apply)?;
-                    let process = materialize_compiled_node(
-                        node,
-                        builder,
-                        &name,
-                        registry.collected_payloads(),
-                        &mut ctx,
-                    )
-                    .map_err(ApplyError::Apply)?;
+                    let process =
+                        materialize_compiled_node(node, builder, &name, registry, &mut ctx)
+                            .map_err(ApplyError::Apply)?;
                     let inputs = input_subs(&new, id, process.as_ref(), &self.names)
                         .map_err(ApplyError::Apply)?;
                     self.manager
@@ -2552,22 +2556,22 @@ mod tests {
     use crate::nodes;
 
     #[test]
-    fn viewable_payloads_register_subscription_and_default_presentation() {
+    fn payload_subscriptions_register_subscription_and_default_presentation() {
         let mut registry = BuilderRegistry::standard();
 
         assert!(
             registry
-                .viewable_payload_kinds()
+                .subscribable_payload_kinds()
                 .contains(&PortKind::of::<Sample>())
         );
         assert!(
             registry
-                .viewable_payload_kinds()
+                .subscribable_payload_kinds()
                 .contains(&PortKind::of::<Word>())
         );
         assert_eq!(
             registry
-                .viewable_payload_presentation(PortKind::of::<Word>())
+                .payload_subscription_presentation(PortKind::of::<Word>())
                 .unwrap()
                 .badge()
                 .text,
@@ -2580,17 +2584,25 @@ mod tests {
             PortKind::of::<NumberSample>(),
             PortKind::of::<TextSample>(),
         ] {
-            assert!(registry.viewable_payload_presentation(kind).is_some());
+            assert!(registry.payload_subscription_presentation(kind).is_some());
         }
         registry
             .register_collected_payload::<SampleBlock>("org.example.block/v1")
             .unwrap();
+        assert!(
+            !registry
+                .subscribable_payload_kinds()
+                .contains(&PortKind::of::<SampleBlock>()),
+            "a durable payload identity alone must not create a subscription contract"
+        );
         assert!(matches!(
-            registry.register_viewable_collected_payload::<SampleBlock>(
+            registry.register_collected_payload_subscription::<SampleBlock>(
                 DefaultViewerPayloadPresentation::new(ViewerLaneBadge::new("B", Color32::WHITE))
             ),
             Err(CollectedPayloadRegistrationError::PayloadHasNoAdapter { .. })
         ));
+        assert!(registry.payload_uses_persistent_cache(PortKind::of::<Word>()));
+        assert!(!registry.payload_uses_persistent_cache(PortKind::of::<Sample>()));
     }
 
     fn startup_widget() -> NodeGraphWidget {
@@ -3225,14 +3237,9 @@ mod tests {
             ctx.derived_word_caches
                 .clone_from(&node.derived_word_caches);
             register_collected_subscribers(node, builder, &node.runtime_name, &ctx).unwrap();
-            let process = materialize_compiled_node(
-                node,
-                builder,
-                &node.runtime_name,
-                registry.collected_payloads(),
-                &mut ctx,
-            )
-            .unwrap();
+            let process =
+                materialize_compiled_node(node, builder, &node.runtime_name, &registry, &mut ctx)
+                    .unwrap();
             let inputs = input_subs(&compiled, id, process.as_ref(), &names).unwrap();
             manager
                 .add_node_deferred(NodeSpec {
@@ -3858,14 +3865,9 @@ mod tests {
         assert!(viewer.data_collector, "lowering must plan retained storage");
 
         let mut ctx = CompileCtx::default();
-        let process = materialize_compiled_node(
-            viewer,
-            builder,
-            &viewer.runtime_name,
-            registry.collected_payloads(),
-            &mut ctx,
-        )
-        .unwrap();
+        let process =
+            materialize_compiled_node(viewer, builder, &viewer.runtime_name, &registry, &mut ctx)
+                .unwrap();
         assert_eq!(process.num_inputs(), viewer.resolved.member_count(0));
         assert_eq!(process.num_outputs(), 0);
     }

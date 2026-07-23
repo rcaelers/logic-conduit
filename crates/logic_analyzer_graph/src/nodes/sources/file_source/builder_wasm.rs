@@ -22,9 +22,11 @@ impl RuntimeBuilder for FileSourceBuilder {
     }
 
     fn accepted_kinds(&self, socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        (socket.def_index == 0)
-            .then(|| vec![PortKind::of::<TextSample>()])
-            .unwrap_or_default()
+        if socket.def_index == 0 {
+            vec![PortKind::of::<TextSample>()]
+        } else {
+            Vec::new()
+        }
     }
 
     fn offered_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
