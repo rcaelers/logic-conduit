@@ -7,7 +7,10 @@ use signal_processing::{
     CaptureMetadata, CaptureSampledWindow, CaptureWaveformSegment, CollectedLaneSnapshotRequest,
 };
 
-use crate::lanes::{DerivedLaneId, ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneInteraction};
+use crate::lanes::{
+    DerivedLaneId, ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneInteraction,
+    ViewerLaneInteractionContext,
+};
 use crate::sampling::sample_to_us;
 use crate::types::{
     AnalyzerLayout, RowDragState, RowKey, RowLabel, RowRenameState, Transition, ViewerRowId,
@@ -569,14 +572,25 @@ impl LogicAnalyzerViewer {
             let lane = opaque_lanes
                 .iter()
                 .find(|lane| lane.name() == track.lane.as_str())?;
-            let snapshot = lane.snapshot(CollectedLaneSnapshotRequest {
+            let request = CollectedLaneSnapshotRequest {
                 start_time_ns,
                 end_time_ns,
                 max_items: DETAIL_BUDGET,
-            });
+            };
+            let snapshot = lane.snapshot(request);
             group
                 .renderer
-                .interaction(track, snapshot.as_ref())
+                .interaction(
+                    track,
+                    snapshot.as_ref(),
+                    ViewerLaneInteractionContext {
+                        visible_start_ns: request.start_time_ns,
+                        visible_end_ns: request.end_time_ns,
+                        max_items: request.max_items,
+                        hovered: false,
+                        pointer_time_ns: None,
+                    },
+                )
                 .map(|interaction| (lane.name().to_owned(), interaction))
         })
     }
@@ -734,6 +748,7 @@ mod tests {
             &self,
             _track: &ViewerLaneTrack,
             snapshot: Option<&OpaqueCollectedLaneSnapshot>,
+            _context: ViewerLaneInteractionContext,
         ) -> Option<ViewerLaneInteraction> {
             snapshot
                 .and_then(|snapshot| snapshot.value::<Option<ViewerLaneInteraction>>())

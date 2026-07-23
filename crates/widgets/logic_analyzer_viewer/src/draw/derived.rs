@@ -2,7 +2,7 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, Shape, Stroke};
 
 use signal_processing::{Annotation, MAX_ANNOTATION_NS, MipmapRecord, Sample};
 
-use crate::lanes::{AnnotationVisual, OpaqueLaneDrawContext};
+use crate::lanes::{AnnotationVisual, OpaqueLaneDrawContext, ViewerLaneTheme};
 
 const MIN_ANNOTATION_WIDTH_PX: f32 = 8.0;
 
@@ -12,7 +12,7 @@ pub fn draw_digital_snapshot(
     samples: &[Sample],
     initial: bool,
 ) {
-    let color = Color32::from_rgb(95, 175, 95);
+    let color = context.theme.accent;
     let stroke = Stroke::new(1.4, color);
     let high_y = context.top + context.height * 0.28;
     let low_y = context.top + context.height * 0.72;
@@ -50,7 +50,7 @@ pub fn draw_digital_activity(
     records: &[MipmapRecord],
     initial: bool,
 ) {
-    let color = Color32::from_rgb(95, 175, 95);
+    let color = context.theme.accent;
     let stroke = Stroke::new(1.4, color);
     let high_y = context.top + context.height * 0.28;
     let low_y = context.top + context.height * 0.72;
@@ -118,7 +118,7 @@ pub fn draw_digital_activity(
 
 /// Draws exact trigger markers supplied by a lane adapter.
 pub fn draw_trigger_snapshot(context: &OpaqueLaneDrawContext<'_>, markers: &[u64]) {
-    let color = Color32::from_rgb(230, 190, 80);
+    let color = context.theme.accent;
     let top = context.top + context.height * 0.18;
     let bottom = context.top + context.height * 0.82;
     for timestamp_ns in markers {
@@ -141,7 +141,7 @@ pub fn draw_trigger_snapshot(context: &OpaqueLaneDrawContext<'_>, markers: &[u64
 
 /// Draws bounded trigger activity supplied by a dense lane query.
 pub fn draw_trigger_activity(context: &OpaqueLaneDrawContext<'_>, records: &[MipmapRecord]) {
-    let color = Color32::from_rgb(230, 190, 80);
+    let color = context.theme.accent;
     let top = context.top + context.height * 0.18;
     let bottom = context.top + context.height * 0.82;
     for record in records {
@@ -219,7 +219,7 @@ pub fn draw_value_snapshot(
                 Align2::CENTER_CENTER,
                 value,
                 FontId::monospace(12.0),
-                Color32::WHITE,
+                context.theme.foreground,
             );
         }
     }
@@ -252,11 +252,15 @@ pub fn draw_value_activity(
     }
 }
 
-pub fn default_annotation_visual(value: u64, display_format: Option<&str>) -> AnnotationVisual {
+pub fn default_annotation_visual(
+    value: u64,
+    display_format: Option<&str>,
+    theme: &ViewerLaneTheme,
+) -> AnnotationVisual {
     AnnotationVisual {
         label: format_value(value, display_format),
-        fill: Color32::from_rgb(88, 58, 28),
-        border: Stroke::new(1.0, Color32::from_rgb(215, 140, 60)),
+        fill: theme.accent.gamma_multiply(0.35),
+        border: Stroke::new(1.0, theme.accent),
     }
 }
 
@@ -330,7 +334,7 @@ pub fn draw_annotation_snapshot<F>(
                 Align2::CENTER_CENTER,
                 visual.label,
                 FontId::monospace(10.0),
-                Color32::from_rgb(235, 220, 200),
+                context.theme.foreground,
             );
         }
     }
@@ -342,7 +346,7 @@ pub fn draw_annotation_presence<I>(context: &OpaqueLaneDrawContext<'_>, buckets:
 where
     I: IntoIterator<Item = (u64, u64, u64)>,
 {
-    let color = Color32::from_rgb(215, 140, 60);
+    let color = context.theme.accent;
     let top = context.top + context.height * 0.12;
     let bottom = context.top + context.height * 0.88;
     for (bucket_start_ns, bucket_end_ns, item_count) in buckets {
@@ -402,6 +406,17 @@ fn annotation_label_position(rect: Rect, wave_rect: Rect, label_width: f32) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_annotation_visual_uses_the_supplied_theme() {
+        let theme =
+            ViewerLaneTheme::from_visuals(&egui::Visuals::light(), Color32::from_rgb(20, 80, 160));
+        let visual = default_annotation_visual(0x2a, Some("Hex"), &theme);
+
+        assert_eq!(visual.label, "2A");
+        assert_eq!(visual.border.color, theme.accent);
+        assert_eq!(visual.fill, theme.accent.gamma_multiply(0.35));
+    }
 
     #[test]
     fn last_ever_open_annotation_matches_the_previous_words_width() {

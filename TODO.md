@@ -27,19 +27,16 @@ required by arbitrary plugins.
 
 This is the definitive completion checklist for the plugin migration:
 
-1. Complete the `ViewerLaneRenderer` contract with the required theme and interaction context.
-   Renderers continue to receive only bounded immutable snapshots, time transforms, and explicit
-   commands; they never receive `LogicAnalyzerViewer` internals or locked runtime storage.
-2. Make collection and subscription negotiation fully registry-driven. Remove the built-in
+1. Make collection and subscription negotiation fully registry-driven. Remove the built-in
    `PortKind` list from the data collector and require registered collection, presentation, and
    diagnostic contracts for every subscribable payload.
-3. Define saved-graph compatibility for Viewer sockets and `show_in_view` outputs. Explicitly
+2. Define saved-graph compatibility for Viewer sockets and `show_in_view` outputs. Explicitly
    migrate legacy built-in lanes, preserve their visual behavior, and show a user-visible warning
    for missing payload or presentation registrations.
-4. Add UI panel registration, then prove the complete contract with a `CameraFrame` plugin payload
+3. Add UI panel registration, then prove the complete contract with a `CameraFrame` plugin payload
    carrying a timestamp and image: custom socket, source node, bounded sampler, thumbnail renderer,
    explicit Viewer connection, and View-panel discovery without generic-source edits.
-5. Add architecture and contract coverage for registration collisions and absence, typed channel
+4. Add architecture and contract coverage for registration collisions and absence, typed channel
    construction, negotiation, retention, dense snapshots, timeline extent, renderer lock release,
    saved-state diagnostics, native/wasm compilation, and absence of hardcoded built-in checks in
    generic viewer, compiler, and runtime paths.

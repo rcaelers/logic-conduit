@@ -11,7 +11,7 @@ Public surface:
 pub use viewer::{ChannelSignal, LogicAnalyzerViewer};
 pub use lanes::{
     AnnotationVisual, DefaultViewerLaneRenderer, DerivedLaneId, OpaqueLaneDrawContext,
-    ViewerLaneBadge, ViewerLaneInteraction,
+    ViewerLaneBadge, ViewerLaneInteraction, ViewerLaneInteractionContext, ViewerLaneTheme,
     ViewerLaneGroup, ViewerLaneGroupId, WaveformPresentationRegistry, ViewerLaneRenderer,
     ViewerLaneTrack, ViewerLaneTrackId, ViewerOutputPresentation,
 };
@@ -96,7 +96,9 @@ viewer.set_waveform_presentations(compile_ctx.waveform_presentations().clone());
 The registry contains explicit `ViewerLaneGroup` and `ViewerLaneTrack` objects plus singleton
 defaults keyed by stable payload identity. A group can combine several payload lanes in one
 displayed row and supplies a `ViewerLaneRenderer` for row height, bounded drawing, optional
-level/event interaction, annotation labels/styles, and snap-track selection. Concrete producer builders contribute
+level/event interaction, annotation labels/styles, and snap-track selection. Drawing receives a
+theme with semantic color roles and an interaction context containing the bounded window, item
+budget, hover state, and pointer time. Concrete producer builders contribute
 `ViewerOutputPresentation` through `RuntimeBuilder::viewer_output_presentation`; the generic
 waveform-subscription builder performs registration without inspecting node names, socket labels,
 or metadata values. The compiler independently materializes a neutral `DerivedDataCollector` for

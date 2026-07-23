@@ -6,7 +6,7 @@ use egui::{Color32, Stroke};
 
 use logic_analyzer_viewer::{
     AnnotationVisual, DerivedLaneId, ViewerLaneBadge, ViewerLaneGroup, ViewerLaneRenderer,
-    ViewerLaneTrackId, ViewerOutputPresentation,
+    ViewerLaneTheme, ViewerLaneTrackId, ViewerOutputPresentation,
 };
 
 use crate::decoder_table::{DecoderTableCellMode, DecoderTableColumnPresentation};
@@ -30,6 +30,7 @@ impl ViewerLaneRenderer for UartLaneRenderer {
     fn annotation_visual(
         &self,
         track: &ViewerLaneTrackId,
+        theme: &ViewerLaneTheme,
         value: u64,
         mut default: AnnotationVisual,
     ) -> AnnotationVisual {
@@ -41,8 +42,8 @@ impl ViewerLaneRenderer for UartLaneRenderer {
                 STOP => default.label = "T".to_owned(),
                 ERROR => {
                     default.label = "Error".to_owned();
-                    default.fill = Color32::from_rgb(92, 38, 38);
-                    default.border = Stroke::new(1.0, Color32::from_rgb(235, 85, 85));
+                    default.fill = theme.error.gamma_multiply(0.35);
+                    default.border = Stroke::new(1.0, theme.error);
                 }
                 _ => {}
             }
@@ -123,26 +124,30 @@ mod tests {
         let renderer = UartLaneRenderer;
         let bits = ViewerLaneTrackId::new("bits");
         let frame = ViewerLaneTrackId::new("frame");
+        let theme =
+            ViewerLaneTheme::from_visuals(&egui::Visuals::dark(), Color32::from_rgb(215, 140, 60));
 
         assert_eq!(
-            renderer.annotation_visual(&bits, 1, visual("0x1")).label,
+            renderer
+                .annotation_visual(&bits, &theme, 1, visual("0x1"))
+                .label,
             "1"
         );
         assert_eq!(
             renderer
-                .annotation_visual(&frame, START, visual("default"))
+                .annotation_visual(&frame, &theme, START, visual("default"))
                 .label,
             "S"
         );
         assert_eq!(
             renderer
-                .annotation_visual(&frame, STOP, visual("default"))
+                .annotation_visual(&frame, &theme, STOP, visual("default"))
                 .label,
             "T"
         );
-        let error = renderer.annotation_visual(&frame, ERROR, visual("default"));
+        let error = renderer.annotation_visual(&frame, &theme, ERROR, visual("default"));
         assert_eq!(error.label, "Error");
-        assert_eq!(error.fill, Color32::from_rgb(92, 38, 38));
+        assert_eq!(error.fill, theme.error.gamma_multiply(0.35));
     }
 
     #[test]

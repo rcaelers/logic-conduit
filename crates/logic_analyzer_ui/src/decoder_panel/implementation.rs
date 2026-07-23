@@ -5,7 +5,7 @@ use egui::{Color32, PopupCloseBehavior, Stroke};
 use logic_analyzer_graph::{
     DecoderTableCellMode, DecoderTableColumn, DecoderTableRegistry, DecoderTableSource,
 };
-use logic_analyzer_viewer::AnnotationVisual;
+use logic_analyzer_viewer::{AnnotationVisual, ViewerLaneTheme};
 use signal_processing::{
     Annotation, CollectedLaneTableRow, DerivedLaneData, DerivedLanes, OpaqueCollectedLane,
 };
@@ -781,7 +781,7 @@ fn show_row(
                     row.start_time_ns >= anchor.start_time_ns
                         && row.start_time_ns <= anchor.end_time_ns
                 })
-                .map(|row| format_cell_value(column, row.value, state, loaded))
+                .map(|row| format_cell_value(ui, column, row.value, state, loaded))
                 .collect::<Vec<_>>();
             let text = match &column.cell_mode {
                 DecoderTableCellMode::Single => values.first().cloned().unwrap_or_default(),
@@ -838,23 +838,25 @@ fn paint_sticky_header(
 }
 
 fn format_cell_value(
+    ui: &egui::Ui,
     column: &DecoderTableColumn,
     value: u64,
     state: &DecoderPanelState,
     loaded: &LoadedColumn,
 ) -> String {
+    let theme = ViewerLaneTheme::from_visuals(ui.visuals(), ui.visuals().hyperlink_color);
     let format = state
         .format
         .override_name()
         .or(loaded.lane_format.as_deref());
     let default = AnnotationVisual {
         label: format_value(value, format),
-        fill: Color32::from_rgb(88, 58, 28),
-        border: Stroke::new(1.0, Color32::from_rgb(215, 140, 60)),
+        fill: theme.accent.gamma_multiply(0.35),
+        border: Stroke::new(1.0, theme.accent),
     };
     column
         .renderer
-        .annotation_visual(&column.track, value, default)
+        .annotation_visual(&column.track, &theme, value, default)
         .label
 }
 

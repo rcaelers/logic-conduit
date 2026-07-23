@@ -4,7 +4,7 @@ use signal_processing::CollectedLaneSnapshotRequest;
 
 use crate::cursor::{cursor_color, cursor_flag_geometry, cursor_flag_label};
 use crate::format::{badge_text_color, format_time, nice_step};
-use crate::lanes::OpaqueLaneDrawContext;
+use crate::lanes::{OpaqueLaneDrawContext, ViewerLaneTheme};
 use crate::types::{AnalyzerLayout, RowKey};
 use crate::viewer::LogicAnalyzerViewer;
 
@@ -50,6 +50,7 @@ impl LogicAnalyzerViewer {
         let trace = self.color_profile.trace();
         self.draw_rows(
             painter,
+            pointer,
             labels_rect,
             wave_rect,
             row_height,
@@ -134,6 +135,7 @@ impl LogicAnalyzerViewer {
     fn draw_rows(
         &self,
         painter: &Painter,
+        pointer: Option<Pos2>,
         labels_rect: Rect,
         wave_rect: Rect,
         row_height: f32,
@@ -241,6 +243,8 @@ impl LogicAnalyzerViewer {
                     };
                     let opaque_lanes = store.opaque_lanes();
                     let (visible_start_ns, visible_end_ns) = self.visible_window_ns();
+                    let style = painter.ctx().style_of(painter.ctx().theme());
+                    let theme = ViewerLaneTheme::from_visuals(&style.visuals, group.badge.color);
                     for (track, track_top, track_height) in group.track_rects(y_top, display_height)
                     {
                         let Some(query) = opaque_lanes
@@ -249,13 +253,29 @@ impl LogicAnalyzerViewer {
                         else {
                             continue;
                         };
-                        let snapshot = query.snapshot(CollectedLaneSnapshotRequest {
+                        let request = CollectedLaneSnapshotRequest {
                             start_time_ns: visible_start_ns,
                             end_time_ns: visible_end_ns,
                             max_items: (wave_rect.width().max(1.0) as usize)
                                 .saturating_mul(2)
                                 .max(32),
+                        };
+                        let snapshot = query.snapshot(request);
+                        let track_rect = Rect::from_min_max(
+                            Pos2::new(wave_rect.left(), track_top),
+                            Pos2::new(wave_rect.right(), track_top + track_height),
+                        );
+                        let hovered = pointer.is_some_and(|pointer| track_rect.contains(pointer));
+                        let pointer_time_ns = pointer.filter(|_| hovered).map(|pointer| {
+                            (self.x_to_time(wave_rect, pointer.x).max(0.0) * 1_000.0).round() as u64
                         });
+                        let interaction = crate::lanes::ViewerLaneInteractionContext {
+                            visible_start_ns: request.start_time_ns,
+                            visible_end_ns: request.end_time_ns,
+                            max_items: request.max_items,
+                            hovered,
+                            pointer_time_ns,
+                        };
                         group.renderer.draw_opaque_lane(
                             &track,
                             snapshot.as_ref(),
@@ -266,6 +286,8 @@ impl LogicAnalyzerViewer {
                                 height: track_height,
                                 visible_start_ns,
                                 visible_end_ns,
+                                theme,
+                                interaction,
                             },
                         );
                     }
@@ -475,6 +497,8 @@ mod frame_tests {
 
     struct OpaqueSnapshotRenderer {
         values: Mutex<Vec<u8>>,
+        interaction: Mutex<Option<crate::lanes::ViewerLaneInteractionContext>>,
+        theme: Mutex<Option<ViewerLaneTheme>>,
     }
 
     impl ViewerLaneRenderer for OpaqueSnapshotRenderer {
@@ -482,12 +506,14 @@ mod frame_tests {
             &self,
             _track: &ViewerLaneTrack,
             snapshot: Option<&OpaqueCollectedLaneSnapshot>,
-            _context: OpaqueLaneDrawContext<'_>,
+            context: OpaqueLaneDrawContext<'_>,
         ) -> bool {
             let values = snapshot
                 .and_then(|snapshot| snapshot.value::<Vec<u8>>())
                 .expect("opaque renderer receives its registered snapshot");
             self.values.lock().unwrap().extend(values.iter().copied());
+            *self.interaction.lock().unwrap() = Some(context.interaction);
+            *self.theme.lock().unwrap() = Some(context.theme);
             true
         }
     }
@@ -535,6 +561,8 @@ mod frame_tests {
         );
         let renderer = Arc::new(OpaqueSnapshotRenderer {
             values: Mutex::new(Vec::new()),
+            interaction: Mutex::new(None),
+            theme: Mutex::new(None),
         });
         let presentations = crate::lanes::WaveformPresentationRegistry::new();
         presentations.set_implicit_groups(false);
@@ -573,12 +601,26 @@ mod frame_tests {
                 name_col_width: 120.0,
                 badge_width: 32.0,
             },
-            None,
+            Some(Pos2::new(400.0, 60.0)),
             None,
         );
         let _ = context.end_pass();
 
         assert_eq!(*renderer.values.lock().unwrap(), vec![7, 9]);
+        assert_eq!(
+            *renderer.interaction.lock().unwrap(),
+            Some(crate::lanes::ViewerLaneInteractionContext {
+                visible_start_ns: 0,
+                visible_end_ns: 100_000,
+                max_items: 1_200,
+                hovered: true,
+                pointer_time_ns: Some(33_333),
+            })
+        );
+        assert_eq!(
+            renderer.theme.lock().unwrap().unwrap().accent,
+            Color32::WHITE
+        );
         assert_eq!(
             *query.requested.lock().unwrap(),
             Some(CollectedLaneSnapshotRequest {

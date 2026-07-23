@@ -137,6 +137,10 @@ The trait receives group/track metadata and fully generic default annotation vis
 payload-owned query for an immutable snapshot bounded by the visible window and viewport-derived
 item limit. Exact and dense activity snapshot semantics belong to the payload adapter. Query
 handles are cloned and lane-registry locks are released before the query or renderer runs.
+Drawing receives a `ViewerLaneTheme` derived from the current egui visuals and group accent.
+`ViewerLaneInteractionContext` reports the visible range and item budget for both drawing and
+level/event projection; during drawing it also reports whether the track is hovered and the
+pointer's timeline position. These are copied value contracts, not access to viewer state.
 
 The viewer itself owns the protocol-neutral facilities:
 

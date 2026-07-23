@@ -381,7 +381,9 @@ budget, then releases retained-data locks before calling renderer code. Exact an
 snapshot semantics belong to the payload query. Renderers may additionally project a snapshot to
 generic level or event transitions for measurement and event-row interaction. Cursor boundary,
 timeline extent, and live-status behavior are query capabilities. No renderer or plugin code runs
-while `DerivedLanes` is locked, and the viewer never branches on a concrete payload type.
+while `DerivedLanes` is locked, and the viewer never branches on a concrete payload type. Drawing
+receives semantic theme colors and a copied interaction context containing the bounded window,
+budget, hover state, and pointer time; it never receives `LogicAnalyzerViewer` internals.
 
 ### Pulse measurement (hover)
 

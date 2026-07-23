@@ -6,7 +6,7 @@ use egui::Color32;
 
 use logic_analyzer_viewer::{
     AnnotationVisual, DerivedLaneId, ViewerLaneBadge, ViewerLaneGroup, ViewerLaneRenderer,
-    ViewerLaneTrackId, ViewerOutputPresentation,
+    ViewerLaneTheme, ViewerLaneTrackId, ViewerOutputPresentation,
 };
 
 use crate::decoder_table::{DecoderTableCellMode, DecoderTableColumnPresentation};
@@ -18,6 +18,7 @@ impl ViewerLaneRenderer for SpiLaneRenderer {
     fn annotation_visual(
         &self,
         track: &ViewerLaneTrackId,
+        _theme: &ViewerLaneTheme,
         value: u64,
         mut default: AnnotationVisual,
     ) -> AnnotationVisual {
@@ -141,7 +142,12 @@ mod tests {
 
         assert_eq!(
             renderer
-                .annotation_visual(&ViewerLaneTrackId::new("bits"), 1, visual)
+                .annotation_visual(
+                    &ViewerLaneTrackId::new("bits"),
+                    &ViewerLaneTheme::from_visuals(&egui::Visuals::dark(), Color32::WHITE),
+                    1,
+                    visual,
+                )
                 .label,
             "1"
         );

@@ -118,7 +118,11 @@ capabilities rather than inferred from a payload type.
 
 The waveform viewer owns a separate presentation registry keyed by the collected payload identity.
 Its adapter supplies default group/badge metadata and a renderer for bounded snapshots. Rendering
-occurs after the retained-lane lock is released.
+occurs after the retained-lane lock is released. `ViewerLaneTheme` supplies current background,
+foreground, muted, accent, and error roles. `ViewerLaneInteractionContext` supplies the bounded
+visible range, item budget, hover state, and optional pointer time. Renderers receive these value
+objects instead of viewer internals and can therefore respond to host theme and interaction state
+without reaching into `LogicAnalyzerViewer`.
 
 Table projection is optional adapter metadata. `CollectedLaneQuery::table_metadata` supplies a
 revision and row count for cache invalidation, while `table_snapshot(max_rows)` supplies bounded

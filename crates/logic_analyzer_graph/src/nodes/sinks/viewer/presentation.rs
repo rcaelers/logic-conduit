@@ -2,14 +2,12 @@
 
 use std::sync::Arc;
 
-use egui::Color32;
-
 use logic_analyzer_viewer::{
     AnnotationVisual, DerivedLaneId, OpaqueLaneDrawContext, ViewerLaneGroup, ViewerLaneInteraction,
-    ViewerLaneRenderer, ViewerLaneTrack, ViewerLaneTrackId, default_annotation_visual,
-    draw_annotation_presence, draw_annotation_snapshot, draw_digital_activity,
-    draw_digital_snapshot, draw_trigger_activity, draw_trigger_snapshot, draw_value_activity,
-    draw_value_snapshot,
+    ViewerLaneInteractionContext, ViewerLaneRenderer, ViewerLaneTheme, ViewerLaneTrack,
+    ViewerLaneTrackId, default_annotation_visual, draw_annotation_presence,
+    draw_annotation_snapshot, draw_digital_activity, draw_digital_snapshot, draw_trigger_activity,
+    draw_trigger_snapshot, draw_value_activity, draw_value_snapshot,
 };
 use signal_processing::{
     DigitalLaneSnapshot, NumberLaneSnapshot, OpaqueCollectedLaneSnapshot, TextLaneSnapshot,
@@ -45,6 +43,7 @@ impl ViewerLaneRenderer for DigitalSnapshotRenderer {
         &self,
         _track: &ViewerLaneTrack,
         snapshot: Option<&OpaqueCollectedLaneSnapshot>,
+        _context: ViewerLaneInteractionContext,
     ) -> Option<ViewerLaneInteraction> {
         let snapshot = snapshot?.value::<DigitalLaneSnapshot>()?;
         let (initial, transitions) = match snapshot.as_ref() {
@@ -92,6 +91,7 @@ impl ViewerLaneRenderer for TriggerSnapshotRenderer {
         &self,
         _track: &ViewerLaneTrack,
         snapshot: Option<&OpaqueCollectedLaneSnapshot>,
+        _context: ViewerLaneInteractionContext,
     ) -> Option<ViewerLaneInteraction> {
         let snapshot = snapshot?.value::<TriggerLaneSnapshot>()?;
         let timestamps: Vec<u64> = match snapshot.as_ref() {
@@ -144,7 +144,7 @@ impl ViewerLaneRenderer for NumberSnapshotRenderer {
         else {
             return false;
         };
-        let color = Color32::from_rgb(95, 145, 210);
+        let color = context.theme.accent;
         match snapshot.as_ref() {
             NumberLaneSnapshot::Exact(samples) => {
                 let values = samples
@@ -173,7 +173,7 @@ impl ViewerLaneRenderer for TextSnapshotRenderer {
         else {
             return false;
         };
-        let color = Color32::from_rgb(215, 150, 170);
+        let color = context.theme.accent;
         match snapshot.as_ref() {
             TextLaneSnapshot::Exact(samples) => {
                 let values = samples
@@ -209,10 +209,12 @@ impl ViewerLaneRenderer for WordSnapshotRenderer {
     fn annotation_visual(
         &self,
         track: &ViewerLaneTrackId,
+        theme: &ViewerLaneTheme,
         value: u64,
         default: AnnotationVisual,
     ) -> AnnotationVisual {
-        self.semantics.annotation_visual(track, value, default)
+        self.semantics
+            .annotation_visual(track, theme, value, default)
     }
 
     fn draw_opaque_lane(
@@ -231,8 +233,10 @@ impl ViewerLaneRenderer for WordSnapshotRenderer {
                 last_timestamp_ns,
                 display_format,
             } => draw_annotation_snapshot(&context, annotations, *last_timestamp_ns, |value| {
-                let default = default_annotation_visual(value, display_format.as_deref());
-                self.semantics.annotation_visual(&track.id, value, default)
+                let default =
+                    default_annotation_visual(value, display_format.as_deref(), &context.theme);
+                self.semantics
+                    .annotation_visual(&track.id, &context.theme, value, default)
             }),
             WordLaneSnapshot::Presence(buckets) => draw_annotation_presence(
                 &context,
@@ -249,7 +253,7 @@ impl ViewerLaneRenderer for WordSnapshotRenderer {
                         egui::Pos2::new(context.wave_rect.right(), bottom),
                     ),
                     0.0,
-                    Color32::from_rgb(215, 140, 60),
+                    context.theme.accent,
                 );
             }
             WordLaneSnapshot::Error => return false,
@@ -275,6 +279,7 @@ mod presentation_tests {
         fn annotation_visual(
             &self,
             _track: &ViewerLaneTrackId,
+            _theme: &ViewerLaneTheme,
             value: u64,
             mut default: AnnotationVisual,
         ) -> AnnotationVisual {
@@ -293,7 +298,9 @@ mod presentation_tests {
             border: Stroke::new(1.0, Color32::WHITE),
         };
         assert_eq!(
-            renderer.annotation_visual(&track.id, 42, default).label,
+            renderer
+                .annotation_visual(&track.id, &test_theme(), 42, default)
+                .label,
             "semantic-42"
         );
     }
@@ -308,7 +315,7 @@ mod presentation_tests {
         }));
 
         assert_eq!(
-            renderer.interaction(&track, Some(&snapshot)),
+            renderer.interaction(&track, Some(&snapshot), interaction_context()),
             Some(ViewerLaneInteraction {
                 initial: false,
                 transitions: vec![(10, true), (20, false)],
@@ -327,12 +334,26 @@ mod presentation_tests {
             ])));
 
         assert_eq!(
-            renderer.interaction(&track, Some(&snapshot)),
+            renderer.interaction(&track, Some(&snapshot), interaction_context()),
             Some(ViewerLaneInteraction {
                 initial: false,
                 transitions: vec![(10, true), (20, false), (30, true)],
                 event: true,
             })
         );
+    }
+
+    fn test_theme() -> ViewerLaneTheme {
+        ViewerLaneTheme::from_visuals(&egui::Visuals::dark(), Color32::LIGHT_BLUE)
+    }
+
+    fn interaction_context() -> ViewerLaneInteractionContext {
+        ViewerLaneInteractionContext {
+            visible_start_ns: 0,
+            visible_end_ns: 100,
+            max_items: 100,
+            hovered: false,
+            pointer_time_ns: None,
+        }
     }
 }

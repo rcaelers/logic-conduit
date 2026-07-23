@@ -100,6 +100,30 @@ pub struct OpaqueLaneDrawContext<'a> {
     pub height: f32,
     pub visible_start_ns: u64,
     pub visible_end_ns: u64,
+    pub theme: ViewerLaneTheme,
+    pub interaction: ViewerLaneInteractionContext,
+}
+
+/// Theme roles available to payload renderers without exposing viewer state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViewerLaneTheme {
+    pub background: Color32,
+    pub foreground: Color32,
+    pub muted_foreground: Color32,
+    pub accent: Color32,
+    pub error: Color32,
+}
+
+impl ViewerLaneTheme {
+    pub fn from_visuals(visuals: &egui::Visuals, accent: Color32) -> Self {
+        Self {
+            background: visuals.extreme_bg_color,
+            foreground: visuals.strong_text_color(),
+            muted_foreground: visuals.weak_text_color(),
+            accent,
+            error: visuals.error_fg_color,
+        }
+    }
 }
 
 /// Payload-neutral interaction data supplied by a lane renderer.
@@ -112,6 +136,16 @@ pub struct ViewerLaneInteraction {
     pub initial: bool,
     pub transitions: Vec<(u64, bool)>,
     pub event: bool,
+}
+
+/// Bounded viewer request accompanying a renderer's interaction projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViewerLaneInteractionContext {
+    pub visible_start_ns: u64,
+    pub visible_end_ns: u64,
+    pub max_items: usize,
+    pub hovered: bool,
+    pub pointer_time_ns: Option<u64>,
 }
 
 impl OpaqueLaneDrawContext<'_> {
@@ -145,6 +179,7 @@ pub trait ViewerLaneRenderer: Send + Sync {
     fn annotation_visual(
         &self,
         _track: &ViewerLaneTrackId,
+        _theme: &ViewerLaneTheme,
         _value: u64,
         default: AnnotationVisual,
     ) -> AnnotationVisual {
@@ -170,6 +205,7 @@ pub trait ViewerLaneRenderer: Send + Sync {
         &self,
         _track: &ViewerLaneTrack,
         _snapshot: Option<&OpaqueCollectedLaneSnapshot>,
+        _context: ViewerLaneInteractionContext,
     ) -> Option<ViewerLaneInteraction> {
         None
     }

@@ -28,8 +28,9 @@ pub use draw::{
 };
 pub use lanes::{
     AnnotationVisual, DefaultViewerLaneRenderer, DerivedLaneId, OpaqueLaneDrawContext,
-    ViewerLaneBadge, ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneInteraction, ViewerLaneRenderer,
-    ViewerLaneTrack, ViewerLaneTrackId, ViewerOutputPresentation, WaveformPresentationRegistry,
+    ViewerLaneBadge, ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneInteraction,
+    ViewerLaneInteractionContext, ViewerLaneRenderer, ViewerLaneTheme, ViewerLaneTrack,
+    ViewerLaneTrackId, ViewerOutputPresentation, WaveformPresentationRegistry,
 };
 pub use sampling_overlay::{SamplingEdge, SamplingOverlay, SamplingQualifier};
 pub use simple_trigger::{SimpleTriggerEdit, SimpleTriggerLane};
