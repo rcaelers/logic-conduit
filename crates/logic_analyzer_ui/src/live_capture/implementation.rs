@@ -171,11 +171,18 @@ mod tests {
 
     use super::*;
 
+    const TEST_CAPTURE_SOURCE_ID: &str = "org.logicconduit.graph-node.test-capture-source/v1";
+    const TEST_LIVE_CAPTURE_SOURCE_ID: &str =
+        "org.logicconduit.graph-node.test-live-capture-source/v1";
+
     #[test]
     fn source_only_graph_is_available_for_raw_capture() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         graph
-            .add_node_at(nodes::test_live_capture_source_name(), egui::Pos2::ZERO)
+            .add_node_at(
+                nodes::registered_node_name(TEST_LIVE_CAPTURE_SOURCE_ID),
+                egui::Pos2::ZERO,
+            )
             .expect("test capture source is registered");
 
         assert!(matches!(
@@ -188,7 +195,10 @@ mod tests {
     fn preloaded_demo_capture_is_not_a_live_capture_source() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         graph
-            .add_node_at(nodes::test_capture_source_name(), egui::Pos2::ZERO)
+            .add_node_at(
+                nodes::registered_node_name(TEST_CAPTURE_SOURCE_ID),
+                egui::Pos2::ZERO,
+            )
             .expect("test capture source is registered");
 
         assert!(matches!(

@@ -13,7 +13,7 @@ pub mod nodes;
 #[cfg(not(target_arch = "wasm32"))]
 mod capture_export;
 #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
-mod test_support;
+pub mod test_support;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use capture_export::{
@@ -40,9 +40,3 @@ pub use decoder_table::{
     DecoderTableSource,
 };
 pub use nodes::GraphNodeRegistration;
-#[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
-#[doc(hidden)]
-pub use test_support::{
-    TestBufferedFakeConfig, TestBufferedFakeController, TestBufferedFakeProvider,
-    TestDeterministicFakeConfig, TestDeterministicFakeController, TestDeterministicFakeProvider,
-};

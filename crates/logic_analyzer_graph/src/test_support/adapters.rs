@@ -1,5 +1,3 @@
-//! Test-only adapters for driving graph contracts without exposing processing types.
-
 use std::sync::Arc;
 use std::time::Duration;
 

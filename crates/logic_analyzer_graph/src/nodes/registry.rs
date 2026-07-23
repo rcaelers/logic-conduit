@@ -154,20 +154,9 @@ pub fn build_registry() -> NodeTypeRegistry {
 
 #[cfg(test)]
 pub(crate) mod test_graphs_tests {
-    use node_graph::NodeDef;
-
-    use super::super::decoders::{
-        BinaryDecoder, BinaryDecoderState, SpiDecoder, SpiDecoderState, UartDecoder,
-        UartDecoderState, default_baud_preset, default_display_format, default_input_strategy,
-    };
-    use super::super::logic::{
-        Counter, LogicGate, SrFlipFlop, StringFormatter, WordMatcher, WordMatcherState,
-        default_match_op, default_trigger_at,
-    };
-    use super::super::sinks::{FileWriter, Viewer};
-    use super::super::sources::{
-        DslFileSource, SigrokFileSource, TestUartSource, TestUartSourceState,
-    };
+    fn name(stable_id: &str) -> &'static str {
+        super::super::test_support::node_name(stable_id)
+    }
 
     fn output_index(
         widget: &node_graph::NodeGraphWidget,
@@ -213,63 +202,85 @@ pub(crate) mod test_graphs_tests {
 
     pub(crate) fn build_binary_decoder_demo(widget: &mut node_graph::NodeGraphWidget) {
         use egui::Pos2;
-        use node_graph::{BoolValue, EnumValue, IntValue, StringValue};
-
         let add = |widget: &mut node_graph::NodeGraphWidget, name: &str, x: f32, y: f32| {
             widget
                 .add_node_at(name, Pos2::new(x, y))
                 .unwrap_or_else(|| panic!("unknown node type '{name}'"))
         };
 
-        let source = add(widget, SigrokFileSource::name(), 40.0, 300.0);
-        let mut source_state = SigrokFileSource::state();
-        source_state.channels.value = 11;
-        source_state.demo_data = true;
-        widget.set_node_state(source, serde_json::to_value(source_state).unwrap());
-        widget.graph_mut().nodes.get_mut(&source).unwrap().title = SigrokFileSource::name().into();
-        let spi = add(widget, SpiDecoder::name(), 360.0, 80.0);
-        let start = add(widget, WordMatcher::name(), 680.0, 40.0);
-        let stop = add(widget, WordMatcher::name(), 680.0, 230.0);
-        let counter = add(widget, Counter::name(), 960.0, 40.0);
-        let latch = add(widget, SrFlipFlop::name(), 960.0, 230.0);
-        let formatter = add(widget, StringFormatter::name(), 1240.0, 40.0);
-        let gate = add(widget, LogicGate::name(), 1198.4297, 592.2656);
-        let decoder = add(widget, BinaryDecoder::name(), 1520.0, 300.0);
-
-        widget.set_node_state(
-            spi,
-            serde_json::to_value(SpiDecoderState {
-                metadata: crate::nodes::SpiDecoderMetadata::current(),
-                display_format: default_display_format(),
-                word_size: IntValue::new(8, 1, 64),
-                cpol: EnumValue::new(0, &["0", "1"]),
-                cpha: EnumValue::new(0, &["0", "1"]),
-                bit_order: EnumValue::new(0, &["MSB first", "LSB first"]),
-                cs_polarity: EnumValue::new(0, &["Active low", "Active high", "Disabled"]),
-                has_miso: BoolValue::new(true),
-            })
-            .unwrap(),
+        let source_name = name("org.logicconduit.graph-node.sigrok-file-source/v1");
+        let source = add(widget, source_name, 40.0, 300.0);
+        let mut source_state = widget.graph().nodes[&source].state.clone();
+        source_state["channels"]["value"] = 11.into();
+        source_state["demo_data"] = true.into();
+        widget.set_node_state(source, source_state);
+        widget.graph_mut().nodes.get_mut(&source).unwrap().title = source_name.into();
+        let spi = add(
+            widget,
+            name("org.logicconduit.graph-node.spi-decoder/v1"),
+            360.0,
+            80.0,
         );
-        let matcher_state = |pattern: &str| {
-            serde_json::to_value(WordMatcherState {
-                pattern: StringValue::new(pattern),
-                mask: StringValue::new("0xFF"),
-                op: default_match_op(),
-                trigger_at: default_trigger_at(),
-                pulse_output: BoolValue::new(false),
-            })
-            .unwrap()
-        };
-        widget.set_node_state(start, matcher_state("0x9A"));
-        widget.set_node_state(stop, matcher_state("0xDE"));
+        let start = add(
+            widget,
+            name("org.logicconduit.graph-node.word-matcher/v1"),
+            680.0,
+            40.0,
+        );
+        let stop = add(
+            widget,
+            name("org.logicconduit.graph-node.word-matcher/v1"),
+            680.0,
+            230.0,
+        );
+        let counter = add(
+            widget,
+            name("org.logicconduit.graph-node.counter/v1"),
+            960.0,
+            40.0,
+        );
+        let latch = add(
+            widget,
+            name("org.logicconduit.graph-node.sr-flip-flop/v1"),
+            960.0,
+            230.0,
+        );
+        let formatter = add(
+            widget,
+            name("org.logicconduit.graph-node.string-formatter/v1"),
+            1240.0,
+            40.0,
+        );
+        let gate = add(
+            widget,
+            name("org.logicconduit.graph-node.logic-gate/v1"),
+            1198.4297,
+            592.2656,
+        );
+        let decoder = add(
+            widget,
+            name("org.logicconduit.graph-node.binary-decoder/v1"),
+            1520.0,
+            300.0,
+        );
 
-        let mut formatter_state = StringFormatter::state();
-        formatter_state.template.value = "Window {n:02}".to_owned();
-        widget.set_node_state(formatter, serde_json::to_value(formatter_state).unwrap());
+        let matcher_state =
+            |widget: &node_graph::NodeGraphWidget, node: node_graph::NodeId, pattern: &str| {
+                let mut state = widget.graph().nodes[&node].state.clone();
+                state["pattern"]["value"] = pattern.into();
+                state["mask"]["value"] = "0xFF".into();
+                state
+            };
+        widget.set_node_state(start, matcher_state(widget, start, "0x9A"));
+        widget.set_node_state(stop, matcher_state(widget, stop, "0xDE"));
 
-        let mut decoder_state = BinaryDecoder::state();
-        decoder_state.input_strategy.select("Packed stream");
-        widget.set_node_state(decoder, serde_json::to_value(decoder_state).unwrap());
+        let mut formatter_state = widget.graph().nodes[&formatter].state.clone();
+        formatter_state["template"]["value"] = "Window {n:02}".into();
+        widget.set_node_state(formatter, formatter_state);
+
+        let mut decoder_state = widget.graph().nodes[&decoder].state.clone();
+        decoder_state["input_strategy"]["value"] = "Packed stream".into();
+        widget.set_node_state(decoder, decoder_state);
 
         for (id, title) in [
             (source, "Demo"),
@@ -328,17 +339,21 @@ pub(crate) mod test_graphs_tests {
     ) -> node_graph::NodeId {
         use egui::Pos2;
 
-        use super::super::sources::TestLiveCaptureSource;
-
         let source = widget
-            .add_node_at(TestLiveCaptureSource::name(), Pos2::new(40.0, 80.0))
+            .add_node_at(
+                name("org.logicconduit.graph-node.test-live-capture-source/v1"),
+                Pos2::new(40.0, 80.0),
+            )
             .expect("demo source is registered");
         let decoder = widget
-            .add_node_at(BinaryDecoder::name(), Pos2::new(360.0, 80.0))
+            .add_node_at(
+                name("org.logicconduit.graph-node.binary-decoder/v1"),
+                Pos2::new(360.0, 80.0),
+            )
             .expect("binary decoder is registered");
-        let mut decoder_state = BinaryDecoder::state();
-        decoder_state.input_strategy.select("Packed stream");
-        widget.set_node_state(decoder, serde_json::to_value(decoder_state).unwrap());
+        let mut decoder_state = widget.graph().nodes[&decoder].state.clone();
+        decoder_state["input_strategy"]["value"] = "Packed stream".into();
+        widget.set_node_state(decoder, decoder_state);
         connect(widget, (source, "Ch 0"), (decoder, "Clock"));
         connect(widget, (source, "Ch 1"), (decoder, "D"));
         let words = output_index(widget, decoder, "Words");
@@ -356,72 +371,92 @@ pub(crate) mod test_graphs_tests {
     /// "inverted SPI enable" of the requirement.
     pub(crate) fn populate_startup(widget: &mut node_graph::NodeGraphWidget) {
         use egui::Pos2;
-        use node_graph::{BoolValue, EnumValue, IntValue, StringValue};
-
         let add = |widget: &mut node_graph::NodeGraphWidget, name: &str, x: f32, y: f32| {
             widget
                 .add_node_at(name, Pos2::new(x, y))
                 .unwrap_or_else(|| panic!("unknown node type '{name}'"))
         };
 
-        let source = add(widget, DslFileSource::name(), 40.0, 260.0);
-        let spi = add(widget, SpiDecoder::name(), 330.0, 120.0);
-        let start = add(widget, WordMatcher::name(), 620.0, 40.0);
-        let stop = add(widget, WordMatcher::name(), 620.0, 230.0);
-        let counter = add(widget, Counter::name(), 900.0, 40.0);
-        let latch = add(widget, SrFlipFlop::name(), 900.0, 230.0);
-        let formatter = add(widget, StringFormatter::name(), 1160.0, 40.0);
-        let gate = add(widget, LogicGate::name(), 1160.0, 400.0);
-        let decoder = add(widget, BinaryDecoder::name(), 1440.0, 260.0);
-        let writer = add(widget, FileWriter::name(), 1760.0, 120.0);
+        let source = add(
+            widget,
+            name("org.logicconduit.graph-node.dsl-file-source/v1"),
+            40.0,
+            260.0,
+        );
+        let spi = add(
+            widget,
+            name("org.logicconduit.graph-node.spi-decoder/v1"),
+            330.0,
+            120.0,
+        );
+        let start = add(
+            widget,
+            name("org.logicconduit.graph-node.word-matcher/v1"),
+            620.0,
+            40.0,
+        );
+        let stop = add(
+            widget,
+            name("org.logicconduit.graph-node.word-matcher/v1"),
+            620.0,
+            230.0,
+        );
+        let counter = add(
+            widget,
+            name("org.logicconduit.graph-node.counter/v1"),
+            900.0,
+            40.0,
+        );
+        let latch = add(
+            widget,
+            name("org.logicconduit.graph-node.sr-flip-flop/v1"),
+            900.0,
+            230.0,
+        );
+        let formatter = add(
+            widget,
+            name("org.logicconduit.graph-node.string-formatter/v1"),
+            1160.0,
+            40.0,
+        );
+        let gate = add(
+            widget,
+            name("org.logicconduit.graph-node.logic-gate/v1"),
+            1160.0,
+            400.0,
+        );
+        let decoder = add(
+            widget,
+            name("org.logicconduit.graph-node.binary-decoder/v1"),
+            1440.0,
+            260.0,
+        );
+        let writer = add(
+            widget,
+            name("org.logicconduit.graph-node.file-writer/v1"),
+            1760.0,
+            120.0,
+        );
 
         // Configure states before wiring so `on_update`-driven socket visibility
         // (e.g. hidden MISO) is settled.
-        widget.set_node_state(
-            spi,
-            serde_json::to_value(SpiDecoderState {
-                metadata: crate::nodes::SpiDecoderMetadata::current(),
-                display_format: default_display_format(),
-                word_size: IntValue::new(24, 1, 32),
-                cpol: EnumValue::new(0, &["0", "1"]),
-                cpha: EnumValue::new(0, &["0", "1"]),
-                bit_order: EnumValue::new(0, &["MSB first", "LSB first"]),
-                cs_polarity: EnumValue::new(0, &["Active low", "Active high", "Disabled"]),
-                has_miso: BoolValue::new(false),
-            })
-            .unwrap(),
-        );
-        let matcher_state = |pattern: &str| {
-            serde_json::to_value(WordMatcherState {
-                pattern: StringValue::new(pattern),
-                mask: StringValue::new("0xFFFFFF"),
-                op: default_match_op(),
-                trigger_at: default_trigger_at(),
-                pulse_output: BoolValue::new(false),
-            })
-            .unwrap()
-        };
-        widget.set_node_state(start, matcher_state("0x600081"));
-        widget.set_node_state(stop, matcher_state("0x600000"));
-        let mut decoder_state = BinaryDecoderState {
-            display_format: default_display_format(),
-            sample_on: EnumValue::new(
-                0,
-                &[
-                    "Rising (SDR)",
-                    "Falling (SDR)",
-                    "Both (DDR)",
-                    "High level",
-                    "Low level",
-                ],
-            ),
-            input_strategy: default_input_strategy(),
-            word_size: IntValue::new(1, 1, 8),
-            endianness: EnumValue::new(0, &["Little", "Big"]),
-            cs_polarity: EnumValue::new(0, &["Disabled", "Active low", "Active high"]),
-        };
-        decoder_state.sample_on.select("Both (DDR)");
-        widget.set_node_state(decoder, serde_json::to_value(decoder_state).unwrap());
+        let mut spi_state = widget.graph().nodes[&spi].state.clone();
+        spi_state["word_size"]["value"] = 24.into();
+        spi_state["has_miso"]["value"] = false.into();
+        widget.set_node_state(spi, spi_state);
+        let matcher_state =
+            |widget: &node_graph::NodeGraphWidget, node: node_graph::NodeId, pattern: &str| {
+                let mut state = widget.graph().nodes[&node].state.clone();
+                state["pattern"]["value"] = pattern.into();
+                state["mask"]["value"] = "0xFFFFFF".into();
+                state
+            };
+        widget.set_node_state(start, matcher_state(widget, start, "0x600081"));
+        widget.set_node_state(stop, matcher_state(widget, stop, "0x600000"));
+        let mut decoder_state = widget.graph().nodes[&decoder].state.clone();
+        decoder_state["sample_on"]["value"] = "Both (DDR)".into();
+        decoder_state["word_size"]["value"] = 1.into();
+        widget.set_node_state(decoder, decoder_state);
 
         // Descriptive titles (the def is still identified by `type_name`).
         for (id, title) in [
@@ -482,42 +517,45 @@ pub(crate) mod test_graphs_tests {
     /// graph runs through the normal pipeline.
     pub(crate) fn populate_uart_demo(widget: &mut node_graph::NodeGraphWidget) {
         use egui::Pos2;
-        use node_graph::{BoolValue, EnumValue, IntValue, StringValue};
-
         let add = |widget: &mut node_graph::NodeGraphWidget, name: &str, x: f32, y: f32| {
             widget
                 .add_node_at(name, Pos2::new(x, y))
                 .unwrap_or_else(|| panic!("unknown node type '{name}'"))
         };
 
-        let source = add(widget, TestUartSource::name(), 80.0, 220.0);
-        let uart = add(widget, UartDecoder::name(), 420.0, 180.0);
-        let viewer = add(widget, Viewer::name(), 760.0, 230.0);
+        let source = add(
+            widget,
+            name("org.logicconduit.graph-node.test-uart-source/v1"),
+            80.0,
+            220.0,
+        );
+        let uart = add(
+            widget,
+            name("org.logicconduit.graph-node.uart-decoder/v1"),
+            420.0,
+            180.0,
+        );
+        let viewer = add(
+            widget,
+            name("org.logicconduit.graph-node.viewer/v1"),
+            760.0,
+            230.0,
+        );
 
-        widget.set_node_state(
-            source,
-            serde_json::to_value(TestUartSourceState {
-                message: StringValue::new("HELLO\n"),
-                baud_rate: IntValue::new(115_200, 300, 100_000_000),
-            })
-            .unwrap(),
-        );
-        widget.set_node_state(
-            uart,
-            serde_json::to_value(UartDecoderState {
-                display_format: default_display_format(),
-                baud_preset: default_baud_preset(),
-                baud_rate: IntValue::new(115_200, 300, 100_000_000),
-                data_bits: IntValue::new(8, 5, 9),
-                parity: EnumValue::new(0, &["None", "Odd", "Even", "Mark", "Space"]),
-                check_parity: BoolValue::new(false),
-                stop_bits: EnumValue::new(2, &["0", "0.5", "1", "1.5", "2"]),
-                bit_order: EnumValue::new(0, &["LSB first", "MSB first"]),
-                invert: BoolValue::new(false),
-                error_output: BoolValue::new(false),
-            })
-            .unwrap(),
-        );
+        let mut source_state = widget.graph().nodes[&source].state.clone();
+        source_state["message"]["value"] = "HELLO\n".into();
+        source_state["baud_rate"]["value"] = 115_200.into();
+        widget.set_node_state(source, source_state);
+        let mut uart_state = widget.graph().nodes[&uart].state.clone();
+        uart_state["baud_rate"]["value"] = 115_200.into();
+        uart_state["data_bits"]["value"] = 8.into();
+        uart_state["parity"]["value"] = "None".into();
+        uart_state["check_parity"]["value"] = false.into();
+        uart_state["stop_bits"]["value"] = "1".into();
+        uart_state["bit_order"]["value"] = "LSB first".into();
+        uart_state["invert"]["value"] = false.into();
+        uart_state["error_output"]["value"] = false.into();
+        widget.set_node_state(uart, uart_state);
 
         if let Some(node) = widget.graph_mut().nodes.get_mut(&source) {
             node.title = "Generated serial.rx".to_owned();
@@ -534,9 +572,8 @@ pub(crate) mod test_graphs_tests {
 
 #[cfg(test)]
 mod tests {
-    use node_graph::{NodeDef, NodeGraphWidget};
+    use node_graph::NodeGraphWidget;
 
-    use super::super::sinks::Viewer;
     use super::{build_registry, test_graphs_tests};
 
     #[test]
@@ -572,13 +609,8 @@ mod tests {
 
         let mut widget = NodeGraphWidget::new(build_registry());
         test_graphs_tests::build_binary_decoder_demo(&mut widget);
-        assert!(
-            widget
-                .graph()
-                .nodes
-                .values()
-                .all(|node| node.type_name != Viewer::name())
-        );
+        assert!(widget.graph().nodes.values().all(|node| node.type_name
+            != super::super::test_support::node_name("org.logicconduit.graph-node.viewer/v1")));
         assert_eq!(
             widget
                 .graph()

@@ -7,16 +7,9 @@ inventory::submit! {
 #[cfg(test)]
 mod registration_tests {
     #[test]
-    fn i2c_is_discovered_as_an_editor_only_graph_feature() {
-        let registration = crate::nodes::graph_node_registrations()
-            .into_iter()
-            .find(|registration| registration.name() == "I2C Decoder")
-            .expect("I2C inventory submission must be linked");
-
-        assert_eq!(
-            registration.stable_id(),
-            "org.logicconduit.graph-node.i2c-decoder/v1"
+    fn i2c_definition_is_isolated() {
+        crate::nodes::test_support::assert_node_registration_isolated(
+            "org.logicconduit.graph-node.i2c-decoder/v1",
         );
-        assert!(registration.builder().is_none());
     }
 }

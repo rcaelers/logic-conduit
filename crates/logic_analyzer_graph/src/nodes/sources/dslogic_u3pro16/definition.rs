@@ -154,11 +154,6 @@ impl CaptureDurationValue {
         Self::from_nanoseconds(milliseconds.saturating_mul(1_000_000))
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn set_milliseconds(&mut self, milliseconds: u64) {
-        *self = Self::from_milliseconds(milliseconds);
-    }
-
     pub(crate) fn nanoseconds(&self) -> u64 {
         self.nanoseconds
     }
@@ -520,25 +515,6 @@ impl Default for U3Pro16State {
 }
 
 impl U3Pro16State {
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn configure_test_capture(
-        &mut self,
-        mode: &str,
-        sample_rate: &str,
-        duration_ms: u64,
-        enabled_channels: &[usize],
-    ) {
-        self.mode.select(mode);
-        self.sample_rate.select(sample_rate);
-        self.duration.set_milliseconds(duration_ms);
-        self.channels.enabled.fill(false);
-        for &channel in enabled_channels {
-            if let Some(enabled) = self.channels.enabled.get_mut(channel) {
-                *enabled = true;
-            }
-        }
-    }
-
     pub(crate) fn trigger_program(&self) -> Option<&TriggerProgram> {
         self.metadata.trigger_program.as_ref()
     }

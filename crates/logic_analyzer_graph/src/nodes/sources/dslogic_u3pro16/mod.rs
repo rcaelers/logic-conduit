@@ -9,6 +9,3 @@ mod registration;
 mod trigger;
 #[cfg(not(target_arch = "wasm32"))]
 mod trigger_lowering;
-
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use definition::{DsLogicU3Pro16, U3Pro16State};

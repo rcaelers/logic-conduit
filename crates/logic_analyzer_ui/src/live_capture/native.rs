@@ -1687,14 +1687,17 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    use logic_analyzer_graph::{
-        self as compiler, CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature,
-        LiveCaptureFeature, SimpleTriggerChannel, TestBufferedFakeConfig as BufferedFakeConfig,
+    use logic_analyzer_graph::test_support::{
+        TestBufferedFakeConfig as BufferedFakeConfig,
         TestBufferedFakeController as BufferedFakeController,
         TestBufferedFakeProvider as BufferedFakeProvider,
         TestDeterministicFakeConfig as DeterministicFakeConfig,
         TestDeterministicFakeController as DeterministicFakeController,
-        TestDeterministicFakeProvider as DeterministicFakeProvider, nodes,
+        TestDeterministicFakeProvider as DeterministicFakeProvider,
+    };
+    use logic_analyzer_graph::{
+        self as compiler, CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature, LiveCaptureEdit,
+        LiveCaptureFeature, SimpleTriggerChannel, nodes,
     };
     use node_graph::{NodeGraphWidget, NodeId};
     use signal_processing::{
@@ -1710,6 +1713,35 @@ mod tests {
         ActiveCapture, CaptureCoordinator, CaptureCoordinatorContract, CaptureRawExportFormat,
         WorkerCompletion, bounded_capture_event_queue, waveform_ready_for_publication,
     };
+
+    const TEST_LIVE_CAPTURE_SOURCE_ID: &str =
+        "org.logicconduit.graph-node.test-live-capture-source/v1";
+    const U3PRO16_ID: &str = "org.logicconduit.graph-node.dslogic-u3pro16/v1";
+
+    fn registered_node_name(stable_id: &str) -> &'static str {
+        nodes::registered_node_name(stable_id)
+    }
+
+    fn configure_u3pro16(
+        state: &mut serde_json::Value,
+        mode: &str,
+        sample_rate: &str,
+        duration_ms: u64,
+        enabled_channels: &[usize],
+    ) {
+        state["mode"]["value"] = mode.into();
+        state["sample_rate"]["value"] = sample_rate.into();
+        state["duration"]["nanoseconds"] = duration_ms.saturating_mul(1_000_000).into();
+        let channel_count = state["channels"]["enabled"]
+            .as_array()
+            .expect("U3Pro16 channels are an array")
+            .len();
+        let mut enabled = vec![false; channel_count];
+        for &channel in enabled_channels {
+            enabled[channel] = true;
+        }
+        state["channels"]["enabled"] = serde_json::to_value(enabled).unwrap();
+    }
 
     impl CaptureCoordinator {
         fn start(
@@ -2247,7 +2279,10 @@ mod tests {
     fn development_registration_discovers_and_completes_a_capture() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         let source = graph
-            .add_node_at(nodes::test_live_capture_source_name(), egui::Pos2::ZERO)
+            .add_node_at(
+                registered_node_name(TEST_LIVE_CAPTURE_SOURCE_ID),
+                egui::Pos2::ZERO,
+            )
             .unwrap();
         let feature = compiler::discover_live_capture_feature(
             graph.graph(),
@@ -2273,7 +2308,10 @@ mod tests {
     fn raw_only_capture_completes_after_its_analysis_attachment_is_dropped() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         graph
-            .add_node_at(nodes::test_live_capture_source_name(), egui::Pos2::ZERO)
+            .add_node_at(
+                registered_node_name(TEST_LIVE_CAPTURE_SOURCE_ID),
+                egui::Pos2::ZERO,
+            )
             .unwrap();
         let feature = compiler::discover_live_capture_feature(
             graph.graph(),
@@ -2312,7 +2350,10 @@ mod tests {
     fn starting_a_new_capture_discards_the_previous_store_and_index() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         graph
-            .add_node_at(nodes::test_live_capture_source_name(), egui::Pos2::ZERO)
+            .add_node_at(
+                registered_node_name(TEST_LIVE_CAPTURE_SOURCE_ID),
+                egui::Pos2::ZERO,
+            )
             .unwrap();
         let builders = compiler::BuilderRegistry::standard();
         let feature = compiler::discover_live_capture_feature(graph.graph(), &builders)
@@ -2650,14 +2691,22 @@ mod tests {
     fn capture_now_bypasses_one_session_trigger_without_mutating_requested_policy() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         let source = graph
-            .add_node_at(nodes::test_live_capture_source_name(), egui::Pos2::ZERO)
+            .add_node_at(
+                registered_node_name(TEST_LIVE_CAPTURE_SOURCE_ID),
+                egui::Pos2::ZERO,
+            )
             .unwrap();
-        nodes::set_test_capture_trigger_condition(
-            &mut graph.graph_mut().nodes.get_mut(&source).unwrap().state,
-            0,
-            SimpleTriggerCondition::Rising,
+        let state = &graph.graph().nodes[&source].state;
+        let edited = nodes::apply_registered_live_capture_edit(
+            TEST_LIVE_CAPTURE_SOURCE_ID,
+            state,
+            &LiveCaptureEdit::SetSimpleTrigger {
+                channel_id: CaptureChannelId::new("demo:0"),
+                condition: SimpleTriggerCondition::Rising,
+            },
         )
         .unwrap();
+        graph.graph_mut().nodes.get_mut(&source).unwrap().state = edited;
         let feature = compiler::discover_live_capture_feature(
             graph.graph(),
             &compiler::BuilderRegistry::standard(),
@@ -2921,16 +2970,15 @@ mod tests {
     fn u3pro16_buffered_hardware_capture_finalizes_and_opens_a_replay_source() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         let source = graph
-            .add_node_at(nodes::dslogic_u3pro16_name(), egui::Pos2::ZERO)
+            .add_node_at(registered_node_name(U3PRO16_ID), egui::Pos2::ZERO)
             .unwrap();
-        nodes::configure_u3pro16_test_capture(
+        configure_u3pro16(
             &mut graph.graph_mut().nodes.get_mut(&source).unwrap().state,
             "Buffer",
             "1 MHz",
             1,
             &[0, 1],
-        )
-        .unwrap();
+        );
         let feature = compiler::discover_live_capture_feature(
             graph.graph(),
             &compiler::BuilderRegistry::standard(),
@@ -2970,16 +3018,15 @@ mod tests {
     fn u3pro16_streaming_hardware_capture_stops_at_the_host_limit_and_replays() {
         let mut graph = NodeGraphWidget::new(nodes::build_registry());
         let source = graph
-            .add_node_at(nodes::dslogic_u3pro16_name(), egui::Pos2::ZERO)
+            .add_node_at(registered_node_name(U3PRO16_ID), egui::Pos2::ZERO)
             .unwrap();
-        nodes::configure_u3pro16_test_capture(
+        configure_u3pro16(
             &mut graph.graph_mut().nodes.get_mut(&source).unwrap().state,
             "Stream",
             "1 MHz",
             10,
             &[0, 1],
-        )
-        .unwrap();
+        );
         let feature = compiler::discover_live_capture_feature(
             graph.graph(),
             &compiler::BuilderRegistry::standard(),

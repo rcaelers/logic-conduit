@@ -110,7 +110,7 @@ nearest owning facade. The allowlist names canonical public namespaces.
 | --- | --- | --- |
 | `signal_processing` | `capture`, `live_capture`, `live_capture_store`, `derived_word_store`; native-only `waveform_index` | These are substantial, independent generic capture and storage domains. Runtime plumbing such as ports, senders, receivers, scheduling, workers, errors, and pipeline implementation remains private behind root re-exports. |
 | `logic_analyzer_processing` | `nodes`, `nodes::decoders`, `nodes::logic`, `nodes::sinks`, `nodes::sources`, each node module under its family, native `support`, `support::logic_analyzer`, feature-gated `test_support`, `types` | Each concrete node owns a directory-backed public facade, so its configuration types have an unambiguous owner such as `nodes::decoders::parallel_decoder::StrobeMode`. The native support namespaces own reusable logic-analyzer configuration/error contracts that are not themselves nodes. Protocol-neutral processing value conventions are exposed through `types`. Node implementation, transport, and format details remain private behind their owning node facade; deterministic fake providers are available only through the explicit test-support facade. |
-| `logic_analyzer_graph` | `nodes` | The public node namespace exposes generic socket definitions, registry construction, the compile-time registration contract, and feature-gated behavioral test helpers. Concrete graph-node definitions and their decoder, logic, sink, and source family modules remain crate-private; inventory submissions make those definitions discoverable without exporting their Rust types. Graph-owned raw-capture export, compiler, builder, definition, lowering, migration, registry, platform, and presentation modules remain private; supported compiler, export, and plugin contracts are re-exported at the crate root. |
+| `logic_analyzer_graph` | `nodes`; native feature-gated `test_support` | The public node namespace exposes generic socket definitions, registry construction, the compile-time registration contract, and feature-gated behavioral test helpers. The explicit test-support namespace owns fake-provider adapters used by downstream integration tests without adding test types to the crate-root facade. Concrete graph-node definitions and their decoder, logic, sink, and source family modules remain private; inventory submissions make those definitions discoverable without exporting their Rust types. Graph-owned raw-capture export, compiler, builder, definition, lowering, migration, registry, platform, and presentation modules remain private; supported compiler, export, and plugin contracts are re-exported at the crate root. |
 | `node_graph` | none | The reusable widget exposes one curated crate-root API; model, runtime, support, API, and widget implementation modules remain private. |
 | `logic_analyzer_viewer` | none | The reusable viewer exposes one curated crate-root API; drawing, sampling, input, cursor, lane, worker, and indexing modules remain private. |
 | `logic_analyzer_ui` | none | The application-composition crate exposes only its host-facing crate-root facade. |
@@ -120,12 +120,20 @@ nearest owning facade. The allowlist names canonical public namespaces.
 Changing this allowlist is an API-design decision. A new public module requires a documented
 domain boundary, more than import convenience, and review of its native and wasm surface.
 
+Each concrete `logic_analyzer_graph` node directory owns an isolated registration test. Test-only
+wildcard source and sink definitions negotiate the node builder's declared payload kinds, so the
+test lowers only that node and does not import concrete neighboring nodes. A concrete graph-node
+`mod.rs` does not re-export its definition, state, builder, or other symbols, including under
+`cfg(test)`. Multi-node fixture and compiler tests discover nodes through inventory stable IDs and
+edit their serialized state through the generic graph contract.
+
 ### Enforcement
 
 The source-structure check in CI rejects module declarations outside the
 allowed root files, non-test exceptions, test module names without `tests`, public file modules,
 implementation items in `mod.rs`, public modules outside the allowlist, and occurrences of
-`pub(super)` or `pub(in ...)`. The existing `-D unreachable-pub` check remains enabled.
+`pub(super)` or `pub(in ...)`. It also rejects symbol re-exports from concrete graph-node facades.
+The existing `-D unreachable-pub` check remains enabled.
 
 ## Error boundaries
 

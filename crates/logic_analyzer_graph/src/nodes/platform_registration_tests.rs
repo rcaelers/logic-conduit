@@ -1,17 +1,34 @@
 use egui::Pos2;
 
-use node_graph::{NodeDef, NodeGraphWidget, SocketDirection, SocketId};
+use node_graph::{NodeGraphWidget, SocketDirection, SocketId};
 use signal_processing::{CaptureChannelId, CaptureDataDelivery, SimpleTriggerCondition};
 
-use super::sources::{DsLogicU3Pro16, U3Pro16State};
-use crate::nodes::{DslFileSource, Viewer, build_registry, test_graphs_tests};
+use super::{build_registry, node_name, test_graphs_tests};
 use crate::{
     BuilderRegistry, LiveCaptureEdit, apply_live_capture_edit, discover_live_capture_feature, lower,
 };
 
+const U3PRO16_ID: &str = "org.logicconduit.graph-node.dslogic-u3pro16/v1";
+const DSL_FILE_SOURCE_ID: &str = "org.logicconduit.graph-node.dsl-file-source/v1";
+const VIEWER_ID: &str = "org.logicconduit.graph-node.viewer/v1";
+
+fn select(state: &mut serde_json::Value, field: &str, value: &str) {
+    state[field]["value"] = serde_json::Value::String(value.to_owned());
+}
+
+fn enable_channels(state: &mut serde_json::Value, channels: &[usize]) {
+    let enabled = state["channels"]["enabled"]
+        .as_array_mut()
+        .expect("capture source channels are an array");
+    enabled.fill(serde_json::Value::Bool(false));
+    for &channel in channels {
+        enabled[channel] = serde_json::Value::Bool(true);
+    }
+}
+
 fn attach_viewer_sink(widget: &mut NodeGraphWidget, source: node_graph::NodeId) {
     let viewer = widget
-        .add_node_at(Viewer::name(), Pos2::new(320.0, 0.0))
+        .add_node_at(node_name(VIEWER_ID), Pos2::new(320.0, 0.0))
         .expect("viewer should be registered");
     widget.graph_mut().add_connection(
         SocketId {
@@ -31,7 +48,7 @@ fn attach_viewer_sink(widget: &mut NodeGraphWidget, source: node_graph::NodeId) 
 fn native_hardware_source_registers_and_lowers() {
     let mut widget = NodeGraphWidget::new(build_registry());
     let source = widget
-        .add_node_at(DsLogicU3Pro16::name(), Pos2::ZERO)
+        .add_node_at(node_name(U3PRO16_ID), Pos2::ZERO)
         .expect("native hardware source should be registered");
     attach_viewer_sink(&mut widget, source);
 
@@ -40,7 +57,7 @@ fn native_hardware_source_registers_and_lowers() {
         compiled
             .nodes
             .iter()
-            .any(|node| node.builder == DsLogicU3Pro16::name())
+            .any(|node| node.builder == node_name(U3PRO16_ID))
     );
 }
 
@@ -48,7 +65,7 @@ fn native_hardware_source_registers_and_lowers() {
 fn buffered_hardware_feature_lowers_opaque_channels_and_portable_trigger_edits() {
     let mut widget = NodeGraphWidget::new(build_registry());
     let source = widget
-        .add_node_at(DsLogicU3Pro16::name(), Pos2::ZERO)
+        .add_node_at(node_name(U3PRO16_ID), Pos2::ZERO)
         .unwrap();
     let streaming = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
         .unwrap()
@@ -57,15 +74,9 @@ fn buffered_hardware_feature_lowers_opaque_channels_and_portable_trigger_edits()
         streaming.capabilities().data_delivery(),
         CaptureDataDelivery::DuringAcquisition
     );
-    let mut state =
-        serde_json::from_value::<U3Pro16State>(widget.graph().nodes[&source].state.clone())
-            .unwrap();
-    state.mode.select("Buffer");
-    state.channels.enabled.fill(false);
-    for channel in [0, 2, 9] {
-        state.channels.enabled[channel] = true;
-    }
-    widget.graph_mut().nodes.get_mut(&source).unwrap().state = serde_json::to_value(state).unwrap();
+    let state = &mut widget.graph_mut().nodes.get_mut(&source).unwrap().state;
+    select(state, "mode", "Buffer");
+    enable_channels(state, &[0, 2, 9]);
 
     let builders = BuilderRegistry::standard();
     let feature = discover_live_capture_feature(widget.graph(), &builders)
@@ -114,15 +125,15 @@ fn buffered_hardware_feature_lowers_opaque_channels_and_portable_trigger_edits()
 fn buffered_hardware_discovery_rejects_too_many_channels_for_the_rate() {
     let mut widget = NodeGraphWidget::new(build_registry());
     let source = widget
-        .add_node_at(DsLogicU3Pro16::name(), Pos2::ZERO)
+        .add_node_at(node_name(U3PRO16_ID), Pos2::ZERO)
         .unwrap();
-    let mut state =
-        serde_json::from_value::<U3Pro16State>(widget.graph().nodes[&source].state.clone())
-            .unwrap();
-    state.mode.select("Buffer");
-    state.sample_rate.select("1 GHz");
-    state.channels.enabled.fill(true);
-    widget.graph_mut().nodes.get_mut(&source).unwrap().state = serde_json::to_value(state).unwrap();
+    let state = &mut widget.graph_mut().nodes.get_mut(&source).unwrap().state;
+    select(state, "mode", "Buffer");
+    select(state, "sample_rate", "1 GHz");
+    let enabled = state["channels"]["enabled"]
+        .as_array_mut()
+        .expect("capture source channels are an array");
+    enabled.fill(serde_json::Value::Bool(true));
     let error = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
         .err()
         .expect("wide 1 GHz buffered capture must be rejected before opening hardware");
@@ -140,17 +151,12 @@ fn buffered_hardware_discovery_rejects_too_many_channels_for_the_rate() {
 fn streaming_hardware_discovery_rejects_too_many_channels_for_the_rate() {
     let mut widget = NodeGraphWidget::new(build_registry());
     let source = widget
-        .add_node_at(DsLogicU3Pro16::name(), Pos2::ZERO)
+        .add_node_at(node_name(U3PRO16_ID), Pos2::ZERO)
         .unwrap();
-    let mut state =
-        serde_json::from_value::<U3Pro16State>(widget.graph().nodes[&source].state.clone())
-            .unwrap();
-    state.mode.select("Stream");
-    state.sample_rate.select("1 GHz");
-    state.channels.enabled.fill(false);
-    state.channels.enabled[0] = true;
-    state.channels.enabled[3] = true;
-    widget.graph_mut().nodes.get_mut(&source).unwrap().state = serde_json::to_value(state).unwrap();
+    let state = &mut widget.graph_mut().nodes.get_mut(&source).unwrap().state;
+    select(state, "mode", "Stream");
+    select(state, "sample_rate", "1 GHz");
+    enable_channels(state, &[0, 3]);
     let error = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
         .err()
         .expect("four-input 1 GHz stream must be rejected before opening hardware");
@@ -172,17 +178,12 @@ fn dsl_source_presentation_is_builder_owned_after_node_rename() {
         .graph()
         .nodes
         .iter()
-        .find(|(_, node)| node.def_name() == DslFileSource::name())
+        .find(|(_, node)| node.def_name() == node_name(DSL_FILE_SOURCE_ID))
         .map(|(id, _)| id)
         .unwrap();
     widget.graph_mut().nodes.get_mut(&source_id).unwrap().title = "My capture".to_owned();
-    let mut state = serde_json::from_value::<crate::nodes::DslFileSourceState>(
-        widget.graph().nodes[&source_id].state.clone(),
-    )
-    .unwrap();
-    state.file.value = "capture.dsl".into();
-    widget.graph_mut().nodes.get_mut(&source_id).unwrap().state =
-        serde_json::to_value(state).unwrap();
+    widget.graph_mut().nodes.get_mut(&source_id).unwrap().state["file"]["value"] =
+        serde_json::Value::String("capture.dsl".to_owned());
     let presentation =
         crate::discover_capture_presentation(widget.graph(), &BuilderRegistry::standard())
             .unwrap()

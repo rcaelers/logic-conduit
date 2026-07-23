@@ -14,18 +14,9 @@ inventory::submit! {
 #[cfg(test)]
 mod registration_tests {
     #[test]
-    fn buffer_is_discovered_as_one_atomic_graph_feature() {
-        let registration = crate::nodes::graph_node_registrations()
-            .into_iter()
-            .find(|registration| registration.name() == "Buffer")
-            .expect("Buffer inventory submission must be linked");
-
-        assert_eq!(
-            registration.stable_id(),
-            "org.logicconduit.graph-node.buffer/v1"
+    fn buffer_lowers_in_isolation() {
+        crate::nodes::test_support::assert_node_registration_isolated(
+            "org.logicconduit.graph-node.buffer/v1",
         );
-        let _builder = registration
-            .builder()
-            .expect("Buffer inventory submission must include its builder");
     }
 }

@@ -10,20 +10,3 @@ mod test_uart_source;
 
 #[cfg(target_arch = "wasm32")]
 mod synthetic_presentation;
-
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use dslogic_u3pro16::{DsLogicU3Pro16, U3Pro16State};
-#[cfg(all(test, not(target_arch = "wasm32")))]
-pub(crate) use file_source::FileSourceBuilder;
-#[cfg(test)]
-pub(crate) use file_source::{DslFileSource, DslFileSourceState};
-#[cfg(test)]
-pub(crate) use sigrok_file_source::SigrokFileSource;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-pub(crate) use test_capture_source::TestCaptureSourceBuilder;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use test_capture_source::{
-    TestCaptureSource, TestCaptureSourceState, TestLiveCaptureSource,
-};
-#[cfg(test)]
-pub(crate) use test_uart_source::{TestUartSource, TestUartSourceState};

@@ -1,40 +1,24 @@
-use node_graph::NodeDef;
-use signal_processing::SimpleTriggerCondition;
+use crate::LiveCaptureEdit;
 
-pub fn test_capture_source_name() -> &'static str {
-    super::sources::TestCaptureSource::name()
+fn node_registration(stable_id: &str) -> &'static super::GraphNodeRegistration {
+    super::graph_node_registrations()
+        .into_iter()
+        .find(|registration| registration.stable_id() == stable_id)
+        .unwrap_or_else(|| panic!("test-support graph node '{stable_id}' is not registered"))
 }
 
-pub fn test_live_capture_source_name() -> &'static str {
-    super::sources::TestLiveCaptureSource::name()
+pub fn registered_node_name(stable_id: &str) -> &'static str {
+    node_registration(stable_id).name()
 }
 
-pub fn set_test_capture_trigger_condition(
-    state: &mut serde_json::Value,
-    channel: usize,
-    condition: SimpleTriggerCondition,
-) -> Result<(), String> {
-    let mut typed: super::sources::TestCaptureSourceState =
-        serde_json::from_value(state.clone()).map_err(|error| error.to_string())?;
-    typed.set_trigger_condition(channel, condition)?;
-    *state = serde_json::to_value(typed).map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-pub fn dslogic_u3pro16_name() -> &'static str {
-    super::sources::DsLogicU3Pro16::name()
-}
-
-pub fn configure_u3pro16_test_capture(
-    state: &mut serde_json::Value,
-    mode: &str,
-    sample_rate: &str,
-    duration_ms: u64,
-    enabled_channels: &[usize],
-) -> Result<(), String> {
-    let mut typed: super::sources::U3Pro16State =
-        serde_json::from_value(state.clone()).map_err(|error| error.to_string())?;
-    typed.configure_test_capture(mode, sample_rate, duration_ms, enabled_channels);
-    *state = serde_json::to_value(typed).map_err(|error| error.to_string())?;
-    Ok(())
+pub fn apply_registered_live_capture_edit(
+    stable_id: &str,
+    state: &serde_json::Value,
+    edit: &LiveCaptureEdit,
+) -> Result<serde_json::Value, String> {
+    node_registration(stable_id)
+        .builder()
+        .ok_or_else(|| format!("registered graph node '{stable_id}' is not runnable"))?
+        .apply_live_capture_edit(state, edit)?
+        .ok_or_else(|| format!("registered graph node '{stable_id}' rejected its capture edit"))
 }

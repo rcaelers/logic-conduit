@@ -24,8 +24,7 @@ PUBLIC_MODULES = {
   "crates/logic_analyzer_processing/src/nodes/sources/mod.rs" => %w[
     dsl_file dslogic_u3pro16 sigrok_file synthetic_capture_source synthetic_uart_source
   ],
-  "crates/logic_analyzer_graph/src/lib.rs" => %w[nodes],
-  "crates/logic_analyzer_graph/src/nodes/mod.rs" => %w[decoders logic sinks sources]
+  "crates/logic_analyzer_graph/src/lib.rs" => %w[nodes test_support]
 }.freeze
 
 errors = []
@@ -86,6 +85,13 @@ files.each do |path|
   end
   source.to_enum(:scan, /^\s*use\s+/).each do
     errors << "#{rel}:#{line_number(source, Regexp.last_match.begin(0))}: mod.rs imports must be facade re-exports"
+  end
+
+  concrete_graph_node = rel.match?(%r{\Acrates/logic_analyzer_graph/src/nodes/(?:decoders|logic|sinks|sources)/[^/]+/mod\.rs\z})
+  if concrete_graph_node
+    source.to_enum(:scan, /^\s*pub(?:\(crate\))?\s+use\s+/).each do
+      errors << "#{rel}:#{line_number(source, Regexp.last_match.begin(0))}: concrete graph nodes must not re-export symbols"
+    end
   end
 end
 

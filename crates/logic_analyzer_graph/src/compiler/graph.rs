@@ -678,8 +678,14 @@ type CollectedPayloadRequestConfigurator = Arc<
 
 impl BuilderRegistry {
     pub fn standard() -> Self {
+        let registry = Self::with_builders(crate::nodes::standard_builders());
+        crate::nodes::validate_graph_node_payload_requirements(&registry.collected_payloads);
+        registry
+    }
+
+    fn with_builders(builders: HashMap<String, Box<dyn RuntimeBuilder>>) -> Self {
         let mut registry = Self {
-            builders: crate::nodes::standard_builders(),
+            builders,
             collected_payloads: CollectedPayloadRegistry::new(),
             payload_subscriptions: Vec::new(),
         };
@@ -688,8 +694,21 @@ impl BuilderRegistry {
                 .apply_to(&mut registry)
                 .expect("collected-payload inventory registration must be valid");
         }
-        crate::nodes::validate_graph_node_payload_requirements(&registry.collected_payloads);
         registry
+    }
+
+    #[cfg(test)]
+    pub(crate) fn isolated_test() -> Self {
+        Self::with_builders(HashMap::new())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_test_builder(
+        &mut self,
+        name: impl Into<String>,
+        builder: Box<dyn RuntimeBuilder>,
+    ) {
+        self.builders.insert(name.into(), builder);
     }
 
     /// Registers a payload that has explicit retained-data semantics.
@@ -2512,7 +2531,7 @@ mod tests {
 
     use logic_analyzer_processing::nodes::sinks::binary_file_writer::BinaryFileWriter;
     use logic_analyzer_processing::test_support::{BufferedFakeConfig, BufferedFakeProvider};
-    use node_graph::{NodeDef, NodeGraphWidget};
+    use node_graph::NodeGraphWidget;
     use signal_processing::{
         AcquisitionContext, AcquisitionResult, CaptureAnalysisChannel, CaptureAnalysisSource,
         CaptureChannelId, CaptureChunk, CaptureChunkWriter, CaptureDataDelivery,
@@ -2615,17 +2634,23 @@ mod tests {
     }
 
     struct ThrottledBinaryBuilder {
+        inner: Box<dyn RuntimeBuilder>,
         delay: Duration,
     }
 
     struct InstrumentedCaptureBuilder {
+        inner: Box<dyn RuntimeBuilder>,
         discovery_calls: Arc<AtomicUsize>,
         provider_build_calls: Arc<AtomicUsize>,
     }
 
-    struct BufferedPluginBuilder;
+    struct BufferedPluginBuilder {
+        inner: Box<dyn RuntimeBuilder>,
+    }
 
-    struct TriggerOnlyPluginBuilder;
+    struct TriggerOnlyPluginBuilder {
+        inner: Box<dyn RuntimeBuilder>,
+    }
 
     struct BufferedPluginGraphSourceFactory {
         channels: Arc<[CaptureChannelId]>,
@@ -2698,11 +2723,11 @@ mod tests {
         }
 
         fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::sources::TestCaptureSourceBuilder.accepted_kinds(socket, state)
+            self.inner.accepted_kinds(socket, state)
         }
 
         fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::sources::TestCaptureSourceBuilder.offered_kinds(socket, state)
+            self.inner.offered_kinds(socket, state)
         }
 
         fn input_port(
@@ -2712,20 +2737,15 @@ mod tests {
             state: &Value,
             kind: PortKind,
         ) -> Option<String> {
-            crate::nodes::sources::TestCaptureSourceBuilder.input_port(
-                socket,
-                member_index,
-                state,
-                kind,
-            )
+            self.inner.input_port(socket, member_index, state, kind)
         }
 
         fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
-            crate::nodes::sources::TestCaptureSourceBuilder.output_port(socket, state, kind)
+            self.inner.output_port(socket, state, kind)
         }
 
         fn viewer_channel_origin(&self, socket: &Socket, state: &Value) -> Option<usize> {
-            crate::nodes::sources::TestCaptureSourceBuilder.viewer_channel_origin(socket, state)
+            self.inner.viewer_channel_origin(socket, state)
         }
 
         fn live_capture_feature(
@@ -2764,7 +2784,7 @@ mod tests {
         }
 
         fn input_required(&self, socket: &Socket, state: &Value) -> bool {
-            crate::nodes::sources::TestCaptureSourceBuilder.input_required(socket, state)
+            self.inner.input_required(socket, state)
         }
 
         fn build(
@@ -2774,7 +2794,7 @@ mod tests {
             resolved: &ResolvedInputs,
             ctx: &mut CompileCtx,
         ) -> Result<Box<dyn ProcessNode>, String> {
-            crate::nodes::sources::TestCaptureSourceBuilder.build(name, state, resolved, ctx)
+            self.inner.build(name, state, resolved, ctx)
         }
     }
 
@@ -2784,11 +2804,11 @@ mod tests {
         }
 
         fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::sources::TestCaptureSourceBuilder.accepted_kinds(socket, state)
+            self.inner.accepted_kinds(socket, state)
         }
 
         fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::sources::TestCaptureSourceBuilder.offered_kinds(socket, state)
+            self.inner.offered_kinds(socket, state)
         }
 
         fn input_port(
@@ -2798,20 +2818,15 @@ mod tests {
             state: &Value,
             kind: PortKind,
         ) -> Option<String> {
-            crate::nodes::sources::TestCaptureSourceBuilder.input_port(
-                socket,
-                member_index,
-                state,
-                kind,
-            )
+            self.inner.input_port(socket, member_index, state, kind)
         }
 
         fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
-            crate::nodes::sources::TestCaptureSourceBuilder.output_port(socket, state, kind)
+            self.inner.output_port(socket, state, kind)
         }
 
         fn viewer_channel_origin(&self, socket: &Socket, state: &Value) -> Option<usize> {
-            crate::nodes::sources::TestCaptureSourceBuilder.viewer_channel_origin(socket, state)
+            self.inner.viewer_channel_origin(socket, state)
         }
 
         fn live_capture_feature(
@@ -2850,7 +2865,7 @@ mod tests {
         }
 
         fn input_required(&self, socket: &Socket, state: &Value) -> bool {
-            crate::nodes::sources::TestCaptureSourceBuilder.input_required(socket, state)
+            self.inner.input_required(socket, state)
         }
 
         fn build(
@@ -2860,7 +2875,7 @@ mod tests {
             resolved: &ResolvedInputs,
             ctx: &mut CompileCtx,
         ) -> Result<Box<dyn ProcessNode>, String> {
-            crate::nodes::sources::TestCaptureSourceBuilder.build(name, state, resolved, ctx)
+            self.inner.build(name, state, resolved, ctx)
         }
     }
 
@@ -2870,11 +2885,11 @@ mod tests {
         }
 
         fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::sources::TestCaptureSourceBuilder.accepted_kinds(socket, state)
+            self.inner.accepted_kinds(socket, state)
         }
 
         fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::sources::TestCaptureSourceBuilder.offered_kinds(socket, state)
+            self.inner.offered_kinds(socket, state)
         }
 
         fn input_port(
@@ -2884,20 +2899,15 @@ mod tests {
             state: &Value,
             kind: PortKind,
         ) -> Option<String> {
-            crate::nodes::sources::TestCaptureSourceBuilder.input_port(
-                socket,
-                member_index,
-                state,
-                kind,
-            )
+            self.inner.input_port(socket, member_index, state, kind)
         }
 
         fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
-            crate::nodes::sources::TestCaptureSourceBuilder.output_port(socket, state, kind)
+            self.inner.output_port(socket, state, kind)
         }
 
         fn viewer_channel_origin(&self, socket: &Socket, state: &Value) -> Option<usize> {
-            crate::nodes::sources::TestCaptureSourceBuilder.viewer_channel_origin(socket, state)
+            self.inner.viewer_channel_origin(socket, state)
         }
 
         fn live_capture_feature(
@@ -2909,7 +2919,7 @@ mod tests {
         }
 
         fn input_required(&self, socket: &Socket, state: &Value) -> bool {
-            crate::nodes::sources::TestCaptureSourceBuilder.input_required(socket, state)
+            self.inner.input_required(socket, state)
         }
 
         fn build(
@@ -2926,11 +2936,11 @@ mod tests {
 
     impl RuntimeBuilder for ThrottledBinaryBuilder {
         fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::decoders::BinaryDecoderBuilder.accepted_kinds(socket, state)
+            self.inner.accepted_kinds(socket, state)
         }
 
         fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
-            crate::nodes::decoders::BinaryDecoderBuilder.offered_kinds(socket, state)
+            self.inner.offered_kinds(socket, state)
         }
 
         fn input_port(
@@ -2940,28 +2950,23 @@ mod tests {
             state: &Value,
             kind: PortKind,
         ) -> Option<String> {
-            crate::nodes::decoders::BinaryDecoderBuilder.input_port(
-                socket,
-                member_index,
-                state,
-                kind,
-            )
+            self.inner.input_port(socket, member_index, state, kind)
         }
 
         fn output_port(&self, socket: &Socket, state: &Value, kind: PortKind) -> Option<String> {
-            crate::nodes::decoders::BinaryDecoderBuilder.output_port(socket, state, kind)
+            self.inner.output_port(socket, state, kind)
         }
 
         fn word_display_format(&self, socket: &Socket, state: &Value) -> Option<String> {
-            crate::nodes::decoders::BinaryDecoderBuilder.word_display_format(socket, state)
+            self.inner.word_display_format(socket, state)
         }
 
         fn sampling_overlay(&self, state: &Value) -> Option<SamplingOverlayDescriptor> {
-            crate::nodes::decoders::BinaryDecoderBuilder.sampling_overlay(state)
+            self.inner.sampling_overlay(state)
         }
 
         fn input_required(&self, socket: &Socket, state: &Value) -> bool {
-            crate::nodes::decoders::BinaryDecoderBuilder.input_required(socket, state)
+            self.inner.input_required(socket, state)
         }
 
         fn build(
@@ -2971,8 +2976,7 @@ mod tests {
             resolved: &ResolvedInputs,
             ctx: &mut CompileCtx,
         ) -> Result<Box<dyn ProcessNode>, String> {
-            let inner =
-                crate::nodes::decoders::BinaryDecoderBuilder.build(name, state, resolved, ctx)?;
+            let inner = self.inner.build(name, state, resolved, ctx)?;
             Ok(Box::new(ThrottledProcess {
                 inner,
                 delay: self.delay,
@@ -3104,8 +3108,9 @@ mod tests {
         let graph_source_factory = captured_feature.graph_source_factory();
         let mut registry = BuilderRegistry::standard();
         registry.builders.insert(
-            nodes::BinaryDecoder::name().to_owned(),
+            nodes::node_name("org.logicconduit.graph-node.binary-decoder/v1").to_owned(),
             Box::new(ThrottledBinaryBuilder {
+                inner: nodes::node_builder("org.logicconduit.graph-node.binary-decoder/v1"),
                 delay: Duration::from_millis(3),
             }),
         );
@@ -3178,8 +3183,9 @@ mod tests {
         let provider_build_calls = Arc::new(AtomicUsize::new(0));
         let mut reference_registry = BuilderRegistry::standard();
         reference_registry.builders.insert(
-            nodes::TestCaptureSource::name().to_owned(),
+            nodes::node_name("org.logicconduit.graph-node.test-capture-source/v1").to_owned(),
             Box::new(InstrumentedCaptureBuilder {
+                inner: nodes::node_builder("org.logicconduit.graph-node.test-capture-source/v1"),
                 discovery_calls: Arc::clone(&discovery_calls),
                 provider_build_calls: Arc::clone(&provider_build_calls),
             }),
@@ -3363,7 +3369,10 @@ mod tests {
     fn development_capture_feature_is_discovered_without_node_name_matching() {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let source = widget
-            .add_node_at(nodes::TestLiveCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(
+                nodes::node_name("org.logicconduit.graph-node.test-live-capture-source/v1"),
+                Pos2::ZERO,
+            )
             .unwrap();
         let feature = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
             .unwrap()
@@ -3467,12 +3476,17 @@ mod tests {
         let node_types = nodes::build_registry();
         let mut builders = BuilderRegistry::standard();
         builders.builders.insert(
-            nodes::TestCaptureSource::name().to_owned(),
-            Box::new(TriggerOnlyPluginBuilder),
+            nodes::node_name("org.logicconduit.graph-node.test-capture-source/v1").to_owned(),
+            Box::new(TriggerOnlyPluginBuilder {
+                inner: nodes::node_builder("org.logicconduit.graph-node.test-capture-source/v1"),
+            }),
         );
         let mut widget = NodeGraphWidget::new(node_types);
         let source = widget
-            .add_node_at(nodes::TestCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(
+                nodes::node_name("org.logicconduit.graph-node.test-capture-source/v1"),
+                Pos2::ZERO,
+            )
             .unwrap();
 
         let configuration = discover_trigger_configuration(widget.graph(), &builders)
@@ -3495,7 +3509,10 @@ mod tests {
         let builders = BuilderRegistry::standard();
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let source = widget
-            .add_node_at(nodes::TestLiveCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(
+                nodes::node_name("org.logicconduit.graph-node.test-live-capture-source/v1"),
+                Pos2::ZERO,
+            )
             .unwrap();
         let configuration = discover_trigger_configuration(widget.graph(), &builders)
             .unwrap()
@@ -3573,7 +3590,10 @@ mod tests {
     fn legacy_development_capture_state_migrates_with_a_visible_warning() {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let source = widget
-            .add_node_at(nodes::TestCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(
+                nodes::node_name("org.logicconduit.graph-node.test-capture-source/v1"),
+                Pos2::ZERO,
+            )
             .unwrap();
         let mut graph = widget.graph().clone();
         graph.nodes.get_mut(&source).unwrap().state = serde_json::json!({});
@@ -3591,10 +3611,16 @@ mod tests {
     fn discovery_rejects_multiple_live_capture_features() {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let first = widget
-            .add_node_at(nodes::TestLiveCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(
+                nodes::node_name("org.logicconduit.graph-node.test-live-capture-source/v1"),
+                Pos2::ZERO,
+            )
             .unwrap();
         let second = widget
-            .add_node_at(nodes::TestLiveCaptureSource::name(), Pos2::new(100.0, 0.0))
+            .add_node_at(
+                nodes::node_name("org.logicconduit.graph-node.test-live-capture-source/v1"),
+                Pos2::new(100.0, 0.0),
+            )
             .unwrap();
 
         let error = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
@@ -3609,7 +3635,7 @@ mod tests {
         let mut widget = uart_demo_widget();
         widget
             .add_node_at(
-                nodes::TestLiveCaptureSource::name(),
+                nodes::node_name("org.logicconduit.graph-node.test-live-capture-source/v1"),
                 Pos2::new(1_000.0, 0.0),
             )
             .unwrap();
@@ -3653,7 +3679,10 @@ mod tests {
     fn source_only_widget() -> NodeGraphWidget {
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         widget
-            .add_node_at(nodes::TestUartSource::name(), egui::Pos2::ZERO)
+            .add_node_at(
+                nodes::node_name("org.logicconduit.graph-node.test-uart-source/v1"),
+                egui::Pos2::ZERO,
+            )
             .expect("Test UART Source is registered");
         widget
     }
@@ -3706,7 +3735,10 @@ mod tests {
 
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         nodes::test_graphs_tests::build_binary_decoder_demo(&mut widget);
-        for definition in [nodes::Counter::name(), nodes::StringFormatter::name()] {
+        for definition in [
+            nodes::node_name("org.logicconduit.graph-node.counter/v1"),
+            nodes::node_name("org.logicconduit.graph-node.string-formatter/v1"),
+        ] {
             let node = widget
                 .graph_mut()
                 .nodes
@@ -3884,10 +3916,10 @@ mod tests {
             .find(|node| node.def_name() == "UART Decoder")
             .unwrap()
             .id;
-        let mut state: nodes::UartDecoderState =
-            serde_json::from_value(widget.graph().nodes[&decoder].state.clone()).unwrap();
-        state.data_bits.value -= 1;
-        widget.set_node_state(decoder, serde_json::to_value(state).unwrap());
+        let mut state = widget.graph().nodes[&decoder].state.clone();
+        let data_bits = state["data_bits"]["value"].as_i64().unwrap();
+        state["data_bits"]["value"] = (data_bits - 1).into();
+        widget.set_node_state(decoder, state);
         let changed = lower(widget.graph(), &registry).unwrap();
         assert_ne!(first_keys, persistent_word_keys(&changed));
     }
@@ -4256,7 +4288,10 @@ mod tests {
         let first_decoder = node_by_def(&widget, "UART Decoder");
         let viewer = node_by_def(&widget, "Viewer");
         let second_decoder = widget
-            .add_node_at(nodes::UartDecoder::name(), Pos2::new(420.0, 420.0))
+            .add_node_at(
+                nodes::node_name("org.logicconduit.graph-node.uart-decoder/v1"),
+                Pos2::new(420.0, 420.0),
+            )
             .unwrap();
         for decoder in [first_decoder, second_decoder] {
             widget.graph_mut().nodes.get_mut(&decoder).unwrap().title = "Duplicate title".into();
@@ -4409,12 +4444,17 @@ mod tests {
         let node_types = nodes::build_registry();
         let mut builders = BuilderRegistry::standard();
         builders.builders.insert(
-            nodes::TestCaptureSource::name().to_owned(),
-            Box::new(BufferedPluginBuilder),
+            nodes::node_name("org.logicconduit.graph-node.test-capture-source/v1").to_owned(),
+            Box::new(BufferedPluginBuilder {
+                inner: nodes::node_builder("org.logicconduit.graph-node.test-capture-source/v1"),
+            }),
         );
         let mut widget = NodeGraphWidget::new(node_types);
         let source = widget
-            .add_node_at(nodes::TestCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(
+                nodes::node_name("org.logicconduit.graph-node.test-capture-source/v1"),
+                Pos2::ZERO,
+            )
             .unwrap();
 
         let feature = discover_live_capture_feature(widget.graph(), &builders)
@@ -4448,12 +4488,17 @@ mod tests {
         let node_types = nodes::build_registry();
         let mut builders = BuilderRegistry::standard();
         builders.builders.insert(
-            nodes::TestCaptureSource::name().to_owned(),
-            Box::new(BufferedPluginBuilder),
+            nodes::node_name("org.logicconduit.graph-node.test-capture-source/v1").to_owned(),
+            Box::new(BufferedPluginBuilder {
+                inner: nodes::node_builder("org.logicconduit.graph-node.test-capture-source/v1"),
+            }),
         );
         let mut widget = NodeGraphWidget::new(node_types);
         let source = widget
-            .add_node_at(nodes::TestCaptureSource::name(), Pos2::ZERO)
+            .add_node_at(
+                nodes::node_name("org.logicconduit.graph-node.test-capture-source/v1"),
+                Pos2::ZERO,
+            )
             .unwrap();
         let program = TriggerProgram::new(
             TriggerIdentifier::new("plugin.vendor-neutral.engine").unwrap(),
@@ -4533,14 +4578,9 @@ mod tests {
     fn file_source_with_wired_filename_builds_deferred_source() {
         use signal_processing::TextSample;
 
-        use crate::nodes::sources::FileSourceBuilder;
-
-        let builder = FileSourceBuilder;
-        let state = serde_json::to_value(nodes::DslFileSourceState {
-            file: node_graph::FileValue::new(""),
-            channels: node_graph::IntValue::new(4, 1, 32),
-        })
-        .unwrap();
+        let builder = nodes::node_builder("org.logicconduit.graph-node.dsl-file-source/v1");
+        let mut state = nodes::default_node_state("org.logicconduit.graph-node.dsl-file-source/v1");
+        state["channels"]["value"] = 4.into();
 
         let file_socket = Socket {
             name: "File".into(),
@@ -4612,10 +4652,9 @@ mod tests {
             .unwrap();
         graph.remove_connection_at(index);
 
-        let mut state: nodes::FileWriterState =
-            serde_json::from_value(graph.nodes[&writer].state.clone()).unwrap();
-        state.filename = node_graph::FileValue::new_save("/tmp/capture.bin", "Save capture as");
-        widget.set_node_state(writer, serde_json::to_value(state).unwrap());
+        let mut state = graph.nodes[&writer].state.clone();
+        state["filename"]["value"] = "/tmp/capture.bin".into();
+        widget.set_node_state(writer, state);
 
         lower(widget.graph(), &BuilderRegistry::standard())
             .unwrap_or_else(|errors| panic!("expected the graph to compile: {errors:?}"));
@@ -4624,26 +4663,35 @@ mod tests {
     #[test]
     fn buffer_node_kind_mismatch_is_rejected() {
         use egui::Pos2;
-        use node_graph::{NodeDef, SocketDirection, SocketId};
+        use node_graph::{SocketDirection, SocketId};
 
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let source = widget
-            .add_node_at(nodes::TestUartSource::name(), Pos2::new(0.0, 0.0))
+            .add_node_at(
+                nodes::node_name("org.logicconduit.graph-node.test-uart-source/v1"),
+                Pos2::new(0.0, 0.0),
+            )
             .unwrap();
         let buf = widget
-            .add_node_at(nodes::Buffer::name(), Pos2::new(200.0, 0.0))
+            .add_node_at(
+                nodes::node_name("org.logicconduit.graph-node.buffer/v1"),
+                Pos2::new(200.0, 0.0),
+            )
             .unwrap();
         let viewer = widget
-            .add_node_at(nodes::Viewer::name(), Pos2::new(400.0, 0.0))
+            .add_node_at(
+                nodes::node_name("org.logicconduit.graph-node.viewer/v1"),
+                Pos2::new(400.0, 0.0),
+            )
             .unwrap();
 
         // TestUartSource offers `Sample` ("Signal"); set the buffer to
         // "Trigger" — no common kind on the source -> buffer edge, must be
         // a compile error (regardless of what the buffer -> viewer edge
         // downstream negotiates to).
-        let mut state = nodes::Buffer::state();
-        state.kind.select("Trigger");
-        widget.set_node_state(buf, serde_json::to_value(state).unwrap());
+        let mut state = widget.graph().nodes[&buf].state.clone();
+        state["kind"]["value"] = "Trigger".into();
+        widget.set_node_state(buf, state);
 
         let connect = |widget: &mut NodeGraphWidget, from: (NodeId, &str), to: (NodeId, &str)| {
             let from_socket = SocketId {
@@ -4674,17 +4722,26 @@ mod tests {
     #[test]
     fn muted_node_with_compatible_pass_through_lowers_to_a_direct_connection() {
         use egui::Pos2;
-        use node_graph::{NodeDef, SocketDirection, SocketId};
+        use node_graph::{SocketDirection, SocketId};
 
         let mut widget = NodeGraphWidget::new(nodes::build_registry());
         let source = widget
-            .add_node_at(nodes::TestUartSource::name(), Pos2::new(0.0, 0.0))
+            .add_node_at(
+                nodes::node_name("org.logicconduit.graph-node.test-uart-source/v1"),
+                Pos2::new(0.0, 0.0),
+            )
             .unwrap();
         let buf = widget
-            .add_node_at(nodes::Buffer::name(), Pos2::new(200.0, 0.0))
+            .add_node_at(
+                nodes::node_name("org.logicconduit.graph-node.buffer/v1"),
+                Pos2::new(200.0, 0.0),
+            )
             .unwrap();
         let viewer = widget
-            .add_node_at(nodes::Viewer::name(), Pos2::new(400.0, 0.0))
+            .add_node_at(
+                nodes::node_name("org.logicconduit.graph-node.viewer/v1"),
+                Pos2::new(400.0, 0.0),
+            )
             .unwrap();
 
         let connect = |widget: &mut NodeGraphWidget, from: (NodeId, &str), to: (NodeId, &str)| {
@@ -4831,10 +4888,9 @@ mod tests {
             .find(|node| node.title == "Match Start")
             .unwrap()
             .id;
-        let mut state: nodes::WordMatcherState =
-            serde_json::from_value(widget.graph().nodes[&matcher].state.clone()).unwrap();
-        state.pattern = node_graph::StringValue::new("0x600082");
-        widget.set_node_state(matcher, serde_json::to_value(state).unwrap());
+        let mut state = widget.graph().nodes[&matcher].state.clone();
+        state["pattern"]["value"] = "0x600082".into();
+        widget.set_node_state(matcher, state);
 
         let new = lower(widget.graph(), &registry).unwrap();
         let edits = diff(&old, &new, &registry).unwrap();
@@ -4856,10 +4912,9 @@ mod tests {
 
         // SPI word size has no hot config and the decoder is source-fed.
         let spi = node_by_def(&widget, "SPI Decoder");
-        let mut state: nodes::SpiDecoderState =
-            serde_json::from_value(widget.graph().nodes[&spi].state.clone()).unwrap();
-        state.word_size = node_graph::IntValue::new(16, 1, 32);
-        widget.set_node_state(spi, serde_json::to_value(state).unwrap());
+        let mut state = widget.graph().nodes[&spi].state.clone();
+        state["word_size"]["value"] = 16.into();
+        widget.set_node_state(spi, state);
 
         let new = lower(widget.graph(), &registry).unwrap();
         let error = diff(&old, &new, &registry).unwrap_err();
@@ -4878,11 +4933,10 @@ mod tests {
         let matcher = widget
             .add_node_at("Word Matcher", egui::Pos2::new(620.0, 600.0))
             .unwrap();
-        let mut state: nodes::WordMatcherState =
-            serde_json::from_value(widget.graph().nodes[&matcher].state.clone()).unwrap();
-        state.pattern = node_graph::StringValue::new("0x0");
-        state.mask = node_graph::StringValue::new("0x0");
-        widget.set_node_state(matcher, serde_json::to_value(state).unwrap());
+        let mut state = widget.graph().nodes[&matcher].state.clone();
+        state["pattern"]["value"] = "0x0".into();
+        state["mask"]["value"] = "0x0".into();
+        widget.set_node_state(matcher, state);
 
         let decoder = node_by_def(widget, "Binary Decoder");
         let out_idx = |graph: &node_graph::GraphState, id: NodeId, name: &str| {
@@ -5189,24 +5243,14 @@ mod tests {
         let mut widget = startup_widget();
         let source_id = node_by_def(&widget, "DSL File Source");
         let formatter_id = node_by_def(&widget, "String Formatter");
-        widget.set_node_state(
-            source_id,
-            serde_json::to_value(nodes::DslFileSourceState {
-                file: node_graph::FileValue::new(capture.display().to_string()),
-                channels: node_graph::IntValue::new(11, 1, 32),
-            })
-            .unwrap(),
-        );
-        widget.set_node_state(
-            formatter_id,
-            serde_json::to_value(nodes::StringFormatterState {
-                template: node_graph::StringValue::new(format!(
-                    "{}/capture_{{n:04}}.bin",
-                    out_dir.display()
-                )),
-            })
-            .unwrap(),
-        );
+        let mut source_state = widget.graph().nodes[&source_id].state.clone();
+        source_state["file"]["value"] = capture.display().to_string().into();
+        source_state["channels"]["value"] = 11.into();
+        widget.set_node_state(source_id, source_state);
+        let mut formatter_state = widget.graph().nodes[&formatter_id].state.clone();
+        formatter_state["template"]["value"] =
+            format!("{}/capture_{{n:04}}.bin", out_dir.display()).into();
+        widget.set_node_state(formatter_id, formatter_state);
         widget
     }
 
@@ -5399,20 +5443,12 @@ mod tests {
         for node in widget.graph_mut().nodes.values_mut() {
             match node.def_name() {
                 "DSL File Source" => {
-                    node.state = serde_json::to_value(nodes::DslFileSourceState {
-                        file: node_graph::FileValue::new(capture.display().to_string()),
-                        channels: node_graph::IntValue::new(11, 1, 32),
-                    })
-                    .unwrap();
+                    node.state["file"]["value"] = capture.display().to_string().into();
+                    node.state["channels"]["value"] = 11.into();
                 }
                 "String Formatter" => {
-                    node.state = serde_json::to_value(nodes::StringFormatterState {
-                        template: node_graph::StringValue::new(format!(
-                            "{}/capture_{{n:04}}.bin",
-                            output.path().display()
-                        )),
-                    })
-                    .unwrap();
+                    node.state["template"]["value"] =
+                        format!("{}/capture_{{n:04}}.bin", output.path().display()).into();
                 }
                 _ => {}
             }
@@ -5446,20 +5482,12 @@ mod tests {
         for node in widget.graph_mut().nodes.values_mut() {
             match node.def_name() {
                 "DSL File Source" => {
-                    node.state = serde_json::to_value(nodes::DslFileSourceState {
-                        file: node_graph::FileValue::new(capture.display().to_string()),
-                        channels: node_graph::IntValue::new(11, 1, 32),
-                    })
-                    .unwrap();
+                    node.state["file"]["value"] = capture.display().to_string().into();
+                    node.state["channels"]["value"] = 11.into();
                 }
                 "String Formatter" => {
-                    node.state = serde_json::to_value(nodes::StringFormatterState {
-                        template: node_graph::StringValue::new(format!(
-                            "{}/capture_{{n:04}}.bin",
-                            output.path().display()
-                        )),
-                    })
-                    .unwrap();
+                    node.state["template"]["value"] =
+                        format!("{}/capture_{{n:04}}.bin", output.path().display()).into();
                 }
                 _ => {}
             }

@@ -2,8 +2,3 @@
 mod builder;
 mod definition;
 mod registration;
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-pub(crate) use builder::FileSourceBuilder;
-#[cfg(test)]
-pub(crate) use definition::{DslFileSource, DslFileSourceState};

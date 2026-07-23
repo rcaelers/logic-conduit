@@ -237,6 +237,7 @@ mod tests {
         RecordingStart, RetentionPolicy, TriggerPlacement,
     };
 
+    use super::super::definition::CaptureDurationValue;
     use super::{U3Pro16State, feature};
 
     struct EndCursor;
@@ -285,7 +286,7 @@ mod tests {
         let mut state = U3Pro16State::default();
         state.mode.select("Buffer");
         state.sample_rate.select("100 MHz");
-        state.duration.set_milliseconds(10);
+        state.duration = CaptureDurationValue::from_milliseconds(10);
         state.channels.enabled.fill(false);
         state.channels.enabled[0] = true;
         state
