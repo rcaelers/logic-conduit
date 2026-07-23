@@ -94,14 +94,9 @@ pub(crate) fn run() -> MainResult {
         APPLICATION_NAME,
         options,
         Box::new(move |cc| {
-            let app = logic_analyzer_ui::App::new_with_plugins_and_file(
-                cc,
-                args.file.as_deref(),
-                |_ctx| {
-                    #[cfg(feature = "example-plugin")]
-                    example_plugin::register(_ctx);
-                },
-            );
+            #[cfg(feature = "example-plugin")]
+            example_plugin::force_link();
+            let app = logic_analyzer_ui::App::new_with_file(cc, args.file.as_deref());
             #[cfg(target_os = "macos")]
             macos_menu::install(app.recent_files());
             Ok(Box::new(app))

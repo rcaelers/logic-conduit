@@ -44,8 +44,10 @@ Delivery plan:
 5. **UI-panel capabilities — complete:** independently openable panel kinds submit stable metadata
    and factories through a deterministically applied UI inventory. Camera Frames is inventory-backed
    and no longer uses the application plugin callback for panel registration.
-6. Migrate the example plugin to force-linked inventory submissions and remove explicit
-   `example_plugin::register` and application registration callbacks.
+6. **Inventory-native example plugin — complete:** Pulse Measure, Camera Frame Source, the custom
+   CameraFrame collected payload, and Camera Frames panel are independent submissions. The host
+   force-links the optional plugin through a no-op anchor; explicit plugin registration and
+   application registration callbacks have been removed.
 7. Add collision, missing-dependency, deterministic-order, force-link, native, and WASM constructor
    coverage; initialize WASM constructors once at the web platform entry point before iteration.
 8. Remove remaining compatibility registration functions and temporary migration scaffolding.

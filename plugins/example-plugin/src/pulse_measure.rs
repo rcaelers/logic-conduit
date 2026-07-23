@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use logic_analyzer_graph::nodes::Signal;
-use logic_analyzer_graph::{CompileCtx, PortKind, PortValue, ResolvedInputs, RuntimeBuilder};
+use logic_analyzer_graph::{
+    CompileCtx, GraphNodeRegistration, PortKind, PortValue, ResolvedInputs, RuntimeBuilder,
+};
 use node_graph::{InputDef, NodeDef, OutputDef, Socket, SocketDef, SocketShape};
 use signal_processing::{
     InputPort, OutputPort, PortDirection, PortSchema, ProcessNode, Sample, WorkError, WorkResult,
@@ -91,7 +93,8 @@ impl NodeDef for PulseMeasure {
 
 // ── Compiler builder ─────────────────────────────────────────────────────────
 
-pub struct PulseMeasureBuilder;
+#[derive(Default)]
+struct PulseMeasureBuilder;
 impl RuntimeBuilder for PulseMeasureBuilder {
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
         vec![PortKind::of::<Sample>()]
@@ -114,6 +117,18 @@ impl RuntimeBuilder for PulseMeasureBuilder {
     ) -> Result<Box<dyn ProcessNode>, String> {
         Ok(Box::new(PulseMeasureNode::new(name)))
     }
+}
+
+fn register_pulse_width_channel() {
+    signal_processing::register_type::<PulseWidth>();
+}
+
+inventory::submit! {
+    GraphNodeRegistration::runnable::<PulseMeasure, PulseMeasureBuilder>(
+        "org.logicconduit.example.graph-node.pulse-measure/v1",
+    )
+    .requiring_payloads(&["org.logicconduit.digital-sample/v1"])
+    .with_runtime_setup(&[register_pulse_width_channel])
 }
 
 // ── Runtime node ──────────────────────────────────────────────────────────────
@@ -188,11 +203,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn register_populates_both_registries() {
-        let mut nodes = node_graph::NodeTypeRegistry::new();
-        let mut builders = logic_analyzer_graph::BuilderRegistry::standard();
-        let mut ctx = logic_analyzer_graph::PluginContext::new(&mut nodes, &mut builders);
-        crate::register_graph(&mut ctx);
+    fn inventory_populates_both_registries() {
+        let nodes = logic_analyzer_graph::nodes::build_registry();
+        let _builders = logic_analyzer_graph::BuilderRegistry::standard();
         assert_eq!(nodes.category_of("Pulse Measure"), Some("Plugin"));
     }
 

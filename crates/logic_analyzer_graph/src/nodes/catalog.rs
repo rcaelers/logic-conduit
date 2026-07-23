@@ -13,6 +13,7 @@ pub(crate) fn standard_builders() -> HashMap<String, Box<dyn RuntimeBuilder>> {
     );
 
     for registration in super::graph_node_registrations() {
+        registration.apply_runtime_setup();
         assert!(
             builders
                 .insert(registration.name().to_owned(), registration.builder())

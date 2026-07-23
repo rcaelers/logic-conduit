@@ -8,8 +8,8 @@ use egui::{Color32, Rect, Stroke, StrokeKind};
 use serde_json::Value;
 
 use logic_analyzer_graph::{
-    CompileCtx, DefaultViewerPayloadPresentation, PluginContext as GraphPluginContext, PortKind,
-    PortValue, ResolvedInputs, RuntimeBuilder,
+    CollectedPayloadRegistration, CompileCtx, DefaultViewerPayloadPresentation,
+    GraphNodeRegistration, PortKind, PortValue, ResolvedInputs, RuntimeBuilder,
 };
 use logic_analyzer_ui::{PluginPanel, PluginPanelContext, PluginPanelIcon, UiPanelRegistration};
 use logic_analyzer_viewer::{
@@ -93,6 +93,7 @@ impl NodeDef for CameraFrameSource {
     }
 }
 
+#[derive(Default)]
 struct CameraFrameSourceBuilder;
 
 impl RuntimeBuilder for CameraFrameSourceBuilder {
@@ -373,6 +374,10 @@ impl CollectedPayloadAdapter for CameraFrameAdapter {
     }
 }
 
+fn camera_frame_adapter() -> Arc<dyn CollectedPayloadAdapter> {
+    Arc::new(CameraFrameAdapter)
+}
+
 struct CameraFrameRenderer;
 
 impl ViewerLaneRenderer for CameraFrameRenderer {
@@ -398,6 +403,13 @@ impl ViewerLaneRenderer for CameraFrameRenderer {
         }
         true
     }
+}
+
+fn camera_frame_presentation() -> DefaultViewerPayloadPresentation {
+    DefaultViewerPayloadPresentation::with_renderer(
+        ViewerLaneBadge::new("IMG", Color32::from_rgb(90, 175, 220)),
+        Arc::new(CameraFrameRenderer),
+    )
 }
 
 fn paint_thumbnail(painter: &egui::Painter, rect: Rect, frame: &CameraFrame) {
@@ -499,19 +511,19 @@ impl PluginPanel for CameraPanel {
     }
 }
 
-pub(crate) fn register_graph(ctx: &mut GraphPluginContext<'_>) -> Result<(), String> {
-    ctx.register_node::<CameraFrameSource>()
-        .register_builder("Camera Frame Source", Box::new(CameraFrameSourceBuilder))
-        .register_collected_payload_subscription_adapter::<CameraFrame>(
-            PAYLOAD_ID,
-            Arc::new(CameraFrameAdapter),
-            DefaultViewerPayloadPresentation::with_renderer(
-                ViewerLaneBadge::new("IMG", Color32::from_rgb(90, 175, 220)),
-                Arc::new(CameraFrameRenderer),
-            ),
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
+inventory::submit! {
+    CollectedPayloadRegistration::subscribable::<CameraFrame>(
+        PAYLOAD_ID,
+        camera_frame_adapter,
+        camera_frame_presentation,
+    )
+}
+
+inventory::submit! {
+    GraphNodeRegistration::runnable::<CameraFrameSource, CameraFrameSourceBuilder>(
+        "org.logicconduit.example.graph-node.camera-frame-source/v1",
+    )
+    .requiring_payloads(&[PAYLOAD_ID])
 }
 
 inventory::submit! {
@@ -529,10 +541,8 @@ mod camera_frame_tests {
 
     #[test]
     fn custom_source_collects_bounded_typed_frames_through_an_explicit_viewer() {
-        let mut node_types = logic_analyzer_graph::nodes::build_registry();
-        let mut builders = BuilderRegistry::standard();
-        let mut plugins = GraphPluginContext::new(&mut node_types, &mut builders);
-        register_graph(&mut plugins).unwrap();
+        let node_types = logic_analyzer_graph::nodes::build_registry();
+        let builders = BuilderRegistry::standard();
         let mut widget = NodeGraphWidget::new(node_types);
         let source = widget
             .add_node_at("Camera Frame Source", egui::Pos2::ZERO)

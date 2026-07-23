@@ -5,16 +5,7 @@ mod camera_frame;
 mod pulse_measure;
 
 pub use camera_frame::{CameraFrame, CameraFrameSocket, CameraFrameSource};
-pub use pulse_measure::{PulseMeasure, PulseMeasureBuilder, PulseSocket, PulseWidth};
+pub use pulse_measure::{PulseMeasure, PulseSocket, PulseWidth};
 
-/// Registers this plugin's graph/runtime extensions and application panel.
-pub fn register(ctx: &mut logic_analyzer_ui::PluginContext) {
-    register_graph(ctx.graph());
-}
-
-fn register_graph(ctx: &mut logic_analyzer_graph::PluginContext) {
-    ctx.register_payload::<PulseWidth>()
-        .register_node::<PulseMeasure>()
-        .register_builder("Pulse Measure", Box::new(PulseMeasureBuilder));
-    camera_frame::register_graph(ctx).expect("example camera payload registration must be unique");
-}
+/// Linker anchor used by a host that enables this compile-time plugin.
+pub fn force_link() {}

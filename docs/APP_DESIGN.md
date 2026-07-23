@@ -223,19 +223,16 @@ machinery.
 
 ## Plugins
 
-Compile-time plugin crates extend all three layers through one hook:
-`App::new_with_plugins(cc, |ctx: &mut PluginContext| …)` where the context exposes
-`register_payload::<T>()` (runtime type registry + `PortValue`),
-`register_node::<T: NodeDef>()`, and `register_builder(name, Box<dyn RuntimeBuilder>)`.
-A plugin depends on `logic-analyzer-graph`, so the registration call lives in the binary
-crate that depends on both (`logic-analyzer-app-native`, behind the `example-plugin` Cargo
-feature). [plugins/example-plugin](../plugins/example-plugin)
-demonstrates a new payload type, socket type, node def, and builder
-(`Pulse Measure`).
+Compile-time plugin crates submit independently discoverable payload, graph-node, and UI-panel
+capabilities through `inventory`. The host enables and force-links the plugin crate; application
+composition then applies payloads, graph nodes, and panels in deterministic stable-ID order without
+a plugin registration callback. [plugins/example-plugin](../plugins/example-plugin) demonstrates
+custom channel and collected payload types, socket types, graph definitions and runtime builders,
+a waveform renderer, and an independently openable panel.
 
 ## wasm
 
-The same `App` compiles to `wasm32-unknown-unknown`: no file dialogs/paths, no capture
-files, no threads. The UART demo graph runs on the `CooperativeManager` pumped from the
-frame loop; derived viewer lanes are the only viewer content. Cargo features/`cfg` gates
-keep the native-only nodes (file source/writers, USB driver) out of the wasm registry.
+The same `App` compiles to `wasm32-unknown-unknown`: no native file dialogs, USB access, or
+threads. The demo graph runs on the `CooperativeManager` pumped from the frame loop. The same graph
+node features are registered on both platforms; whole-file WASM builder implementations provide
+synthetic sources and discard writers where native facilities do not exist.

@@ -2,18 +2,18 @@
 
 ## Current architecture
 
-`PortKind` is an open runtime payload identity. A compile-time plugin implements
-`PortValue` for its Rust payload type and calls `PluginContext::register_payload::<T>()` so the
-generic processing runtime can create channels for `T`.
+`PortKind` is an open runtime payload identity. A compile-time plugin implements `PortValue` for its
+Rust payload type. A graph-node inventory submission carries any idempotent runtime channel setup
+needed for a non-collected custom payload; collected payload capability registration performs the
+same typed channel setup as part of its atomic submission.
 
-`CollectedPayloadRegistry` records a durable, plugin-owned identity for each payload that is
-intended to become collectable. `BuilderRegistry::standard()` registers the five built-in retained
-payload types, and `PluginContext::register_collected_payload::<T>(stable_id)` registers a plugin
-payload with both the runtime channel factory and that identity registry. The registry rejects a
-stable identifier assigned to multiple Rust types, and a Rust type assigned multiple identifiers.
+`CollectedPayloadRegistry` records a durable, plugin-owned identity for each payload intended to
+become collectable. `CollectedPayloadRegistration` inventory submissions atomically provide that
+identity, typed channel setup, adapter factory, request configuration, persistence policy, and
+default waveform presentation. `BuilderRegistry::standard()` applies submissions in stable-ID
+order and rejects identity/type collisions before graph-node payload requirements are validated.
 
-`PluginContext::register_collected_payload_adapter::<T>(stable_id, adapter)` additionally records
-an adapter factory. `DerivedDataCollector` schedules adapter-created lane ingestors beside its
+`DerivedDataCollector` schedules adapter-created lane ingestors beside its
 other lanes. An adapter publishes its retained, type-erased query object through `DerivedLanes`,
 so a later subscriber can discover it by stable payload identity and downcast only to its own
 registered query type. Built-in payloads are registered through this same path and retain their
@@ -149,8 +149,8 @@ adapter may expose rows and columns when that is meaningful; no table-specific b
 required for arbitrary payloads.
 
 Extra panels are UI-owned plugin registrations, not graph or processing registrations. A panel
-registers a stable identity, title, icon, minimum size, factory, and optional singleton constraint
-through `logic_analyzer_ui::PluginContext`. The application discovers those descriptors when it
+submits a stable identity, title, icon, minimum size, factory, and optional singleton constraint
+through `UiPanelRegistration`. The application discovers those descriptors when it
 builds the View menu and panel-layout catalog, so adding a panel does not add an application dispatch
 branch. Each panel instance receives a restricted read-only context containing collected-lane
 descriptors and query handles. It keeps versioned serializable state under its stable panel identity

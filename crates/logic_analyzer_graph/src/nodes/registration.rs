@@ -13,6 +13,7 @@ pub struct GraphNodeRegistration {
     register_node: fn(&mut NodeTypeRegistry),
     create_builder: fn() -> Box<dyn RuntimeBuilder>,
     required_payloads: &'static [&'static str],
+    runtime_setup: &'static [fn()],
 }
 
 impl GraphNodeRegistration {
@@ -29,11 +30,19 @@ impl GraphNodeRegistration {
             register_node: register_node::<N>,
             create_builder: create_builder::<B>,
             required_payloads: &[],
+            runtime_setup: &[],
         }
     }
 
     pub const fn requiring_payloads(mut self, required_payloads: &'static [&'static str]) -> Self {
         self.required_payloads = required_payloads;
+        self
+    }
+
+    /// Adds idempotent runtime setup owned by this node, such as registering
+    /// a custom non-collected channel payload.
+    pub const fn with_runtime_setup(mut self, runtime_setup: &'static [fn()]) -> Self {
+        self.runtime_setup = runtime_setup;
         self
     }
 
@@ -47,6 +56,12 @@ impl GraphNodeRegistration {
 
     pub const fn required_payloads(&self) -> &'static [&'static str] {
         self.required_payloads
+    }
+
+    pub(crate) fn apply_runtime_setup(&self) {
+        for setup in self.runtime_setup {
+            setup();
+        }
     }
 
     pub(crate) fn apply_node(&self, registry: &mut NodeTypeRegistry) {

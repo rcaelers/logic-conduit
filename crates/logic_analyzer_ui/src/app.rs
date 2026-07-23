@@ -297,13 +297,13 @@ impl App {
     }
 
     pub fn new(cc: &eframe::CreationContext) -> Self {
-        Self::new_with_plugins(cc, |_ctx| {})
+        Self::build(cc)
     }
 
     /// Builds the application around an initial graph supplied by the host
     /// application. The host owns where that graph comes from.
     pub fn new_with_graph(cc: &eframe::CreationContext, graph: node_graph::GraphState) -> Self {
-        let mut app = Self::build(cc, |_ctx| {});
+        let mut app = Self::build(cc);
         app.node_graph.set_graph(graph);
         app.synchronize_payload_subscription_manifest(true);
         app.restore_sampling_overlay_setting();
@@ -341,48 +341,22 @@ impl App {
         self.platform.recent_files()
     }
 
-    /// Like [`Self::new`], but first runs `register_plugins` against a
-    /// [`crate::PluginContext`] wrapping the freshly built registries.
-    /// This is the hook a downstream crate (e.g. `logic-analyzer-app-native`) uses to link in
-    /// compile-time plugin crates — `logic-analyzer-ui` itself never depends on any
-    /// plugin (a plugin depends on `logic-analyzer-graph`, so the reverse would be a
-    /// dependency cycle), so the actual `example_plugin::register(...)`
-    /// call lives at the binary crate that depends on both.
-    pub fn new_with_plugins(
-        cc: &eframe::CreationContext,
-        register_plugins: impl FnOnce(&mut crate::PluginContext),
-    ) -> Self {
-        Self::new_with_plugins_and_file(cc, None, register_plugins)
-    }
-
-    pub fn new_with_plugins_and_file(
-        cc: &eframe::CreationContext,
-        file: Option<&Path>,
-        register_plugins: impl FnOnce(&mut crate::PluginContext),
-    ) -> Self {
-        let mut app = Self::build(cc, register_plugins);
+    pub fn new_with_file(cc: &eframe::CreationContext, file: Option<&Path>) -> Self {
+        let mut app = Self::build(cc);
         app.platform_load_startup_file(file);
         app
     }
 
-    fn build(
-        cc: &eframe::CreationContext,
-        register_plugins: impl FnOnce(&mut crate::PluginContext),
-    ) -> Self {
+    fn build(cc: &eframe::CreationContext) -> Self {
         // The graph canvas and its custom widgets use a dark palette. Do not
         // inherit a light OS/browser preference for the surrounding egui
         // controls, or their dark foreground text becomes unreadable there.
         cc.egui_ctx.set_theme(egui::Theme::Dark);
         install_fonts(&cc.egui_ctx);
-        let mut registry = nodes::build_registry();
+        let registry = nodes::build_registry();
         let input_bindings = Arc::new(crate::application_input_bindings().clone());
-        let mut builders = compiler::BuilderRegistry::standard();
-        let mut plugin_panel_registry = PluginPanelRegistry::standard();
-        let graph_plugins = compiler::PluginContext::new(&mut registry, &mut builders);
-        register_plugins(&mut crate::PluginContext::new(
-            graph_plugins,
-            &mut plugin_panel_registry,
-        ));
+        let builders = compiler::BuilderRegistry::standard();
+        let plugin_panel_registry = PluginPanelRegistry::standard();
         let mut widget = NodeGraphWidget::new(registry);
         widget.set_input_bindings(input_bindings.clone());
         let platform = crate::app_platform::PlatformState::restore(cc, &mut widget);
