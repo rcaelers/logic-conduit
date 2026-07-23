@@ -41,7 +41,9 @@ Delivery plan:
    identity, typed channel setup, ingestion/query adapter, request configuration, persistence policy,
    and default waveform renderer atomically. Payloads are applied deterministically before graph-node
    payload requirements are validated.
-5. Add UI-panel inventory registration and migrate the example Camera Frames panel.
+5. **UI-panel capabilities — complete:** independently openable panel kinds submit stable metadata
+   and factories through a deterministically applied UI inventory. Camera Frames is inventory-backed
+   and no longer uses the application plugin callback for panel registration.
 6. Migrate the example plugin to force-linked inventory submissions and remove explicit
    `example_plugin::register` and application registration callbacks.
 7. Add collision, missing-dependency, deterministic-order, force-link, native, and WASM constructor

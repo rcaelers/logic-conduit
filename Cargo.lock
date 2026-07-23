@@ -1240,6 +1240,7 @@ version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
  "egui",
+ "inventory",
  "logic-analyzer-graph",
  "logic-analyzer-ui",
  "logic-analyzer-viewer",
@@ -2214,6 +2215,7 @@ dependencies = [
  "eframe",
  "egui",
  "input-bindings",
+ "inventory",
  "logic-analyzer-graph",
  "logic-analyzer-viewer",
  "node-graph",

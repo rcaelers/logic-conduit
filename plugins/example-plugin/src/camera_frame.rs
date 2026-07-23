@@ -11,9 +11,7 @@ use logic_analyzer_graph::{
     CompileCtx, DefaultViewerPayloadPresentation, PluginContext as GraphPluginContext, PortKind,
     PortValue, ResolvedInputs, RuntimeBuilder,
 };
-use logic_analyzer_ui::{
-    PluginContext, PluginPanel, PluginPanelContext, PluginPanelDescriptor, PluginPanelIcon,
-};
+use logic_analyzer_ui::{PluginPanel, PluginPanelContext, PluginPanelIcon, UiPanelRegistration};
 use logic_analyzer_viewer::{
     OpaqueLaneDrawContext, ViewerLaneBadge, ViewerLaneRenderer, ViewerLaneTrack,
 };
@@ -516,13 +514,10 @@ pub(crate) fn register_graph(ctx: &mut GraphPluginContext<'_>) -> Result<(), Str
     Ok(())
 }
 
-pub(crate) fn register_panel(ctx: &mut PluginContext<'_>) -> Result<(), String> {
-    ctx.register_panel::<CameraPanel>(
-        PluginPanelDescriptor::new(PANEL_ID, "Camera Frames")
-            .icon(PluginPanelIcon::Image)
-            .minimum_size(220.0, 180.0),
-    )?;
-    Ok(())
+inventory::submit! {
+    UiPanelRegistration::panel::<CameraPanel>(PANEL_ID, "Camera Frames")
+        .icon(PluginPanelIcon::Image)
+        .minimum_size(220.0, 180.0)
 }
 
 #[cfg(test)]

@@ -377,7 +377,7 @@ impl App {
         let mut registry = nodes::build_registry();
         let input_bindings = Arc::new(crate::application_input_bindings().clone());
         let mut builders = compiler::BuilderRegistry::standard();
-        let mut plugin_panel_registry = PluginPanelRegistry::default();
+        let mut plugin_panel_registry = PluginPanelRegistry::standard();
         let graph_plugins = compiler::PluginContext::new(&mut registry, &mut builders);
         register_plugins(&mut crate::PluginContext::new(
             graph_plugins,

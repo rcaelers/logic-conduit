@@ -19,7 +19,9 @@ pub use app_platform::{
 };
 use input_bindings::InputBindings;
 pub use plugin::PluginContext;
-pub use plugin_panel::{PluginPanel, PluginPanelContext, PluginPanelDescriptor, PluginPanelIcon};
+pub use plugin_panel::{
+    PluginPanel, PluginPanelContext, PluginPanelDescriptor, PluginPanelIcon, UiPanelRegistration,
+};
 pub use product::{APPLICATION_ID, APPLICATION_NAME};
 
 pub fn application_input_bindings() -> &'static InputBindings {

@@ -10,7 +10,6 @@ pub use pulse_measure::{PulseMeasure, PulseMeasureBuilder, PulseSocket, PulseWid
 /// Registers this plugin's graph/runtime extensions and application panel.
 pub fn register(ctx: &mut logic_analyzer_ui::PluginContext) {
     register_graph(ctx.graph());
-    camera_frame::register_panel(ctx).expect("example camera panel registration must be unique");
 }
 
 fn register_graph(ctx: &mut logic_analyzer_graph::PluginContext) {

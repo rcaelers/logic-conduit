@@ -30,6 +30,16 @@ pub(crate) struct PluginPanelRegistry {
 }
 
 impl PluginPanelRegistry {
+    pub(crate) fn standard() -> Self {
+        let mut registry = Self::default();
+        for registration in super::registration::ui_panel_registrations() {
+            registration
+                .apply_to(&mut registry)
+                .expect("UI-panel inventory registration must be valid");
+        }
+        registry
+    }
+
     pub(crate) fn register<P>(&mut self, descriptor: PluginPanelDescriptor) -> Result<(), String>
     where
         P: PluginPanel + Default + 'static,
