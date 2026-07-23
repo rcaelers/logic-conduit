@@ -11,5 +11,5 @@ pub mod synthetic_uart_source;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod capture_archive;
-#[cfg(all(test, feature = "test-support", not(target_arch = "wasm32")))]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod conformance_tests;

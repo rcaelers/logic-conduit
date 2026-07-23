@@ -1689,18 +1689,14 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use logic_analyzer_graph::host::{DiscoveredLiveCaptureFeature, GraphCompiler};
-    use logic_analyzer_graph::test_support::{
-        TestBufferedFakeConfig as BufferedFakeConfig,
-        TestBufferedFakeController as BufferedFakeController,
-        TestBufferedFakeProvider as BufferedFakeProvider,
-        TestDeterministicFakeConfig as DeterministicFakeConfig,
-        TestDeterministicFakeController as DeterministicFakeController,
-        TestDeterministicFakeProvider as DeterministicFakeProvider,
-    };
     use logic_analyzer_graph::{
         CaptureGraphSourceFactory, LiveCaptureEdit, LiveCaptureFeature, SimpleTriggerChannel,
     };
     use logic_analyzer_graph_nodes::test_support as nodes;
+    use logic_analyzer_test_support::{
+        BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider, DeterministicFakeConfig,
+        DeterministicFakeController, DeterministicFakeProvider,
+    };
     use node_graph::{NodeGraphWidget, NodeId};
     use signal_processing::{
         AcquisitionContext, AcquisitionError, AcquisitionResult, CaptureAnalysisChannel,

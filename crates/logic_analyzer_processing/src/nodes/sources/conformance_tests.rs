@@ -2,16 +2,15 @@ use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
 
+use logic_analyzer_test_support::{
+    BufferedFakeConfig, BufferedFakeProvider, DeterministicFakeConfig, DeterministicFakeProvider,
+};
 use signal_processing::{
     AcquisitionContext, AcquisitionResult, CaptureAcquisitionPhase, CaptureChannelId,
     CaptureCursorItem, CaptureDataDelivery, CaptureEvent, CaptureProviderCapabilities,
     CaptureQueueReceiveError, CaptureSessionId, CaptureSessionState, CaptureStoreCursor,
     CaptureStoreDescriptor, NativeCaptureStore, NativeCaptureStoreConfig, NativeFinalizedCapture,
     PreparedAcquisition, SimpleTriggerCondition, bounded_capture_event_queue,
-};
-
-use crate::test_support::{
-    BufferedFakeConfig, BufferedFakeProvider, DeterministicFakeConfig, DeterministicFakeProvider,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(2);

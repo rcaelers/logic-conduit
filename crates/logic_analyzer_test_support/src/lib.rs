@@ -1,4 +1,4 @@
-//! Test-only deterministic capture providers.
+//! Shared deterministic fixtures for cross-crate integration tests.
 
 mod buffered_fake;
 mod live_acquisition;

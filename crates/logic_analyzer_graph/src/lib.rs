@@ -13,9 +13,6 @@ pub mod node_support;
 #[cfg(test)]
 mod nodes;
 
-#[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
-pub mod test_support;
-
 pub use compiler::{
     ApplyError, ApplySummary, BuilderRegistry, CaptureCacheIdentity, CaptureGraphSourceFactory,
     CapturePresentation, CapturePresentationSignal, CollectedPayloadRegistration, CompileCtx,

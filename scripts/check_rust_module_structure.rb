@@ -11,7 +11,7 @@ ROOT_FILES = %w[lib.rs main.rs mod.rs].freeze
 
 PUBLIC_MODULES = {
   "crates/signal_processing/src/lib.rs" => %w[capture derived_word_store live_capture live_capture_store waveform_index],
-  "crates/logic_analyzer_processing/src/lib.rs" => %w[nodes support test_support types],
+  "crates/logic_analyzer_processing/src/lib.rs" => %w[nodes support types],
   "crates/logic_analyzer_processing/src/support/mod.rs" => %w[logic_analyzer],
   "crates/logic_analyzer_processing/src/nodes/mod.rs" => %w[decoders logic sinks sources],
   "crates/logic_analyzer_processing/src/nodes/decoders/mod.rs" => %w[parallel_decoder spi_decoder uart_decoder],
@@ -25,7 +25,7 @@ PUBLIC_MODULES = {
     dsl_file dslogic_u3pro16 sigrok_file synthetic_capture_source synthetic_uart_source
   ],
   "crates/logic_analyzer_graph_api/src/lib.rs" => %w[node node_support],
-  "crates/logic_analyzer_graph/src/lib.rs" => %w[host node node_support test_support],
+  "crates/logic_analyzer_graph/src/lib.rs" => %w[host node node_support],
   "crates/logic_analyzer_graph_nodes/src/lib.rs" => %w[test_support]
 }.freeze
 
@@ -75,6 +75,19 @@ end
 %w[logic-analyzer-capture-export tempfile thiserror zip].each do |dependency|
   if graph_production_manifest.match?(/^#{Regexp.escape(dependency)}\s*=/)
     errors << "crates/logic_analyzer_graph/Cargo.toml: compiler production code must not depend on #{dependency}"
+  end
+end
+
+processing_manifest = File.read(File.join(ROOT, "crates/logic_analyzer_processing/Cargo.toml"))
+processing_production_manifest = processing_manifest.split(/^\[dev-dependencies\]\s*$/, 2).first
+if processing_production_manifest.match?(/^logic-analyzer-test-support\s*=/)
+  errors << "crates/logic_analyzer_processing/Cargo.toml: production processing code must not depend on test support"
+end
+
+test_support_manifest = File.read(File.join(ROOT, "crates/logic_analyzer_test_support/Cargo.toml"))
+%w[logic-analyzer-capture-export logic-analyzer-graph-api logic-analyzer-graph logic-analyzer-graph-nodes logic-analyzer-processing logic-analyzer-ui].each do |dependency|
+  if test_support_manifest.match?(/^#{Regexp.escape(dependency)}\s*=/)
+    errors << "crates/logic_analyzer_test_support/Cargo.toml: shared test support must not depend on #{dependency}"
   end
 end
 

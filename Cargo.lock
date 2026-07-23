@@ -2195,6 +2195,7 @@ dependencies = [
  "logic-analyzer-graph-api",
  "logic-analyzer-graph-nodes",
  "logic-analyzer-processing",
+ "logic-analyzer-test-support",
  "logic-analyzer-viewer",
  "node-graph",
  "serde",
@@ -2224,6 +2225,7 @@ dependencies = [
  "logic-analyzer-graph",
  "logic-analyzer-graph-api",
  "logic-analyzer-processing",
+ "logic-analyzer-test-support",
  "logic-analyzer-viewer",
  "node-graph",
  "serde",
@@ -2240,6 +2242,7 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "libc",
+ "logic-analyzer-test-support",
  "rusb",
  "serde",
  "serde_json",
@@ -2249,6 +2252,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zip",
+]
+
+[[package]]
+name = "logic-analyzer-test-support"
+version = "0.1.0"
+dependencies = [
+ "signal-processing",
+ "tempfile",
 ]
 
 [[package]]
@@ -2264,6 +2275,7 @@ dependencies = [
  "logic-analyzer-capture-export",
  "logic-analyzer-graph",
  "logic-analyzer-graph-nodes",
+ "logic-analyzer-test-support",
  "logic-analyzer-viewer",
  "node-graph",
  "panel-layout",

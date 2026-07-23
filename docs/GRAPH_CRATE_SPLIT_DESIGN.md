@@ -8,10 +8,11 @@ inventory assembly is compiler-owned and consumes submissions without importing 
 
 `logic_analyzer_graph_nodes` owns the built-in node definitions, builders, migrations, socket
 types, payload presentations, and inventory submissions. `logic_analyzer_graph` owns compiler and
-host services and temporarily retains test support and compatibility re-exports.
+host services and temporarily retains compatibility re-exports and narrow compiler test seams.
 `logic_analyzer_capture_export` owns native streaming capture export without depending on a graph
-crate. Native and web application composition link the built-in bundle before constructing the
-host compiler.
+crate. `logic_analyzer_test_support` owns deterministic capture providers shared by cross-crate
+tests. Native and web application composition link the built-in bundle before constructing the host
+compiler.
 
 ## Proposed future architecture
 
@@ -32,7 +33,7 @@ logic_analyzer_graph   logic_analyzer_graph_nodes
  logic_analyzer_ui          plugins
 
 logic_analyzer_capture_export ---> signal_processing
-logic_analyzer_test_support  ---> graph API and processing test support
+logic_analyzer_test_support  ---> signal_processing
 ```
 
 `logic_analyzer_graph` and `logic_analyzer_graph_nodes` both depend on
@@ -131,10 +132,11 @@ complete exporter implementation at the crate boundary.
 
 ### Test support
 
-`logic_analyzer_test_support` owns deterministic acquisition providers and graph integration
-fixtures used across crate boundaries. Production graph API and compiler crates do not depend on
-`logic_analyzer_processing` merely to expose test adapters. Node-isolation mocks remain private to
-the built-in graph-node crate unless another crate has a documented need for them.
+`logic_analyzer_test_support` owns deterministic acquisition providers used across crate
+boundaries. It depends only on generic `signal_processing` capture contracts. Processing
+conformance tests, compiler tests, built-in test nodes, and UI integration tests consume this owner
+directly. Node-isolation mocks remain private to the built-in graph-node crate unless another crate
+has a documented need for them.
 
 ### Inventory and composition
 
