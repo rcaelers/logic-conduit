@@ -6,7 +6,7 @@ use logic_analyzer_processing::nodes::logic::trigger_counter::TriggerCounter;
 use node_graph::Socket;
 use signal_processing::{NumberSample, ProcessNode, Trigger};
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 #[derive(Default)]
 pub(crate) struct CounterBuilder;
@@ -29,7 +29,7 @@ impl RuntimeBuilder for CounterBuilder {
         name: &str,
         state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: super::definition::CounterState = parse_state(state)?;
         Ok(Box::new(

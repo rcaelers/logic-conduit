@@ -11,7 +11,7 @@ use logic_analyzer_graph::node::{
     CollectedPayloadRegistration, GraphNodeRegistration, RuntimeBuilder,
 };
 use logic_analyzer_graph::node_support::{
-    CompileCtx, DefaultViewerPayloadPresentation, PortKind, PortValue, ResolvedInputs,
+    DefaultViewerPayloadPresentation, NodeBuildContext, PortKind, PortValue, ResolvedInputs,
 };
 use logic_analyzer_ui::{PluginPanel, PluginPanelContext, PluginPanelIcon, UiPanelRegistration};
 use logic_analyzer_viewer::{
@@ -134,7 +134,7 @@ impl RuntimeBuilder for CameraFrameSourceBuilder {
         name: &str,
         _state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         Ok(Box::new(CameraFrameSourceNode::new(name)))
     }
@@ -536,8 +536,8 @@ inventory::submit! {
 
 #[cfg(test)]
 mod camera_frame_tests {
-    use logic_analyzer_graph::host::{BuilderRegistry, lower, start_app_run};
-    use logic_analyzer_graph::node_support::{CompileCtx, PortKind};
+    use logic_analyzer_graph::host::{BuilderRegistry, CompileCtx, lower, start_app_run};
+    use logic_analyzer_graph::node_support::PortKind;
     use node_graph::{NodeGraphWidget, SocketDirection, SocketId};
 
     use super::*;

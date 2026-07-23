@@ -7,7 +7,7 @@ use node_graph::Socket;
 use signal_processing::{DerivedDataRetention, ProcessNode, Sample, SampleBlock, TextSample};
 
 use crate::{
-    CapturePresentation, CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state,
+    CapturePresentation, NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, parse_state,
 };
 
 #[derive(Default)]
@@ -71,7 +71,7 @@ impl RuntimeBuilder for FileSourceBuilder {
         name: &str,
         state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: super::definition::DslFileSourceState = parse_state(state)?;
         Ok(Box::new(

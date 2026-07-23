@@ -12,7 +12,7 @@ use signal_processing::{ProcessNode, Sample, SampleBlock, Word};
 
 use crate::decoder_table::DecoderTableColumnPresentation;
 use crate::{
-    CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, SamplingOverlayDescriptor,
+    NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, SamplingOverlayDescriptor,
     SamplingQualifierDescriptor, parse_state,
 };
 
@@ -124,7 +124,7 @@ impl RuntimeBuilder for BinaryDecoderBuilder {
         name: &str,
         state: &Value,
         resolved: &ResolvedInputs,
-        ctx: &mut CompileCtx,
+        ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state = Self::parsed(state)?;
         let data_bits = resolved.member_count(1);

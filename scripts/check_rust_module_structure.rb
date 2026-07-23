@@ -37,11 +37,25 @@ def line_number(source, offset)
   source[0...offset].count("\n") + 1
 end
 
+def implementation_source(source)
+  test_module = source.index(/^\s*#\s*\[\s*cfg\s*\([^\]]*\btest\b[^\]]*\)\s*\]\s*\n\s*mod\s+\w*tests\b/)
+  test_module.nil? ? source : source[0...test_module]
+end
+
 files = SOURCE_GLOBS.flat_map { |glob| Dir.glob(File.join(ROOT, glob)) }.sort
 
 files.each do |path|
   rel = relative(path)
   source = File.read(path)
+
+  graph_node_implementation = rel.start_with?("crates/logic_analyzer_graph/src/nodes/")
+  plugin_implementation = rel.start_with?("plugins/")
+  if graph_node_implementation || plugin_implementation
+    implementation = implementation_source(source)
+    implementation.to_enum(:scan, /\bCompileCtx\b/).each do
+      errors << "#{rel}:#{line_number(source, Regexp.last_match.begin(0))}: graph-node implementations receive NodeBuildContext, not host CompileCtx"
+    end
+  end
 
   source.to_enum(:scan, /\bpub\s*\((?:super|in\s+[^)]*)\)/).each do
     errors << "#{rel}:#{line_number(source, Regexp.last_match.begin(0))}: pub(super) and pub(in ...) are forbidden"

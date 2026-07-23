@@ -1,8 +1,8 @@
 //! Graph compilation, discovery, execution, and saved-document services for application hosts.
 
 pub use crate::compiler::{
-    ApplyError, ApplySummary, BuilderRegistry, CompileError, CompiledEdge, CompiledGraph,
-    CompiledNode, DiscoveredCapturePresentation, DiscoveredLiveCaptureFeature,
+    ApplyError, ApplySummary, BuilderRegistry, CompileCtx, CompileError, CompiledEdge,
+    CompiledGraph, CompiledNode, DiscoveredCapturePresentation, DiscoveredLiveCaptureFeature,
     DiscoveredTriggerConfiguration, GraphCompatibilityWarning, LiveAnalysisSource,
     LiveCaptureDiscoveryError, LiveRun, SamplingOverlayCandidate, SourceProcessOverrides,
     apply_live_capture_edit, derived_cache_configs_by_node, discover_capture_presentation,

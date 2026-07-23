@@ -7,8 +7,8 @@ use signal_processing::{ProcessNode, SimpleTriggerCondition, TriggerPredicate, T
 
 use super::builder::TestCaptureSourceBuilder;
 use crate::{
-    CapturePresentation, CompileCtx, LiveCaptureEdit, LiveCaptureFeature, PortKind, ResolvedInputs,
-    RuntimeBuilder, SimpleTriggerChannel, TriggerConfigurationFeature,
+    CapturePresentation, LiveCaptureEdit, LiveCaptureFeature, NodeBuildContext, PortKind,
+    ResolvedInputs, RuntimeBuilder, SimpleTriggerChannel, TriggerConfigurationFeature,
 };
 
 #[derive(Default)]
@@ -133,7 +133,7 @@ impl RuntimeBuilder for TestLiveCaptureSourceBuilder {
         name: &str,
         state: &Value,
         resolved: &ResolvedInputs,
-        ctx: &mut CompileCtx,
+        ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         TestCaptureSourceBuilder.build(name, state, resolved, ctx)
     }

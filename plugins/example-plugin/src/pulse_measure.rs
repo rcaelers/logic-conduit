@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use logic_analyzer_graph::node::{GraphNodeRegistration, RuntimeBuilder};
-use logic_analyzer_graph::node_support::{CompileCtx, PortKind, PortValue, ResolvedInputs};
+use logic_analyzer_graph::node_support::{NodeBuildContext, PortKind, PortValue, ResolvedInputs};
 use logic_analyzer_graph::nodes::Signal;
 use node_graph::{InputDef, NodeDef, OutputDef, Socket, SocketDef, SocketShape};
 use signal_processing::{
@@ -112,7 +112,7 @@ impl RuntimeBuilder for PulseMeasureBuilder {
         name: &str,
         _state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         Ok(Box::new(PulseMeasureNode::new(name)))
     }

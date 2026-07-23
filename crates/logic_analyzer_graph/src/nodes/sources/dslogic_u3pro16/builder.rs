@@ -8,8 +8,8 @@ use signal_processing::{DerivedDataRetention, ProcessNode, Sample, SampleBlock};
 
 use super::definition::U3Pro16State;
 use crate::{
-    CapturePresentation, CompileCtx, LiveCaptureEdit, LiveCaptureFeature, PortKind, ResolvedInputs,
-    RuntimeBuilder, TriggerConfigurationFeature, parse_state,
+    CapturePresentation, LiveCaptureEdit, LiveCaptureFeature, NodeBuildContext, PortKind,
+    ResolvedInputs, RuntimeBuilder, TriggerConfigurationFeature, parse_state,
 };
 
 #[derive(Default)]
@@ -126,7 +126,7 @@ impl RuntimeBuilder for DsLogicU3Pro16Builder {
         name: &str,
         state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: U3Pro16State = parse_state(state)?;
         let config = super::implementation::capture_config(&state)?;

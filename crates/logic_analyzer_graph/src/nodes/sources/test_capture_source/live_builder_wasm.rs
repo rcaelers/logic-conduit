@@ -6,7 +6,7 @@ use logic_analyzer_processing::nodes::sources::synthetic_capture_source::Synthet
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock};
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
+use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder};
 
 #[derive(Default)]
 pub(crate) struct TestLiveCaptureSourceBuilder;
@@ -47,7 +47,7 @@ impl RuntimeBuilder for TestLiveCaptureSourceBuilder {
         name: &str,
         _state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         Ok(Box::new(SyntheticCaptureSource::new().with_name(name)))
     }

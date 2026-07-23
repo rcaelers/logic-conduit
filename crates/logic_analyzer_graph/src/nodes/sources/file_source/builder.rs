@@ -11,7 +11,7 @@ use signal_processing::{
 };
 
 use crate::{
-    CaptureCacheIdentity, CapturePresentation, CompileCtx, PortKind, ResolvedInputs,
+    CaptureCacheIdentity, CapturePresentation, NodeBuildContext, PortKind, ResolvedInputs,
     RuntimeBuilder, parse_state,
 };
 
@@ -91,7 +91,7 @@ impl RuntimeBuilder for FileSourceBuilder {
         name: &str,
         state: &Value,
         resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: super::definition::DslFileSourceState = parse_state(state)?;
         let channels = state.channels.value.clamp(1, 32) as u8;

@@ -8,11 +8,13 @@ use signal_processing::{
     CollectedLaneRequest, CollectedPayloadAdapter, CollectedPayloadRegistrationError,
 };
 
-use super::graph::{BuilderRegistry, CompileCtx, DefaultViewerPayloadPresentation, ResolvedInput};
+use super::graph::{
+    BuilderRegistry, DefaultViewerPayloadPresentation, NodeBuildContext, ResolvedInput,
+};
 use super::port_kind::PortValue;
 
 type RequestConfigurator =
-    fn(CollectedLaneRequest, usize, &ResolvedInput, &CompileCtx) -> CollectedLaneRequest;
+    fn(CollectedLaneRequest, usize, &ResolvedInput, &dyn NodeBuildContext) -> CollectedLaneRequest;
 
 /// One independently discoverable retained payload, including ingestion,
 /// query/storage, and its default waveform presentation.
@@ -92,7 +94,7 @@ fn identity_request(
     request: CollectedLaneRequest,
     _member: usize,
     _input: &ResolvedInput,
-    _ctx: &CompileCtx,
+    _ctx: &dyn NodeBuildContext,
 ) -> CollectedLaneRequest {
     request
 }

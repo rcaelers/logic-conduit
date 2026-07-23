@@ -9,7 +9,7 @@ use node_graph::Socket;
 use signal_processing::{ConfigValue, NodeConfig, ProcessNode, Sample, Trigger, Word};
 
 use super::definition::parse_hex;
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 #[derive(Default)]
 pub(crate) struct WordMatcherBuilder;
@@ -62,7 +62,7 @@ impl RuntimeBuilder for WordMatcherBuilder {
         name: &str,
         state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: super::definition::WordMatcherState = parse_state(state)?;
         let pattern = parse_hex(&state.pattern.value)?;

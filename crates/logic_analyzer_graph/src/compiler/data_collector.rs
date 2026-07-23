@@ -7,7 +7,7 @@ use serde_json::Value;
 use node_graph::Socket;
 use signal_processing::{CollectedLaneRequest, DerivedDataCollector, ProcessNode};
 
-use super::{BuilderRegistry, CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
+use super::{BuilderRegistry, NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder};
 
 pub(crate) const BUILDER_NAME: &str = "Derived Data Collector";
 
@@ -19,7 +19,7 @@ impl DataCollectorBuilder {
         resolved: &ResolvedInputs,
         lane_names: &[(usize, String)],
         registry: &BuilderRegistry,
-        ctx: &mut CompileCtx,
+        ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let mut collector = DerivedDataCollector::new()
             .with_name(name)
@@ -130,7 +130,7 @@ impl RuntimeBuilder for DataCollectorBuilder {
         _name: &str,
         _state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         Err("data collectors must be materialized through the payload registry".to_owned())
     }

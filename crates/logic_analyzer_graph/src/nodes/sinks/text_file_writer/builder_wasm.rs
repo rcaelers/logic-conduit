@@ -6,7 +6,7 @@ use logic_analyzer_processing::nodes::sinks::discard_writer::DiscardTextWriter;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, TextSample};
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
+use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder};
 
 #[derive(Default)]
 pub(crate) struct TextFileWriterBuilder;
@@ -41,7 +41,7 @@ impl RuntimeBuilder for TextFileWriterBuilder {
         name: &str,
         _state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         Ok(Box::new(DiscardTextWriter::new(name)))
     }

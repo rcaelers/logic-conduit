@@ -7,7 +7,7 @@ use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock};
 
 use crate::{
-    CapturePresentation, CapturePresentationSignal, CompileCtx, PortKind, ResolvedInputs,
+    CapturePresentation, CapturePresentationSignal, NodeBuildContext, PortKind, ResolvedInputs,
     RuntimeBuilder, parse_state,
 };
 
@@ -88,7 +88,7 @@ impl RuntimeBuilder for SigrokFileSourceBuilder {
         name: &str,
         state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: super::definition::SigrokFileSourceState = parse_state(state)?;
         Ok(Box::new(

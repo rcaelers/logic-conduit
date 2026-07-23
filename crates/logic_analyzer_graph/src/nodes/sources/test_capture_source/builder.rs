@@ -7,7 +7,7 @@ use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, SampleBlock};
 
 use crate::{
-    CapturePresentation, CapturePresentationSignal, CompileCtx, PortKind, ResolvedInputs,
+    CapturePresentation, CapturePresentationSignal, NodeBuildContext, PortKind, ResolvedInputs,
     RuntimeBuilder,
 };
 
@@ -88,7 +88,7 @@ impl RuntimeBuilder for TestCaptureSourceBuilder {
         name: &str,
         _state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         Ok(Box::new(SyntheticCaptureSource::new().with_name(name)))
     }

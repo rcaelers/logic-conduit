@@ -6,7 +6,7 @@ use logic_analyzer_processing::nodes::logic::text_formatter::TextFormatter;
 use node_graph::Socket;
 use signal_processing::{ConfigValue, NodeConfig, NumberSample, ProcessNode, TextSample};
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 #[derive(Default)]
 pub(crate) struct FormatterBuilder;
@@ -40,7 +40,7 @@ impl RuntimeBuilder for FormatterBuilder {
         name: &str,
         state: &Value,
         resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: super::definition::StringFormatterState = parse_state(state)?;
         let values = resolved.member_count(0).max(1);

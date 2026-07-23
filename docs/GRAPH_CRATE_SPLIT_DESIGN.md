@@ -77,8 +77,8 @@ configuration, waveform/table presentation registration, and runtime sampling ac
 
 The compiler owns the concrete context state and implements `NodeBuildContext`. Host-only result
 operations, such as taking resolved sampling candidates or publishing the final presentation
-registries, remain on a private compiler type. A plugin cannot inspect or mutate compiler state
-that is unrelated to building its node.
+registries, remain on `CompileCtx`, which is exposed only through the compiler's `host` namespace.
+A plugin cannot receive or import that concrete context through the graph-node API.
 
 ### Graph compiler and host facade
 

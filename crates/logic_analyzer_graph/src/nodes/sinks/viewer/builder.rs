@@ -11,7 +11,7 @@ use logic_analyzer_viewer::{
 };
 use node_graph::Socket;
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 #[derive(Default)]
 pub(crate) struct ViewerSubscriptionBuilder;
@@ -90,7 +90,7 @@ impl RuntimeBuilder for ViewerSubscriptionBuilder {
         state: &Value,
         resolved: &ResolvedInputs,
         lane_names: &[(usize, String)],
-        ctx: &CompileCtx,
+        ctx: &dyn NodeBuildContext,
     ) -> Result<(), String> {
         let state: super::definition::ViewerState = parse_state(state)?;
         let prefix = state.label.value.trim().to_owned();
@@ -135,7 +135,7 @@ impl RuntimeBuilder for ViewerSubscriptionBuilder {
                         input.kind.name()
                     )
                 })?;
-                ctx.waveform_presentations().register(ViewerLaneGroup {
+                ctx.register_waveform_presentation(ViewerLaneGroup {
                     id: ViewerLaneGroupId::new(format!("{name}:lane:{member}")),
                     label: lane_name.clone(),
                     badge: presentation.badge().clone(),
@@ -146,7 +146,7 @@ impl RuntimeBuilder for ViewerSubscriptionBuilder {
         }
         for mut pending in pending_groups {
             pending.tracks.sort_by_key(|(order, _)| *order);
-            ctx.waveform_presentations().register(ViewerLaneGroup {
+            ctx.register_waveform_presentation(ViewerLaneGroup {
                 id: ViewerLaneGroupId::new(format!(
                     "{name}:node:{}:{}",
                     pending.source_node.0, pending.key

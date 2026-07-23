@@ -6,7 +6,7 @@ use logic_analyzer_processing::nodes::sinks::discard_writer::DiscardWordWriter;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, TextSample, Word};
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 #[derive(Default)]
 pub(crate) struct CsvWriterBuilder;
@@ -54,7 +54,7 @@ impl RuntimeBuilder for CsvWriterBuilder {
         name: &str,
         _state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         Ok(Box::new(DiscardWordWriter::new(name)))
     }

@@ -11,7 +11,7 @@ use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, Trigger, Word};
 
 use crate::decoder_table::DecoderTableColumnPresentation;
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 #[derive(Default)]
 pub(crate) struct UartDecoderBuilder;
@@ -72,7 +72,7 @@ impl RuntimeBuilder for UartDecoderBuilder {
         name: &str,
         state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: super::definition::UartDecoderState = parse_state(state)?;
         let parity = match state.parity.selected() {

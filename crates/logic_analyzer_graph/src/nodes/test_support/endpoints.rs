@@ -4,7 +4,7 @@ use serde_json::Value;
 use node_graph::{AnySocket, InputDef, NodeDef, OutputDef, Socket};
 use signal_processing::{InputPort, OutputPort, ProcessNode, WorkResult};
 
-use crate::{BuilderRegistry, CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
+use crate::{BuilderRegistry, NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder};
 
 pub(crate) const SOURCE_NAME: &str = "Isolated Test Source";
 pub(crate) const SINK_NAME: &str = "Isolated Test Sink";
@@ -108,7 +108,7 @@ impl RuntimeBuilder for TestSourceBuilder {
         name: &str,
         _state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         Ok(Box::new(InertEndpoint::new(name)))
     }
@@ -152,7 +152,7 @@ impl RuntimeBuilder for TestSinkBuilder {
         name: &str,
         _state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         Ok(Box::new(InertEndpoint::new(name)))
     }

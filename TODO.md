@@ -136,8 +136,8 @@ order; update this single checklist as slices land:
 - [x] Introduce explicit `node`, `node_support`, and `host` facades in
   `logic_analyzer_graph`; classify every current public symbol and stop adding new crate-root
   exports.
-- [ ] Replace plugin-visible `CompileCtx` parameters with a narrow `NodeBuildContext` contract;
-  keep compiler result extraction on private host state.
+- [x] Replace plugin-visible `CompileCtx` parameters with a narrow `NodeBuildContext` contract;
+  keep compiler result extraction on host-owned state.
 - [ ] Make inventory construction independent of the built-in node module. The compiler reads
   `GraphNodeRegistration` and `CollectedPayloadRegistration` submissions without calling
   `crate::nodes`.

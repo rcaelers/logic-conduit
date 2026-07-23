@@ -10,7 +10,7 @@ use signal_processing::{ProcessNode, Sample, Word};
 
 use crate::decoder_table::DecoderTableColumnPresentation;
 use crate::{
-    CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, SamplingOverlayDescriptor,
+    NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, SamplingOverlayDescriptor,
     SamplingQualifierDescriptor, parse_state,
 };
 
@@ -132,7 +132,7 @@ impl RuntimeBuilder for SpiDecoderBuilder {
         name: &str,
         state: &Value,
         _resolved: &ResolvedInputs,
-        ctx: &mut CompileCtx,
+        ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state = Self::parsed(state)?;
         let mode = match (state.cpol.selected(), state.cpha.selected()) {

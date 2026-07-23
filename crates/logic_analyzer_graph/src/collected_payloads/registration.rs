@@ -12,7 +12,7 @@ use super::presentation::{
     WordSnapshotRenderer,
 };
 use crate::{
-    CollectedPayloadRegistration, CompileCtx, DefaultViewerPayloadPresentation, ResolvedInput,
+    CollectedPayloadRegistration, DefaultViewerPayloadPresentation, NodeBuildContext, ResolvedInput,
 };
 
 fn digital_presentation() -> DefaultViewerPayloadPresentation {
@@ -35,7 +35,7 @@ fn word_request(
     request: CollectedLaneRequest,
     member: usize,
     input: &ResolvedInput,
-    ctx: &CompileCtx,
+    ctx: &dyn NodeBuildContext,
 ) -> CollectedLaneRequest {
     let store_config = if let Some(persistent) = ctx.derived_word_cache(member) {
         LiveStoreConfig {

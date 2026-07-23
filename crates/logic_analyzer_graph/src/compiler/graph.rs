@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use logic_analyzer_viewer::{
     DefaultViewerLaneRenderer, SamplingEdge, SamplingOverlay, SamplingQualifier, ViewerLaneBadge,
-    ViewerLaneRenderer, ViewerOutputPresentation, WaveformPresentationRegistry,
+    ViewerLaneGroup, ViewerLaneRenderer, ViewerOutputPresentation, WaveformPresentationRegistry,
 };
 use node_graph::{
     Connection, GraphState, Node, NodeId, NodeKind, Socket, SocketDirection, SocketId, SocketShape,
@@ -64,37 +64,69 @@ pub struct CompileCtx {
 }
 
 impl CompileCtx {
-    pub fn derived_lanes(&self) -> &DerivedLanes {
-        &self.derived_lanes
-    }
-
+    /// Returns the waveform presentations registered while materializing nodes.
     pub fn waveform_presentations(&self) -> &WaveformPresentationRegistry {
         &self.waveform_presentations
     }
 
+    /// Returns the decoder-table sources registered for this run.
     pub fn decoder_tables(&self) -> &DecoderTableRegistry {
         &self.decoder_tables
     }
 
-    pub fn derived_data_retention(&self) -> DerivedDataRetention {
+    /// Selects the host-owned directory used for persistent derived-data caches.
+    pub fn set_persistent_cache_directory(&mut self, directory: std::path::PathBuf) {
+        self.persistent_cache_directory = Some(directory);
+    }
+
+    /// Returns the run's collected lanes for binding to host views and panels.
+    pub fn derived_lanes(&self) -> &DerivedLanes {
+        &self.derived_lanes
+    }
+
+    /// Takes the sampling-overlay candidates discovered for this run.
+    pub fn take_sampling_overlays(&mut self) -> Vec<SamplingOverlayCandidate> {
+        std::mem::take(&mut self.sampling_overlays)
+    }
+}
+
+/// Restricted compiler services available while a graph node is materialized.
+///
+/// The compiler owns the concrete context and its host-facing result state.
+/// Node builders receive only this contract and cannot extract or replace the
+/// compiler's presentation registries or resolved host results.
+pub trait NodeBuildContext {
+    fn derived_lanes(&self) -> &DerivedLanes;
+
+    fn derived_data_retention(&self) -> DerivedDataRetention;
+
+    fn derived_word_cache(&self, member: usize) -> Option<&PersistentStoreConfig>;
+
+    fn register_waveform_presentation(&self, presentation: ViewerLaneGroup);
+
+    fn sampling_activity(&self, runtime_name: &str, input: usize) -> Option<SamplingActivity>;
+}
+
+impl NodeBuildContext for CompileCtx {
+    fn derived_lanes(&self) -> &DerivedLanes {
+        &self.derived_lanes
+    }
+
+    fn derived_data_retention(&self) -> DerivedDataRetention {
         self.derived_data_retention
     }
 
-    pub fn derived_word_cache(&self, member: usize) -> Option<&PersistentStoreConfig> {
+    fn derived_word_cache(&self, member: usize) -> Option<&PersistentStoreConfig> {
         self.derived_word_caches
             .get(member)
             .and_then(Option::as_ref)
     }
 
-    pub fn set_persistent_cache_directory(&mut self, directory: std::path::PathBuf) {
-        self.persistent_cache_directory = Some(directory);
+    fn register_waveform_presentation(&self, presentation: ViewerLaneGroup) {
+        self.waveform_presentations.register(presentation);
     }
 
-    pub fn take_sampling_overlays(&mut self) -> Vec<SamplingOverlayCandidate> {
-        std::mem::take(&mut self.sampling_overlays)
-    }
-
-    pub fn sampling_activity(&self, runtime_name: &str, input: usize) -> Option<SamplingActivity> {
+    fn sampling_activity(&self, runtime_name: &str, input: usize) -> Option<SamplingActivity> {
         self.sampling_activities
             .get(&(runtime_name.to_owned(), input))
             .cloned()
@@ -496,7 +528,7 @@ pub trait RuntimeBuilder {
         _state: &Value,
         _resolved: &ResolvedInputs,
         _lane_names: &[(usize, String)],
-        _ctx: &CompileCtx,
+        _ctx: &dyn NodeBuildContext,
     ) -> Result<(), String> {
         Ok(())
     }
@@ -610,7 +642,7 @@ pub trait RuntimeBuilder {
         _name: &str,
         _state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         Err("graph-only builder has no runtime node".to_owned())
     }
@@ -671,7 +703,12 @@ struct CollectedPayloadSubscription {
 }
 
 type CollectedPayloadRequestConfigurator = Arc<
-    dyn Fn(CollectedLaneRequest, usize, &ResolvedInput, &CompileCtx) -> CollectedLaneRequest
+    dyn Fn(
+            CollectedLaneRequest,
+            usize,
+            &ResolvedInput,
+            &dyn NodeBuildContext,
+        ) -> CollectedLaneRequest
         + Send
         + Sync,
 >;
@@ -839,7 +876,7 @@ impl BuilderRegistry {
         request: CollectedLaneRequest,
         member: usize,
         input: &ResolvedInput,
-        ctx: &CompileCtx,
+        ctx: &dyn NodeBuildContext,
     ) -> Result<(CollectedLaneRequest, &str), String> {
         let contract = self
             .payload_subscriptions
@@ -2792,7 +2829,7 @@ mod tests {
             name: &str,
             state: &Value,
             resolved: &ResolvedInputs,
-            ctx: &mut CompileCtx,
+            ctx: &mut dyn NodeBuildContext,
         ) -> Result<Box<dyn ProcessNode>, String> {
             self.inner.build(name, state, resolved, ctx)
         }
@@ -2873,7 +2910,7 @@ mod tests {
             name: &str,
             state: &Value,
             resolved: &ResolvedInputs,
-            ctx: &mut CompileCtx,
+            ctx: &mut dyn NodeBuildContext,
         ) -> Result<Box<dyn ProcessNode>, String> {
             self.inner.build(name, state, resolved, ctx)
         }
@@ -2927,7 +2964,7 @@ mod tests {
             _name: &str,
             _state: &Value,
             _resolved: &ResolvedInputs,
-            _ctx: &mut CompileCtx,
+            _ctx: &mut dyn NodeBuildContext,
         ) -> Result<Box<dyn ProcessNode>, String> {
             self.provider_build_calls.fetch_add(1, Ordering::SeqCst);
             Err("replay attempted to build the provider source".into())
@@ -2974,7 +3011,7 @@ mod tests {
             name: &str,
             state: &Value,
             resolved: &ResolvedInputs,
-            ctx: &mut CompileCtx,
+            ctx: &mut dyn NodeBuildContext,
         ) -> Result<Box<dyn ProcessNode>, String> {
             let inner = self.inner.build(name, state, resolved, ctx)?;
             Ok(Box::new(ThrottledProcess {
@@ -4411,7 +4448,7 @@ mod tests {
                 _: &str,
                 _: &Value,
                 _: &ResolvedInputs,
-                _: &mut CompileCtx,
+                _: &mut dyn NodeBuildContext,
             ) -> Result<Box<dyn ProcessNode>, String> {
                 Err("not needed by presentation registration test".into())
             }

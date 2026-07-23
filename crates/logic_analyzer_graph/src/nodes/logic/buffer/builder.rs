@@ -9,7 +9,7 @@ use signal_processing::{
     NumberSample, ProcessNode, Sample, SampleBlock, TextSample, Trigger, Word,
 };
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 /// Maps a `BufferState.kind` selection to
 /// the concrete `PortKind` it names. Falls back to `Signal` for state that
@@ -54,7 +54,7 @@ impl RuntimeBuilder for BufferBuilder {
         name: &str,
         state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: super::definition::BufferState = parse_state(state)?;
         let node: Box<dyn ProcessNode> = match state.kind.selected() {

@@ -6,7 +6,7 @@ use logic_analyzer_processing::nodes::logic::sr_latch::SrLatch;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, Trigger};
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 #[derive(Default)]
 pub(crate) struct SrFlipFlopBuilder;
@@ -33,7 +33,7 @@ impl RuntimeBuilder for SrFlipFlopBuilder {
         name: &str,
         state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: super::definition::SrFlipFlopState = parse_state(state)?;
         Ok(Box::new(SrLatch::new(state.initial.value).with_name(name)))

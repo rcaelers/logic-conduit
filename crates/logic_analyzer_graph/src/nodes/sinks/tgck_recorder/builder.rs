@@ -9,7 +9,7 @@ use logic_analyzer_processing::nodes::sinks::tgck_recorder::TgckRecorder;
 use node_graph::Socket;
 use signal_processing::{ProcessNode, Sample, TextSample, Word};
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
+use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder};
 
 #[derive(Default)]
 pub(crate) struct TgckRecorderBuilder;
@@ -49,7 +49,7 @@ impl RuntimeBuilder for TgckRecorderBuilder {
         name: &str,
         _state: &Value,
         _resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         Ok(Box::new(TgckRecorder::new().with_name(name)))
     }

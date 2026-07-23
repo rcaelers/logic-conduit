@@ -7,7 +7,7 @@ use logic_analyzer_processing::nodes::sinks::binary_file_writer::{BinaryFileWrit
 use node_graph::Socket;
 use signal_processing::{ProcessNode, TextSample, Word};
 
-use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
+use crate::{NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
 #[derive(Default)]
 pub(crate) struct FileWriterBuilder;
@@ -51,7 +51,7 @@ impl RuntimeBuilder for FileWriterBuilder {
         name: &str,
         state: &Value,
         resolved: &ResolvedInputs,
-        _ctx: &mut CompileCtx,
+        _ctx: &mut dyn NodeBuildContext,
     ) -> Result<Box<dyn ProcessNode>, String> {
         let state: super::definition::FileWriterState = parse_state(state)?;
         let width = match state.write_width.selected() {
