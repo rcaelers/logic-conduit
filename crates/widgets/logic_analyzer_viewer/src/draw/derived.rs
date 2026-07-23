@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
 use signal_processing::{
-    Annotation, AnnotationFold, ChunkedMipmap, CollectedValue, MAX_ANNOTATION_NS, Sample,
-    WordPresenceBucket,
+    Annotation, AnnotationFold, ChunkedMipmap, CollectedValue, MAX_ANNOTATION_NS, MipmapRecord,
+    Sample, WordPresenceBucket,
 };
 
 use crate::lanes::{AnnotationVisual, OpaqueLaneDrawContext};
@@ -16,6 +16,116 @@ const MIN_ANNOTATION_WIDTH_PX: f32 = 8.0;
 pub(crate) struct DerivedRowGeometry {
     pub top: f32,
     pub height: f32,
+}
+
+/// Draws an exact digital transition snapshot supplied by a lane adapter.
+pub fn draw_digital_snapshot(
+    context: &OpaqueLaneDrawContext<'_>,
+    samples: &[Sample],
+    initial: bool,
+) {
+    let color = Color32::from_rgb(95, 175, 95);
+    let stroke = Stroke::new(1.4, color);
+    let high_y = context.top + context.height * 0.28;
+    let low_y = context.top + context.height * 0.72;
+    let y_of = |value: bool| if value { high_y } else { low_y };
+    let mut level = initial;
+    let mut previous_x = context.wave_rect.left();
+    for sample in samples {
+        let x = context.time_to_x(sample.start_time_ns);
+        context.painter.line_segment(
+            [
+                Pos2::new(previous_x, y_of(level)),
+                Pos2::new(x, y_of(level)),
+            ],
+            stroke,
+        );
+        context.painter.line_segment(
+            [Pos2::new(x, y_of(level)), Pos2::new(x, y_of(sample.value))],
+            stroke,
+        );
+        level = sample.value;
+        previous_x = x;
+    }
+    context.painter.line_segment(
+        [
+            Pos2::new(previous_x, y_of(level)),
+            Pos2::new(context.wave_rect.right(), y_of(level)),
+        ],
+        stroke,
+    );
+}
+
+/// Draws a bounded activity summary supplied by a dense digital lane query.
+pub fn draw_digital_activity(
+    context: &OpaqueLaneDrawContext<'_>,
+    records: &[MipmapRecord],
+    initial: bool,
+) {
+    let color = Color32::from_rgb(95, 175, 95);
+    let stroke = Stroke::new(1.4, color);
+    let high_y = context.top + context.height * 0.28;
+    let low_y = context.top + context.height * 0.72;
+    let y_of = |value: bool| if value { high_y } else { low_y };
+    let mut level = initial;
+    let mut previous_x = context.wave_rect.left();
+    for record in records {
+        let start_ns = record.start_ns.max(context.visible_start_ns);
+        let end_ns = record.end_ns.min(context.visible_end_ns);
+        if start_ns > end_ns {
+            continue;
+        }
+        let x0 = context.time_to_x(start_ns).max(context.wave_rect.left());
+        let x1 = context
+            .time_to_x(end_ns)
+            .max(x0 + 1.0)
+            .min(context.wave_rect.right());
+        context.painter.line_segment(
+            [
+                Pos2::new(previous_x, y_of(level)),
+                Pos2::new(x0, y_of(level)),
+            ],
+            stroke,
+        );
+        match record.level_hint {
+            Some((first, last)) if first == last => {
+                if level != first {
+                    context.painter.line_segment(
+                        [Pos2::new(x0, y_of(level)), Pos2::new(x0, y_of(first))],
+                        stroke,
+                    );
+                }
+                context.painter.line_segment(
+                    [Pos2::new(x0, y_of(first)), Pos2::new(x1, y_of(first))],
+                    stroke,
+                );
+                level = last;
+            }
+            Some((_, last)) => {
+                context.painter.rect_filled(
+                    Rect::from_min_max(Pos2::new(x0, high_y), Pos2::new(x1, low_y)),
+                    0.0,
+                    color,
+                );
+                level = last;
+            }
+            None => {
+                context.painter.rect_filled(
+                    Rect::from_min_max(Pos2::new(x0, high_y), Pos2::new(x1, low_y)),
+                    0.0,
+                    color,
+                );
+            }
+        }
+        previous_x = x1;
+    }
+    context.painter.line_segment(
+        [
+            Pos2::new(previous_x, y_of(level)),
+            Pos2::new(context.wave_rect.right(), y_of(level)),
+        ],
+        stroke,
+    );
 }
 
 impl LogicAnalyzerViewer {
@@ -32,87 +142,22 @@ impl LogicAnalyzerViewer {
         row_height: f32,
         samples: &[Sample],
     ) {
-        const DIRECT_EDGE_LIMIT: usize = 4096;
-        let color = Color32::from_rgb(95, 175, 95);
-        let stroke = Stroke::new(1.4, color);
-        let high_y = y_top + row_height * 0.28;
-        let low_y = y_top + row_height * 0.72;
         let (start_ns, end_ns) = self.visible_window_ns();
-
         let first = samples.partition_point(|sample| sample.start_time_ns < start_ns);
         let last = samples.partition_point(|sample| sample.start_time_ns <= end_ns);
-        let mut level = if first > 0 {
-            samples[first - 1].value
-        } else {
-            false
+        let initial = first
+            .checked_sub(1)
+            .and_then(|index| samples.get(index))
+            .is_some_and(|sample| sample.value);
+        let context = OpaqueLaneDrawContext {
+            painter,
+            wave_rect,
+            top: y_top,
+            height: row_height,
+            visible_start_ns: start_ns,
+            visible_end_ns: end_ns,
         };
-        let y_of = |value: bool| if value { high_y } else { low_y };
-
-        if last - first <= DIRECT_EDGE_LIMIT {
-            let mut prev_x = wave_rect.left();
-            for sample in &samples[first..last] {
-                let x = self.ns_to_x(wave_rect, sample.start_time_ns);
-                painter.line_segment(
-                    [Pos2::new(prev_x, y_of(level)), Pos2::new(x, y_of(level))],
-                    stroke,
-                );
-                painter.line_segment(
-                    [Pos2::new(x, y_of(level)), Pos2::new(x, y_of(sample.value))],
-                    stroke,
-                );
-                level = sample.value;
-                prev_x = x;
-            }
-            painter.line_segment(
-                [
-                    Pos2::new(prev_x, y_of(level)),
-                    Pos2::new(wave_rect.right(), y_of(level)),
-                ],
-                stroke,
-            );
-            return;
-        }
-
-        // Dense: one pass per pixel column — a column containing edges is a
-        // solid band (same rule as the channel renderer: never invent edge
-        // positions), columns without edges extend the current level.
-        let span_ns = (end_ns - start_ns).max(1);
-        let width = wave_rect.width().max(1.0);
-        let mut index = first;
-        let mut run_start_x = wave_rect.left();
-        let mut column = 0u32;
-        while (column as f32) < width {
-            let x0 = wave_rect.left() + column as f32;
-            let column_end_ns =
-                start_ns + ((column + 1) as u64).saturating_mul(span_ns) / width as u64;
-            let step =
-                samples[index..last].partition_point(|sample| sample.start_time_ns < column_end_ns);
-            if step > 0 {
-                painter.line_segment(
-                    [
-                        Pos2::new(run_start_x, y_of(level)),
-                        Pos2::new(x0, y_of(level)),
-                    ],
-                    stroke,
-                );
-                painter.rect_filled(
-                    Rect::from_min_max(Pos2::new(x0, high_y), Pos2::new(x0 + 1.0, low_y)),
-                    0.0,
-                    color,
-                );
-                index += step;
-                level = samples[index - 1].value;
-                run_start_x = x0 + 1.0;
-            }
-            column += 1;
-        }
-        painter.line_segment(
-            [
-                Pos2::new(run_start_x, y_of(level)),
-                Pos2::new(wave_rect.right(), y_of(level)),
-            ],
-            stroke,
-        );
+        draw_digital_snapshot(&context, &samples[first..last], initial);
     }
 
     pub(crate) fn draw_derived_values(

@@ -43,7 +43,7 @@ use super::data_collector::DataCollectorBuilder;
 use super::errors::{ApplyError, CompileError};
 use super::port_kind::{PortKind, PortValue};
 use crate::decoder_table::{DecoderTableColumnPresentation, DecoderTableRegistry};
-use crate::nodes::sinks::WordSnapshotRenderer;
+use crate::nodes::sinks::{DigitalSnapshotRenderer, WordSnapshotRenderer};
 
 /// Shared resources handed to builders. A fresh `DerivedLanes` store per
 /// run makes stale collected data vanish atomically on re-run.
@@ -681,10 +681,10 @@ impl BuilderRegistry {
         .expect("built-in collected payload adapters must be valid");
         registry
             .register_viewable_collected_payload::<signal_processing::Sample>(
-                DefaultViewerPayloadPresentation::new(ViewerLaneBadge::new(
-                    "S",
-                    Color32::from_rgb(95, 175, 95),
-                )),
+                DefaultViewerPayloadPresentation::with_renderer(
+                    ViewerLaneBadge::new("S", Color32::from_rgb(95, 175, 95)),
+                    Arc::new(DigitalSnapshotRenderer),
+                ),
             )
             .expect("built-in digital payload must be viewable");
         registry
@@ -2560,6 +2560,18 @@ mod tests {
                 .uses_opaque_snapshot(&ViewerLaneTrack::new(
                     "words",
                     DerivedLaneId::new("words"),
+                    1.0,
+                ))
+        );
+        let digital_presentation = registry
+            .viewable_payload_presentation(PortKind::of::<Sample>())
+            .unwrap();
+        assert!(
+            digital_presentation
+                .renderer()
+                .uses_opaque_snapshot(&ViewerLaneTrack::new(
+                    "signal",
+                    DerivedLaneId::new("signal"),
                     1.0,
                 ))
         );

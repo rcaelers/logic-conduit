@@ -20,6 +20,12 @@ registered query type. Built-in payloads are registered through this same path w
 their existing digital, indexed-word, marker, and value storage representations behind their
 adapters.
 
+The built-in digital adapter publishes an opaque query with bounded exact-transition and dense
+activity snapshots, cursor-boundary lookup, and timeline extent. Its viewer presentation consumes
+those snapshots through the same renderer contract as a plugin payload. The legacy digital lane
+storage remains only as a compatibility fallback while row interactions migrate to query
+capabilities.
+
 `CollectedLaneQuery` supplies an immutable snapshot only when its payload has waveform
 semantics. The request is bounded by a visible time window and item limit. The viewer passes the
 returned `OpaqueCollectedLaneSnapshot` to the payload's renderer only after it has released

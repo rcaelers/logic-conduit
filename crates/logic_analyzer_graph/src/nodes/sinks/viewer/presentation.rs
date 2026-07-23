@@ -7,9 +7,39 @@ use egui::Color32;
 use logic_analyzer_viewer::{
     AnnotationVisual, DerivedLaneId, OpaqueLaneDrawContext, ViewerLaneGroup, ViewerLaneRenderer,
     ViewerLaneTrack, ViewerLaneTrackId, default_annotation_visual, draw_annotation_presence,
-    draw_annotation_snapshot,
+    draw_annotation_snapshot, draw_digital_activity, draw_digital_snapshot,
 };
-use signal_processing::{OpaqueCollectedLaneSnapshot, WordLaneSnapshot};
+use signal_processing::{DigitalLaneSnapshot, OpaqueCollectedLaneSnapshot, WordLaneSnapshot};
+
+/// Renders the built-in digital payload from its adapter-owned snapshot.
+pub(crate) struct DigitalSnapshotRenderer;
+
+impl ViewerLaneRenderer for DigitalSnapshotRenderer {
+    fn uses_opaque_snapshot(&self, _track: &ViewerLaneTrack) -> bool {
+        true
+    }
+
+    fn draw_opaque_lane(
+        &self,
+        _track: &ViewerLaneTrack,
+        snapshot: Option<&OpaqueCollectedLaneSnapshot>,
+        context: OpaqueLaneDrawContext<'_>,
+    ) -> bool {
+        let Some(snapshot) = snapshot.and_then(|snapshot| snapshot.value::<DigitalLaneSnapshot>())
+        else {
+            return false;
+        };
+        match snapshot.as_ref() {
+            DigitalLaneSnapshot::Exact { samples, initial } => {
+                draw_digital_snapshot(&context, samples, *initial)
+            }
+            DigitalLaneSnapshot::Activity { records, initial } => {
+                draw_digital_activity(&context, records, *initial)
+            }
+        }
+        true
+    }
+}
 
 /// Renders the built-in word payload from its adapter-owned snapshot while
 /// delegating protocol-specific labels and snapping to the producer's

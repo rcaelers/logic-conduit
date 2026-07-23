@@ -4,4 +4,4 @@ mod presentation;
 
 pub(crate) use builder::ViewerSubscriptionBuilder;
 pub use definition::{Viewer, ViewerState};
-pub(crate) use presentation::WordSnapshotRenderer;
+pub(crate) use presentation::{DigitalSnapshotRenderer, WordSnapshotRenderer};

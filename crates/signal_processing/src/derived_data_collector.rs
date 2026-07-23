@@ -157,6 +157,91 @@ pub enum WordLaneSnapshot {
     Error,
 }
 
+/// Immutable bounded result of a built-in digital-lane query.
+#[derive(Clone, Debug)]
+pub enum DigitalLaneSnapshot {
+    /// Exact level transitions in the requested visible window.
+    Exact { samples: Vec<Sample>, initial: bool },
+    /// Bounded summary records for a dense visible window.
+    Activity {
+        records: Vec<MipmapRecord>,
+        initial: bool,
+    },
+}
+
+struct DigitalLaneQuery {
+    store: DerivedLanes,
+    name: String,
+}
+
+impl CollectedLaneQuery for DigitalLaneQuery {
+    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+        self
+    }
+
+    fn snapshot(
+        &self,
+        request: CollectedLaneSnapshotRequest,
+    ) -> Option<OpaqueCollectedLaneSnapshot> {
+        let snapshot = {
+            let lanes = self.store.read();
+            let lane = lanes.iter().find(|lane| lane.name == self.name)?;
+            let (DerivedLaneData::Digital(samples), LaneSummary::Digital(summary)) =
+                (&lane.data, &lane.summary)
+            else {
+                return None;
+            };
+            let first =
+                samples.partition_point(|sample| sample.start_time_ns < request.start_time_ns);
+            let last =
+                samples.partition_point(|sample| sample.start_time_ns <= request.end_time_ns);
+            let initial = first
+                .checked_sub(1)
+                .and_then(|index| samples.get(index))
+                .is_some_and(|sample| sample.value);
+            if last - first <= request.max_items {
+                DigitalLaneSnapshot::Exact {
+                    samples: samples[first..last].to_vec(),
+                    initial,
+                }
+            } else {
+                DigitalLaneSnapshot::Activity {
+                    records: summary.sampled_window(
+                        request.start_time_ns,
+                        request.end_time_ns,
+                        request.max_items,
+                    ),
+                    initial,
+                }
+            }
+        };
+        Some(OpaqueCollectedLaneSnapshot::new(Arc::new(snapshot)))
+    }
+
+    fn nearest_time_boundary(&self, timestamp_ns: u64, max_distance_ns: u64) -> Option<u64> {
+        let lanes = self.store.read();
+        let lane = lanes.iter().find(|lane| lane.name == self.name)?;
+        let DerivedLaneData::Digital(samples) = &lane.data else {
+            return None;
+        };
+        let index = samples.partition_point(|sample| sample.start_time_ns <= timestamp_ns);
+        samples[index.saturating_sub(1)..(index + 1).min(samples.len())]
+            .iter()
+            .map(|sample| sample.start_time_ns)
+            .filter(|candidate| candidate.abs_diff(timestamp_ns) <= max_distance_ns)
+            .min_by_key(|candidate| candidate.abs_diff(timestamp_ns))
+    }
+
+    fn timeline_extent_end_ns(&self) -> Option<u64> {
+        let lanes = self.store.read();
+        let lane = lanes.iter().find(|lane| lane.name == self.name)?;
+        let DerivedLaneData::Digital(samples) = &lane.data else {
+            return None;
+        };
+        samples.last().map(|sample| sample.start_time_ns)
+    }
+}
+
 struct WordLaneQuery {
     store: DerivedLanes,
     name: String,
@@ -934,14 +1019,12 @@ impl DerivedLanes {
 /// presentations while payload adapters migrate to owned query handles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CollectedDataKind {
-    Signal,
     Trigger,
     Number,
     Text,
 }
 
 enum LaneBuffer {
-    Signal(VecDeque<Sample>),
     Trigger(VecDeque<Trigger>),
     Number(VecDeque<NumberSample>),
     Text(VecDeque<TextSample>),
@@ -975,7 +1058,6 @@ impl Lane {
         payload: Option<CollectedPayloadDescriptor>,
     ) -> Self {
         let data = match kind {
-            CollectedDataKind::Signal => DerivedLaneData::Digital(Vec::new()),
             CollectedDataKind::Trigger => DerivedLaneData::Markers(Vec::new()),
             CollectedDataKind::Number | CollectedDataKind::Text => {
                 let value_kind = if kind == CollectedDataKind::Number {
@@ -990,7 +1072,6 @@ impl Lane {
             }
         };
         let buffer = match kind {
-            CollectedDataKind::Signal => LaneBuffer::Signal(VecDeque::new()),
             CollectedDataKind::Trigger => LaneBuffer::Trigger(VecDeque::new()),
             CollectedDataKind::Number => LaneBuffer::Number(VecDeque::new()),
             CollectedDataKind::Text => LaneBuffer::Text(VecDeque::new()),
@@ -1011,9 +1092,6 @@ impl CollectedLaneIngestor for Lane {
     fn input_schema(&self, index: usize) -> PortSchema {
         let name = format!("in{index}");
         match self.kind {
-            CollectedDataKind::Signal => {
-                PortSchema::new::<Sample>(name, index, PortDirection::Input)
-            }
             CollectedDataKind::Trigger => {
                 PortSchema::new::<Trigger>(name, index, PortDirection::Input)
             }
@@ -1047,14 +1125,6 @@ impl CollectedLaneIngestor for Lane {
         let store = self.store.clone();
         let retention = self.retention;
         let batch_len = match &mut self.buffer {
-            LaneBuffer::Signal(buffer) => {
-                let batch = drain_batch!(Sample, buffer);
-                let len = batch.len();
-                if !batch.is_empty() {
-                    store.append_digital_batch_retained(self.store_index, batch, retention);
-                }
-                len
-            }
             LaneBuffer::Trigger(buffer) => {
                 let batch = drain_batch!(Trigger, buffer);
                 let len = batch.len();
@@ -1098,6 +1168,84 @@ impl CollectedLaneIngestor for Lane {
                 len
             }
         };
+        Ok(batch_len)
+    }
+
+    fn is_finished(&self) -> bool {
+        self.eos
+    }
+}
+
+/// Typed append state for the built-in digital payload.
+///
+/// The opaque query is published when this lane is created. The legacy
+/// `DerivedLaneData::Digital` entry remains a temporary storage fallback for
+/// callers that have not yet moved to the query contract.
+struct DigitalLane {
+    store: DerivedLanes,
+    store_index: usize,
+    buffer: VecDeque<Sample>,
+    eos: bool,
+    retention: DerivedDataRetention,
+}
+
+impl DigitalLane {
+    fn new(request: CollectedLaneRequest) -> Self {
+        let name = request.name().to_owned();
+        let store = request.lanes().clone();
+        let store_index = store.register_with_payload(
+            name.clone(),
+            Some(request.payload().clone()),
+            DerivedLaneData::Digital(Vec::new()),
+        );
+        request.publish_query(Arc::new(DigitalLaneQuery {
+            store: store.clone(),
+            name,
+        }));
+        Self {
+            store,
+            store_index,
+            buffer: VecDeque::new(),
+            eos: false,
+            retention: request.retention(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_store(name: String, store: DerivedLanes, retention: DerivedDataRetention) -> Self {
+        let store_index = store.register(name, DerivedLaneData::Digital(Vec::new()));
+        Self {
+            store,
+            store_index,
+            buffer: VecDeque::new(),
+            eos: false,
+            retention,
+        }
+    }
+}
+
+impl CollectedLaneIngestor for DigitalLane {
+    fn input_schema(&self, index: usize) -> PortSchema {
+        PortSchema::new::<Sample>(format!("in{index}"), index, PortDirection::Input)
+    }
+
+    fn drain(&mut self, input: &InputPort, _retention: DerivedDataRetention) -> WorkResult<usize> {
+        use crossbeam_channel::TryRecvError;
+
+        let mut batch = Vec::with_capacity(DRAIN_BATCH_SIZE);
+        if let Some(mut receiver) = input.get::<Sample>(&mut self.buffer) {
+            match receiver.try_recv_many(&mut batch, DRAIN_BATCH_SIZE) {
+                Ok(_) | Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => self.eos = true,
+            }
+        } else {
+            self.eos = true;
+        }
+        let batch_len = batch.len();
+        if !batch.is_empty() {
+            self.store
+                .append_digital_batch_retained(self.store_index, batch, self.retention);
+        }
         Ok(batch_len)
     }
 
@@ -1317,7 +1465,18 @@ struct BuiltinPayloadAdapter {
     kind: CollectedDataKind,
 }
 
+struct DigitalPayloadAdapter;
+
 struct WordPayloadAdapter;
+
+impl CollectedPayloadAdapter for DigitalPayloadAdapter {
+    fn create_ingestor(
+        &self,
+        request: CollectedLaneRequest,
+    ) -> Result<Box<dyn CollectedLaneIngestor>, String> {
+        Ok(Box::new(DigitalLane::new(request)))
+    }
+}
 
 impl CollectedPayloadAdapter for WordPayloadAdapter {
     fn create_ingestor(
@@ -1351,11 +1510,8 @@ pub fn register_builtin_collected_payload_adapters(
         registry.register_adapter::<T>(Arc::new(BuiltinPayloadAdapter { kind }))
     }
 
-    register::<Sample>(
-        registry,
-        "org.logicconduit.digital-sample/v1",
-        CollectedDataKind::Signal,
-    )?;
+    registry.register::<Sample>("org.logicconduit.digital-sample/v1")?;
+    registry.register_adapter::<Sample>(Arc::new(DigitalPayloadAdapter))?;
     registry.register::<Word>("org.logicconduit.word/v1")?;
     registry.register_adapter::<Word>(Arc::new(WordPayloadAdapter))?;
     register::<Trigger>(
@@ -1527,6 +1683,15 @@ mod tests {
                 self.test_lanes.clone(),
                 self.retention,
                 None,
+            )));
+            self
+        }
+
+        fn with_digital(mut self, name: impl Into<String>) -> Self {
+            self.lanes.push(Box::new(DigitalLane::with_store(
+                name.into(),
+                self.test_lanes.clone(),
+                self.retention,
             )));
             self
         }
@@ -1750,6 +1915,38 @@ mod tests {
     }
 
     #[test]
+    fn digital_adapter_publishes_an_opaque_snapshot_query() {
+        let lanes = DerivedLanes::new();
+        let mut payloads = crate::CollectedPayloadRegistry::new();
+        register_builtin_collected_payload_adapters(&mut payloads).unwrap();
+        let descriptor = payloads.descriptor::<Sample>().unwrap().clone();
+        let ingestor = payloads
+            .adapter_by_type_id(std::any::TypeId::of::<Sample>())
+            .unwrap()
+            .create_ingestor(CollectedLaneRequest::new(
+                "signal",
+                0,
+                lanes.clone(),
+                descriptor,
+                DerivedDataRetention::Unlimited,
+            ))
+            .unwrap();
+
+        let _collector = DerivedDataCollector::new().with_ingestor(ingestor);
+        let snapshot = lanes.opaque_lanes()[0]
+            .snapshot(CollectedLaneSnapshotRequest {
+                start_time_ns: 0,
+                end_time_ns: 1,
+                max_items: 8,
+            })
+            .unwrap();
+        assert!(matches!(
+            snapshot.value::<DigitalLaneSnapshot>().as_deref(),
+            Some(DigitalLaneSnapshot::Exact { samples, initial: false }) if samples.is_empty()
+        ));
+    }
+
+    #[test]
     fn word_query_returns_only_a_bounded_visible_snapshot() {
         let lanes = DerivedLanes::new();
         lanes.register(
@@ -1829,7 +2026,7 @@ mod tests {
     fn lanes_collect_signals_words_and_triggers() {
         let store = DerivedLanes::new();
         let mut sink = test_collector(store.clone())
-            .with_lane(CollectedDataKind::Signal, "latch.q")
+            .with_digital("latch.q")
             .with_words("decoder.words")
             .with_lane(CollectedDataKind::Trigger, "start.match");
 
@@ -1978,7 +2175,7 @@ mod tests {
         // `Block` overflow policy apply real backpressure instead of never
         // engaging (§`DRAIN_BATCH_SIZE`).
         let store = DerivedLanes::new();
-        let mut sink = test_collector(store.clone()).with_lane(CollectedDataKind::Signal, "sig");
+        let mut sink = test_collector(store.clone()).with_digital("sig");
 
         let total = DRAIN_BATCH_SIZE + 5;
         let wd = Watchdog::new();
@@ -2073,6 +2270,53 @@ mod tests {
         assert_eq!(window.len(), 2);
         assert_eq!(window[0].level_hint, Some((true, true)));
         assert_eq!(window[1].level_hint, Some((false, false)));
+    }
+
+    #[test]
+    fn digital_query_returns_bounded_exact_or_activity_snapshots() {
+        let store = DerivedLanes::new();
+        let lane = store.register("d", DerivedLaneData::Digital(Vec::new()));
+        store.append_digital_batch(
+            lane,
+            [
+                Sample::new(true, 100),
+                Sample::new(false, 200),
+                Sample::new(true, 300),
+            ],
+        );
+        let query = DigitalLaneQuery {
+            store,
+            name: "d".to_owned(),
+        };
+
+        let exact = query
+            .snapshot(CollectedLaneSnapshotRequest {
+                start_time_ns: 150,
+                end_time_ns: 350,
+                max_items: 3,
+            })
+            .and_then(|snapshot| snapshot.value::<DigitalLaneSnapshot>())
+            .expect("digital exact snapshot");
+        assert!(matches!(
+            exact.as_ref(),
+            DigitalLaneSnapshot::Exact { samples, initial: true }
+                if samples == &[Sample::new(false, 200), Sample::new(true, 300)]
+        ));
+
+        let activity = query
+            .snapshot(CollectedLaneSnapshotRequest {
+                start_time_ns: 0,
+                end_time_ns: 400,
+                max_items: 1,
+            })
+            .and_then(|snapshot| snapshot.value::<DigitalLaneSnapshot>())
+            .expect("digital activity snapshot");
+        assert!(matches!(
+            activity.as_ref(),
+            DigitalLaneSnapshot::Activity { records, initial: false } if !records.is_empty()
+        ));
+        assert_eq!(query.timeline_extent_end_ns(), Some(300));
+        assert_eq!(query.nearest_time_boundary(190, 20), Some(200));
     }
 
     #[test]
