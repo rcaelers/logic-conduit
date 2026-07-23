@@ -1,10 +1,10 @@
-//! Inventory contract for one atomic graph-node feature.
+//! Inventory contract and neutral catalog assembly for graph-node features.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use node_graph::{NodeDef, NodeTypeRegistry};
 
-use crate::RuntimeBuilder;
+use super::graph::RuntimeBuilder;
 
 /// One independently discoverable graph-node definition, optionally paired
 /// with the runtime builder that makes it runnable.
@@ -114,6 +114,43 @@ pub(crate) fn graph_node_registrations() -> Vec<&'static GraphNodeRegistration> 
     registrations
 }
 
+pub fn build_node_registry() -> NodeTypeRegistry {
+    let mut registry = NodeTypeRegistry::new();
+    for registration in graph_node_registrations() {
+        assert!(
+            registry.category_of(registration.name()).is_none(),
+            "graph-node inventory definition '{}' conflicts with an explicit catalog entry",
+            registration.name()
+        );
+        registration.apply_node(&mut registry);
+    }
+    registry
+}
+
+pub(crate) fn standard_graph_node_builders() -> HashMap<String, Box<dyn RuntimeBuilder>> {
+    let mut builders: HashMap<String, Box<dyn RuntimeBuilder>> = HashMap::new();
+
+    builders.insert(
+        super::DATA_COLLECTOR_BUILDER.into(),
+        Box::new(super::DataCollectorBuilder),
+    );
+
+    for registration in graph_node_registrations() {
+        registration.apply_runtime_setup();
+        let Some(builder) = registration.builder() else {
+            continue;
+        };
+        assert!(
+            builders
+                .insert(registration.name().to_owned(), builder)
+                .is_none(),
+            "graph-node inventory builder '{}' conflicts with an explicit catalog entry",
+            registration.name()
+        );
+    }
+    builders
+}
+
 fn validate_graph_node_registrations(registrations: &mut Vec<&GraphNodeRegistration>) {
     registrations.sort_by_key(|registration| registration.stable_id());
 
@@ -160,7 +197,7 @@ fn validate_graph_node_payload_requirements_for(
 }
 
 #[cfg(test)]
-mod registration_tests {
+mod graph_node_registration_tests {
     use super::*;
 
     fn unused_register_node(_registry: &mut NodeTypeRegistry) {}

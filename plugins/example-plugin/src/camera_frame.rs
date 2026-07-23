@@ -536,7 +536,9 @@ inventory::submit! {
 
 #[cfg(test)]
 mod camera_frame_tests {
-    use logic_analyzer_graph::host::{BuilderRegistry, CompileCtx, lower, start_app_run};
+    use logic_analyzer_graph::host::{
+        BuilderRegistry, CompileCtx, build_node_registry, lower, start_app_run,
+    };
     use logic_analyzer_graph::node_support::PortKind;
     use node_graph::{NodeGraphWidget, SocketDirection, SocketId};
 
@@ -544,7 +546,7 @@ mod camera_frame_tests {
 
     #[test]
     fn custom_source_collects_bounded_typed_frames_through_an_explicit_viewer() {
-        let node_types = logic_analyzer_graph::nodes::build_registry();
+        let node_types = build_node_registry();
         let builders = BuilderRegistry::standard();
         let mut widget = NodeGraphWidget::new(node_types);
         let source = widget

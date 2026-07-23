@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use input_bindings::{InputBindings, PointerButtonName, PointerGesture, Trigger};
-use logic_analyzer_graph::{self as compiler, nodes};
+use logic_analyzer_graph as compiler;
 use logic_analyzer_viewer::{
     LogicAnalyzerViewer, SimpleTriggerEdit, SimpleTriggerLane, ViewerLaneGroupId, ViewerRowId,
 };
@@ -353,7 +353,7 @@ impl App {
         // controls, or their dark foreground text becomes unreadable there.
         cc.egui_ctx.set_theme(egui::Theme::Dark);
         install_fonts(&cc.egui_ctx);
-        let registry = nodes::build_registry();
+        let registry = compiler::host::build_node_registry();
         let input_bindings = Arc::new(crate::application_input_bindings().clone());
         let builders = compiler::BuilderRegistry::standard();
         let plugin_panel_registry = PluginPanelRegistry::standard();

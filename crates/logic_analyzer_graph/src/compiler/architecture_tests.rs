@@ -38,3 +38,25 @@ fn generic_collection_compiler_has_no_builtin_payload_or_protocol_checks() {
         }
     }
 }
+
+#[test]
+fn inventory_assembly_does_not_import_the_builtin_node_module() {
+    let sources = [
+        ("graph compiler", include_str!("graph.rs")),
+        (
+            "graph-node inventory",
+            include_str!("graph_node_registration.rs"),
+        ),
+        (
+            "collected-payload inventory",
+            include_str!("collected_payload_registration.rs"),
+        ),
+    ];
+
+    for (component, source) in sources {
+        assert!(
+            !implementation_source(source).contains("crate::nodes"),
+            "{component} must consume inventory contracts without importing built-in nodes"
+        );
+    }
+}

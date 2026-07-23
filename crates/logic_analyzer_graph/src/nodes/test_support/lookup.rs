@@ -1,7 +1,7 @@
 use crate::RuntimeBuilder;
 
 fn registration(stable_id: &str) -> &'static super::super::GraphNodeRegistration {
-    super::super::graph_node_registrations()
+    crate::compiler::graph_node_registrations()
         .into_iter()
         .find(|registration| registration.stable_id() == stable_id)
         .unwrap_or_else(|| panic!("graph node '{stable_id}' is not registered"))

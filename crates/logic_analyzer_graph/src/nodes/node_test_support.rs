@@ -1,7 +1,7 @@
 use crate::LiveCaptureEdit;
 
 fn node_registration(stable_id: &str) -> &'static super::GraphNodeRegistration {
-    super::graph_node_registrations()
+    crate::compiler::graph_node_registrations()
         .into_iter()
         .find(|registration| registration.stable_id() == stable_id)
         .unwrap_or_else(|| panic!("test-support graph node '{stable_id}' is not registered"))

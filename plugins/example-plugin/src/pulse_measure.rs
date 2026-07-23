@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn inventory_populates_both_registries() {
-        let nodes = logic_analyzer_graph::nodes::build_registry();
+        let nodes = logic_analyzer_graph::host::build_node_registry();
         let _builders = logic_analyzer_graph::BuilderRegistry::standard();
         assert_eq!(nodes.category_of("Pulse Measure"), Some("Plugin"));
     }

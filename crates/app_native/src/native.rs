@@ -145,7 +145,7 @@ mod tests {
     fn force_link_makes_example_plugin_inventories_visible_to_the_native_host() {
         std::hint::black_box(example_plugin::force_link());
 
-        let nodes = logic_analyzer_graph::nodes::build_registry();
+        let nodes = logic_analyzer_graph::host::build_node_registry();
         assert_eq!(nodes.category_of("Pulse Measure"), Some("Plugin"));
         assert_eq!(nodes.category_of("Camera Frame Source"), Some("Plugin"));
 

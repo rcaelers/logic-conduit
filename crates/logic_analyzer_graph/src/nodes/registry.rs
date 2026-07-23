@@ -17,7 +17,7 @@
 
 use egui::Color32;
 
-use node_graph::{NodeTypeRegistry, SocketDef, SocketShape};
+use node_graph::{SocketDef, SocketShape};
 
 // ── Stream socket types (`docs/APP_DESIGN.md`) ───────────────────────────────────────────────
 
@@ -134,21 +134,6 @@ pub(crate) const COLOR_SOURCES: Color32 = Color32::from_rgb(100, 75, 140);
 pub(crate) const COLOR_DECODERS: Color32 = Color32::from_rgb(60, 100, 160);
 pub(crate) const COLOR_LOGIC: Color32 = Color32::from_rgb(60, 140, 100);
 pub(crate) const COLOR_OUTPUT: Color32 = Color32::from_rgb(160, 80, 60);
-
-// ── Registry ─────────────────────────────────────────────────────────────────
-
-pub fn build_registry() -> NodeTypeRegistry {
-    let mut registry = NodeTypeRegistry::new();
-    for registration in super::graph_node_registrations() {
-        assert!(
-            registry.category_of(registration.name()).is_none(),
-            "graph-node inventory definition '{}' conflicts with an explicit catalog entry",
-            registration.name()
-        );
-        registration.apply_node(&mut registry);
-    }
-    registry
-}
 
 // ── Test graph fixtures ──────────────────────────────────────────────────────
 
@@ -574,11 +559,12 @@ pub(crate) mod test_graphs_tests {
 mod tests {
     use node_graph::NodeGraphWidget;
 
-    use super::{build_registry, test_graphs_tests};
+    use super::test_graphs_tests;
+    use crate::compiler::build_node_registry;
 
     #[test]
     fn startup_graph_builds_with_compatible_wiring() {
-        let mut widget = NodeGraphWidget::new(build_registry());
+        let mut widget = NodeGraphWidget::new(build_node_registry());
         test_graphs_tests::populate_startup(&mut widget);
         let graph = widget.graph();
 
@@ -607,7 +593,7 @@ mod tests {
     fn binary_decoder_demo_fixture_lowers() {
         use crate::{BuilderRegistry, lower};
 
-        let mut widget = NodeGraphWidget::new(build_registry());
+        let mut widget = NodeGraphWidget::new(build_node_registry());
         test_graphs_tests::build_binary_decoder_demo(&mut widget);
         assert!(widget.graph().nodes.values().all(|node| node.type_name
             != super::super::test_support::node_name("org.logicconduit.graph-node.viewer/v1")));
@@ -648,12 +634,12 @@ mod tests {
 
     #[test]
     fn auxiliary_test_graph_fixtures_build_with_registered_nodes() {
-        let mut live_binary = NodeGraphWidget::new(build_registry());
+        let mut live_binary = NodeGraphWidget::new(build_node_registry());
         let source = test_graphs_tests::build_live_binary_test(&mut live_binary);
         assert!(live_binary.graph().nodes.contains_key(&source));
         assert_eq!(live_binary.graph().nodes.len(), 2);
 
-        let mut uart = NodeGraphWidget::new(build_registry());
+        let mut uart = NodeGraphWidget::new(build_node_registry());
         test_graphs_tests::populate_uart_demo(&mut uart);
         assert_eq!(uart.graph().nodes.len(), 3);
         assert_eq!(uart.graph().connections.len(), 3);
@@ -661,13 +647,13 @@ mod tests {
 
     #[test]
     fn graph_file_api_round_trips_the_startup_graph() {
-        let mut original = NodeGraphWidget::new(build_registry());
+        let mut original = NodeGraphWidget::new(build_node_registry());
         test_graphs_tests::populate_startup(&mut original);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pipeline.json");
         original.save_to_path(&path).unwrap();
 
-        let mut loaded = NodeGraphWidget::new(build_registry());
+        let mut loaded = NodeGraphWidget::new(build_node_registry());
         loaded.load_from_path(&path).unwrap();
 
         assert_eq!(loaded.graph().nodes.len(), 10);
@@ -681,7 +667,7 @@ mod tests {
     fn graph_json_round_trip_compiles_identically() {
         use crate::{BuilderRegistry, lower};
 
-        let mut widget = NodeGraphWidget::new(build_registry());
+        let mut widget = NodeGraphWidget::new(build_node_registry());
         test_graphs_tests::populate_startup(&mut widget);
         let registry = BuilderRegistry::standard();
         let original = lower(widget.graph(), &registry).expect("original lowers");
@@ -689,7 +675,7 @@ mod tests {
         let json = serde_json::to_string(widget.graph()).expect("graph serializes");
         let restored_state: node_graph::GraphState =
             serde_json::from_str(&json).expect("graph deserializes");
-        let mut restored = NodeGraphWidget::new(build_registry());
+        let mut restored = NodeGraphWidget::new(build_node_registry());
         restored.set_graph(restored_state);
 
         let reloaded = lower(restored.graph(), &registry).expect("restored lowers");

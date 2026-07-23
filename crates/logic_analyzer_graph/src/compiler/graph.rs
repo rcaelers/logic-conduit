@@ -715,8 +715,8 @@ type CollectedPayloadRequestConfigurator = Arc<
 
 impl BuilderRegistry {
     pub fn standard() -> Self {
-        let registry = Self::with_builders(crate::nodes::standard_builders());
-        crate::nodes::validate_graph_node_payload_requirements(&registry.collected_payloads);
+        let registry = Self::with_builders(super::standard_graph_node_builders());
+        super::validate_graph_node_payload_requirements(&registry.collected_payloads);
         registry
     }
 

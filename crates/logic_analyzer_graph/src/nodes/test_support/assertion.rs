@@ -15,7 +15,7 @@ pub(crate) fn assert_node_registration_isolated_with_state(
     stable_id: &str,
     state: Option<serde_json::Value>,
 ) {
-    let registration = crate::nodes::graph_node_registrations()
+    let registration = crate::compiler::graph_node_registrations()
         .into_iter()
         .find(|registration| registration.stable_id() == stable_id)
         .unwrap_or_else(|| panic!("missing graph-node registration '{stable_id}'"));

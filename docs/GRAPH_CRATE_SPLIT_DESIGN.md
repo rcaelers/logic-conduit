@@ -9,10 +9,11 @@
 - graph compilation, execution, discovery, and saved-graph handling used by the application host;
 - built-in graph nodes, built-in payload presentations, raw-capture export, and test providers.
 
-The combined crate makes dependency direction implicit. A concrete node can reach host operations,
-the compiler can reach the built-in node catalog, and plugins depend on the complete compiler even
-when they only implement a node contract. `CompileCtx` also mixes node-facing build services with
-compiler-owned result registries read by the application.
+The explicit `node`, `node_support`, and `host` facades establish the intended API directions inside
+the combined crate. Inventory assembly is compiler-owned and consumes `GraphNodeRegistration` and
+`CollectedPayloadRegistration` submissions directly, without importing the built-in `nodes`
+module. The remaining crate extraction removes the physical dependency from plugins to the complete
+compiler and separates built-in definitions from host compilation.
 
 ## Proposed future architecture
 

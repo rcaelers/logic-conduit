@@ -2,6 +2,7 @@ mod collected_payload_registration;
 mod data_collector;
 mod errors;
 mod graph;
+mod graph_node_registration;
 mod port_kind;
 mod saved_graph;
 
@@ -32,6 +33,12 @@ pub use graph::{
     derived_cache_configs_by_node, discover_capture_presentation, discover_live_capture_feature,
     discover_trigger_configuration, lower, sampling_overlay_candidates, start_app_run,
     start_app_run_with_source_overrides, start_live_analysis,
+};
+pub use graph_node_registration::{GraphNodeRegistration, build_node_registry};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use graph_node_registration::graph_node_registrations;
+pub(crate) use graph_node_registration::{
+    standard_graph_node_builders, validate_graph_node_payload_requirements,
 };
 pub use port_kind::{PortKind, PortValue};
 pub use saved_graph::{GraphCompatibilityWarning, synchronize_payload_subscriptions};

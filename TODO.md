@@ -138,7 +138,7 @@ order; update this single checklist as slices land:
   exports.
 - [x] Replace plugin-visible `CompileCtx` parameters with a narrow `NodeBuildContext` contract;
   keep compiler result extraction on host-owned state.
-- [ ] Make inventory construction independent of the built-in node module. The compiler reads
+- [x] Make inventory construction independent of the built-in node module. The compiler reads
   `GraphNodeRegistration` and `CollectedPayloadRegistration` submissions without calling
   `crate::nodes`.
 - [ ] Extract `logic_analyzer_graph_api` with only the `node` and `node_support` namespaces, then
