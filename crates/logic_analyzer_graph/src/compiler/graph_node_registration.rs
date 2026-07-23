@@ -13,7 +13,7 @@ pub(crate) fn graph_node_registrations() -> Vec<&'static GraphNodeRegistration> 
     registrations
 }
 
-pub fn build_node_registry() -> NodeTypeRegistry {
+pub(crate) fn build_node_registry() -> NodeTypeRegistry {
     let mut registry = NodeTypeRegistry::new();
     for registration in graph_node_registrations() {
         assert!(

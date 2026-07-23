@@ -8,13 +8,14 @@ inventory assembly is compiler-owned and consumes submissions without importing 
 
 `logic_analyzer_graph_nodes` owns the built-in node definitions, builders, migrations, socket
 types, payload presentations, and inventory submissions. `logic_analyzer_graph` owns compiler and
-host services and temporarily retains compatibility re-exports and narrow compiler test seams.
+host services. Its feature-gated `GraphCompiler` test constructors are the narrow integration seam
+for isolated built-in-node tests.
 `logic_analyzer_capture_export` owns native streaming capture export without depending on a graph
 crate. `logic_analyzer_test_support` owns deterministic capture providers shared by cross-crate
 tests. Native and web application composition link the built-in bundle before constructing the host
 compiler.
 
-## Proposed future architecture
+## Architecture
 
 The graph domain is divided into crates whose dependency edges follow the direction of their
 contracts:
@@ -83,11 +84,12 @@ A plugin cannot receive or import that concrete context through the graph-node A
 ### Graph compiler and host facade
 
 `logic_analyzer_graph` owns graph lowering, validation, discovery, execution, cache planning, and
-saved-graph synchronization. Its public `host` namespace is consumed by `logic_analyzer_ui`, native
-and web composition, headless hosts, and integration tests.
+saved-graph synchronization. Its only public namespace is `host`, consumed by `logic_analyzer_ui`,
+native and web composition, headless hosts, and integration tests. Graph-node contracts are
+imported directly from `logic_analyzer_graph_api` rather than forwarded through the compiler crate.
 
-`GraphCompiler` owns the inventory-derived builder registry and provides the application-facing
-operations that are currently independent free functions:
+`GraphCompiler` owns the inventory-derived builder registry and provides these application-facing
+operations:
 
 - lower and validate a graph;
 - discover capture and trigger features;

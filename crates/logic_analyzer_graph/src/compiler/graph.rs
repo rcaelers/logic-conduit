@@ -243,7 +243,7 @@ pub struct DiscoveredCapturePresentation {
     pub presentation: CapturePresentation,
 }
 
-pub struct BuilderRegistry {
+pub(crate) struct BuilderRegistry {
     pub(crate) builders: HashMap<String, Box<dyn RuntimeBuilder>>,
     pub(crate) collected_payloads: CollectedPayloadRegistry,
     pub(crate) payload_subscriptions: Vec<CollectedPayloadSubscription>,
@@ -270,7 +270,7 @@ pub(crate) type CollectedPayloadRequestConfigurator = Arc<
 >;
 
 impl BuilderRegistry {
-    pub fn standard() -> Self {
+    pub(crate) fn standard() -> Self {
         let registry = Self::with_builders(super::standard_graph_node_builders());
         super::validate_graph_node_payload_requirements(&registry.collected_payloads);
         registry
@@ -294,13 +294,13 @@ impl BuilderRegistry {
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn isolated_test() -> Self {
+    pub(crate) fn isolated_test() -> Self {
         Self::with_builders(HashMap::new())
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn insert_test_builder(
+    pub(crate) fn insert_test_builder(
         &mut self,
         name: impl Into<String>,
         builder: Box<dyn RuntimeBuilder>,
@@ -376,12 +376,12 @@ impl BuilderRegistry {
 
     /// Registered retained-payload identities, keyed by runtime `TypeId` and
     /// durable plugin-owned identifiers.
-    pub fn collected_payloads(&self) -> &CollectedPayloadRegistry {
+    pub(crate) fn collected_payloads(&self) -> &CollectedPayloadRegistry {
         &self.collected_payloads
     }
 
     #[cfg_attr(feature = "test-support", doc(hidden))]
-    pub fn subscribable_payload_kinds(&self) -> Vec<PortKind> {
+    pub(crate) fn subscribable_payload_kinds(&self) -> Vec<PortKind> {
         self.payload_subscriptions
             .iter()
             .map(|payload| payload.kind)
@@ -468,7 +468,7 @@ impl BuilderRegistry {
 }
 
 /// Discovers a concrete source's pre-run presentation through its builder contract.
-pub fn discover_capture_presentation(
+pub(crate) fn discover_capture_presentation(
     graph: &GraphState,
     builders: &BuilderRegistry,
 ) -> Result<Option<DiscoveredCapturePresentation>, String> {
@@ -500,7 +500,7 @@ pub fn discover_capture_presentation(
 
 /// Resolves exactly one enabled live-capture feature without identifying a
 /// concrete node type. Muted nodes do not participate in acquisition.
-pub fn discover_live_capture_feature(
+pub(crate) fn discover_live_capture_feature(
     graph: &GraphState,
     builders: &BuilderRegistry,
 ) -> Result<Option<DiscoveredLiveCaptureFeature>, LiveCaptureDiscoveryError> {
@@ -509,7 +509,7 @@ pub fn discover_live_capture_feature(
 
 /// Resolves exactly one enabled trigger-configuration feature without consulting acquisition
 /// backends or identifying a concrete node type.
-pub fn discover_trigger_configuration(
+pub(crate) fn discover_trigger_configuration(
     graph: &GraphState,
     builders: &BuilderRegistry,
 ) -> Result<Option<DiscoveredTriggerConfiguration>, LiveCaptureDiscoveryError> {
@@ -552,7 +552,7 @@ pub fn discover_trigger_configuration(
 }
 
 /// Routes a portable live-feature edit to the concrete builder that owns `source_node`.
-pub fn apply_live_capture_edit(
+pub(crate) fn apply_live_capture_edit(
     graph: &GraphState,
     builders: &BuilderRegistry,
     source_node: NodeId,
@@ -1048,7 +1048,7 @@ fn with_auto_view_sink(graph: &GraphState, registry: &BuilderRegistry) -> GraphS
     graph
 }
 
-pub fn lower(
+pub(crate) fn lower(
     graph: &GraphState,
     registry: &BuilderRegistry,
 ) -> Result<CompiledGraph, Vec<CompileError>> {
@@ -1353,7 +1353,7 @@ pub fn lower(
 /// Resolves the clocked-node sampling presentations available for the
 /// current graph without starting its runtime. Hosts use this to populate
 /// presentation controls before the user runs the pipeline.
-pub fn sampling_overlay_candidates(
+pub(crate) fn sampling_overlay_candidates(
     graph: &GraphState,
     registry: &BuilderRegistry,
 ) -> Result<Vec<SamplingOverlayCandidate>, Vec<CompileError>> {
@@ -1508,7 +1508,7 @@ fn register_collected_subscribers(
     )
 }
 
-pub fn derived_cache_configs_by_node(
+pub(crate) fn derived_cache_configs_by_node(
     graph: &GraphState,
     registry: &BuilderRegistry,
     directory: &std::path::Path,
@@ -1735,7 +1735,7 @@ fn start_live(
 /// Starts the fixed compiled graph with its live-capable source replaced by
 /// the process that follows the capture store. All other nodes use the same
 /// lowering and materialization path as an ordinary run.
-pub fn start_live_analysis(
+pub(crate) fn start_live_analysis(
     graph: &GraphState,
     registry: &BuilderRegistry,
     ctx: &mut CompileCtx,
@@ -1854,7 +1854,7 @@ impl LiveRun {
     /// difference live. On any error the running pipeline is untouched
     /// (edits either fail up front in `diff`, or — for build failures midway
     /// — leave already-applied edits in place and report).
-    pub fn apply(
+    pub(crate) fn apply(
         &mut self,
         graph: &GraphState,
         registry: &BuilderRegistry,
@@ -1966,7 +1966,7 @@ impl LiveRun {
     /// explicit future-only boundary. Phase 13.1 deliberately accepts only
     /// builder-declared hot configuration; structural changes and restarts
     /// remain in the edited graph for the next capture or ordinary Run.
-    pub fn apply_configuration_epoch(
+    pub(crate) fn apply_configuration_epoch(
         &mut self,
         graph: &GraphState,
         registry: &BuilderRegistry,
@@ -2090,7 +2090,7 @@ impl LiveRun {
     }
 }
 
-pub fn start_app_run(
+pub(crate) fn start_app_run(
     graph: &GraphState,
     registry: &BuilderRegistry,
     ctx: &mut CompileCtx,
@@ -2101,7 +2101,7 @@ pub fn start_app_run(
 /// Starts an ordinary application run while replacing explicitly identified
 /// source nodes. Finalized-session replay uses this entry point so lowering
 /// cannot invoke the captured provider's discovery or build paths.
-pub fn start_app_run_with_source_overrides(
+pub(crate) fn start_app_run_with_source_overrides(
     graph: &GraphState,
     registry: &BuilderRegistry,
     ctx: &mut CompileCtx,

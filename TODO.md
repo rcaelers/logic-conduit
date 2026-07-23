@@ -153,7 +153,7 @@ order; update this single checklist as slices land:
   dependencies from graph API/compiler production code.
 - [x] Move processing-backed public fake providers to `logic_analyzer_test_support`; keep
   node-isolation mocks private to the built-in-node crate.
-- [ ] Remove transitional re-exports and obsolete dependencies, enforce the final dependency
+- [x] Remove transitional re-exports and obsolete dependencies, enforce the final dependency
   graph in architecture checks, and pass workspace Clippy/tests plus native and wasm builds.
 
 - Define how several source clocks and trigger positions map onto the shared viewer timeline.

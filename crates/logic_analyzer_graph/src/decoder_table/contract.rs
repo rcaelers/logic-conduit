@@ -1,9 +1,7 @@
 use std::fmt;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
-pub use logic_analyzer_graph_api::node_support::{
-    DecoderTableCellMode, DecoderTableColumnPresentation,
-};
+use logic_analyzer_graph_api::node_support::DecoderTableCellMode;
 use logic_analyzer_viewer::{DerivedLaneId, ViewerLaneRenderer, ViewerLaneTrackId};
 
 #[derive(Clone)]

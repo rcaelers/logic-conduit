@@ -12,6 +12,7 @@ path = "src/lib.rs"
 input-bindings = { path = "../input_bindings" }
 signal-processing = { path = "../signal_processing" }
 logic-analyzer-graph = { path = "../logic_analyzer_graph" }
+logic-analyzer-graph-api = { path = "../logic_analyzer_graph_api" }
 logic-analyzer-viewer = { path = "../widgets/logic_analyzer_viewer" }
 node-graph = { path = "../widgets/node_graph" }
 panel-layout = { path = "../widgets/panel_layout" }
@@ -30,7 +31,6 @@ rfd = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]
-logic-analyzer-graph = { path = "../logic_analyzer_graph", features = ["test-support"] }
 logic-analyzer-graph-nodes = { path = "../logic_analyzer_graph_nodes", features = ["test-support"] }
 logic-analyzer-test-support = { path = "../logic_analyzer_test_support" }
 tempfile = { workspace = true }

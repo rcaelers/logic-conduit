@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use logic_analyzer_graph_api::node_support::LiveCaptureEdit;
 use node_graph::{GraphState, NodeId, NodeTypeRegistry};
 use signal_processing::{CollectedPayloadRegistry, ConfigurationBoundary, PersistentStoreConfig};
 
@@ -12,7 +13,6 @@ use super::graph::{
 };
 use super::saved_graph::GraphCompatibilityWarning;
 use super::{graph, graph_node_registration, saved_graph};
-use crate::node_support::LiveCaptureEdit;
 
 /// Stateful application-facing facade for graph discovery, compilation, and execution.
 ///
@@ -36,6 +36,38 @@ impl GraphCompiler {
 
     pub fn collected_payloads(&self) -> &CollectedPayloadRegistry {
         self.builders.collected_payloads()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn isolated_test() -> Self {
+        Self {
+            builders: BuilderRegistry::isolated_test(),
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn insert_test_builder(
+        &mut self,
+        name: impl Into<String>,
+        builder: Box<dyn logic_analyzer_graph_api::node::RuntimeBuilder>,
+    ) {
+        self.builders.insert_test_builder(name, builder);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn subscribable_payload_kinds(
+        &self,
+    ) -> Vec<logic_analyzer_graph_api::node_support::PortKind> {
+        self.builders.subscribable_payload_kinds()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn has_builder(&self, name: &str) -> bool {
+        self.builders.get(name).is_some()
     }
 
     pub fn discover_capture_presentation(

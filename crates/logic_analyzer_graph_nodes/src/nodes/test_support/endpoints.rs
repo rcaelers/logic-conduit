@@ -1,7 +1,7 @@
 use egui::Color32;
 use serde_json::Value;
 
-use logic_analyzer_graph::host::BuilderRegistry;
+use logic_analyzer_graph::host::GraphCompiler;
 use logic_analyzer_graph_api::node::RuntimeBuilder;
 use logic_analyzer_graph_api::node_support::{NodeBuildContext, PortKind, ResolvedInputs};
 use node_graph::{AnySocket, InputDef, NodeDef, OutputDef, Socket};
@@ -66,9 +66,9 @@ impl NodeDef for TestSink {
     fn state() -> Self::State {}
 }
 
-pub(crate) fn install_builders(registry: &mut BuilderRegistry, kinds: Vec<PortKind>) {
-    registry.insert_test_builder(SOURCE_NAME, Box::new(TestSourceBuilder(kinds.clone())));
-    registry.insert_test_builder(SINK_NAME, Box::new(TestSinkBuilder(kinds)));
+pub(crate) fn install_builders(compiler: &mut GraphCompiler, kinds: Vec<PortKind>) {
+    compiler.insert_test_builder(SOURCE_NAME, Box::new(TestSourceBuilder(kinds.clone())));
+    compiler.insert_test_builder(SINK_NAME, Box::new(TestSinkBuilder(kinds)));
 }
 
 struct TestSourceBuilder(Vec<PortKind>);

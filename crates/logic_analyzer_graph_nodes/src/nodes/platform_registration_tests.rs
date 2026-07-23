@@ -1,9 +1,6 @@
 use egui::Pos2;
 
-use logic_analyzer_graph::host::{
-    BuilderRegistry, apply_live_capture_edit, discover_capture_presentation,
-    discover_live_capture_feature, lower,
-};
+use logic_analyzer_graph::host::GraphCompiler;
 use logic_analyzer_graph_api::node_support::{CapturePresentation, LiveCaptureEdit};
 use node_graph::{NodeGraphWidget, SocketDirection, SocketId};
 use signal_processing::{CaptureChannelId, CaptureDataDelivery, SimpleTriggerCondition};
@@ -55,7 +52,7 @@ fn native_hardware_source_registers_and_lowers() {
         .expect("native hardware source should be registered");
     attach_viewer_sink(&mut widget, source);
 
-    let compiled = lower(widget.graph(), &BuilderRegistry::standard()).unwrap();
+    let compiled = GraphCompiler::new().lower(widget.graph()).unwrap();
     assert!(
         compiled
             .nodes
@@ -70,7 +67,9 @@ fn buffered_hardware_feature_lowers_opaque_channels_and_portable_trigger_edits()
     let source = widget
         .add_node_at(node_name(U3PRO16_ID), Pos2::ZERO)
         .unwrap();
-    let streaming = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
+    let compiler = GraphCompiler::new();
+    let streaming = compiler
+        .discover_live_capture_feature(widget.graph())
         .unwrap()
         .expect("stream mode should expose a live feature");
     assert_eq!(
@@ -81,8 +80,8 @@ fn buffered_hardware_feature_lowers_opaque_channels_and_portable_trigger_edits()
     select(state, "mode", "Buffer");
     enable_channels(state, &[0, 2, 9]);
 
-    let builders = BuilderRegistry::standard();
-    let feature = discover_live_capture_feature(widget.graph(), &builders)
+    let feature = compiler
+        .discover_live_capture_feature(widget.graph())
         .unwrap()
         .expect("buffer mode should expose the concrete live feature");
     assert_eq!(feature.source_node(), source);
@@ -104,18 +103,19 @@ fn buffered_hardware_feature_lowers_opaque_channels_and_portable_trigger_edits()
             .supports(feature.channels(), feature.sample_rate_hz())
     );
 
-    let edited = apply_live_capture_edit(
-        widget.graph(),
-        &builders,
-        source,
-        &LiveCaptureEdit::SetSimpleTrigger {
-            channel_id: CaptureChannelId::new("u3pro16:input:2"),
-            condition: SimpleTriggerCondition::Falling,
-        },
-    )
-    .unwrap();
+    let edited = compiler
+        .apply_live_capture_edit(
+            widget.graph(),
+            source,
+            &LiveCaptureEdit::SetSimpleTrigger {
+                channel_id: CaptureChannelId::new("u3pro16:input:2"),
+                condition: SimpleTriggerCondition::Falling,
+            },
+        )
+        .unwrap();
     widget.graph_mut().nodes.get_mut(&source).unwrap().state = edited;
-    let feature = discover_live_capture_feature(widget.graph(), &builders)
+    let feature = compiler
+        .discover_live_capture_feature(widget.graph())
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -137,7 +137,8 @@ fn buffered_hardware_discovery_rejects_too_many_channels_for_the_rate() {
         .as_array_mut()
         .expect("capture source channels are an array");
     enabled.fill(serde_json::Value::Bool(true));
-    let error = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
+    let error = GraphCompiler::new()
+        .discover_live_capture_feature(widget.graph())
         .err()
         .expect("wide 1 GHz buffered capture must be rejected before opening hardware");
 
@@ -160,7 +161,8 @@ fn streaming_hardware_discovery_rejects_too_many_channels_for_the_rate() {
     select(state, "mode", "Stream");
     select(state, "sample_rate", "1 GHz");
     enable_channels(state, &[0, 3]);
-    let error = discover_live_capture_feature(widget.graph(), &BuilderRegistry::standard())
+    let error = GraphCompiler::new()
+        .discover_live_capture_feature(widget.graph())
         .err()
         .expect("four-input 1 GHz stream must be rejected before opening hardware");
 
@@ -187,7 +189,8 @@ fn dsl_source_presentation_is_builder_owned_after_node_rename() {
     widget.graph_mut().nodes.get_mut(&source_id).unwrap().title = "My capture".to_owned();
     widget.graph_mut().nodes.get_mut(&source_id).unwrap().state["file"]["value"] =
         serde_json::Value::String("capture.dsl".to_owned());
-    let presentation = discover_capture_presentation(widget.graph(), &BuilderRegistry::standard())
+    let presentation = GraphCompiler::new()
+        .discover_capture_presentation(widget.graph())
         .unwrap()
         .unwrap();
     let CapturePresentation::Indexed { identity, .. } = presentation.presentation else {

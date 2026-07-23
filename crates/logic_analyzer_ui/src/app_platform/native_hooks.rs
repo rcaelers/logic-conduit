@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use logic_analyzer_graph::host as compiler;
-use logic_analyzer_graph::node_support::CapturePresentation;
+use logic_analyzer_graph_api::node_support::CapturePresentation;
 use node_graph::NodeId;
 
 use crate::app::App;

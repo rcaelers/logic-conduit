@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use input_bindings::{InputBindings, PointerButtonName, PointerGesture, Trigger};
 use logic_analyzer_graph::host as compiler;
-use logic_analyzer_graph::node_support::{CapturePresentationSignal, LiveCaptureEdit};
+use logic_analyzer_graph_api::node_support::{CapturePresentationSignal, LiveCaptureEdit};
 use logic_analyzer_viewer::{
     LogicAnalyzerViewer, SimpleTriggerEdit, SimpleTriggerLane, ViewerLaneGroupId, ViewerRowId,
 };

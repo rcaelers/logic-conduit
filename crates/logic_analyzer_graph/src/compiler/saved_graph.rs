@@ -57,7 +57,7 @@ struct DiscoveredSubscription {
 /// Documents predating the manifest are upgraded in place. Existing stable
 /// identities are retained when their plugin is unavailable, so saving the
 /// graph never silently erases the information needed to restore it later.
-pub fn synchronize_payload_subscriptions(
+pub(crate) fn synchronize_payload_subscriptions(
     graph: &mut GraphState,
     registry: &BuilderRegistry,
 ) -> Result<Vec<GraphCompatibilityWarning>, serde_json::Error> {

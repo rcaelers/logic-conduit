@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
+use logic_analyzer_graph_api::node_support::ResolvedInputs;
 use logic_analyzer_viewer::{DerivedLaneId, ViewerLaneTrackId};
 use node_graph::NodeId;
 
 use super::{DecoderTableColumn, DecoderTableRegistry, DecoderTableSource};
-use crate::compiler::ResolvedInputs;
 
 struct PendingSource {
     source_node: NodeId,

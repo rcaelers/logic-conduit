@@ -15,7 +15,7 @@ use logic_analyzer_capture_export::{
     CaptureExportReport, export_finalized_capture,
 };
 use logic_analyzer_graph::host::DiscoveredLiveCaptureFeature;
-use logic_analyzer_graph::node::CaptureGraphSourceFactory;
+use logic_analyzer_graph_api::node::CaptureGraphSourceFactory;
 use signal_processing::{
     AcquisitionContext, CaptureAcquisitionPhase, CaptureCompletion, CaptureDataDelivery,
     CaptureEvent, CaptureEventPublishError, CaptureEventPublisher, CaptureEventQueueReader,
@@ -1689,9 +1689,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use logic_analyzer_graph::host::{DiscoveredLiveCaptureFeature, GraphCompiler};
-    use logic_analyzer_graph::{
-        CaptureGraphSourceFactory, LiveCaptureEdit, LiveCaptureFeature, SimpleTriggerChannel,
-    };
+    use logic_analyzer_graph_api::node::{CaptureGraphSourceFactory, LiveCaptureFeature};
+    use logic_analyzer_graph_api::node_support::{LiveCaptureEdit, SimpleTriggerChannel};
     use logic_analyzer_graph_nodes::test_support as nodes;
     use logic_analyzer_test_support::{
         BufferedFakeConfig, BufferedFakeController, BufferedFakeProvider, DeterministicFakeConfig,

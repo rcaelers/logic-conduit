@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use egui::Pos2;
 
-use logic_analyzer_graph::host::{BuilderRegistry, lower};
+use logic_analyzer_graph::host::GraphCompiler;
 use logic_analyzer_graph_api::node::GraphNodeRegistration;
 use logic_analyzer_graph_api::node_support::PortKind;
 use node_graph::{NodeDef, NodeGraphWidget, NodeTypeRegistry, SocketDirection, SocketId};
@@ -76,9 +76,9 @@ pub(crate) fn assert_node_registration_isolated_with_state(
         offered_outputs.push(index);
     }
 
-    let mut builders = BuilderRegistry::isolated_test();
+    let mut compiler = GraphCompiler::isolated_test();
     if builder.is_data_subscription() {
-        kinds.extend(builders.subscribable_payload_kinds());
+        kinds.extend(compiler.subscribable_payload_kinds());
         if required_inputs.is_empty() {
             let input = target_inputs
                 .iter()
@@ -88,12 +88,12 @@ pub(crate) fn assert_node_registration_isolated_with_state(
         }
     }
     let kinds = kinds.into_iter().collect::<Vec<_>>();
-    endpoints::install_builders(&mut builders, kinds);
+    endpoints::install_builders(&mut compiler, kinds);
 
     let is_source = builder.is_source();
     let is_sink = builder.is_sink();
     let is_data_subscription = builder.is_data_subscription();
-    builders.insert_test_builder(registration.name(), builder);
+    compiler.insert_test_builder(registration.name(), builder);
 
     if !is_source {
         assert!(
@@ -136,7 +136,7 @@ pub(crate) fn assert_node_registration_isolated_with_state(
         }
     }
 
-    let compiled = lower(widget.graph(), &builders).unwrap_or_else(|errors| {
+    let compiled = compiler.lower(widget.graph()).unwrap_or_else(|errors| {
         panic!(
             "isolated lowering of '{}' failed: {errors:#?}",
             registration.name()

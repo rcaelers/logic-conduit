@@ -2,9 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use egui::{Color32, PopupCloseBehavior, Stroke};
 
-use logic_analyzer_graph::{
-    DecoderTableCellMode, DecoderTableColumn, DecoderTableRegistry, DecoderTableSource,
-};
+use logic_analyzer_graph::host::{DecoderTableColumn, DecoderTableRegistry, DecoderTableSource};
+use logic_analyzer_graph_api::node_support::DecoderTableCellMode;
 use logic_analyzer_viewer::{AnnotationVisual, ViewerLaneTheme};
 use signal_processing::{
     Annotation, CollectedLaneTableRow, DerivedLaneData, DerivedLanes, OpaqueCollectedLane,

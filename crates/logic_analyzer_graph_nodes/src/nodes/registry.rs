@@ -557,9 +557,7 @@ pub(crate) mod test_graphs_tests {
 
 #[cfg(test)]
 mod tests {
-    use logic_analyzer_graph::host::{
-        BuilderRegistry, CompiledGraph, discover_capture_presentation, lower,
-    };
+    use logic_analyzer_graph::host::{CompiledGraph, GraphCompiler};
     use logic_analyzer_graph_api::node_support::CapturePresentation;
     use node_graph::NodeGraphWidget;
 
@@ -609,7 +607,9 @@ mod tests {
                 .count(),
             10
         );
-        let preview = discover_capture_presentation(widget.graph(), &BuilderRegistry::standard())
+        let compiler = GraphCompiler::new();
+        let preview = compiler
+            .discover_capture_presentation(widget.graph())
             .unwrap()
             .expect("demo source should provide a pre-run capture preview");
         let CapturePresentation::InMemory {
@@ -625,7 +625,8 @@ mod tests {
             preview.last().unwrap().transitions.last().unwrap().0,
             59_999_000.0
         );
-        let compiled = lower(widget.graph(), &BuilderRegistry::standard())
+        let compiled = compiler
+            .lower(widget.graph())
             .expect("wasm demo should lower cleanly");
         // Watching the formatter output keeps the counter/formatter branch
         // live even though the wasm graph has no filesystem writer sink.
@@ -668,8 +669,8 @@ mod tests {
     fn graph_json_round_trip_compiles_identically() {
         let mut widget = NodeGraphWidget::new(build_node_registry());
         test_graphs_tests::populate_startup(&mut widget);
-        let registry = BuilderRegistry::standard();
-        let original = lower(widget.graph(), &registry).expect("original lowers");
+        let compiler = GraphCompiler::new();
+        let original = compiler.lower(widget.graph()).expect("original lowers");
 
         let json = serde_json::to_string(widget.graph()).expect("graph serializes");
         let restored_state: node_graph::GraphState =
@@ -677,7 +678,7 @@ mod tests {
         let mut restored = NodeGraphWidget::new(build_node_registry());
         restored.set_graph(restored_state);
 
-        let reloaded = lower(restored.graph(), &registry).expect("restored lowers");
+        let reloaded = compiler.lower(restored.graph()).expect("restored lowers");
 
         assert_eq!(original.nodes.len(), reloaded.nodes.len());
         for (a, b) in original.nodes.iter().zip(&reloaded.nodes) {

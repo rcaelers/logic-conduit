@@ -25,7 +25,7 @@ PUBLIC_MODULES = {
     dsl_file dslogic_u3pro16 sigrok_file synthetic_capture_source synthetic_uart_source
   ],
   "crates/logic_analyzer_graph_api/src/lib.rs" => %w[node node_support],
-  "crates/logic_analyzer_graph/src/lib.rs" => %w[host node node_support],
+  "crates/logic_analyzer_graph/src/lib.rs" => %w[host],
   "crates/logic_analyzer_graph_nodes/src/lib.rs" => %w[test_support]
 }.freeze
 
@@ -69,12 +69,25 @@ end
 
 graph_manifest = File.read(File.join(ROOT, "crates/logic_analyzer_graph/Cargo.toml"))
 graph_production_manifest = graph_manifest.split(/^\[dev-dependencies\]\s*$/, 2).first
-if graph_production_manifest.match?(/^logic-analyzer-graph-nodes\s*=/)
-  errors << "crates/logic_analyzer_graph/Cargo.toml: compiler production code must not depend on built-in graph nodes"
-end
-%w[logic-analyzer-capture-export tempfile thiserror zip].each do |dependency|
+%w[
+  logic-analyzer-capture-export logic-analyzer-graph-nodes logic-analyzer-processing
+  logic-analyzer-test-support logic-analyzer-ui tempfile thiserror zip
+].each do |dependency|
   if graph_production_manifest.match?(/^#{Regexp.escape(dependency)}\s*=/)
     errors << "crates/logic_analyzer_graph/Cargo.toml: compiler production code must not depend on #{dependency}"
+  end
+end
+
+graph_root = File.read(File.join(ROOT, "crates/logic_analyzer_graph/src/lib.rs"))
+if graph_root.match?(/^pub\s+use\s+/)
+  errors << "crates/logic_analyzer_graph/src/lib.rs: compiler contracts belong under the host facade"
+end
+
+graph_host = File.read(File.join(ROOT, "crates/logic_analyzer_graph/src/host/mod.rs"))
+forbidden_host_exports = ui_compiler_free_functions + ["BuilderRegistry"]
+forbidden_host_exports.each do |name|
+  if graph_host.match?(/\b#{Regexp.escape(name)}\b/)
+    errors << "crates/logic_analyzer_graph/src/host/mod.rs: host facade must not expose transitional #{name}"
   end
 end
 
@@ -102,6 +115,13 @@ graph_nodes_manifest = File.read(File.join(ROOT, "crates/logic_analyzer_graph_no
 graph_nodes_production_manifest = graph_nodes_manifest.split(/^\[dev-dependencies\]\s*$/, 2).first
 if graph_nodes_production_manifest.match?(/^logic-analyzer-graph\s*=/)
   errors << "crates/logic_analyzer_graph_nodes/Cargo.toml: built-in nodes submit graph API contracts and must not depend on the compiler"
+end
+
+Dir.glob(File.join(ROOT, "plugins/*/Cargo.toml")).sort.each do |manifest_path|
+  production_manifest = File.read(manifest_path).split(/^\[dev-dependencies\]\s*$/, 2).first
+  if production_manifest.match?(/^logic-analyzer-graph\s*=/)
+    errors << "#{relative(manifest_path)}: plugins depend on the graph API, not the compiler"
+  end
 end
 
 def production_path_dependencies(manifest_path)

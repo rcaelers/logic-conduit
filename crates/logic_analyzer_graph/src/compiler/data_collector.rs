@@ -4,10 +4,12 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+use logic_analyzer_graph_api::node::RuntimeBuilder;
+use logic_analyzer_graph_api::node_support::{NodeBuildContext, PortKind, ResolvedInputs};
 use node_graph::Socket;
 use signal_processing::{CollectedLaneRequest, DerivedDataCollector, ProcessNode};
 
-use super::{BuilderRegistry, NodeBuildContext, PortKind, ResolvedInputs, RuntimeBuilder};
+use super::graph::BuilderRegistry;
 
 pub(crate) const BUILDER_NAME: &str = "Derived Data Collector";
 

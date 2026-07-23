@@ -1,6 +1,6 @@
 use egui::Pos2;
 
-use logic_analyzer_graph::host::BuilderRegistry;
+use logic_analyzer_graph::host::GraphCompiler;
 use node_graph::NodeGraphWidget;
 
 use crate::nodes::node_name;
@@ -18,7 +18,7 @@ fn browser_discovers_every_platform_sensitive_node_and_builder() {
         "org.logicconduit.graph-node.csv-writer/v1",
     ];
     let mut graph = NodeGraphWidget::new(build_registry());
-    let builders = BuilderRegistry::standard();
+    let compiler = GraphCompiler::new();
 
     for (index, stable_id) in stable_ids.into_iter().enumerate() {
         let name = node_name(stable_id);
@@ -29,7 +29,7 @@ fn browser_discovers_every_platform_sensitive_node_and_builder() {
             "missing browser node definition for {name}"
         );
         assert!(
-            builders.get(name).is_some(),
+            compiler.has_builder(name),
             "missing browser runtime builder for {name}"
         );
     }

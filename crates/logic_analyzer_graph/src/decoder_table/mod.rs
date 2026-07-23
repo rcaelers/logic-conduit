@@ -3,8 +3,5 @@
 mod contract;
 mod subscription;
 
-pub use contract::{
-    DecoderTableCellMode, DecoderTableColumn, DecoderTableColumnPresentation, DecoderTableRegistry,
-    DecoderTableSource,
-};
+pub use contract::{DecoderTableColumn, DecoderTableRegistry, DecoderTableSource};
 pub(crate) use subscription::subscribe_collected_tables;
