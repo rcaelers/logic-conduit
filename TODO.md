@@ -20,29 +20,26 @@
 
 Collected payloads already register typed ingestion adapters, stable identities, viewable
 presentations, and bounded opaque snapshots. The standard Word, digital, trigger, numeric, and
-text adapters retain their data exclusively in adapter-owned queries. The remaining work removes
-the legacy built-in fallback representation and completes the payload capabilities required by
-arbitrary plugins.
+text adapters retain their data exclusively in adapter-owned queries. Generic viewer row
+discovery, activity, measurement, event behavior, cursor snapping, timeline extent, and rendering
+all use registered payload queries and presentations. The remaining work completes the contracts
+required by arbitrary plugins.
 
 This is the definitive completion checklist for the plugin migration:
 
-1. Replace the generic viewer's remaining legacy-lane fallbacks: implicit/default row discovery,
-   row activity and measurement, event-row behavior, and rendering. These must be explicit
-   payload/presentation capabilities, so a registered lane can be discovered after collection
-   without the viewer matching a built-in payload representation.
-2. Complete the `ViewerLaneRenderer` contract with the required theme and interaction context.
+1. Complete the `ViewerLaneRenderer` contract with the required theme and interaction context.
    Renderers continue to receive only bounded immutable snapshots, time transforms, and explicit
    commands; they never receive `LogicAnalyzerViewer` internals or locked runtime storage.
-3. Make collection and subscription negotiation fully registry-driven. Remove the built-in
+2. Make collection and subscription negotiation fully registry-driven. Remove the built-in
    `PortKind` list from the data collector and require registered collection, presentation, and
    diagnostic contracts for every subscribable payload.
-4. Define saved-graph compatibility for Viewer sockets and `show_in_view` outputs. Explicitly
+3. Define saved-graph compatibility for Viewer sockets and `show_in_view` outputs. Explicitly
    migrate legacy built-in lanes, preserve their visual behavior, and show a user-visible warning
    for missing payload or presentation registrations.
-5. Add UI panel registration, then prove the complete contract with a `CameraFrame` plugin payload
+4. Add UI panel registration, then prove the complete contract with a `CameraFrame` plugin payload
    carrying a timestamp and image: custom socket, source node, bounded sampler, thumbnail renderer,
    explicit Viewer connection, and View-panel discovery without generic-source edits.
-6. Add architecture and contract coverage for registration collisions and absence, typed channel
+5. Add architecture and contract coverage for registration collisions and absence, typed channel
    construction, negotiation, retention, dense snapshots, timeline extent, renderer lock release,
    saved-state diagnostics, native/wasm compilation, and absence of hardcoded built-in checks in
    generic viewer, compiler, and runtime paths.

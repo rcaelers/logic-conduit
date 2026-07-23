@@ -128,18 +128,20 @@ operations supply the concrete semantics needed by the generic row drawing path:
 
 - compute row metrics from the base lane height and available tracks;
 - resolve an annotation value to its label and visual style;
+- draw an adapter-owned bounded opaque snapshot;
+- project a snapshot to optional payload-neutral level/event interaction data;
 - select the explicitly registered tracks eligible for snapping at a pointer position.
 
 The trait receives group/track metadata and fully generic default annotation visuals rather than
-`LogicAnalyzerViewer` or runtime lane storage. Before a renderer runs, the viewer prepares a
-bounded `ViewerLaneFrame` snapshot for the visible window. Sparse annotation snapshots contain
-exact values up to a viewport-derived limit; dense snapshots contain activity only and do not
-invoke value formatters. Indexed handles are queried after the lane lock is released.
+`LogicAnalyzerViewer` or runtime lane storage. Before a renderer runs, the viewer asks the
+payload-owned query for an immutable snapshot bounded by the visible window and viewport-derived
+item limit. Exact and dense activity snapshot semantics belong to the payload adapter. Query
+handles are cloned and lane-registry locks are released before the query or renderer runs.
 
 The viewer itself owns the protocol-neutral facilities:
 
 - visible time range, time-to-screen transforms, clipping, colors, and track rectangles;
-- digital waveform, marker, and annotation-track drawing;
+- reusable digital, marker, annotation, number, and text drawing primitives;
 - angled annotation boxes, dense presence bands, and indexed/in-memory sampling;
 - configurable annotation labels and visual style supplied by the renderer;
 - nearest transition, marker, and annotation-boundary queries with a caller-provided tolerance.
@@ -157,14 +159,10 @@ lock.
 
 ### Default presentation
 
-`logic_analyzer_viewer` supplies default singleton renderers for the generic payload families:
-
-- digital levels;
-- decoded words/annotations, including a generic numeric format;
-- event markers.
-
-Knowing these payload families is part of the generic viewer contract. Knowing that a value is a
-UART start marker, an SPI transfer direction, or a decoder error is not.
+Payload owners register default singleton presentations by stable collected-payload identity.
+The graph crate registers the standard digital, word, trigger, number, and text presentations;
+plugins use the same contract. The generic viewer does not know this set and leaves an unregistered
+payload undisplayed.
 
 The default annotation renderer owns the angled-box geometry, fitting, clipping, dense fallback,
 and generic number formatting. Concrete renderers reuse it with a value presenter that can map

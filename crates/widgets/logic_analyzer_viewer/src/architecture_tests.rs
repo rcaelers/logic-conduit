@@ -38,3 +38,23 @@ fn generic_viewer_exposes_no_decoder_table_contracts() {
         );
     }
 }
+
+#[test]
+fn generic_viewer_has_no_legacy_collected_lane_fallback() {
+    let sources = [
+        include_str!("channel.rs"),
+        include_str!("cursor.rs"),
+        include_str!("draw/derived.rs"),
+        include_str!("draw/frame.rs"),
+        include_str!("lanes.rs"),
+        include_str!("viewer.rs"),
+    ];
+    let forbidden = ["DerivedLaneData", "LaneSummary", "CollectedValueKind"];
+
+    for token in forbidden {
+        assert!(
+            sources.iter().all(|source| !source.contains(token)),
+            "generic viewer source contains legacy collected-lane fallback {token:?}"
+        );
+    }
+}

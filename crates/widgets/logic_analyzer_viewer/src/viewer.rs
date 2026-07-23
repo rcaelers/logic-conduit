@@ -9,7 +9,6 @@ use input_bindings::InputBindings;
 use signal_processing::{CaptureDataSource, CaptureIndex, CaptureIndexFactory, DerivedLanes};
 
 use crate::channel::LogicChannel;
-use crate::indexed_annotations::IndexedAnnotationCacheEntry;
 use crate::lanes::{ViewerLaneGroupId, WaveformPresentationRegistry};
 use crate::sampling_overlay::SamplingOverlay;
 use crate::simple_trigger::{SimpleTriggerEdit, SimpleTriggerLane, SimpleTriggerPopup};
@@ -73,7 +72,6 @@ pub struct LogicAnalyzerViewer {
     /// subscriptions select which entries appear under the raw channels.
     pub(crate) derived: Option<DerivedLanes>,
     pub(crate) waveform_presentations: WaveformPresentationRegistry,
-    pub(crate) indexed_annotation_cache: HashMap<String, IndexedAnnotationCacheEntry>,
     pub(crate) sampling_overlay: Option<SamplingOverlay>,
     pub(crate) sampling_overlay_channels: Option<Vec<LogicChannel>>,
     pub(crate) sampling_overlay_key: Option<(u64, u64, u64)>,
@@ -129,7 +127,6 @@ impl LogicAnalyzerViewer {
             color_profile: ColorProfile::DsView,
             derived: None,
             waveform_presentations: WaveformPresentationRegistry::new(),
-            indexed_annotation_cache: HashMap::new(),
             sampling_overlay: None,
             sampling_overlay_channels: None,
             sampling_overlay_key: None,
@@ -174,7 +171,6 @@ impl LogicAnalyzerViewer {
     /// previous run's lanes.
     pub fn set_derived_lanes(&mut self, lanes: DerivedLanes) {
         self.derived = Some(lanes);
-        self.indexed_annotation_cache.clear();
     }
 
     /// Replaces the explicit presentation registry paired with the current
@@ -601,7 +597,6 @@ impl LogicAnalyzerViewer {
         self.sample_visible_window(layout);
         self.sample_sampling_overlay();
         layout = self.layout(ui, rect);
-        self.sample_indexed_annotations(layout);
         let hover_pointer = if cursor_input.blocks_pan {
             None
         } else {
@@ -611,7 +606,7 @@ impl LogicAnalyzerViewer {
         self.draw(&painter, layout, hover_pointer, cursor_input.active);
         self.show_simple_trigger_popup(ui.ctx());
         self.show_row_rename(ui.ctx());
-        if self.has_live_indexed_annotations() {
+        if self.has_live_collected_data() {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(50));
         }
@@ -749,51 +744,19 @@ impl LogicAnalyzerViewer {
         let Some(derived) = self.derived.as_ref() else {
             return 0.0;
         };
-        let opaque_lanes = derived.opaque_lanes();
-        let opaque_lane_names: std::collections::HashSet<_> =
-            opaque_lanes.iter().map(|lane| lane.name()).collect();
-        let opaque_end_ns = opaque_lanes
+        let end_ns = derived
+            .opaque_lanes()
             .iter()
             .filter_map(|lane| lane.timeline_extent_end_ns())
             .max()
             .unwrap_or(0);
-        let lanes = derived.read();
-        let end_ns = lanes
-            .iter()
-            .filter(|lane| !opaque_lane_names.contains(lane.name.as_str()))
-            .filter_map(|lane| match &lane.data {
-                signal_processing::DerivedLaneData::Digital(samples) => {
-                    samples.last().map(|sample| sample.start_time_ns)
-                }
-                signal_processing::DerivedLaneData::Annotations(annotations) => annotations
-                    .iter()
-                    .map(|annotation| annotation.end_ns.max(annotation.start_ns))
-                    .max(),
-                signal_processing::DerivedLaneData::IndexedAnnotations(indexed) => {
-                    indexed.metadata().extent_end_ns
-                }
-                signal_processing::DerivedLaneData::Markers(markers) => markers.last().copied(),
-                signal_processing::DerivedLaneData::Values(values) => {
-                    values.values.last().map(|value| value.start_time_ns)
-                }
-            })
-            .max()
-            .unwrap_or(0)
-            .max(opaque_end_ns);
         end_ns as f64 / 1_000.0
     }
 
-    fn has_live_indexed_annotations(&self) -> bool {
-        self.derived.as_ref().is_some_and(|derived| {
-            derived.read().iter().any(|lane| {
-                matches!(
-                    &lane.data,
-                    signal_processing::DerivedLaneData::IndexedAnnotations(indexed)
-                        if indexed.status()
-                            == signal_processing::StoreStatus::Live
-                )
-            })
-        })
+    fn has_live_collected_data(&self) -> bool {
+        self.derived
+            .as_ref()
+            .is_some_and(|derived| derived.opaque_lanes().iter().any(|lane| lane.is_live()))
     }
 
     pub(crate) fn clamp_to_capture_duration(&mut self) {
@@ -815,8 +778,7 @@ mod tests {
 
     use signal_processing::{
         CaptureIndex, CaptureMetadata, CaptureSampledChannel, CaptureSampledWindow,
-        CollectedLaneQuery, CollectedPayloadRegistry, DerivedLaneData, DerivedLanes,
-        IndexedAnnotationLane, IndexedAnnotationWriter, LiveStoreConfig, Word,
+        CollectedLaneQuery, CollectedPayloadRegistry, DerivedLanes, Word,
     };
 
     use super::{ChannelSignal, LogicAnalyzerViewer};
@@ -925,30 +887,6 @@ mod tests {
     }
 
     #[test]
-    fn reset_time_view_fits_indexed_annotations_without_a_capture() {
-        let (mut writer, store) =
-            IndexedAnnotationWriter::create(LiveStoreConfig::default()).unwrap();
-        writer
-            .append_batch(&[Word::spanning(0x27, 250_000, 50_000)])
-            .unwrap();
-        writer.finish().unwrap();
-        let lanes = DerivedLanes::new();
-        lanes.register(
-            "words",
-            DerivedLaneData::IndexedAnnotations(IndexedAnnotationLane::from_store(store)),
-        );
-        let mut viewer = LogicAnalyzerViewer::new();
-        viewer.set_derived_lanes(lanes);
-        viewer.visible_start_us = 120.0;
-        viewer.visible_span_us = 12.0;
-
-        viewer.reset_time_view();
-
-        assert_eq!(viewer.visible_start_us, 0.0);
-        assert_eq!(viewer.visible_span_us, 300.0);
-    }
-
-    #[test]
     fn reset_time_view_uses_the_adapter_owned_timeline_extent() {
         struct ExtentQuery;
 
@@ -963,14 +901,6 @@ mod tests {
         }
 
         let lanes = DerivedLanes::new();
-        lanes.register(
-            "words",
-            DerivedLaneData::Annotations(vec![signal_processing::Annotation {
-                start_ns: 10_000,
-                end_ns: 10_000,
-                value: 0x27,
-            }]),
-        );
         let mut payloads = CollectedPayloadRegistry::new();
         payloads.register::<Word>("org.example.word/v1").unwrap();
         lanes.publish_opaque_lane(

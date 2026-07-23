@@ -40,12 +40,11 @@ collector storage.
 semantics. The request is bounded by a visible time window and item limit. The viewer passes the
 returned `OpaqueCollectedLaneSnapshot` to the payload's renderer only after it has released
 retained-data locks; the renderer downcasts the snapshot only to its own registered type. An
-opaque lane is sufficient to activate an explicitly registered viewer row, so a payload does not
-need a parallel `DerivedLaneData` entry merely to be visualized.
-
-`DerivedLaneData` and `LaneSummary` remain a temporary fallback representation for legacy viewer
-rows and explicit compatibility fixtures. They are not part of the collected-payload contract;
-built-in adapters do not write to them.
+opaque lane activates an explicit viewer group or a singleton default presentation registered for
+its stable payload identity. Renderers also project bounded snapshots into payload-neutral level
+and event transitions for hover measurement and event-row interaction. Cursor boundaries,
+timeline extent, and live status are query capabilities. The generic viewer neither reads a
+parallel built-in lane representation nor matches a payload type.
 
 ## Collected-payload adapters
 

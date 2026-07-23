@@ -102,6 +102,18 @@ pub struct OpaqueLaneDrawContext<'a> {
     pub visible_end_ns: u64,
 }
 
+/// Payload-neutral interaction data supplied by a lane renderer.
+///
+/// This projection is bounded by the same visible-window request as drawing.
+/// It lets generic hover measurement and cursor behavior operate without
+/// inspecting an adapter's retained snapshot type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewerLaneInteraction {
+    pub initial: bool,
+    pub transitions: Vec<(u64, bool)>,
+    pub event: bool,
+}
+
 impl OpaqueLaneDrawContext<'_> {
     /// Maps an absolute timeline position into the clipped waveform region.
     pub fn time_to_x(&self, time_ns: u64) -> f32 {
@@ -139,18 +151,9 @@ pub trait ViewerLaneRenderer: Send + Sync {
         default
     }
 
-    /// Whether this renderer consumes an adapter-owned opaque snapshot for
-    /// the track. Returning `false` preserves the legacy fallback without
-    /// issuing an unnecessary retained-data query.
-    fn uses_opaque_snapshot(&self, _track: &ViewerLaneTrack) -> bool {
-        false
-    }
-
     /// Draws an adapter-owned opaque lane from an immutable, bounded
-    /// snapshot. Returning `true` means the renderer handled the track;
-    /// returning `false` allows the built-in retained-lane fallback to
-    /// proceed. The viewer invokes this only after releasing all
-    /// derived-data locks.
+    /// snapshot. The viewer invokes this only after releasing all retained
+    /// data locks.
     fn draw_opaque_lane(
         &self,
         _track: &ViewerLaneTrack,
@@ -158,6 +161,17 @@ pub trait ViewerLaneRenderer: Send + Sync {
         _context: OpaqueLaneDrawContext<'_>,
     ) -> bool {
         false
+    }
+
+    /// Projects a bounded adapter snapshot into generic level/event
+    /// transitions for hover measurement. Payloads without level or event
+    /// semantics return `None`.
+    fn interaction(
+        &self,
+        _track: &ViewerLaneTrack,
+        _snapshot: Option<&OpaqueCollectedLaneSnapshot>,
+    ) -> Option<ViewerLaneInteraction> {
+        None
     }
 
     fn snap_lanes(&self, group: &ViewerLaneGroup, pointer_fraction: f32) -> Vec<DerivedLaneId> {
@@ -299,16 +313,35 @@ impl ViewerOutputPresentation {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WaveformPresentationRegistry {
     inner: Arc<RwLock<Vec<ViewerLaneGroup>>>,
+    defaults: Arc<RwLock<Vec<DefaultPayloadPresentation>>>,
     implicit_groups: Arc<AtomicBool>,
+}
+
+struct DefaultPayloadPresentation {
+    stable_id: String,
+    badge: ViewerLaneBadge,
+    renderer: Arc<dyn ViewerLaneRenderer>,
+}
+
+impl fmt::Debug for WaveformPresentationRegistry {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WaveformPresentationRegistry")
+            .field("groups", &self.inner.read().unwrap().len())
+            .field("default_payloads", &self.defaults.read().unwrap().len())
+            .field("implicit_groups", &self.implicit_groups())
+            .finish()
+    }
 }
 
 impl Default for WaveformPresentationRegistry {
     fn default() -> Self {
         Self {
             inner: Arc::default(),
+            defaults: Arc::default(),
             implicit_groups: Arc::new(AtomicBool::new(true)),
         }
     }
@@ -343,6 +376,51 @@ impl WaveformPresentationRegistry {
 
     pub fn clear(&self) {
         self.inner.write().unwrap().clear();
+    }
+
+    /// Registers the singleton presentation used when an opaque lane with
+    /// this stable payload identity appears without an explicit group.
+    pub fn register_default_payload(
+        &self,
+        stable_id: impl Into<String>,
+        badge: ViewerLaneBadge,
+        renderer: Arc<dyn ViewerLaneRenderer>,
+    ) {
+        let stable_id = stable_id.into();
+        let mut defaults = self.defaults.write().unwrap();
+        if let Some(existing) = defaults
+            .iter_mut()
+            .find(|existing| existing.stable_id == stable_id)
+        {
+            *existing = DefaultPayloadPresentation {
+                stable_id,
+                badge,
+                renderer,
+            };
+        } else {
+            defaults.push(DefaultPayloadPresentation {
+                stable_id,
+                badge,
+                renderer,
+            });
+        }
+    }
+
+    pub(crate) fn default_payload(
+        &self,
+        stable_id: &str,
+    ) -> Option<(ViewerLaneBadge, Arc<dyn ViewerLaneRenderer>)> {
+        self.defaults
+            .read()
+            .unwrap()
+            .iter()
+            .find(|candidate| candidate.stable_id == stable_id)
+            .map(|presentation| {
+                (
+                    presentation.badge.clone(),
+                    Arc::clone(&presentation.renderer),
+                )
+            })
     }
 
     /// Controls whether unclaimed retained data appears as a default row.

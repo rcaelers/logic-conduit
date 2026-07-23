@@ -361,39 +361,27 @@ band — a truthful "something toggled here" signal, since drawing invented edge
 visibly jump on refinement; narrower activity segments draw a first/last step plus a center
 tick.
 
-### Derived lanes
+### Collected lanes
 
-Derived display uses two per-run stores:
+Collected display uses two independent registries:
 
-- `DerivedLanes` in `signal-processing` maps stable storage keys to payloads, summaries, and
-  indexed query handles;
-- `WaveformPresentationRegistry` in `logic-analyzer-viewer` maps explicit group and track identities to
-  those payloads and supplies protocol-neutral renderer objects.
+- `DerivedLanes` in `signal-processing` publishes stable lane keys, payload descriptors, and
+  type-erased query handles owned by their collection adapters;
+- `WaveformPresentationRegistry` in `logic-analyzer-viewer` maps explicit group and track identities
+  to those lanes and supplies protocol-neutral renderer objects. It also maps stable payload
+  identities to registered singleton presentations for lanes without an explicit group.
 
-`DerivedLaneData` has these generic payload families:
+Every visible payload belongs to an explicit or registered default group. Concrete producer
+builders can register compound groups and renderer objects through opaque
+`ViewerOutputPresentation` metadata. Row identity, labels, height, drawing, hit-testing, and
+snapping use group and track IDs rather than display names.
 
-- `Digital(Vec<Sample>)` — rendered like a channel waveform;
-- `Annotations(Vec<Annotation>)` — `(start_ns, end_ns, label)` boxes (decoded words,
-  formatted at render time);
-- `Markers(Vec<u64>)` — zero-width event ticks (triggers).
-
-Every visible payload belongs to an explicit group. Ordinary payloads use default singleton
-groups; concrete producer builders can register compound groups and renderer objects through
-opaque `ViewerOutputPresentation` metadata. Row identity, labels, height, drawing, hit-testing,
-and snapping use group/track IDs rather than display names.
-
-Before concrete renderer code runs, the viewer prepares a bounded `ViewerLaneFrame` while holding
-the payload lock and then releases it. Sparse annotation frames contain exact values; dense frames
-contain activity only. Indexed queries likewise clone their handles before storage access. No
-renderer/plugin code or indexed I/O runs while `DerivedLanes` is locked.
-
-Lanes are **uncapped** — a truncated decode is a wrong decode; backpressure, not dropping, is how
-a slow viewer is handled (see [PIPELINE_DESIGN.md](PIPELINE_DESIGN.md)). Rendering windows raw
-vectors via `partition_point`; dense digital and annotation windows fall back to bounded
-per-pixel activity bands. Hover/snap queries (`channel_at_row`) go through each lane's
-`AppendOnlyMipmap` — an incremental, append-only multi-resolution summary built alongside
-the raw data by the same append calls — so hover cost stays bounded even when the visible
-window spans millions of entries.
+The viewer requests immutable snapshots bounded by the visible time range and pixel-derived item
+budget, then releases retained-data locks before calling renderer code. Exact and dense activity
+snapshot semantics belong to the payload query. Renderers may additionally project a snapshot to
+generic level or event transitions for measurement and event-row interaction. Cursor boundary,
+timeline extent, and live-status behavior are query capabilities. No renderer or plugin code runs
+while `DerivedLanes` is locked, and the viewer never branches on a concrete payload type.
 
 ### Pulse measurement (hover)
 
@@ -437,6 +425,6 @@ cursor creation suppresses fit-to-capture for the same event.
 | Viewing during index build | `Opened`/`Status`/`IndexProgress` messages let the UI show metadata and a progress bar before the sampler exists |
 | Constant / idle signals | No L1/L2/L3 payload stored; directory `toggle` bit cleared; reconstructed from `first`/`last` alone |
 | Boundary transitions | Patched into an otherwise-constant block's summaries by `apply_boundary_transition` |
-| Live decode output | Derived lanes: uncapped shared store + incremental `AppendOnlyMipmap` summaries, repainted while the pipeline runs |
+| Live decode output | Adapter-owned collected queries with bounded exact/activity snapshots, repainted while the pipeline runs |
 | Render time | Bounded by viewport width (`target_points`) and available index/raw data |
 | Measurement accuracy | Always resolved via direct index queries, independent of the zoom level currently drawn |

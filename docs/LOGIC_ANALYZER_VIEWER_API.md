@@ -10,10 +10,10 @@ Public surface:
 ```rust
 pub use viewer::{ChannelSignal, LogicAnalyzerViewer};
 pub use lanes::{
-    AnnotationVisual, DerivedLaneId, ViewerLaneBadge, ViewerLaneFrame,
+    AnnotationVisual, DefaultViewerLaneRenderer, DerivedLaneId, OpaqueLaneDrawContext,
+    ViewerLaneBadge, ViewerLaneInteraction,
     ViewerLaneGroup, ViewerLaneGroupId, WaveformPresentationRegistry, ViewerLaneRenderer,
-    ViewerLaneTrack, ViewerLaneTrackFrame, ViewerLaneTrackId,
-    ViewerOutputPresentation,
+    ViewerLaneTrack, ViewerLaneTrackId, ViewerOutputPresentation,
 };
 ```
 
@@ -74,18 +74,17 @@ from these transitions.
 ### 3. Live pipeline output — `set_derived_lanes`
 
 ```rust
-let lanes = signal_processing::DerivedLanes::default();      // shared Arc<RwLock<…>> store
+let lanes = signal_processing::DerivedLanes::default();
 viewer.set_derived_lanes(lanes.clone());       // viewer renders it live
 // hand `lanes` to the pipeline's DerivedDataCollector nodes (the app's compiler does this)
 ```
 
-Whatever the running pipeline pushes into the store appears as extra rows under the
-channels, repainted live: digital lanes (rendered like channels), annotation lanes (boxed
-decoded values), and marker lanes (event ticks). Swap in a fresh store per run to clear the
-previous run's lanes atomically; existing channel rows are never touched by a run.
+Collection adapters publish stable payload descriptors and type-erased query handles into this
+store. A lane appears when its payload has a registered singleton presentation or an explicit
+group. Swap in a fresh store per run to clear the previous run's lanes atomically; existing
+channel rows are never touched by a run.
 
-Without an explicit presentation registry, each payload becomes a default singleton row. Hosts
-that compile concrete node presentations pair the data store with a per-run registry:
+Hosts pair the data store with a per-run presentation registry:
 
 ```rust
 use logic_analyzer_viewer::WaveformPresentationRegistry;
@@ -94,18 +93,19 @@ let compile_ctx = logic_analyzer_graph::compiler::CompileCtx::default();
 viewer.set_waveform_presentations(compile_ctx.waveform_presentations().clone());
 ```
 
-The registry contains explicit `ViewerLaneGroup` and `ViewerLaneTrack` objects. A group can combine
-several payload lanes in one displayed row and supplies a `ViewerLaneRenderer` for row height,
-annotation labels/styles, and snap-track selection. Concrete producer builders contribute
+The registry contains explicit `ViewerLaneGroup` and `ViewerLaneTrack` objects plus singleton
+defaults keyed by stable payload identity. A group can combine several payload lanes in one
+displayed row and supplies a `ViewerLaneRenderer` for row height, bounded drawing, optional
+level/event interaction, annotation labels/styles, and snap-track selection. Concrete producer builders contribute
 `ViewerOutputPresentation` through `RuntimeBuilder::viewer_output_presentation`; the generic
 waveform-subscription builder performs registration without inspecting node names, socket labels,
 or metadata values. The compiler independently materializes a neutral `DerivedDataCollector` for
 the subscribed outputs.
 
-Before invoking a renderer, the viewer prepares a bounded `ViewerLaneFrame` and releases the
-derived-lane lock. Sparse annotation frames contain exact visible values; dense frames become
-activity bands and skip per-value formatting. Renderer and plugin code therefore never executes
-while the runtime lane store is locked.
+Before invoking a renderer, the viewer asks the lane's query for an immutable snapshot bounded by
+the visible time window and item budget, then releases the lane registry lock. Exact-versus-dense
+snapshot semantics belong to the payload adapter. Renderer and plugin code therefore never
+executes while the runtime lane store is locked.
 
 ## Threading & repaint behavior
 

@@ -5,10 +5,11 @@ use std::sync::Arc;
 use egui::Color32;
 
 use logic_analyzer_viewer::{
-    AnnotationVisual, DerivedLaneId, OpaqueLaneDrawContext, ViewerLaneGroup, ViewerLaneRenderer,
-    ViewerLaneTrack, ViewerLaneTrackId, default_annotation_visual, draw_annotation_presence,
-    draw_annotation_snapshot, draw_digital_activity, draw_digital_snapshot, draw_trigger_activity,
-    draw_trigger_snapshot, draw_value_activity, draw_value_snapshot,
+    AnnotationVisual, DerivedLaneId, OpaqueLaneDrawContext, ViewerLaneGroup, ViewerLaneInteraction,
+    ViewerLaneRenderer, ViewerLaneTrack, ViewerLaneTrackId, default_annotation_visual,
+    draw_annotation_presence, draw_annotation_snapshot, draw_digital_activity,
+    draw_digital_snapshot, draw_trigger_activity, draw_trigger_snapshot, draw_value_activity,
+    draw_value_snapshot,
 };
 use signal_processing::{
     DigitalLaneSnapshot, NumberLaneSnapshot, OpaqueCollectedLaneSnapshot, TextLaneSnapshot,
@@ -19,10 +20,6 @@ use signal_processing::{
 pub(crate) struct DigitalSnapshotRenderer;
 
 impl ViewerLaneRenderer for DigitalSnapshotRenderer {
-    fn uses_opaque_snapshot(&self, _track: &ViewerLaneTrack) -> bool {
-        true
-    }
-
     fn draw_opaque_lane(
         &self,
         _track: &ViewerLaneTrack,
@@ -43,16 +40,37 @@ impl ViewerLaneRenderer for DigitalSnapshotRenderer {
         }
         true
     }
+
+    fn interaction(
+        &self,
+        _track: &ViewerLaneTrack,
+        snapshot: Option<&OpaqueCollectedLaneSnapshot>,
+    ) -> Option<ViewerLaneInteraction> {
+        let snapshot = snapshot?.value::<DigitalLaneSnapshot>()?;
+        let (initial, transitions) = match snapshot.as_ref() {
+            DigitalLaneSnapshot::Exact { samples, initial } => (
+                *initial,
+                samples
+                    .iter()
+                    .map(|sample| (sample.start_time_ns, sample.value))
+                    .collect(),
+            ),
+            DigitalLaneSnapshot::Activity { records, initial } => {
+                (*initial, digital_activity_transitions(records))
+            }
+        };
+        Some(ViewerLaneInteraction {
+            initial,
+            transitions,
+            event: false,
+        })
+    }
 }
 
 /// Renders the built-in trigger payload from its adapter-owned snapshot.
 pub(crate) struct TriggerSnapshotRenderer;
 
 impl ViewerLaneRenderer for TriggerSnapshotRenderer {
-    fn uses_opaque_snapshot(&self, _track: &ViewerLaneTrack) -> bool {
-        true
-    }
-
     fn draw_opaque_lane(
         &self,
         _track: &ViewerLaneTrack,
@@ -69,16 +87,53 @@ impl ViewerLaneRenderer for TriggerSnapshotRenderer {
         }
         true
     }
+
+    fn interaction(
+        &self,
+        _track: &ViewerLaneTrack,
+        snapshot: Option<&OpaqueCollectedLaneSnapshot>,
+    ) -> Option<ViewerLaneInteraction> {
+        let snapshot = snapshot?.value::<TriggerLaneSnapshot>()?;
+        let timestamps: Vec<u64> = match snapshot.as_ref() {
+            TriggerLaneSnapshot::Exact(markers) => markers.clone(),
+            TriggerLaneSnapshot::Activity(records) => {
+                records.iter().map(|record| record.start_ns).collect()
+            }
+        };
+        let mut value = false;
+        let transitions = timestamps
+            .into_iter()
+            .map(|timestamp| {
+                value = !value;
+                (timestamp, value)
+            })
+            .collect();
+        Some(ViewerLaneInteraction {
+            initial: false,
+            transitions,
+            event: true,
+        })
+    }
+}
+
+fn digital_activity_transitions(records: &[signal_processing::MipmapRecord]) -> Vec<(u64, bool)> {
+    let mut transitions = Vec::with_capacity(records.len().saturating_mul(2));
+    for record in records {
+        let Some((first, last)) = record.level_hint else {
+            continue;
+        };
+        transitions.push((record.start_ns, first));
+        if first != last {
+            transitions.push((record.end_ns, last));
+        }
+    }
+    transitions
 }
 
 /// Renders the built-in numeric-level payload from its typed snapshot.
 pub(crate) struct NumberSnapshotRenderer;
 
 impl ViewerLaneRenderer for NumberSnapshotRenderer {
-    fn uses_opaque_snapshot(&self, _track: &ViewerLaneTrack) -> bool {
-        true
-    }
-
     fn draw_opaque_lane(
         &self,
         _track: &ViewerLaneTrack,
@@ -108,10 +163,6 @@ impl ViewerLaneRenderer for NumberSnapshotRenderer {
 pub(crate) struct TextSnapshotRenderer;
 
 impl ViewerLaneRenderer for TextSnapshotRenderer {
-    fn uses_opaque_snapshot(&self, _track: &ViewerLaneTrack) -> bool {
-        true
-    }
-
     fn draw_opaque_lane(
         &self,
         _track: &ViewerLaneTrack,
@@ -164,10 +215,6 @@ impl ViewerLaneRenderer for WordSnapshotRenderer {
         self.semantics.annotation_visual(track, value, default)
     }
 
-    fn uses_opaque_snapshot(&self, _track: &ViewerLaneTrack) -> bool {
-        true
-    }
-
     fn draw_opaque_lane(
         &self,
         track: &ViewerLaneTrack,
@@ -218,6 +265,7 @@ impl ViewerLaneRenderer for WordSnapshotRenderer {
 #[cfg(test)]
 mod presentation_tests {
     use egui::{Color32, Stroke};
+    use signal_processing::Sample;
 
     use super::*;
 
@@ -239,7 +287,6 @@ mod presentation_tests {
     fn word_snapshot_renderer_requests_snapshots_and_delegates_semantics() {
         let renderer = WordSnapshotRenderer::new(Arc::new(SemanticRenderer));
         let track = ViewerLaneTrack::new("data", DerivedLaneId::new("words"), 1.0);
-        assert!(renderer.uses_opaque_snapshot(&track));
         let default = AnnotationVisual {
             label: "default".to_owned(),
             fill: Color32::BLACK,
@@ -248,6 +295,44 @@ mod presentation_tests {
         assert_eq!(
             renderer.annotation_visual(&track.id, 42, default).label,
             "semantic-42"
+        );
+    }
+
+    #[test]
+    fn digital_snapshot_projects_payload_neutral_interaction() {
+        let renderer = DigitalSnapshotRenderer;
+        let track = ViewerLaneTrack::new("signal", DerivedLaneId::new("signal"), 1.0);
+        let snapshot = OpaqueCollectedLaneSnapshot::new(Arc::new(DigitalLaneSnapshot::Exact {
+            samples: vec![Sample::new(true, 10), Sample::new(false, 20)],
+            initial: false,
+        }));
+
+        assert_eq!(
+            renderer.interaction(&track, Some(&snapshot)),
+            Some(ViewerLaneInteraction {
+                initial: false,
+                transitions: vec![(10, true), (20, false)],
+                event: false,
+            })
+        );
+    }
+
+    #[test]
+    fn trigger_snapshot_projects_event_interaction() {
+        let renderer = TriggerSnapshotRenderer;
+        let track = ViewerLaneTrack::new("trigger", DerivedLaneId::new("trigger"), 1.0);
+        let snapshot =
+            OpaqueCollectedLaneSnapshot::new(Arc::new(TriggerLaneSnapshot::Exact(vec![
+                10, 20, 30,
+            ])));
+
+        assert_eq!(
+            renderer.interaction(&track, Some(&snapshot)),
+            Some(ViewerLaneInteraction {
+                initial: false,
+                transitions: vec![(10, true), (20, false), (30, true)],
+                event: true,
+            })
         );
     }
 }

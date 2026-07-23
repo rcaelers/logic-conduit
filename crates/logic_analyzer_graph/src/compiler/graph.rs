@@ -837,6 +837,25 @@ impl BuilderRegistry {
             .map(|payload| payload.presentation.clone())
     }
 
+    fn register_default_waveform_presentations(
+        &self,
+        presentations: &WaveformPresentationRegistry,
+    ) {
+        for payload in &self.viewable_payloads {
+            let Some(descriptor) = self
+                .collected_payloads
+                .descriptor_by_type_id(payload.kind.type_id())
+            else {
+                continue;
+            };
+            presentations.register_default_payload(
+                descriptor.stable_id(),
+                payload.presentation.badge().clone(),
+                payload.presentation.renderer(),
+            );
+        }
+    }
+
     pub(crate) fn get(&self, def_name: &str) -> Option<&dyn RuntimeBuilder> {
         self.builders.get(def_name).map(|b| b.as_ref())
     }
@@ -2131,6 +2150,7 @@ fn start_live_inner(
     ctx: &mut CompileCtx,
     mut source_overrides: SourceProcessOverrides,
 ) -> Result<LiveRun, Vec<CompileError>> {
+    registry.register_default_waveform_presentations(ctx.waveform_presentations());
     ctx.waveform_presentations().set_implicit_groups(false);
     let mut compiled = lower(graph, registry)?;
     cache_platform::configure_directory(&mut compiled, ctx.persistent_cache_directory.as_deref());
@@ -2508,7 +2528,6 @@ mod tests {
 
     use logic_analyzer_processing::nodes::sinks::binary_file_writer::BinaryFileWriter;
     use logic_analyzer_processing::test_support::{BufferedFakeConfig, BufferedFakeProvider};
-    use logic_analyzer_viewer::{DerivedLaneId, ViewerLaneTrack};
     use node_graph::{NodeDef, NodeGraphWidget};
     use signal_processing::{
         AcquisitionContext, AcquisitionResult, CaptureAnalysisChannel, CaptureAnalysisSource,
@@ -2554,57 +2573,14 @@ mod tests {
                 .text,
             "W"
         );
-        let word_presentation = registry
-            .viewable_payload_presentation(PortKind::of::<Word>())
-            .unwrap();
-        assert!(
-            word_presentation
-                .renderer()
-                .uses_opaque_snapshot(&ViewerLaneTrack::new(
-                    "words",
-                    DerivedLaneId::new("words"),
-                    1.0,
-                ))
-        );
-        let digital_presentation = registry
-            .viewable_payload_presentation(PortKind::of::<Sample>())
-            .unwrap();
-        assert!(
-            digital_presentation
-                .renderer()
-                .uses_opaque_snapshot(&ViewerLaneTrack::new(
-                    "signal",
-                    DerivedLaneId::new("signal"),
-                    1.0,
-                ))
-        );
-        let trigger_presentation = registry
-            .viewable_payload_presentation(PortKind::of::<Trigger>())
-            .unwrap();
-        assert!(
-            trigger_presentation
-                .renderer()
-                .uses_opaque_snapshot(&ViewerLaneTrack::new(
-                    "trigger",
-                    DerivedLaneId::new("trigger"),
-                    1.0,
-                ))
-        );
-        for (kind, lane) in [
-            (PortKind::of::<NumberSample>(), "number"),
-            (PortKind::of::<TextSample>(), "text"),
+        for kind in [
+            PortKind::of::<Word>(),
+            PortKind::of::<Sample>(),
+            PortKind::of::<Trigger>(),
+            PortKind::of::<NumberSample>(),
+            PortKind::of::<TextSample>(),
         ] {
-            assert!(
-                registry
-                    .viewable_payload_presentation(kind)
-                    .unwrap()
-                    .renderer()
-                    .uses_opaque_snapshot(&ViewerLaneTrack::new(
-                        lane,
-                        DerivedLaneId::new(lane),
-                        1.0,
-                    ))
-            );
+            assert!(registry.viewable_payload_presentation(kind).is_some());
         }
         registry
             .register_collected_payload::<SampleBlock>("org.example.block/v1")

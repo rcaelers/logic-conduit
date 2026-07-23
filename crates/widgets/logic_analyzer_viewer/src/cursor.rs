@@ -1,17 +1,7 @@
-use std::sync::Arc;
-
 use egui::{Color32, CursorIcon, FontId, PointerButton, Pos2, Rect, Response, Ui};
 
-use signal_processing::{Annotation, AnnotationQuery, DerivedLaneData};
-
-use crate::draw::annotation_box_end;
 use crate::types::{AnalyzerLayout, CursorInput, RowKey, TimeCursor, Transition};
 use crate::viewer::LogicAnalyzerViewer;
-
-enum TimeBoundarySource {
-    Direct(Option<f64>),
-    Indexed(Arc<dyn AnnotationQuery>),
-}
 
 impl LogicAnalyzerViewer {
     /// Drives cursor add / hover / drag / delete for one frame.
@@ -191,7 +181,7 @@ impl LogicAnalyzerViewer {
             row_top += height;
             channel_row += 1;
         }
-        let annotation_sources = match self.row_order.get(channel_row) {
+        let opaque_boundaries = match self.row_order.get(channel_row) {
             Some(RowKey::Derived(group_id)) => {
                 self.derived.as_ref().map_or_else(Vec::new, |store| {
                     let Some(group) = self
@@ -216,12 +206,7 @@ impl LogicAnalyzerViewer {
                         .ceil()
                         .max(1.0) as u64;
                     let opaque_lanes = store.opaque_lanes();
-                    let has_opaque_query = selected.iter().any(|lane_id| {
-                        opaque_lanes
-                            .iter()
-                            .any(|lane| lane.name() == lane_id.as_str())
-                    });
-                    let opaque_boundaries: Vec<_> = selected
+                    selected
                         .iter()
                         .filter_map(|lane_id| {
                             opaque_lanes
@@ -230,57 +215,16 @@ impl LogicAnalyzerViewer {
                                 .and_then(|lane| {
                                     lane.nearest_time_boundary(timestamp_ns, max_distance_ns)
                                 })
-                                .map(|boundary_ns| {
-                                    TimeBoundarySource::Direct(Some(boundary_ns as f64 / 1_000.0))
-                                })
-                        })
-                        .collect();
-                    if has_opaque_query {
-                        return opaque_boundaries;
-                    }
-                    let lanes = store.read();
-                    selected
-                        .iter()
-                        .filter_map(|lane_id| {
-                            lanes
-                                .iter()
-                                .find(|lane| lane.name == lane_id.as_str())
-                                .and_then(|lane| match &lane.data {
-                                    DerivedLaneData::Annotations(annotations) => {
-                                        Some(TimeBoundarySource::Direct(
-                                            nearest_annotation_boundary_time(annotations, time_us),
-                                        ))
-                                    }
-                                    DerivedLaneData::IndexedAnnotations(indexed) => Some(
-                                        TimeBoundarySource::Indexed(Arc::clone(indexed.query())),
-                                    ),
-                                    _ => None,
-                                })
+                                .map(|boundary_ns| boundary_ns as f64 / 1_000.0)
                         })
                         .collect()
                 })
             }
             _ => Vec::new(),
         };
-        if !annotation_sources.is_empty() {
-            let nearest = annotation_sources
+        if !opaque_boundaries.is_empty() {
+            let nearest = opaque_boundaries
                 .into_iter()
-                .filter_map(|source| match source {
-                    TimeBoundarySource::Direct(nearest) => nearest,
-                    TimeBoundarySource::Indexed(query) => {
-                        let timestamp_ns = (time_us.max(0.0) * 1_000.0).round() as u64;
-                        let max_distance_ns =
-                            (self.visible_span_us * 1_000.0 * f64::from(SNAP_DISTANCE_PX)
-                                / f64::from(wave_rect.width().max(1.0)))
-                            .ceil()
-                            .max(1.0) as u64;
-                        query
-                            .nearest_boundary(timestamp_ns, max_distance_ns)
-                            .ok()
-                            .flatten()
-                            .map(|boundary_ns| boundary_ns as f64 / 1_000.0)
-                    }
-                })
                 .min_by(|left, right| (left - time_us).abs().total_cmp(&(right - time_us).abs()));
             let Some(nearest) = nearest else {
                 return time_us;
@@ -388,32 +332,6 @@ fn nearest_transition_time(transitions: &[Transition], time_us: f64) -> Option<f
     }
 }
 
-fn nearest_annotation_boundary_time(annotations: &[Annotation], time_us: f64) -> Option<f64> {
-    let time_ns = time_us * 1_000.0;
-    let index = annotations.partition_point(|annotation| annotation.start_ns as f64 <= time_ns);
-    let first = index.saturating_sub(2);
-    let last = (index + 2).min(annotations.len());
-
-    annotations[first..last]
-        .iter()
-        .enumerate()
-        .flat_map(|(offset, annotation)| {
-            let annotation_index = first + offset;
-            let previous_duration_ns = annotation_index.checked_sub(1).map(|previous_index| {
-                let previous = &annotations[previous_index];
-                previous.end_ns.saturating_sub(previous.start_ns)
-            });
-            let end_ns = annotation_box_end(
-                annotation,
-                annotation_index == annotations.len() - 1,
-                previous_duration_ns,
-            );
-            [annotation.start_ns, end_ns]
-        })
-        .map(|boundary_ns| boundary_ns as f64 / 1_000.0)
-        .min_by(|a, b| (time_us - *a).abs().total_cmp(&(time_us - *b).abs()))
-}
-
 pub(crate) fn cursor_color(index: usize) -> Color32 {
     const PALETTE: [Color32; 8] = [
         Color32::from_rgb(60, 180, 75),
@@ -447,12 +365,15 @@ fn format_cursor_time(us: f64) -> String {
 mod cursor_tests {
     use std::sync::Arc;
 
-    use signal_processing::{
-        CollectedLaneQuery, CollectedPayloadRegistry, DerivedLanes, IndexedAnnotationLane,
-        IndexedAnnotationWriter, LiveStoreConfig, Word,
-    };
+    use egui::Color32;
+
+    use signal_processing::{CollectedLaneQuery, CollectedPayloadRegistry, DerivedLanes, Word};
 
     use super::*;
+    use crate::lanes::{
+        DefaultViewerLaneRenderer, DerivedLaneId, ViewerLaneBadge, ViewerLaneGroup,
+        ViewerLaneGroupId, ViewerLaneTrack, WaveformPresentationRegistry,
+    };
     use crate::sampling::pulse_measurement_from_window;
 
     fn transition(time_us: f64) -> Transition {
@@ -470,88 +391,6 @@ mod cursor_tests {
         assert_eq!(nearest_transition_time(&transitions, 5.0), Some(10.0));
         assert_eq!(nearest_transition_time(&transitions, 35.0), Some(30.0));
         assert_eq!(nearest_transition_time(&[], 5.0), None);
-    }
-
-    #[test]
-    fn nearest_annotation_boundary_picks_word_starts_and_ends() {
-        let annotations = [
-            Annotation {
-                start_ns: 10_000,
-                end_ns: 20_000,
-                value: 0x12,
-            },
-            Annotation {
-                start_ns: 30_000,
-                end_ns: 40_000,
-                value: 0x27,
-            },
-        ];
-
-        assert_eq!(
-            nearest_annotation_boundary_time(&annotations, 11.0),
-            Some(10.0)
-        );
-        assert_eq!(
-            nearest_annotation_boundary_time(&annotations, 19.0),
-            Some(20.0)
-        );
-        assert_eq!(
-            nearest_annotation_boundary_time(&annotations, 29.0),
-            Some(30.0)
-        );
-        assert_eq!(
-            nearest_annotation_boundary_time(&annotations, 39.0),
-            Some(40.0)
-        );
-    }
-
-    #[test]
-    fn nearest_annotation_boundary_includes_open_words_displayed_end() {
-        let annotations = [
-            Annotation {
-                start_ns: 10_000,
-                end_ns: 20_000,
-                value: 0x12,
-            },
-            Annotation {
-                start_ns: 30_000,
-                end_ns: 30_000,
-                value: 0x27,
-            },
-        ];
-
-        assert_eq!(
-            nearest_annotation_boundary_time(&annotations, 39.0),
-            Some(40.0)
-        );
-    }
-
-    #[test]
-    fn cursor_snaps_when_dragged_over_an_annotation_row() {
-        let mut viewer = LogicAnalyzerViewer::new();
-        viewer.visible_span_us = 100.0;
-        let lanes = DerivedLanes::new();
-        lanes.register(
-            "decoded.words",
-            DerivedLaneData::Annotations(vec![Annotation {
-                start_ns: 10_000,
-                end_ns: 20_000,
-                value: 0x27,
-            }]),
-        );
-        viewer.set_derived_lanes(lanes);
-        viewer.ensure_row_order();
-        let wave_rect = Rect::from_min_max(Pos2::new(0.0, 100.0), Pos2::new(1_000.0, 130.0));
-
-        assert_eq!(
-            viewer.snap_cursor_time(wave_rect, Pos2::new(205.0, 115.0), 20.5),
-            20.0
-        );
-        assert_eq!(
-            viewer.snap_cursor_time(wave_rect, Pos2::new(210.0, 115.0), 21.0),
-            21.0,
-            "a boundary more than eight pixels away must not capture the cursor"
-        );
     }
 
     #[test]
@@ -573,14 +412,6 @@ mod cursor_tests {
         }
 
         let lanes = DerivedLanes::new();
-        lanes.register(
-            "decoded.words",
-            DerivedLaneData::Annotations(vec![Annotation {
-                start_ns: 10_000,
-                end_ns: 10_000,
-                value: 0x27,
-            }]),
-        );
         let mut payloads = CollectedPayloadRegistry::new();
         payloads.register::<Word>("org.example.word/v1").unwrap();
         lanes.publish_opaque_lane(
@@ -592,40 +423,25 @@ mod cursor_tests {
         let mut viewer = LogicAnalyzerViewer::new();
         viewer.visible_span_us = 100.0;
         viewer.set_derived_lanes(lanes);
+        let presentations = WaveformPresentationRegistry::new();
+        presentations.set_implicit_groups(false);
+        presentations.register(ViewerLaneGroup {
+            id: ViewerLaneGroupId::new("words"),
+            label: "Words".to_owned(),
+            badge: ViewerLaneBadge::new("W", Color32::WHITE),
+            tracks: vec![ViewerLaneTrack::new(
+                "words",
+                DerivedLaneId::new("decoded.words"),
+                1.0,
+            )],
+            renderer: Arc::new(DefaultViewerLaneRenderer),
+        });
+        viewer.set_waveform_presentations(presentations);
         viewer.ensure_row_order();
         let wave_rect = Rect::from_min_max(Pos2::new(0.0, 100.0), Pos2::new(1_000.0, 130.0));
 
         assert_eq!(
             viewer.snap_cursor_time(wave_rect, Pos2::new(205.0, 115.0), 20.5),
-            20.0
-        );
-    }
-
-    #[test]
-    fn cursor_snaps_to_indexed_word_starts_and_explicit_ends() {
-        let (mut writer, store) =
-            IndexedAnnotationWriter::create(LiveStoreConfig::default()).unwrap();
-        writer
-            .append_batch(&[Word::spanning(0x27, 10_000, 10_000)])
-            .unwrap();
-        writer.finish().unwrap();
-        let lanes = DerivedLanes::new();
-        lanes.register(
-            "decoded.words",
-            DerivedLaneData::IndexedAnnotations(IndexedAnnotationLane::from_store(store)),
-        );
-        let mut viewer = LogicAnalyzerViewer::new();
-        viewer.visible_span_us = 100.0;
-        viewer.set_derived_lanes(lanes);
-        viewer.ensure_row_order();
-        let wave_rect = Rect::from_min_max(Pos2::new(0.0, 100.0), Pos2::new(1_000.0, 130.0));
-
-        assert_eq!(
-            viewer.snap_cursor_time(wave_rect, Pos2::new(105.0, 115.0), 10.5),
-            10.0
-        );
-        assert_eq!(
-            viewer.snap_cursor_time(wave_rect, Pos2::new(195.0, 115.0), 19.5),
             20.0
         );
     }

@@ -1,14 +1,13 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 
-use egui::{Color32, CursorIcon, Pos2, Rect, Response, Ui, vec2};
+use egui::{CursorIcon, Pos2, Rect, Response, Ui, vec2};
 
 use signal_processing::{
-    AppendOnlyMipmap, CaptureMetadata, CaptureSampledWindow, CaptureWaveformSegment,
-    DerivedLaneData, DigitalFold, LaneSummary, MarkerFold, MipmapRecord, Sample,
+    CaptureMetadata, CaptureSampledWindow, CaptureWaveformSegment, CollectedLaneSnapshotRequest,
 };
 
-use crate::lanes::{DerivedLaneId, ViewerLaneBadge, ViewerLaneGroup, ViewerLaneGroupId};
+use crate::lanes::{DerivedLaneId, ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneInteraction};
 use crate::sampling::sample_to_us;
 use crate::types::{
     AnalyzerLayout, RowDragState, RowKey, RowLabel, RowRenameState, Transition, ViewerRowId,
@@ -465,19 +464,12 @@ impl LogicAnalyzerViewer {
         let Some(group) = groups.iter().find(|group| &group.id == group_id) else {
             return false;
         };
-        let lanes = store.read();
-        let has_legacy_lane = group
-            .tracks
-            .iter()
-            .any(|track| lanes.iter().any(|lane| lane.name == track.lane.as_str()));
-        drop(lanes);
-        has_legacy_lane
-            || store.opaque_lanes().iter().any(|lane| {
-                group
-                    .tracks
-                    .iter()
-                    .any(|track| lane.name() == track.lane.as_str())
-            })
+        store.opaque_lanes().iter().any(|lane| {
+            group
+                .tracks
+                .iter()
+                .any(|track| lane.name() == track.lane.as_str())
+        })
     }
 
     fn ensure_default_viewer_groups(&self) {
@@ -487,44 +479,30 @@ impl LogicAnalyzerViewer {
         let Some(store) = &self.derived else {
             return;
         };
-        let lanes = store.read();
         let claimed: HashSet<DerivedLaneId> = self
             .waveform_presentations
             .read()
             .iter()
             .flat_map(|group| group.tracks.iter().map(|track| track.lane.clone()))
             .collect();
-        for lane in lanes.iter() {
-            let lane_id = DerivedLaneId::new(lane.name.clone());
+        for lane in store.opaque_lanes() {
+            let lane_id = DerivedLaneId::new(lane.name());
             if claimed.contains(&lane_id) {
                 continue;
             }
-            let badge = match &lane.data {
-                DerivedLaneData::Digital(_) => {
-                    ViewerLaneBadge::new("S", Color32::from_rgb(95, 175, 95))
-                }
-                DerivedLaneData::Annotations(_) | DerivedLaneData::IndexedAnnotations(_) => {
-                    ViewerLaneBadge::new("W", Color32::from_rgb(215, 140, 60))
-                }
-                DerivedLaneData::Markers(_) => {
-                    ViewerLaneBadge::new("T", Color32::from_rgb(230, 190, 80))
-                }
-                DerivedLaneData::Values(values) => match values.kind {
-                    signal_processing::CollectedValueKind::Number => {
-                        ViewerLaneBadge::new("N", Color32::from_rgb(95, 145, 210))
-                    }
-                    signal_processing::CollectedValueKind::Text => {
-                        ViewerLaneBadge::new("TXT", Color32::from_rgb(215, 150, 170))
-                    }
-                },
+            let Some((badge, renderer)) = self
+                .waveform_presentations
+                .default_payload(lane.payload().stable_id())
+            else {
+                continue;
             };
-            self.waveform_presentations
-                .register(ViewerLaneGroup::singleton(
-                    ViewerLaneGroupId::new(format!("default:{}", lane.name)),
-                    lane.name.clone(),
-                    badge,
-                    lane_id,
-                ));
+            self.waveform_presentations.register(ViewerLaneGroup {
+                id: ViewerLaneGroupId::new(format!("default:{}", lane.name())),
+                label: lane.name().to_owned(),
+                badge,
+                tracks: vec![crate::lanes::ViewerLaneTrack::new("primary", lane_id, 1.0)],
+                renderer,
+            });
         }
     }
 
@@ -546,16 +524,8 @@ impl LogicAnalyzerViewer {
         self.sampled_key = None;
     }
 
-    /// Row-addressable channel view spanning both raw channels and any
-    /// derived `Digital` or `Markers` lane, resolved through
-    /// `row_order` so the visual position (drag-reordered, interleaved)
-    /// always matches what's actually on screen — the same `LogicChannel`
-    /// shape either way, so hover measurement and cursor snap don't need a
-    /// separate code path for derived lanes; they just don't know the
-    /// difference. `Annotations` lanes have no `LogicChannel` equivalent (no
-    /// boolean level to measure or toggle to snap to), so this returns
-    /// `None` for them, same as an out-of-range row. Use [`Self::is_event_row`]
-    /// to tell a `Markers` lane's synthetic level apart from a real one.
+    /// Row-addressable channel projection spanning raw channels and derived
+    /// rows whose renderer supplies explicit interaction semantics.
     pub(crate) fn channel_at_row(&self, row: usize) -> Option<Cow<'_, LogicChannel>> {
         match self.row_order.get(row)? {
             RowKey::Channel(index) => self
@@ -564,57 +534,50 @@ impl LogicAnalyzerViewer {
                 .find(|channel| channel.index == *index)
                 .map(Cow::Borrowed),
             RowKey::Derived(group_id) => {
-                let (start_ns, end_ns) = self.visible_window_ns();
-                let lanes = self.derived.as_ref()?.read();
-                let groups = self.waveform_presentations.read();
-                let group = groups.iter().find(|group| &group.id == group_id)?;
-                let lane = group.tracks.iter().find_map(|track| {
-                    lanes
-                        .iter()
-                        .find(|lane| lane.name == track.lane.as_str())
-                        .and_then(|lane| match lane.summary {
-                            LaneSummary::Digital(_) | LaneSummary::Markers(_) => Some(lane),
-                            LaneSummary::Annotations(_)
-                            | LaneSummary::IndexedAnnotations
-                            | LaneSummary::Values(_) => None,
-                        })
-                })?;
-                match &lane.summary {
-                    LaneSummary::Digital(summary) => Some(Cow::Owned(derived_digital_channel(
-                        row, &lane.name, summary, start_ns, end_ns,
-                    ))),
-                    LaneSummary::Markers(summary) => Some(Cow::Owned(derived_markers_channel(
-                        row, &lane.name, summary, start_ns, end_ns,
-                    ))),
-                    // No boolean level to measure or toggle to snap to.
-                    LaneSummary::Annotations(_) => None,
-                    LaneSummary::IndexedAnnotations => None,
-                    LaneSummary::Values(_) => None,
-                }
+                let (name, interaction) = self.derived_interaction(group_id)?;
+                Some(Cow::Owned(logic_channel_from_interaction(
+                    row,
+                    &name,
+                    &interaction,
+                )))
             }
         }
     }
 
-    /// Whether `row` is a `Markers` derived lane — [`Self::channel_at_row`]
-    /// reinterprets its events as an alternating channel so hover/snap can
-    /// reuse the same machinery, but there's no real high/low level behind
-    /// that, only the gap between two events.
     pub(crate) fn is_event_row(&self, row: usize) -> bool {
         let Some(RowKey::Derived(group_id)) = self.row_order.get(row) else {
             return false;
         };
-        let Some(store) = &self.derived else {
-            return false;
-        };
-        let groups = self.waveform_presentations.read();
-        let Some(group) = groups.iter().find(|group| &group.id == group_id) else {
-            return false;
-        };
-        let lanes = store.read();
-        group.tracks.iter().any(|track| {
-            lanes.iter().any(|lane| {
-                lane.name == track.lane.as_str() && matches!(lane.data, DerivedLaneData::Markers(_))
-            })
+        self.derived_interaction(group_id)
+            .is_some_and(|(_, interaction)| interaction.event)
+    }
+
+    fn derived_interaction(
+        &self,
+        group_id: &ViewerLaneGroupId,
+    ) -> Option<(String, ViewerLaneInteraction)> {
+        let store = self.derived.as_ref()?;
+        let group = self
+            .waveform_presentations
+            .read()
+            .iter()
+            .find(|group| &group.id == group_id)
+            .cloned()?;
+        let (start_time_ns, end_time_ns) = self.visible_window_ns();
+        let opaque_lanes = store.opaque_lanes();
+        group.tracks.iter().find_map(|track| {
+            let lane = opaque_lanes
+                .iter()
+                .find(|lane| lane.name() == track.lane.as_str())?;
+            let snapshot = lane.snapshot(CollectedLaneSnapshotRequest {
+                start_time_ns,
+                end_time_ns,
+                max_items: DETAIL_BUDGET,
+            });
+            group
+                .renderer
+                .interaction(track, snapshot.as_ref())
+                .map(|interaction| (lane.name().to_owned(), interaction))
         })
     }
 }
@@ -626,86 +589,25 @@ impl LogicAnalyzerViewer {
 /// of them, same as the raw-Vec bug this replaced.
 const DETAIL_BUDGET: usize = 2_048;
 
-/// Reinterprets a derived lane's multi-resolution summary (`Digital` or
-/// `Markers`, whichever kind `records` came from) as a `LogicChannel`, so
-/// hover measurement and cursor snap don't need a separate code path for
-/// derived lanes — they just don't know the difference. Never re-scans the
-/// raw lane: `records` is already the bounded result of a summary query
-/// (`AppendOnlyMipmap::sampled_window`), which handles windowing to the
-/// visible range internally.
-///
-/// A `Digital` record's `level_hint` carries its first/last level — emitted
-/// as one transition, or two when they differ (the record summarizes a
-/// coarsened run that toggled inside it; its own start/end are real
-/// boundaries, not invented edge positions, same principle
-/// `draw_derived_digital`'s dense fallback already follows). A `Markers`
-/// record has no `level_hint` (events have no level) — alternating a
-/// synthetic value per record reuses the same "gap to the nearest toggle"
-/// pulse machinery for "gap to the nearest event", with no real level
-/// implied; nothing reads `value` for a `Markers`-derived channel except
-/// this toggle shape itself.
-fn logic_channel_from_records(row: usize, name: &str, records: &[MipmapRecord]) -> LogicChannel {
-    let mut transitions = Vec::with_capacity(records.len() * 2);
-    let mut toggle = false;
-    for record in records {
-        match record.level_hint {
-            Some((first, last)) => {
-                transitions.push(Transition {
-                    time_us: record.start_ns as f64 / 1_000.0,
-                    value: first,
-                });
-                if first != last {
-                    transitions.push(Transition {
-                        time_us: record.end_ns as f64 / 1_000.0,
-                        value: last,
-                    });
-                }
-            }
-            None => {
-                toggle = !toggle;
-                transitions.push(Transition {
-                    time_us: record.start_ns as f64 / 1_000.0,
-                    value: toggle,
-                });
-            }
-        }
-    }
+fn logic_channel_from_interaction(
+    row: usize,
+    name: &str,
+    interaction: &ViewerLaneInteraction,
+) -> LogicChannel {
     LogicChannel {
         index: row,
         name: name.to_owned(),
-        initial: false,
-        transitions,
+        initial: interaction.initial,
+        transitions: interaction
+            .transitions
+            .iter()
+            .map(|(timestamp_ns, value)| Transition {
+                time_us: *timestamp_ns as f64 / 1_000.0,
+                value: *value,
+            })
+            .collect(),
         waveform: Vec::new(),
     }
-}
-
-/// Reinterprets a derived `Digital` lane as a `LogicChannel`, windowed to
-/// `[start_ns, end_ns]` via its summary index. Before the first recorded
-/// sample there is nothing to show — same default `draw_derived_digital`
-/// uses — so `initial` is always `false`.
-fn derived_digital_channel(
-    row: usize,
-    name: &str,
-    summary: &AppendOnlyMipmap<Sample, DigitalFold>,
-    start_ns: u64,
-    end_ns: u64,
-) -> LogicChannel {
-    let records = summary.sampled_window(start_ns, end_ns, DETAIL_BUDGET);
-    logic_channel_from_records(row, name, &records)
-}
-
-/// Reinterprets a derived `Markers` lane as a `LogicChannel`, windowed to
-/// `[start_ns, end_ns]` via its summary index — see
-/// [`logic_channel_from_records`] for how events become toggles.
-fn derived_markers_channel(
-    row: usize,
-    name: &str,
-    summary: &AppendOnlyMipmap<u64, MarkerFold>,
-    start_ns: u64,
-    end_ns: u64,
-) -> LogicChannel {
-    let records = summary.sampled_window(start_ns, end_ns, DETAIL_BUDGET);
-    logic_channel_from_records(row, name, &records)
 }
 
 pub(crate) fn channels_from_window(
@@ -789,10 +691,81 @@ pub(crate) fn placeholder_channels(header: &CaptureMetadata) -> Vec<LogicChannel
 
 #[cfg(test)]
 mod tests {
-    use signal_processing::{DerivedLanes, Sample};
+    use std::sync::Arc;
+
+    use egui::Color32;
+
+    use signal_processing::{
+        CollectedLaneQuery, CollectedLaneSnapshotRequest, CollectedPayloadRegistry, DerivedLanes,
+        OpaqueCollectedLaneSnapshot,
+    };
 
     use super::*;
+    use crate::lanes::{
+        ViewerLaneBadge, ViewerLaneInteraction, ViewerLaneRenderer, ViewerLaneTrack,
+        WaveformPresentationRegistry,
+    };
     use crate::viewer::LogicAnalyzerViewer;
+
+    const TEST_PAYLOAD_ID: &str = "org.logic-conduit.test.interaction/v1";
+
+    #[derive(Clone)]
+    struct TestPayload;
+
+    struct TestQuery(Option<ViewerLaneInteraction>);
+
+    impl CollectedLaneQuery for TestQuery {
+        fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+            self
+        }
+
+        fn snapshot(
+            &self,
+            _request: CollectedLaneSnapshotRequest,
+        ) -> Option<OpaqueCollectedLaneSnapshot> {
+            Some(OpaqueCollectedLaneSnapshot::new(Arc::new(self.0.clone())))
+        }
+    }
+
+    struct TestRenderer;
+
+    impl ViewerLaneRenderer for TestRenderer {
+        fn interaction(
+            &self,
+            _track: &ViewerLaneTrack,
+            snapshot: Option<&OpaqueCollectedLaneSnapshot>,
+        ) -> Option<ViewerLaneInteraction> {
+            snapshot
+                .and_then(|snapshot| snapshot.value::<Option<ViewerLaneInteraction>>())
+                .as_deref()
+                .cloned()
+                .flatten()
+        }
+    }
+
+    fn publish_test_lane(
+        lanes: &DerivedLanes,
+        name: &str,
+        interaction: Option<ViewerLaneInteraction>,
+    ) {
+        let mut payloads = CollectedPayloadRegistry::new();
+        payloads.register::<TestPayload>(TEST_PAYLOAD_ID).unwrap();
+        lanes.publish_opaque_lane(
+            name,
+            payloads.descriptor::<TestPayload>().unwrap().clone(),
+            Arc::new(TestQuery(interaction)),
+        );
+    }
+
+    fn test_presentations() -> WaveformPresentationRegistry {
+        let presentations = WaveformPresentationRegistry::new();
+        presentations.register_default_payload(
+            TEST_PAYLOAD_ID,
+            ViewerLaneBadge::new("T", Color32::WHITE),
+            Arc::new(TestRenderer),
+        );
+        presentations
+    }
 
     /// A viewer with `count` bare channels (no transitions) — enough for the
     /// row-order/labeling tests below, which only care about channel
@@ -815,11 +788,17 @@ mod tests {
     fn viewer_with_derived() -> LogicAnalyzerViewer {
         let mut viewer = viewer_with_channels(10);
         let lanes = DerivedLanes::new();
-        lanes.register(
+        publish_test_lane(
+            &lanes,
             "decoded.rx",
-            DerivedLaneData::Digital(vec![Sample::new(true, 1_000), Sample::new(false, 3_000)]),
+            Some(ViewerLaneInteraction {
+                initial: false,
+                transitions: vec![(1_000, true), (3_000, false)],
+                event: false,
+            }),
         );
-        lanes.register("decoded.words", DerivedLaneData::Annotations(Vec::new()));
+        publish_test_lane(&lanes, "decoded.words", None);
+        viewer.set_waveform_presentations(test_presentations());
         viewer.set_derived_lanes(lanes);
         // `show()` does this every frame in the real app; the tests below
         // don't drive a frame, so they need it explicitly to see the lanes
@@ -895,9 +874,14 @@ mod tests {
     fn markers_derived_lane_converts_to_toggling_logic_channel() {
         let mut viewer = viewer_with_derived();
         let lanes = DerivedLanes::new();
-        lanes.register(
+        publish_test_lane(
+            &lanes,
             "match.start",
-            DerivedLaneData::Markers(vec![1_000, 3_000, 7_000]),
+            Some(ViewerLaneInteraction {
+                initial: false,
+                transitions: vec![(1_000, true), (3_000, false), (7_000, true)],
+                event: true,
+            }),
         );
         viewer.set_derived_lanes(lanes);
         viewer.ensure_row_order();
@@ -930,102 +914,26 @@ mod tests {
     }
 
     #[test]
-    fn derived_channel_windows_to_the_visible_range_not_the_whole_lane() {
-        // Default view is [0, 900us] = [0, 900_000ns]; a lane with millions
-        // of entries elsewhere in time must not get fully materialized just
-        // because the pointer happens to be hovering the visible window —
-        // at most one entry past the edge, for the padding `windowed_range`
-        // adds (see `derived_channel_window_pads_one_entry_past_each_edge`).
-        let mut viewer = viewer_with_derived();
-        let lanes = DerivedLanes::new();
-        lanes.register(
-            "decoded.rx",
-            DerivedLaneData::Digital(vec![
-                Sample::new(true, 100_000),     // in view
-                Sample::new(false, 500_000),    // in view
-                Sample::new(true, 10_000_000),  // one entry past the edge: the pad
-                Sample::new(false, 20_000_000), // further still: must not appear
-            ]),
-        );
-        viewer.set_derived_lanes(lanes);
-        viewer.ensure_row_order();
-
-        let channel = viewer
-            .channel_at_row(10)
-            .expect("digital lane has a LogicChannel view");
-        assert_eq!(
-            channel.transitions,
-            vec![
-                Transition {
-                    time_us: 100.0,
-                    value: true
-                },
-                Transition {
-                    time_us: 500.0,
-                    value: false
-                },
-                Transition {
-                    time_us: 10_000.0,
-                    value: true
-                },
-            ],
-            "only one padding entry past the edge, and no further"
-        );
-    }
-
-    #[test]
-    fn derived_channel_window_pads_one_entry_past_each_edge() {
-        // A pulse whose closing edge lands just outside [start_ns, end_ns]
-        // still needs that one bounding transition for period/width math —
-        // see `windowed_range`'s one-entry pad.
-        let mut viewer = viewer_with_derived();
-        let lanes = DerivedLanes::new();
-        lanes.register(
-            "decoded.rx",
-            DerivedLaneData::Digital(vec![
-                Sample::new(false, 100),     // in view
-                Sample::new(true, 200),      // in view
-                Sample::new(false, 950_000), // just past the 900_000ns edge
-                Sample::new(true, 950_100),  // one more, past the edge
-            ]),
-        );
-        viewer.set_derived_lanes(lanes);
-        viewer.ensure_row_order();
-
-        let channel = viewer
-            .channel_at_row(10)
-            .expect("digital lane has a LogicChannel view");
-        // Both in-view entries are present, plus exactly one padding entry
-        // past the right edge (950_000ns) — the second out-of-view entry
-        // (950_100ns) is one too many and must not appear. There's nothing
-        // before 100ns to pad with on the left.
-        assert_eq!(
-            channel.transitions,
-            vec![
-                Transition {
-                    time_us: 0.1,
-                    value: false
-                },
-                Transition {
-                    time_us: 0.2,
-                    value: true
-                },
-                Transition {
-                    time_us: 950.0,
-                    value: false
-                },
-            ]
-        );
-    }
-
-    #[test]
     fn is_event_row_true_only_for_markers_lanes() {
         let mut viewer = viewer_with_derived();
         let lanes = DerivedLanes::new();
-        lanes.register("match.start", DerivedLaneData::Markers(vec![1_000]));
-        lanes.register(
+        publish_test_lane(
+            &lanes,
+            "match.start",
+            Some(ViewerLaneInteraction {
+                initial: false,
+                transitions: vec![(1_000, true)],
+                event: true,
+            }),
+        );
+        publish_test_lane(
+            &lanes,
             "decoded.rx",
-            DerivedLaneData::Digital(vec![Sample::new(true, 1_000)]),
+            Some(ViewerLaneInteraction {
+                initial: false,
+                transitions: vec![(1_000, true)],
+                event: false,
+            }),
         );
         viewer.set_derived_lanes(lanes);
         viewer.ensure_row_order();
@@ -1123,7 +1031,8 @@ mod tests {
         );
 
         let lanes = DerivedLanes::new();
-        lanes.register("decoded.words", DerivedLaneData::Annotations(Vec::new()));
+        publish_test_lane(&lanes, "decoded.words", None);
+        viewer.set_waveform_presentations(test_presentations());
         viewer.set_derived_lanes(lanes);
         viewer.apply_viewer_row_order(&requested);
 
@@ -1158,7 +1067,7 @@ mod tests {
         // only one lane still registered.
         viewer.channels.retain(|channel| channel.index < 2);
         let remaining_lane = DerivedLanes::new();
-        remaining_lane.register("decoded.words", DerivedLaneData::Annotations(Vec::new()));
+        publish_test_lane(&remaining_lane, "decoded.words", None);
         viewer.derived = Some(remaining_lane);
 
         viewer.ensure_row_order();

@@ -597,6 +597,11 @@ impl CollectedLaneQuery for CollectedWordLaneQuery {
         }
     }
 
+    fn is_live(&self) -> bool {
+        let storage = self.storage.read().unwrap();
+        matches!(&*storage, WordLaneStorage::Indexed(indexed) if indexed.status() == StoreStatus::Live)
+    }
+
     fn table_metadata(&self) -> Option<CollectedLaneTableMetadata> {
         let storage = self.storage.read().unwrap();
         match &*storage {
@@ -1024,6 +1029,10 @@ impl OpaqueCollectedLane {
     /// the concrete lane storage.
     pub fn timeline_extent_end_ns(&self) -> Option<u64> {
         self.query.timeline_extent_end_ns()
+    }
+
+    pub fn is_live(&self) -> bool {
+        self.query.is_live()
     }
 
     /// Returns table revision metadata supplied by the lane's adapter.

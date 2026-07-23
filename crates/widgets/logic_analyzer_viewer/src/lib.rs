@@ -4,7 +4,6 @@ mod channel;
 mod cursor;
 mod draw;
 mod format;
-mod indexed_annotations;
 mod input;
 mod lanes;
 mod sampling;
@@ -29,8 +28,8 @@ pub use draw::{
 };
 pub use lanes::{
     AnnotationVisual, DefaultViewerLaneRenderer, DerivedLaneId, OpaqueLaneDrawContext,
-    ViewerLaneBadge, ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneRenderer, ViewerLaneTrack,
-    ViewerLaneTrackId, ViewerOutputPresentation, WaveformPresentationRegistry,
+    ViewerLaneBadge, ViewerLaneGroup, ViewerLaneGroupId, ViewerLaneInteraction, ViewerLaneRenderer,
+    ViewerLaneTrack, ViewerLaneTrackId, ViewerOutputPresentation, WaveformPresentationRegistry,
 };
 pub use sampling_overlay::{SamplingEdge, SamplingOverlay, SamplingQualifier};
 pub use simple_trigger::{SimpleTriggerEdit, SimpleTriggerLane};

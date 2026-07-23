@@ -112,6 +112,11 @@ pub trait CollectedLaneQuery: Send + Sync {
         None
     }
 
+    /// Whether retained data can still change without replacing this query.
+    fn is_live(&self) -> bool {
+        false
+    }
+
     /// Supplies revision metadata for a row-oriented scalar table. Queries
     /// without a table projection return `None`.
     fn table_metadata(&self) -> Option<CollectedLaneTableMetadata> {
