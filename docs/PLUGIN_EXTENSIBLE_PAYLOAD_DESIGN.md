@@ -164,6 +164,12 @@ renderer draws bounded thumbnail snapshots, and a Camera Frames panel queries th
 lane. The source reaches collection through an explicit Viewer connection; neither the collector,
 viewer, application panel catalog, nor panel layout contains a CameraFrame-specific branch.
 
+Contract tests cover identity and adapter collisions, missing registrations, typed channel
+construction and negotiation, retention limits, bounded dense snapshots, timeline extent, renderer
+lock release, and saved-panel-state diagnostics. Architecture tests reject built-in payload and
+protocol checks in generic collection, compiler, and viewer paths. CI compiles the example plugin
+on native targets as part of the workspace and explicitly on `wasm32-unknown-unknown`.
+
 ### Crate ownership
 
 - `signal_processing` owns type-erased ingestion, retained query, snapshot, and storage contracts.

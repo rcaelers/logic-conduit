@@ -35,7 +35,7 @@ struct SavedPanelLayout {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-enum SavedViewerRow {
+pub(crate) enum SavedViewerRow {
     Channel(usize),
     Derived(String),
 }
@@ -154,7 +154,7 @@ pub struct App {
     pub(crate) last_live_sync: f64,
     pub(crate) sampling_overlay_candidates: Vec<compiler::SamplingOverlayCandidate>,
     pub(crate) selected_sampling_overlay: Option<NodeId>,
-    viewer_lane_order: Vec<SavedViewerRow>,
+    pub(crate) viewer_lane_order: Vec<SavedViewerRow>,
     pub(crate) decoder_panels: DecoderPanels,
     pub(crate) plugin_panels: PluginPanels,
 }
@@ -2116,7 +2116,9 @@ impl eframe::App for App {
                     content_id,
                     ..
                 } => {
-                    self.plugin_panels.show(content_id, panel_id, panel_ui);
+                    if let Some(warning) = self.plugin_panels.show(content_id, panel_id, panel_ui) {
+                        self.toasts.warning(warning);
+                    }
                 }
                 PanelSlot::TitleBar { .. } => {}
             },

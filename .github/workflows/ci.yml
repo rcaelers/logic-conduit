@@ -43,7 +43,7 @@ jobs:
           targets: wasm32-unknown-unknown
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
-      - name: Check wasm UI and dependencies
+      - name: Check wasm UI, dependencies, and plugin contracts
         env:
           RUSTFLAGS: -D unreachable-pub
-        run: cargo check -p logic-analyzer-app-web --target wasm32-unknown-unknown
+        run: cargo check -p logic-analyzer-app-web -p example-plugin --target wasm32-unknown-unknown

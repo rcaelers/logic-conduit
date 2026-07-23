@@ -426,6 +426,16 @@ mod collected_payload_tests {
     }
 
     #[test]
+    fn adapter_registration_requires_a_payload_identity() {
+        let mut registry = CollectedPayloadRegistry::new();
+
+        assert!(matches!(
+            registry.register_adapter::<First>(Arc::new(FailingAdapter)),
+            Err(CollectedPayloadRegistrationError::PayloadNotRegistered { .. })
+        ));
+    }
+
+    #[test]
     fn request_publishes_an_adapter_owned_query() {
         let lanes = DerivedLanes::new();
         let mut registry = CollectedPayloadRegistry::new();

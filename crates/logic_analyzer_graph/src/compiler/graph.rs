@@ -1383,15 +1383,10 @@ fn with_auto_view_sink(graph: &GraphState, registry: &BuilderRegistry) -> GraphS
         .iter()
         .map(|(_, label)| Socket {
             name: label.clone(),
-            type_name: "Signal".to_owned(),
+            type_name: "Any".to_owned(),
             color: Color32::from_rgb(0, 205, 160),
             shape: SocketShape::Circle,
-            allowed: vec![
-                "Words".to_owned(),
-                "Trigger".to_owned(),
-                "Number".to_owned(),
-                "Text".to_owned(),
-            ],
+            allowed: Vec::new(),
             resolved_type: None,
             def_index: 0,
             variadic: Some(VariadicInfo {
@@ -1436,15 +1431,10 @@ fn with_auto_view_sink(graph: &GraphState, registry: &BuilderRegistry) -> GraphS
             .iter()
             .map(|(_, label)| Socket {
                 name: label.clone(),
-                type_name: "Signal".to_owned(),
+                type_name: "Any".to_owned(),
                 color: Color32::from_rgb(160, 80, 60),
                 shape: SocketShape::Circle,
-                allowed: vec![
-                    "Words".to_owned(),
-                    "Trigger".to_owned(),
-                    "Number".to_owned(),
-                    "Text".to_owned(),
-                ],
+                allowed: Vec::new(),
                 resolved_type: None,
                 def_index: 0,
                 variadic: Some(VariadicInfo {

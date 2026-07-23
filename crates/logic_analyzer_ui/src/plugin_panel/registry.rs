@@ -117,16 +117,19 @@ impl PluginPanels {
         state
     }
 
-    pub(crate) fn show(&mut self, content_id: &str, panel_id: &str, ui: &mut egui::Ui) -> bool {
-        let Some(registered) = self
+    pub(crate) fn show(
+        &mut self,
+        content_id: &str,
+        panel_id: &str,
+        ui: &mut egui::Ui,
+    ) -> Option<String> {
+        let registered = self
             .registry
             .panels
             .iter()
-            .find(|panel| panel.definition.stable_id == content_id)
-        else {
-            return false;
-        };
+            .find(|panel| panel.definition.stable_id == content_id)?;
         let key = (content_id.to_owned(), panel_id.to_owned());
+        let mut restore_warning = None;
         let panel = self.instances.entry(key).or_insert_with(|| {
             let mut panel = (registered.factory)();
             if let Some(state) = self
@@ -135,14 +138,18 @@ impl PluginPanels {
                 .get(content_id)
                 .and_then(|panels| panels.get(panel_id))
                 .cloned()
+                && let Err(error) = panel.restore_state(state)
             {
-                let _ = panel.restore_state(state);
+                restore_warning = Some(format!(
+                    "Could not restore saved state for plugin panel '{}': {error}",
+                    registered.definition.title
+                ));
             }
             panel
         });
         let lanes: Vec<OpaqueCollectedLane> = self.lanes.opaque_lanes();
         panel.show(ui, PluginPanelContext::new(&lanes));
-        true
+        restore_warning
     }
 }
 
@@ -155,6 +162,17 @@ mod registry_tests {
 
     impl PluginPanel for TestPanel {
         fn show(&mut self, _ui: &mut egui::Ui, _context: PluginPanelContext<'_>) {}
+    }
+
+    #[derive(Default)]
+    struct RejectingStatePanel;
+
+    impl PluginPanel for RejectingStatePanel {
+        fn show(&mut self, _ui: &mut egui::Ui, _context: PluginPanelContext<'_>) {}
+
+        fn restore_state(&mut self, _state: serde_json::Value) -> Result<(), String> {
+            Err("unsupported state version 9".to_owned())
+        }
     }
 
     #[test]
@@ -181,5 +199,41 @@ mod registry_tests {
         registry.register::<TestPanel>(descriptor.clone()).unwrap();
 
         assert!(registry.register::<TestPanel>(descriptor).is_err());
+    }
+
+    #[test]
+    fn invalid_saved_panel_state_produces_one_user_facing_diagnostic() {
+        let mut registry = PluginPanelRegistry::default();
+        registry
+            .register::<RejectingStatePanel>(PluginPanelDescriptor::new(
+                "org.example.camera/v1",
+                "Camera",
+            ))
+            .unwrap();
+        let mut panels = PluginPanels::new(registry);
+        panels.restore_state(PluginPanelsState {
+            panels: HashMap::from([(
+                "org.example.camera/v1".to_owned(),
+                HashMap::from([("panel-1".to_owned(), serde_json::json!({ "version": 9 }))]),
+            )]),
+        });
+
+        let context = egui::Context::default();
+        context.begin_pass(egui::RawInput::default());
+        let mut ui = egui::Ui::new(
+            context.clone(),
+            egui::Id::new("plugin-panel-state-test"),
+            egui::UiBuilder::new(),
+        );
+        let first_warning = panels.show("org.example.camera/v1", "panel-1", &mut ui);
+        let second_warning = panels.show("org.example.camera/v1", "panel-1", &mut ui);
+        let _ = context.end_pass();
+
+        assert!(
+            first_warning
+                .as_deref()
+                .is_some_and(|warning| warning.contains("unsupported state version 9"))
+        );
+        assert_eq!(second_warning, None);
     }
 }

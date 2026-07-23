@@ -103,7 +103,7 @@ impl RuntimeBuilder for CameraFrameSourceBuilder {
     }
 
     fn derived_data_retention(&self, _state: &Value) -> DerivedDataRetention {
-        DerivedDataRetention::Unlimited
+        DerivedDataRetention::MaxEntries(9)
     }
 
     fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
@@ -527,7 +527,7 @@ pub(crate) fn register_panel(ctx: &mut PluginContext<'_>) -> Result<(), String> 
 
 #[cfg(test)]
 mod camera_frame_tests {
-    use logic_analyzer_graph::{BuilderRegistry, CompileCtx, start_app_run};
+    use logic_analyzer_graph::{BuilderRegistry, CompileCtx, PortKind, lower, start_app_run};
     use node_graph::{NodeGraphWidget, SocketDirection, SocketId};
 
     use super::*;
@@ -557,6 +557,14 @@ mod camera_frame_tests {
                 direction: SocketDirection::Input,
             },
         );
+        let compiled = lower(widget.graph(), &builders).unwrap();
+        assert!(
+            compiled
+                .edges
+                .iter()
+                .any(|edge| edge.kind == PortKind::of::<CameraFrame>()),
+            "the plugin socket must negotiate its typed runtime channel"
+        );
         let mut ctx = CompileCtx::default();
         let lanes = ctx.derived_lanes().clone();
         let mut run = start_app_run(widget.graph(), &builders, &mut ctx).unwrap();
@@ -580,7 +588,11 @@ mod camera_frame_tests {
             .value::<CameraFrameSnapshot>()
             .unwrap();
 
-        assert_eq!(query.latest(MAX_RETAINED_FRAMES).len(), 24);
+        let retained = query.latest(MAX_RETAINED_FRAMES);
+        assert_eq!(retained.len(), 9);
+        assert_eq!(retained[0].timestamp_ns, 15 * 40_000_000);
+        assert_eq!(query.timeline_extent_end_ns(), Some(23 * 40_000_000));
+        assert!(!query.is_live());
         assert_eq!(snapshot.frames.len(), 3);
         assert_eq!(snapshot.frames[0].rgb.len(), IMAGE_SIZE * IMAGE_SIZE * 3);
     }

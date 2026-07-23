@@ -5,6 +5,9 @@ mod plugin;
 mod port_kind;
 mod saved_graph;
 
+#[cfg(test)]
+mod architecture_tests;
+
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "cache_platform_native.rs"]
 mod cache_platform;

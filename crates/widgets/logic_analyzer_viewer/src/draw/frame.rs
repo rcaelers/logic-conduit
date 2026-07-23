@@ -479,6 +479,7 @@ mod frame_tests {
 
     struct SnapshotQuery {
         requested: Mutex<Option<CollectedLaneSnapshotRequest>>,
+        retained_lock: Arc<Mutex<()>>,
     }
 
     impl CollectedLaneQuery for SnapshotQuery {
@@ -490,6 +491,7 @@ mod frame_tests {
             &self,
             request: CollectedLaneSnapshotRequest,
         ) -> Option<OpaqueCollectedLaneSnapshot> {
+            let _retained = self.retained_lock.lock().unwrap();
             *self.requested.lock().unwrap() = Some(request);
             Some(OpaqueCollectedLaneSnapshot::new(Arc::new(vec![7_u8, 9])))
         }
@@ -499,6 +501,7 @@ mod frame_tests {
         values: Mutex<Vec<u8>>,
         interaction: Mutex<Option<crate::lanes::ViewerLaneInteractionContext>>,
         theme: Mutex<Option<ViewerLaneTheme>>,
+        retained_lock: Arc<Mutex<()>>,
     }
 
     impl ViewerLaneRenderer for OpaqueSnapshotRenderer {
@@ -508,6 +511,10 @@ mod frame_tests {
             snapshot: Option<&OpaqueCollectedLaneSnapshot>,
             context: OpaqueLaneDrawContext<'_>,
         ) -> bool {
+            assert!(
+                self.retained_lock.try_lock().is_ok(),
+                "the retained query lock must be released before plugin rendering"
+            );
             let values = snapshot
                 .and_then(|snapshot| snapshot.value::<Vec<u8>>())
                 .expect("opaque renderer receives its registered snapshot");
@@ -551,8 +558,10 @@ mod frame_tests {
         payloads
             .register::<u8>("org.example.camera-frame/v1")
             .unwrap();
+        let retained_lock = Arc::new(Mutex::new(()));
         let query = Arc::new(SnapshotQuery {
             requested: Mutex::new(None),
+            retained_lock: Arc::clone(&retained_lock),
         });
         lanes.publish_opaque_lane(
             "camera.frames",
@@ -563,6 +572,7 @@ mod frame_tests {
             values: Mutex::new(Vec::new()),
             interaction: Mutex::new(None),
             theme: Mutex::new(None),
+            retained_lock,
         });
         let presentations = crate::lanes::WaveformPresentationRegistry::new();
         presentations.set_implicit_groups(false);

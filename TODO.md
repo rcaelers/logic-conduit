@@ -16,24 +16,6 @@
   records and presentation metadata to the viewer so an overlay reflects produced data rather
   than the viewer interpreting raw channels before the node has run.
 
-### Plugin-extensible viewer payloads
-
-Collected payloads already register typed ingestion adapters, stable identities, viewable
-presentations, and bounded opaque snapshots. The standard Word, digital, trigger, numeric, and
-text adapters retain their data exclusively in adapter-owned queries. Generic viewer row
-discovery, activity, measurement, event behavior, cursor snapping, timeline extent, and rendering
-all use registered payload queries and presentations. The remaining work completes the contracts
-required by arbitrary plugins.
-
-This is the definitive completion checklist for the plugin migration:
-
-1. Add architecture and contract coverage for registration collisions and absence, typed channel
-   construction, negotiation, retention, dense snapshots, timeline extent, renderer lock release,
-   saved-state diagnostics, native/wasm compilation, and absence of hardcoded built-in checks in
-   generic viewer, compiler, and runtime paths.
-
-Related design: [Plugin-Extensible Collected Payload Design](docs/PLUGIN_EXTENSIBLE_PAYLOAD_DESIGN.md), [Logic Analyzer Viewer Design](docs/LOGIC_ANALYZER_VIEWER_DESIGN.md), and [Pipeline Design](docs/PIPELINE_DESIGN.md).
-
 ## Capture sources
 
 ### Consolidate wasm stand-ins behind processing platform facades

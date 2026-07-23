@@ -15,18 +15,18 @@ use signal_processing::{
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CaptureExportRequest {
-    pub destination: PathBuf,
-    pub overwrite: bool,
+pub(crate) struct CaptureExportRequest {
+    pub(crate) destination: PathBuf,
+    pub(crate) overwrite: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CaptureExportProgress {
-    pub samples_written: u64,
-    pub total_samples: u64,
+pub(crate) struct CaptureExportProgress {
+    pub(crate) samples_written: u64,
+    pub(crate) total_samples: u64,
 }
 
-pub trait CaptureExportObserver {
+pub(crate) trait CaptureExportObserver {
     fn is_cancelled(&self) -> bool {
         false
     }
@@ -35,12 +35,12 @@ pub trait CaptureExportObserver {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CaptureExportWarning {
+pub(crate) enum CaptureExportWarning {
     PortableTriggerMetadataExtension,
 }
 
 impl CaptureExportWarning {
-    pub const fn message(self) -> &'static str {
+    pub(crate) const fn message(self) -> &'static str {
         match self {
             Self::PortableTriggerMetadataExtension => {
                 "the portable v2 format has no standard trigger-position field; the trigger was preserved in an optional compatible metadata key"
@@ -50,15 +50,15 @@ impl CaptureExportWarning {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CaptureExportReport {
-    pub destination: PathBuf,
-    pub samples_written: u64,
-    pub encoded_bytes: u64,
-    pub warnings: Vec<CaptureExportWarning>,
+pub(crate) struct CaptureExportReport {
+    pub(crate) destination: PathBuf,
+    pub(crate) samples_written: u64,
+    pub(crate) encoded_bytes: u64,
+    pub(crate) warnings: Vec<CaptureExportWarning>,
 }
 
 #[derive(Debug, Error)]
-pub enum CaptureExportError {
+pub(crate) enum CaptureExportError {
     #[error("capture export requires durable timeline metadata")]
     MissingTimelineMetadata,
     #[error("cannot export an empty raw capture")]
@@ -79,7 +79,7 @@ pub enum CaptureExportError {
     Zip(#[from] zip::result::ZipError),
 }
 
-pub fn export_finalized_capture(
+pub(crate) fn export_finalized_capture(
     capture: &NativeFinalizedCapture,
     request: &CaptureExportRequest,
     observer: &mut dyn CaptureExportObserver,
@@ -399,7 +399,7 @@ mod tests {
     }
 
     #[derive(Default)]
-    pub struct IgnoreCaptureExportProgress;
+    struct IgnoreCaptureExportProgress;
 
     impl CaptureExportObserver for IgnoreCaptureExportProgress {}
 
