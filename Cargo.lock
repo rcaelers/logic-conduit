@@ -1243,6 +1243,7 @@ dependencies = [
  "inventory",
  "logic-analyzer-graph",
  "logic-analyzer-graph-api",
+ "logic-analyzer-graph-nodes",
  "logic-analyzer-ui",
  "logic-analyzer-viewer",
  "node-graph",
@@ -2140,6 +2141,7 @@ dependencies = [
  "egui",
  "example-plugin",
  "logic-analyzer-graph",
+ "logic-analyzer-graph-nodes",
  "logic-analyzer-ui",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
@@ -2154,6 +2156,7 @@ dependencies = [
  "eframe",
  "example-plugin",
  "log",
+ "logic-analyzer-graph-nodes",
  "logic-analyzer-ui",
  "node-graph",
  "serde_json",
@@ -2180,6 +2183,7 @@ dependencies = [
  "egui",
  "inventory",
  "logic-analyzer-graph-api",
+ "logic-analyzer-graph-nodes",
  "logic-analyzer-processing",
  "logic-analyzer-viewer",
  "node-graph",
@@ -2201,6 +2205,23 @@ dependencies = [
  "serde",
  "serde_json",
  "signal-processing",
+]
+
+[[package]]
+name = "logic-analyzer-graph-nodes"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "inventory",
+ "logic-analyzer-graph",
+ "logic-analyzer-graph-api",
+ "logic-analyzer-processing",
+ "logic-analyzer-viewer",
+ "node-graph",
+ "serde",
+ "serde_json",
+ "signal-processing",
+ "tempfile",
 ]
 
 [[package]]
@@ -2233,6 +2254,7 @@ dependencies = [
  "input-bindings",
  "inventory",
  "logic-analyzer-graph",
+ "logic-analyzer-graph-nodes",
  "logic-analyzer-viewer",
  "node-graph",
  "panel-layout",

@@ -90,7 +90,7 @@ shape; a new payload family gets a new hue; red is reserved for error feedback; 
 the wildcard. Colorblind robustness comes from the shape axis: hues that could collide
 never share a shape.
 
-## Node set (`crates/logic_analyzer_graph/src/nodes/`)
+## Node set (`crates/logic_analyzer_graph_nodes/src/nodes/`)
 
 The `sources`, `decoders`, `logic`, and `sinks` directories mirror the processing-node families.
 Each executable feature directory within them groups a `node_graph::NodeDef` in `definition.rs`

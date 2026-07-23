@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn node_editor_shows_words_and_summarizes_detail_lane_visibility() {
-        let mut widget = node_graph::NodeGraphWidget::new(crate::nodes::build_registry());
+        let mut widget = node_graph::NodeGraphWidget::new(crate::test_support::build_registry());
         let node_id = widget
             .add_node_at(SpiDecoder::name(), egui::Pos2::ZERO)
             .unwrap();
@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     fn legacy_view_selection_migrates_to_bits_and_data_with_a_warning() {
-        let mut widget = node_graph::NodeGraphWidget::new(crate::nodes::build_registry());
+        let mut widget = node_graph::NodeGraphWidget::new(crate::test_support::build_registry());
         let node = widget
             .add_node_at(SpiDecoder::name(), egui::Pos2::ZERO)
             .unwrap();

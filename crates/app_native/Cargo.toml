@@ -13,6 +13,7 @@ clap = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
 logic-analyzer-ui = { path = "../logic_analyzer_ui" }
+logic-analyzer-graph-nodes = { path = "../logic_analyzer_graph_nodes" }
 tracing-subscriber = { workspace = true }
 example-plugin = { path = "../../plugins/example-plugin", optional = true }
 

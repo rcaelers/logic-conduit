@@ -2,19 +2,15 @@
 
 ## Current boundary
 
-`logic_analyzer_graph` currently combines four independently changing responsibilities:
-
-- plugin and graph-node contracts;
-- services used by graph-node runtime builders;
-- graph compilation, execution, discovery, and saved-graph handling used by the application host;
-- built-in graph nodes, built-in payload presentations, raw-capture export, and test providers.
-
 `logic_analyzer_graph_api` owns the compile-time plugin contract through its `node` and
 `node_support` namespaces. Graph-node and collected-payload inventory types are defined there;
-inventory assembly remains compiler-owned and consumes submissions without importing the built-in
-`nodes` module. `logic_analyzer_graph` still combines the compiler, host services, built-in nodes,
-capture export, and test support. The remaining extraction separates those responsibilities while
-the graph crate temporarily retains compatibility re-exports.
+inventory assembly is compiler-owned and consumes submissions without importing a node bundle.
+
+`logic_analyzer_graph_nodes` owns the built-in node definitions, builders, migrations, socket
+types, payload presentations, and inventory submissions. `logic_analyzer_graph` owns compiler and
+host services, and temporarily retains capture export, test support, and compatibility re-exports.
+Native and web application composition link the built-in bundle before constructing the host
+compiler.
 
 ## Proposed future architecture
 

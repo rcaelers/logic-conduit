@@ -8,7 +8,7 @@ Generic layers do not contain decoder-specific behavior.
 independent of UART, SPI, Binary Decoder, and all other concrete node types. Protocol behavior
 belongs in:
 
-- its feature directory in `crates/logic_analyzer_graph/src/nodes/decoders/`, which groups
+- its feature directory in `crates/logic_analyzer_graph_nodes/src/nodes/decoders/`, which groups
   `definition.rs`, `builder.rs`, and protocol-specific presentation when needed;
 - its runtime implementation in `crates/logic_analyzer_processing/src/nodes/`.
 
@@ -41,7 +41,7 @@ public and protocol-neutral.
 Concrete implementations live with their node feature:
 
 ```text
-crates/logic_analyzer_graph/src/nodes/decoders/uart_decoder/
+crates/logic_analyzer_graph_nodes/src/nodes/decoders/uart_decoder/
   definition.rs
   builder.rs
   presentation.rs

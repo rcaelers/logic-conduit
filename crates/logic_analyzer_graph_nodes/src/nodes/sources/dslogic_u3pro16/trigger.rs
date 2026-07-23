@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
+use logic_analyzer_graph_api::node_support::{SimpleTriggerChannel, TriggerConfigurationFeature};
 use signal_processing::{
     CaptureChannelId, SimpleTriggerCondition, TriggerCountCapabilities, TriggerCountMode,
     TriggerEditorSchema, TriggerIdentifier, TriggerLogicOperator, TriggerPredicate, TriggerProgram,
 };
 
 use super::definition::{U3PRO16_CHANNELS, U3Pro16State};
-use crate::{SimpleTriggerChannel, TriggerConfigurationFeature};
 
 const SCHEMA_ID: &str = "dsl.dslogic-u3pro16.trigger";
 

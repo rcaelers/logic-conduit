@@ -74,6 +74,7 @@ fn application_icon() -> egui::IconData {
 }
 
 pub(crate) fn run() -> MainResult {
+    std::hint::black_box(logic_analyzer_graph_nodes::link());
     tracing_subscriber::fmt()
         .with_env_filter(application_env_filter())
         .init();
@@ -154,6 +155,21 @@ mod tests {
             compiler
                 .collected_payloads()
                 .descriptor_by_stable_id("org.logicconduit.example.camera-frame/v1")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn built_in_link_makes_node_and_payload_inventories_visible() {
+        std::hint::black_box(logic_analyzer_graph_nodes::link());
+
+        let compiler = logic_analyzer_graph::host::GraphCompiler::new();
+        let nodes = compiler.build_node_registry();
+        assert_eq!(nodes.category_of("SPI Decoder"), Some("Decoders"));
+        assert!(
+            compiler
+                .collected_payloads()
+                .descriptor_by_stable_id("org.logicconduit.word/v1")
                 .is_some()
         );
     }

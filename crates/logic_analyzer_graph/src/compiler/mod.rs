@@ -30,8 +30,6 @@ pub use graph::{
 };
 pub use graph_compiler::GraphCompiler;
 pub use graph_node_registration::build_node_registry;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use graph_node_registration::graph_node_registrations;
 pub(crate) use graph_node_registration::{
     standard_graph_node_builders, validate_graph_node_payload_requirements,
 };

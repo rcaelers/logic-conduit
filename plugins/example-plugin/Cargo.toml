@@ -21,3 +21,4 @@ inventory = { workspace = true }
 
 [dev-dependencies]
 logic-analyzer-graph = { path = "../../crates/logic_analyzer_graph" }
+logic-analyzer-graph-nodes = { path = "../../crates/logic_analyzer_graph_nodes" }

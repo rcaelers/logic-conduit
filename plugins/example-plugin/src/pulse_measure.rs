@@ -212,6 +212,7 @@ mod tests {
 
     #[test]
     fn inventory_populates_both_registries() {
+        std::hint::black_box(logic_analyzer_graph_nodes::link());
         let compiler = logic_analyzer_graph::host::GraphCompiler::new();
         let nodes = compiler.build_node_registry();
         assert_eq!(nodes.category_of("Pulse Measure"), Some("Plugin"));

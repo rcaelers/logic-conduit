@@ -292,13 +292,15 @@ impl BuilderRegistry {
         registry
     }
 
-    #[cfg(test)]
-    pub(crate) fn isolated_test() -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn isolated_test() -> Self {
         Self::with_builders(HashMap::new())
     }
 
-    #[cfg(test)]
-    pub(crate) fn insert_test_builder(
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn insert_test_builder(
         &mut self,
         name: impl Into<String>,
         builder: Box<dyn RuntimeBuilder>,
@@ -378,7 +380,8 @@ impl BuilderRegistry {
         &self.collected_payloads
     }
 
-    pub(crate) fn subscribable_payload_kinds(&self) -> Vec<PortKind> {
+    #[cfg_attr(feature = "test-support", doc(hidden))]
+    pub fn subscribable_payload_kinds(&self) -> Vec<PortKind> {
         self.payload_subscriptions
             .iter()
             .map(|payload| payload.kind)

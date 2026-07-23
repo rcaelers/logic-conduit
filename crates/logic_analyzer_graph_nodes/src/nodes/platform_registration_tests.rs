@@ -1,12 +1,15 @@
 use egui::Pos2;
 
+use logic_analyzer_graph::host::{
+    BuilderRegistry, apply_live_capture_edit, discover_capture_presentation,
+    discover_live_capture_feature, lower,
+};
+use logic_analyzer_graph_api::node_support::{CapturePresentation, LiveCaptureEdit};
 use node_graph::{NodeGraphWidget, SocketDirection, SocketId};
 use signal_processing::{CaptureChannelId, CaptureDataDelivery, SimpleTriggerCondition};
 
-use super::{build_registry, node_name, test_graphs_tests};
-use crate::{
-    BuilderRegistry, LiveCaptureEdit, apply_live_capture_edit, discover_live_capture_feature, lower,
-};
+use super::{node_name, test_graphs_tests};
+use crate::test_support::build_registry;
 
 const U3PRO16_ID: &str = "org.logicconduit.graph-node.dslogic-u3pro16/v1";
 const DSL_FILE_SOURCE_ID: &str = "org.logicconduit.graph-node.dsl-file-source/v1";
@@ -184,11 +187,10 @@ fn dsl_source_presentation_is_builder_owned_after_node_rename() {
     widget.graph_mut().nodes.get_mut(&source_id).unwrap().title = "My capture".to_owned();
     widget.graph_mut().nodes.get_mut(&source_id).unwrap().state["file"]["value"] =
         serde_json::Value::String("capture.dsl".to_owned());
-    let presentation =
-        crate::discover_capture_presentation(widget.graph(), &BuilderRegistry::standard())
-            .unwrap()
-            .unwrap();
-    let crate::CapturePresentation::Indexed { identity, .. } = presentation.presentation else {
+    let presentation = discover_capture_presentation(widget.graph(), &BuilderRegistry::standard())
+        .unwrap()
+        .unwrap();
+    let CapturePresentation::Indexed { identity, .. } = presentation.presentation else {
         panic!("DSL source should provide an indexed presentation");
     };
     assert_eq!(identity, std::path::PathBuf::from("capture.dsl"));

@@ -54,8 +54,10 @@ fn inventory_assembly_does_not_import_the_builtin_node_module() {
     ];
 
     for (component, source) in sources {
+        let implementation = implementation_source(source);
         assert!(
-            !implementation_source(source).contains("crate::nodes"),
+            !implementation.contains("crate::nodes")
+                && !implementation.contains("logic_analyzer_graph_nodes"),
             "{component} must consume inventory contracts without importing built-in nodes"
         );
     }

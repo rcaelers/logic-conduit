@@ -1,17 +1,17 @@
-//! Logic-analyzer node catalog and graph-to-runtime compiler.
+//! Logic-analyzer graph-to-runtime compiler and application-host services.
 //!
-//! This crate is the product-specific bridge between a generic [`node_graph`]
-//! document and the UI-independent [`signal_processing`] runtime. Concrete
-//! node viewer-lane adapters also live here; application composition and
-//! window integration belong in `logic-analyzer-ui`.
+//! This crate lowers a generic [`node_graph`] document through inventory-submitted node contracts
+//! into the UI-independent [`signal_processing`] runtime. Concrete graph nodes and their
+//! presentations live in `logic-analyzer-graph-nodes`; application composition and window
+//! integration belong in `logic-analyzer-ui`.
 
-mod collected_payloads;
 mod compiler;
 mod decoder_table;
 pub mod host;
 pub mod node;
 pub mod node_support;
-pub mod nodes;
+#[cfg(test)]
+mod nodes;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod capture_export;

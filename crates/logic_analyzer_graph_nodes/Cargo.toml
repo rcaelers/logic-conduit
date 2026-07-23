@@ -1,32 +1,28 @@
 [package]
-name = "logic-analyzer-graph"
+name = "logic-analyzer-graph-nodes"
 version.workspace = true
 edition = "2024"
 authors = ["Rob Caelers <rob.caelers@gmail.com>"]
 
 [lib]
-name = "logic_analyzer_graph"
+name = "logic_analyzer_graph_nodes"
 path = "src/lib.rs"
 
 [features]
-test-support = ["dep:logic-analyzer-processing", "logic-analyzer-processing/test-support"]
+test-support = ["logic-analyzer-processing/test-support"]
 
 [dependencies]
 signal-processing = { path = "../signal_processing" }
 logic-analyzer-graph-api = { path = "../logic_analyzer_graph_api" }
-logic-analyzer-processing = { path = "../logic_analyzer_processing", optional = true }
+logic-analyzer-processing = { path = "../logic_analyzer_processing" }
 logic-analyzer-viewer = { path = "../widgets/logic_analyzer_viewer" }
 node-graph = { path = "../widgets/node_graph" }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-crossbeam-channel = { workspace = true }
-blake3 = { workspace = true }
-tempfile = { workspace = true }
-thiserror = { workspace = true }
-zip = { workspace = true }
 inventory = { workspace = true }
 
 [dev-dependencies]
-logic-analyzer-graph-nodes = { path = "../logic_analyzer_graph_nodes", features = ["test-support"] }
+logic-analyzer-graph = { path = "../logic_analyzer_graph", features = ["test-support"] }
 logic-analyzer-processing = { path = "../logic_analyzer_processing", features = ["test-support"] }
+tempfile = { workspace = true }

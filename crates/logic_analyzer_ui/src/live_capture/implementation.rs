@@ -166,7 +166,7 @@ pub(crate) trait CaptureCoordinatorContract {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use logic_analyzer_graph::nodes;
+    use logic_analyzer_graph_nodes::test_support as nodes;
     use node_graph::NodeGraphWidget;
 
     use super::*;

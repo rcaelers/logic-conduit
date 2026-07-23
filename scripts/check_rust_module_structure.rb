@@ -25,7 +25,8 @@ PUBLIC_MODULES = {
     dsl_file dslogic_u3pro16 sigrok_file synthetic_capture_source synthetic_uart_source
   ],
   "crates/logic_analyzer_graph_api/src/lib.rs" => %w[node node_support],
-  "crates/logic_analyzer_graph/src/lib.rs" => %w[host node node_support nodes test_support]
+  "crates/logic_analyzer_graph/src/lib.rs" => %w[host node node_support test_support],
+  "crates/logic_analyzer_graph_nodes/src/lib.rs" => %w[test_support]
 }.freeze
 
 errors = []
@@ -66,6 +67,18 @@ graph_api_manifest = File.read(File.join(ROOT, "crates/logic_analyzer_graph_api/
   end
 end
 
+graph_manifest = File.read(File.join(ROOT, "crates/logic_analyzer_graph/Cargo.toml"))
+graph_production_manifest = graph_manifest.split(/^\[dev-dependencies\]\s*$/, 2).first
+if graph_production_manifest.match?(/^logic-analyzer-graph-nodes\s*=/)
+  errors << "crates/logic_analyzer_graph/Cargo.toml: compiler production code must not depend on built-in graph nodes"
+end
+
+graph_nodes_manifest = File.read(File.join(ROOT, "crates/logic_analyzer_graph_nodes/Cargo.toml"))
+graph_nodes_production_manifest = graph_nodes_manifest.split(/^\[dev-dependencies\]\s*$/, 2).first
+if graph_nodes_production_manifest.match?(/^logic-analyzer-graph\s*=/)
+  errors << "crates/logic_analyzer_graph_nodes/Cargo.toml: built-in nodes submit graph API contracts and must not depend on the compiler"
+end
+
 files.each do |path|
   rel = relative(path)
   source = File.read(path)
@@ -82,7 +95,7 @@ files.each do |path|
     end
   end
 
-  graph_node_implementation = rel.start_with?("crates/logic_analyzer_graph/src/nodes/")
+  graph_node_implementation = rel.start_with?("crates/logic_analyzer_graph_nodes/src/nodes/")
   plugin_implementation = rel.start_with?("plugins/")
   if graph_node_implementation || plugin_implementation
     implementation = implementation_source(source)
@@ -135,7 +148,7 @@ files.each do |path|
     errors << "#{rel}:#{line_number(source, Regexp.last_match.begin(0))}: mod.rs imports must be facade re-exports"
   end
 
-  concrete_graph_node = rel.match?(%r{\Acrates/logic_analyzer_graph/src/nodes/(?:decoders|logic|sinks|sources)/[^/]+/mod\.rs\z})
+  concrete_graph_node = rel.match?(%r{\Acrates/logic_analyzer_graph_nodes/src/nodes/(?:decoders|logic|sinks|sources)/[^/]+/mod\.rs\z})
   if concrete_graph_node
     source.to_enum(:scan, /^\s*pub(?:\(crate\))?\s+use\s+/).each do
       errors << "#{rel}:#{line_number(source, Regexp.last_match.begin(0))}: concrete graph nodes must not re-export symbols"

@@ -1698,8 +1698,9 @@ mod tests {
         TestDeterministicFakeProvider as DeterministicFakeProvider,
     };
     use logic_analyzer_graph::{
-        CaptureGraphSourceFactory, LiveCaptureEdit, LiveCaptureFeature, SimpleTriggerChannel, nodes,
+        CaptureGraphSourceFactory, LiveCaptureEdit, LiveCaptureFeature, SimpleTriggerChannel,
     };
+    use logic_analyzer_graph_nodes::test_support as nodes;
     use node_graph::{NodeGraphWidget, NodeId};
     use signal_processing::{
         AcquisitionContext, AcquisitionError, AcquisitionResult, CaptureAnalysisChannel,

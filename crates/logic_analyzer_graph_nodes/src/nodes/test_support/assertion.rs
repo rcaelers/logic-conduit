@@ -2,10 +2,12 @@ use std::collections::HashSet;
 
 use egui::Pos2;
 
+use logic_analyzer_graph::host::{BuilderRegistry, lower};
+use logic_analyzer_graph_api::node::GraphNodeRegistration;
+use logic_analyzer_graph_api::node_support::PortKind;
 use node_graph::{NodeDef, NodeGraphWidget, NodeTypeRegistry, SocketDirection, SocketId};
 
 use super::endpoints::{self, TestSink, TestSource};
-use crate::{BuilderRegistry, PortKind, lower};
 
 pub(crate) fn assert_node_registration_isolated(stable_id: &str) {
     assert_node_registration_isolated_with_state(stable_id, None);
@@ -15,7 +17,7 @@ pub(crate) fn assert_node_registration_isolated_with_state(
     stable_id: &str,
     state: Option<serde_json::Value>,
 ) {
-    let registration = crate::compiler::graph_node_registrations()
+    let registration = inventory::iter::<GraphNodeRegistration>
         .into_iter()
         .find(|registration| registration.stable_id() == stable_id)
         .unwrap_or_else(|| panic!("missing graph-node registration '{stable_id}'"));

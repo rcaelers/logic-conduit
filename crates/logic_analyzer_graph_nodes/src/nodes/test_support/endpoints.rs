@@ -1,12 +1,11 @@
 use egui::Color32;
 use serde_json::Value;
 
+use logic_analyzer_graph::host::BuilderRegistry;
 use logic_analyzer_graph_api::node::RuntimeBuilder;
 use logic_analyzer_graph_api::node_support::{NodeBuildContext, PortKind, ResolvedInputs};
 use node_graph::{AnySocket, InputDef, NodeDef, OutputDef, Socket};
 use signal_processing::{InputPort, OutputPort, ProcessNode, WorkResult};
-
-use crate::BuilderRegistry;
 
 pub(crate) const SOURCE_NAME: &str = "Isolated Test Source";
 pub(crate) const SINK_NAME: &str = "Isolated Test Sink";

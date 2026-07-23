@@ -8,6 +8,7 @@ unsafe extern "C" {
 
 fn initialize_compile_time_inventories() {
     static INITIALIZE: std::sync::Once = std::sync::Once::new();
+    std::hint::black_box(logic_analyzer_graph_nodes::link());
     #[cfg(feature = "example-plugin")]
     std::hint::black_box(example_plugin::force_link());
     INITIALIZE.call_once(|| {

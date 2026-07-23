@@ -137,10 +137,10 @@ pub(crate) const COLOR_OUTPUT: Color32 = Color32::from_rgb(160, 80, 60);
 
 // ── Test graph fixtures ──────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) mod test_graphs_tests {
     fn name(stable_id: &str) -> &'static str {
-        super::super::test_support::node_name(stable_id)
+        crate::test_support::node_name(stable_id)
     }
 
     fn output_index(
@@ -557,10 +557,14 @@ pub(crate) mod test_graphs_tests {
 
 #[cfg(test)]
 mod tests {
+    use logic_analyzer_graph::host::{
+        BuilderRegistry, CompiledGraph, discover_capture_presentation, lower,
+    };
+    use logic_analyzer_graph_api::node_support::CapturePresentation;
     use node_graph::NodeGraphWidget;
 
     use super::test_graphs_tests;
-    use crate::compiler::build_node_registry;
+    use crate::test_support::build_registry as build_node_registry;
 
     #[test]
     fn startup_graph_builds_with_compatible_wiring() {
@@ -591,8 +595,6 @@ mod tests {
 
     #[test]
     fn binary_decoder_demo_fixture_lowers() {
-        use crate::{BuilderRegistry, lower};
-
         let mut widget = NodeGraphWidget::new(build_node_registry());
         test_graphs_tests::build_binary_decoder_demo(&mut widget);
         assert!(widget.graph().nodes.values().all(|node| node.type_name
@@ -607,11 +609,10 @@ mod tests {
                 .count(),
             10
         );
-        let preview =
-            crate::discover_capture_presentation(widget.graph(), &BuilderRegistry::standard())
-                .unwrap()
-                .expect("demo source should provide a pre-run capture preview");
-        let crate::CapturePresentation::InMemory {
+        let preview = discover_capture_presentation(widget.graph(), &BuilderRegistry::standard())
+            .unwrap()
+            .expect("demo source should provide a pre-run capture preview");
+        let CapturePresentation::InMemory {
             signals: preview, ..
         } = preview.presentation
         else {
@@ -665,8 +666,6 @@ mod tests {
     /// compile to the same pipeline.
     #[test]
     fn graph_json_round_trip_compiles_identically() {
-        use crate::{BuilderRegistry, lower};
-
         let mut widget = NodeGraphWidget::new(build_node_registry());
         test_graphs_tests::populate_startup(&mut widget);
         let registry = BuilderRegistry::standard();
@@ -690,7 +689,7 @@ mod tests {
                 a.builder
             );
         }
-        let edges = |compiled: &crate::CompiledGraph| {
+        let edges = |compiled: &CompiledGraph| {
             let mut edges: Vec<String> = compiled
                 .edges
                 .iter()
