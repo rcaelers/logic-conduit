@@ -151,7 +151,7 @@ order; update this single checklist as slices land:
   plugin; retain inventory-only registration.
 - [x] Extract `logic_analyzer_capture_export` and remove format, ZIP, tempfile, and native export
   dependencies from graph API/compiler production code.
-- [ ] Move processing-backed public fake providers to `logic_analyzer_test_support`; keep
+- [x] Move processing-backed public fake providers to `logic_analyzer_test_support`; keep
   node-isolation mocks private to the built-in-node crate.
 - [ ] Remove transitional re-exports and obsolete dependencies, enforce the final dependency
   graph in architecture checks, and pass workspace Clippy/tests plus native and wasm builds.

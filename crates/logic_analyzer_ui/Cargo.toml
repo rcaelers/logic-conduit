@@ -32,4 +32,5 @@ tempfile = { workspace = true }
 [dev-dependencies]
 logic-analyzer-graph = { path = "../logic_analyzer_graph", features = ["test-support"] }
 logic-analyzer-graph-nodes = { path = "../logic_analyzer_graph_nodes", features = ["test-support"] }
+logic-analyzer-test-support = { path = "../logic_analyzer_test_support" }
 tempfile = { workspace = true }

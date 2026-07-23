@@ -1,4 +1,4 @@
-//! Deterministic device-buffered provider used to challenge the portable capture contracts.
+//! Deterministic device-buffered provider used to challenge portable capture contracts.
 
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;

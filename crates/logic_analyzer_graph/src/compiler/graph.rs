@@ -2119,7 +2119,7 @@ mod tests {
 
     use logic_analyzer_graph_api::node_support::SamplingOverlayDescriptor;
     use logic_analyzer_processing::nodes::sinks::binary_file_writer::BinaryFileWriter;
-    use logic_analyzer_processing::test_support::{BufferedFakeConfig, BufferedFakeProvider};
+    use logic_analyzer_test_support::{BufferedFakeConfig, BufferedFakeProvider};
     use logic_analyzer_viewer::{SamplingEdge, ViewerLaneBadge};
     use node_graph::NodeGraphWidget;
     use signal_processing::{
