@@ -2166,6 +2166,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "logic-analyzer-capture-export"
+version = "0.1.0"
+dependencies = [
+ "signal-processing",
+ "tempfile",
+ "thiserror 2.0.19",
+ "zip",
+]
+
+[[package]]
 name = "logic-analyzer-examples"
 version = "0.1.0"
 dependencies = [
@@ -2191,8 +2201,6 @@ dependencies = [
  "serde_json",
  "signal-processing",
  "tempfile",
- "thiserror 2.0.19",
- "zip",
 ]
 
 [[package]]
@@ -2253,6 +2261,7 @@ dependencies = [
  "egui",
  "input-bindings",
  "inventory",
+ "logic-analyzer-capture-export",
  "logic-analyzer-graph",
  "logic-analyzer-graph-nodes",
  "logic-analyzer-viewer",

@@ -1,9 +1,8 @@
-//! Graph-owned raw-capture export service and application presentation facade.
+//! Native streaming export of finalized logic-analyzer captures.
 
-mod implementation;
-mod presentation;
+mod capture_export;
 
-pub use presentation::{
+pub use capture_export::{
     CaptureExportDescriptor, CaptureExportFormat, CaptureExportObserver, CaptureExportProgress,
     CaptureExportReport, export_finalized_capture,
 };

@@ -25,6 +25,7 @@ inventory = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = { workspace = true }
+logic-analyzer-capture-export = { path = "../logic_analyzer_capture_export" }
 rfd = { workspace = true }
 tempfile = { workspace = true }
 

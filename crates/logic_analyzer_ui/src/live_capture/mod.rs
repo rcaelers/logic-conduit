@@ -16,7 +16,7 @@ pub(crate) use implementation::{
     CaptureReplayAttachment, ConfigurationEpochResolution, capture_availability,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use logic_analyzer_graph::CaptureExportFormat as CaptureRawExportFormat;
+pub(crate) use logic_analyzer_capture_export::CaptureExportFormat as CaptureRawExportFormat;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use platform::CaptureCoordinator;
 #[cfg(not(target_arch = "wasm32"))]

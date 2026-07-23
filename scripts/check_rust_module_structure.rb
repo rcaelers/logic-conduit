@@ -61,7 +61,7 @@ ui_compiler_free_functions = %w[
 ].freeze
 
 graph_api_manifest = File.read(File.join(ROOT, "crates/logic_analyzer_graph_api/Cargo.toml"))
-%w[logic-analyzer-graph logic-analyzer-processing logic-analyzer-ui].each do |dependency|
+%w[logic-analyzer-capture-export logic-analyzer-graph logic-analyzer-processing logic-analyzer-ui].each do |dependency|
   if graph_api_manifest.match?(/^#{Regexp.escape(dependency)}\s*=/)
     errors << "crates/logic_analyzer_graph_api/Cargo.toml: graph API must not depend on #{dependency}"
   end
@@ -71,6 +71,18 @@ graph_manifest = File.read(File.join(ROOT, "crates/logic_analyzer_graph/Cargo.to
 graph_production_manifest = graph_manifest.split(/^\[dev-dependencies\]\s*$/, 2).first
 if graph_production_manifest.match?(/^logic-analyzer-graph-nodes\s*=/)
   errors << "crates/logic_analyzer_graph/Cargo.toml: compiler production code must not depend on built-in graph nodes"
+end
+%w[logic-analyzer-capture-export tempfile thiserror zip].each do |dependency|
+  if graph_production_manifest.match?(/^#{Regexp.escape(dependency)}\s*=/)
+    errors << "crates/logic_analyzer_graph/Cargo.toml: compiler production code must not depend on #{dependency}"
+  end
+end
+
+capture_export_manifest = File.read(File.join(ROOT, "crates/logic_analyzer_capture_export/Cargo.toml"))
+%w[logic-analyzer-graph-api logic-analyzer-graph logic-analyzer-graph-nodes logic-analyzer-processing logic-analyzer-ui].each do |dependency|
+  if capture_export_manifest.match?(/^#{Regexp.escape(dependency)}\s*=/)
+    errors << "crates/logic_analyzer_capture_export/Cargo.toml: capture export must not depend on #{dependency}"
+  end
 end
 
 graph_nodes_manifest = File.read(File.join(ROOT, "crates/logic_analyzer_graph_nodes/Cargo.toml"))

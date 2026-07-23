@@ -21,11 +21,15 @@ The crate boundaries in `AGENTS.md` are enforced at both dependency and symbol l
 - `logic_analyzer_processing` owns concrete capture formats, devices, protocol decoders,
   processing nodes, and sinks. Format parsing and device-transport errors originate here and are
   mapped to generic runtime errors only where a generic trait requires it.
-- `logic_analyzer_graph` owns concrete node definitions, lowering, builders, registration, and
-  application-facing adapters for concrete source presentation and capture export. The UI depends
-  on those capability contracts and never imports `logic_analyzer_processing` directly.
+- `logic_analyzer_graph_api` owns graph-node and collected-payload plugin contracts.
+- `logic_analyzer_graph_nodes` owns built-in concrete node definitions, builders, migrations,
+  registrations, and presentation metadata.
+- `logic_analyzer_graph` owns generic graph lowering, discovery, execution, and host services.
   Definition defaults and lowering helpers remain crate-private unless plugin authors or another
   crate implement against a documented contract.
+- `logic_analyzer_capture_export` owns native streaming export of finalized generic capture
+  storage. It depends on capture contracts and format libraries, not graph crates or concrete
+  processing nodes.
 - Generic graph, viewer, compiler, runtime, and widget crates consume explicit metadata and
   capability contracts. They do not infer concrete behavior from names.
 - Presentation helpers shared by widgets live in a neutral widget module or crate. Input-binding
@@ -113,6 +117,7 @@ nearest owning facade. The allowlist names canonical public namespaces.
 | `logic_analyzer_graph_api` | `node`, `node_support` | `node` owns the traits and inventory submissions implemented by graph-node plugins. `node_support` owns open port identity, protocol-neutral presentation descriptions, capture descriptions, and the restricted node build context. It contains no compiler, host, built-in-node, UI, or export operations. |
 | `logic_analyzer_graph` | `node`, `node_support`, `host`; native feature-gated `test_support` | `node` and `node_support` are transitional forwards to the graph API contracts. `host` exposes `CompileCtx` result extraction together with compilation, discovery, execution, and saved-document operations consumed by application hosts. The explicit test-support namespace owns fake-provider adapters used by downstream integration tests. |
 | `logic_analyzer_graph_nodes` | feature-gated `test_support` | The crate root exposes only the linker anchor. Built-in graph-node definitions, socket types, migrations, presentations, and inventory submissions remain private. The test-support namespace exposes graph fixtures without making concrete node implementation symbols public. |
+| `logic_analyzer_capture_export` | none | The cohesive native exporter exposes its curated format, progress, observer, report, and export operation through the crate root. Encoder and archive implementation modules remain private. |
 | `node_graph` | none | The reusable widget exposes one curated crate-root API; model, runtime, support, API, and widget implementation modules remain private. |
 | `logic_analyzer_viewer` | none | The reusable viewer exposes one curated crate-root API; drawing, sampling, input, cursor, lane, worker, and indexing modules remain private. |
 | `logic_analyzer_ui` | none | The application-composition crate exposes only its host-facing crate-root facade. |

@@ -13,16 +13,9 @@ pub mod node_support;
 #[cfg(test)]
 mod nodes;
 
-#[cfg(not(target_arch = "wasm32"))]
-mod capture_export;
 #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
 pub mod test_support;
 
-#[cfg(not(target_arch = "wasm32"))]
-pub use capture_export::{
-    CaptureExportDescriptor, CaptureExportFormat, CaptureExportObserver, CaptureExportProgress,
-    CaptureExportReport, export_finalized_capture,
-};
 pub use compiler::{
     ApplyError, ApplySummary, BuilderRegistry, CaptureCacheIdentity, CaptureGraphSourceFactory,
     CapturePresentation, CapturePresentationSignal, CollectedPayloadRegistration, CompileCtx,

@@ -8,9 +8,10 @@ inventory assembly is compiler-owned and consumes submissions without importing 
 
 `logic_analyzer_graph_nodes` owns the built-in node definitions, builders, migrations, socket
 types, payload presentations, and inventory submissions. `logic_analyzer_graph` owns compiler and
-host services, and temporarily retains capture export, test support, and compatibility re-exports.
-Native and web application composition link the built-in bundle before constructing the host
-compiler.
+host services and temporarily retains test support and compatibility re-exports.
+`logic_analyzer_capture_export` owns native streaming capture export without depending on a graph
+crate. Native and web application composition link the built-in bundle before constructing the
+host compiler.
 
 ## Proposed future architecture
 

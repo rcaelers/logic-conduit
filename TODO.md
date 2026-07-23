@@ -149,8 +149,8 @@ order; update this single checklist as slices land:
   nodes, migrations, payload presentations, registrations, and isolated tests.
 - [x] Add explicit native and wasm linker anchors for the built-in-node crate and every enabled
   plugin; retain inventory-only registration.
-- [ ] Extract `logic_analyzer_capture_export` and remove format, ZIP, tempfile, and native export
-  dependencies from graph API/compiler crates.
+- [x] Extract `logic_analyzer_capture_export` and remove format, ZIP, tempfile, and native export
+  dependencies from graph API/compiler production code.
 - [ ] Move processing-backed public fake providers to `logic_analyzer_test_support`; keep
   node-isolation mocks private to the built-in-node crate.
 - [ ] Remove transitional re-exports and obsolete dependencies, enforce the final dependency
