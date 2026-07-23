@@ -3,5 +3,7 @@ pub(crate) mod capture_index;
 pub(crate) mod dsl_file;
 pub mod logic_analyzer;
 pub(crate) mod sigrok_file;
+#[cfg(test)]
+mod sigrokdecode;
 
 pub(crate) use capture_format::{get_packed_bit, parse_sample_rate};
