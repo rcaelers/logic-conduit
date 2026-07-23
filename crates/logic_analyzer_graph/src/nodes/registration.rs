@@ -12,6 +12,7 @@ pub struct GraphNodeRegistration {
     node_name: fn() -> &'static str,
     register_node: fn(&mut NodeTypeRegistry),
     create_builder: fn() -> Box<dyn RuntimeBuilder>,
+    required_payloads: &'static [&'static str],
 }
 
 impl GraphNodeRegistration {
@@ -27,7 +28,13 @@ impl GraphNodeRegistration {
             node_name: node_name::<N>,
             register_node: register_node::<N>,
             create_builder: create_builder::<B>,
+            required_payloads: &[],
         }
+    }
+
+    pub const fn requiring_payloads(mut self, required_payloads: &'static [&'static str]) -> Self {
+        self.required_payloads = required_payloads;
+        self
     }
 
     pub const fn stable_id(&self) -> &'static str {
@@ -36,6 +43,10 @@ impl GraphNodeRegistration {
 
     pub fn name(&self) -> &'static str {
         (self.node_name)()
+    }
+
+    pub const fn required_payloads(&self) -> &'static [&'static str] {
+        self.required_payloads
     }
 
     pub(crate) fn apply_node(&self, registry: &mut NodeTypeRegistry) {
@@ -89,6 +100,21 @@ pub(crate) fn graph_node_registrations() -> Vec<&'static GraphNodeRegistration> 
         );
     }
     registrations
+}
+
+pub(crate) fn validate_graph_node_payload_requirements(
+    payloads: &signal_processing::CollectedPayloadRegistry,
+) {
+    for registration in graph_node_registrations() {
+        for stable_id in registration.required_payloads() {
+            assert!(
+                payloads.descriptor_by_stable_id(stable_id).is_some(),
+                "graph-node inventory feature '{}' requires unavailable collected payload '{}'",
+                registration.stable_id(),
+                stable_id
+            );
+        }
+    }
 }
 
 #[cfg(test)]

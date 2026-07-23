@@ -23,7 +23,7 @@ pub use logic::{
     SrFlipFlopState, StringFormatter, StringFormatterState, WordMatcher, WordMatcherState,
 };
 pub use registration::GraphNodeRegistration;
-pub(crate) use registration::graph_node_registrations;
+pub(crate) use registration::{graph_node_registrations, validate_graph_node_payload_requirements};
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use registry::test_graphs_tests;
 pub use registry::{

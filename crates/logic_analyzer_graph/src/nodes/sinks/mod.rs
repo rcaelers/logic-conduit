@@ -11,4 +11,3 @@ pub use file_writer::{FileWriter, FileWriterState};
 pub use text_file_writer::TextFileWriter;
 pub use tgck_recorder::TgckRecorder;
 pub use viewer::{Viewer, ViewerState};
-pub(crate) use viewer::{WordSnapshotRenderer, register_collected_payload_subscriptions};

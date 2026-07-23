@@ -6,11 +6,13 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use web_time::Instant;
 
+#[cfg(test)]
+use crate::collected_payload::CollectedPayloadRegistrationError;
 use crate::collected_payload::{
     CollectedLaneIngestor, CollectedLaneQuery, CollectedLaneRequest, CollectedLaneSnapshotRequest,
     CollectedLaneTableMetadata, CollectedLaneTableRow, CollectedLaneTableSnapshot,
-    CollectedPayloadAdapter, CollectedPayloadDescriptor, CollectedPayloadRegistrationError,
-    CollectedPayloadRegistry, OpaqueCollectedLaneSnapshot,
+    CollectedPayloadAdapter, CollectedPayloadDescriptor, CollectedPayloadRegistry,
+    OpaqueCollectedLaneSnapshot,
 };
 use crate::derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 use crate::derived_word_store::{
@@ -1905,8 +1907,12 @@ pub fn built_in_word_lane_ingestor(
     options: CollectedWordLaneOptions,
 ) -> Box<dyn CollectedLaneIngestor> {
     let mut payloads = CollectedPayloadRegistry::new();
-    register_builtin_collected_payload_adapters(&mut payloads)
-        .expect("built-in collected payload registration must be valid");
+    payloads
+        .register::<Word>("org.logicconduit.word/v1")
+        .expect("built-in word payload identity must be valid");
+    payloads
+        .register_adapter::<Word>(word_payload_adapter())
+        .expect("built-in word payload adapter must be valid");
     let payload = payloads
         .descriptor::<Word>()
         .expect("built-in word payload must be registered")
@@ -1971,21 +1977,40 @@ impl CollectedPayloadAdapter for WordPayloadAdapter {
     }
 }
 
-/// Registers built-in retained payloads through the same adapter contract
-/// used by compile-time plugins.
-pub fn register_builtin_collected_payload_adapters(
+pub fn digital_payload_adapter() -> Arc<dyn CollectedPayloadAdapter> {
+    Arc::new(DigitalPayloadAdapter)
+}
+
+pub fn word_payload_adapter() -> Arc<dyn CollectedPayloadAdapter> {
+    Arc::new(WordPayloadAdapter)
+}
+
+pub fn trigger_payload_adapter() -> Arc<dyn CollectedPayloadAdapter> {
+    Arc::new(TriggerPayloadAdapter)
+}
+
+pub fn number_payload_adapter() -> Arc<dyn CollectedPayloadAdapter> {
+    Arc::new(NumberPayloadAdapter)
+}
+
+pub fn text_payload_adapter() -> Arc<dyn CollectedPayloadAdapter> {
+    Arc::new(TextPayloadAdapter)
+}
+
+#[cfg(test)]
+fn register_test_payload_adapters(
     registry: &mut CollectedPayloadRegistry,
 ) -> Result<(), CollectedPayloadRegistrationError> {
     registry.register::<Sample>("org.logicconduit.digital-sample/v1")?;
-    registry.register_adapter::<Sample>(Arc::new(DigitalPayloadAdapter))?;
+    registry.register_adapter::<Sample>(digital_payload_adapter())?;
     registry.register::<Word>("org.logicconduit.word/v1")?;
-    registry.register_adapter::<Word>(Arc::new(WordPayloadAdapter))?;
+    registry.register_adapter::<Word>(word_payload_adapter())?;
     registry.register::<Trigger>("org.logicconduit.trigger/v1")?;
-    registry.register_adapter::<Trigger>(Arc::new(TriggerPayloadAdapter))?;
+    registry.register_adapter::<Trigger>(trigger_payload_adapter())?;
     registry.register::<NumberSample>("org.logicconduit.number-sample/v1")?;
-    registry.register_adapter::<NumberSample>(Arc::new(NumberPayloadAdapter))?;
+    registry.register_adapter::<NumberSample>(number_payload_adapter())?;
     registry.register::<TextSample>("org.logicconduit.text-sample/v1")?;
-    registry.register_adapter::<TextSample>(Arc::new(TextPayloadAdapter))
+    registry.register_adapter::<TextSample>(text_payload_adapter())
 }
 
 /// Sink with one typed input per lane. Never blocks *waiting* on any single
@@ -2335,7 +2360,7 @@ mod tests {
     #[test]
     fn built_in_payloads_register_through_the_adapter_registry() {
         let mut payloads = crate::CollectedPayloadRegistry::new();
-        register_builtin_collected_payload_adapters(&mut payloads).unwrap();
+        register_test_payload_adapters(&mut payloads).unwrap();
 
         for type_id in [
             std::any::TypeId::of::<Sample>(),
@@ -2352,7 +2377,7 @@ mod tests {
     fn adapter_owned_lane_publishes_its_payload_identity() {
         let lanes = DerivedLanes::new();
         let mut payloads = crate::CollectedPayloadRegistry::new();
-        register_builtin_collected_payload_adapters(&mut payloads).unwrap();
+        register_test_payload_adapters(&mut payloads).unwrap();
         let descriptor = payloads.descriptor::<Word>().unwrap().clone();
         let ingestor = payloads
             .adapter_by_type_id(std::any::TypeId::of::<Word>())
@@ -2412,7 +2437,7 @@ mod tests {
     fn digital_adapter_publishes_an_opaque_snapshot_query() {
         let lanes = DerivedLanes::new();
         let mut payloads = crate::CollectedPayloadRegistry::new();
-        register_builtin_collected_payload_adapters(&mut payloads).unwrap();
+        register_test_payload_adapters(&mut payloads).unwrap();
         let descriptor = payloads.descriptor::<Sample>().unwrap().clone();
         let ingestor = payloads
             .adapter_by_type_id(std::any::TypeId::of::<Sample>())
@@ -2445,7 +2470,7 @@ mod tests {
     fn trigger_adapter_publishes_an_opaque_snapshot_query() {
         let lanes = DerivedLanes::new();
         let mut payloads = crate::CollectedPayloadRegistry::new();
-        register_builtin_collected_payload_adapters(&mut payloads).unwrap();
+        register_test_payload_adapters(&mut payloads).unwrap();
         let descriptor = payloads.descriptor::<Trigger>().unwrap().clone();
         let ingestor = payloads
             .adapter_by_type_id(std::any::TypeId::of::<Trigger>())
@@ -2478,7 +2503,7 @@ mod tests {
     fn level_adapters_publish_typed_snapshots_after_collection() {
         let lanes = DerivedLanes::new();
         let mut payloads = crate::CollectedPayloadRegistry::new();
-        register_builtin_collected_payload_adapters(&mut payloads).unwrap();
+        register_test_payload_adapters(&mut payloads).unwrap();
         let number = payloads
             .adapter_by_type_id(std::any::TypeId::of::<NumberSample>())
             .unwrap()

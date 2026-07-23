@@ -9,8 +9,8 @@ use logic_analyzer_viewer::{
     ViewerLaneTheme, ViewerLaneTrackId, ViewerOutputPresentation,
 };
 
+use crate::collected_payloads::WordSnapshotRenderer;
 use crate::decoder_table::{DecoderTableCellMode, DecoderTableColumnPresentation};
-use crate::nodes::sinks::WordSnapshotRenderer;
 
 struct SpiLaneRenderer;
 

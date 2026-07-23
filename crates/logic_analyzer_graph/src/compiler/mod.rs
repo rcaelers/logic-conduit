@@ -1,3 +1,4 @@
+mod collected_payload_registration;
 mod data_collector;
 mod errors;
 mod graph;
@@ -15,6 +16,8 @@ mod cache_platform;
 #[path = "cache_platform_wasm.rs"]
 mod cache_platform;
 
+pub use collected_payload_registration::CollectedPayloadRegistration;
+pub(crate) use collected_payload_registration::collected_payload_registrations;
 pub(crate) use data_collector::{BUILDER_NAME as DATA_COLLECTOR_BUILDER, DataCollectorBuilder};
 pub use errors::{ApplyError, CompileError};
 pub(crate) use graph::parse_state;

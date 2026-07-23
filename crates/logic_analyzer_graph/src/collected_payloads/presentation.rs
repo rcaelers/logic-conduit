@@ -1,4 +1,4 @@
-//! Built-in collected-payload renderers for `Viewer` subscriptions.
+//! Built-in collected-payload waveform renderers.
 
 use std::sync::Arc;
 

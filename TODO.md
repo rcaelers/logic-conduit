@@ -37,8 +37,10 @@ Delivery plan:
 3. **Platform-sensitive graph nodes — complete:** sources and writers submit one stable feature
    identity from their owning directory while selecting complete native or WASM builder files at
    that boundary. `registry_native.rs` and `registry_web.rs` have been removed.
-4. Add the collected-payload inventory and migrate built-in payload/channel/adapter/default-renderer
-   registration before allowing graph-node requirements to resolve against it.
+4. **Collected-payload capabilities — complete:** each built-in retained payload submits its stable
+   identity, typed channel setup, ingestion/query adapter, request configuration, persistence policy,
+   and default waveform renderer atomically. Payloads are applied deterministically before graph-node
+   payload requirements are validated.
 5. Add UI-panel inventory registration and migrate the example Camera Frames panel.
 6. Migrate the example plugin to force-linked inventory submissions and remove explicit
    `example_plugin::register` and application registration callbacks.

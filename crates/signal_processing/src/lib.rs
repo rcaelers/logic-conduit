@@ -105,7 +105,8 @@ pub use derived_data_collector::{
     DerivedDataRetention, DerivedLane, DerivedLaneData, DerivedLanes, DigitalFold,
     DigitalLaneSnapshot, IndexedAnnotationLane, LaneSummary, MarkerFold, NumberLaneSnapshot,
     OpaqueCollectedLane, TextLaneSnapshot, TriggerLaneSnapshot, ValueFold, WordLaneSnapshot,
-    built_in_word_lane_ingestor, register_builtin_collected_payload_adapters,
+    built_in_word_lane_ingestor, digital_payload_adapter, number_payload_adapter,
+    text_payload_adapter, trigger_payload_adapter, word_payload_adapter,
 };
 pub use derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 pub use derived_word_store::{

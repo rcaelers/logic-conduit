@@ -683,11 +683,12 @@ impl BuilderRegistry {
             collected_payloads: CollectedPayloadRegistry::new(),
             payload_subscriptions: Vec::new(),
         };
-        signal_processing::register_builtin_collected_payload_adapters(
-            &mut registry.collected_payloads,
-        )
-        .expect("built-in collected payload adapters must be valid");
-        crate::nodes::sinks::register_collected_payload_subscriptions(&mut registry);
+        for registration in super::collected_payload_registrations() {
+            registration
+                .apply_to(&mut registry)
+                .expect("collected-payload inventory registration must be valid");
+        }
+        crate::nodes::validate_graph_node_payload_requirements(&registry.collected_payloads);
         registry
     }
 
