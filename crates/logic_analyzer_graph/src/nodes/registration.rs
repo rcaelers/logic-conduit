@@ -1,0 +1,105 @@
+//! Inventory contract for one atomic graph-node feature.
+
+use std::collections::HashSet;
+
+use node_graph::{NodeDef, NodeTypeRegistry};
+
+use crate::RuntimeBuilder;
+
+/// One independently discoverable graph node paired with its runtime builder.
+pub struct GraphNodeRegistration {
+    stable_id: &'static str,
+    node_name: fn() -> &'static str,
+    register_node: fn(&mut NodeTypeRegistry),
+    create_builder: fn() -> Box<dyn RuntimeBuilder>,
+}
+
+impl GraphNodeRegistration {
+    /// Declares a runnable graph node. The processing implementation remains
+    /// private behind `B`; only its graph-owned builder is discoverable.
+    pub const fn runnable<N, B>(stable_id: &'static str) -> Self
+    where
+        N: NodeDef,
+        B: RuntimeBuilder + Default + 'static,
+    {
+        Self {
+            stable_id,
+            node_name: node_name::<N>,
+            register_node: register_node::<N>,
+            create_builder: create_builder::<B>,
+        }
+    }
+
+    pub const fn stable_id(&self) -> &'static str {
+        self.stable_id
+    }
+
+    pub fn name(&self) -> &'static str {
+        (self.node_name)()
+    }
+
+    pub(crate) fn apply_node(&self, registry: &mut NodeTypeRegistry) {
+        (self.register_node)(registry);
+    }
+
+    pub(crate) fn builder(&self) -> Box<dyn RuntimeBuilder> {
+        (self.create_builder)()
+    }
+}
+
+fn node_name<N: NodeDef>() -> &'static str {
+    N::name()
+}
+
+fn register_node<N: NodeDef>(registry: &mut NodeTypeRegistry) {
+    registry.register::<N>();
+}
+
+fn create_builder<B>() -> Box<dyn RuntimeBuilder>
+where
+    B: RuntimeBuilder + Default + 'static,
+{
+    Box::<B>::default()
+}
+
+inventory::collect!(GraphNodeRegistration);
+
+pub(crate) fn graph_node_registrations() -> Vec<&'static GraphNodeRegistration> {
+    let mut registrations = inventory::iter::<GraphNodeRegistration>
+        .into_iter()
+        .collect::<Vec<_>>();
+    registrations.sort_by_key(|registration| registration.stable_id());
+
+    let mut stable_ids = HashSet::new();
+    let mut names = HashSet::new();
+    for registration in &registrations {
+        assert!(
+            !registration.stable_id().trim().is_empty(),
+            "graph-node inventory contains an empty stable ID"
+        );
+        assert!(
+            stable_ids.insert(registration.stable_id()),
+            "duplicate graph-node inventory stable ID '{}'",
+            registration.stable_id()
+        );
+        assert!(
+            names.insert(registration.name()),
+            "duplicate graph-node inventory name '{}'",
+            registration.name()
+        );
+    }
+    registrations
+}
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+
+    #[test]
+    fn collected_registrations_are_stably_ordered_and_unique() {
+        let registrations = graph_node_registrations();
+        assert!(registrations.windows(2).all(|pair| {
+            pair[0].stable_id() < pair[1].stable_id() && pair[0].name() != pair[1].name()
+        }));
+    }
+}

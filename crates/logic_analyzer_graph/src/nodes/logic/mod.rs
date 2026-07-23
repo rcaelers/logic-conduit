@@ -7,7 +7,6 @@ mod logic_gate;
 mod sr_flip_flop;
 mod word_matcher;
 
-pub(crate) use buffer::BufferBuilder;
 pub use buffer::{Buffer, BufferState};
 pub(crate) use counter::CounterBuilder;
 pub use counter::{Counter, CounterState};

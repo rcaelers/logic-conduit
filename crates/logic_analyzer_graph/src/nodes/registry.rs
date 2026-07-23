@@ -20,7 +20,7 @@ use egui::Color32;
 use node_graph::{NodeTypeRegistry, SocketDef, SocketShape};
 
 use super::decoders::{BinaryDecoder, I2cDecoder, SpiDecoder, UartDecoder};
-use super::logic::{Buffer, Counter, LogicGate, SrFlipFlop, StringFormatter, WordMatcher};
+use super::logic::{Counter, LogicGate, SrFlipFlop, StringFormatter, WordMatcher};
 use super::sinks::{TgckRecorder, Viewer};
 #[cfg(any(test, feature = "test-support"))]
 use super::sources::{TestCaptureSource, TestUartSource};
@@ -158,11 +158,18 @@ pub fn build_registry() -> NodeTypeRegistry {
     registry.register::<WordMatcher>();
     registry.register::<SrFlipFlop>();
     registry.register::<LogicGate>();
-    registry.register::<Buffer>();
     registry.register::<Counter>();
     registry.register::<StringFormatter>();
     registry.register::<TgckRecorder>();
     registry.register::<Viewer>();
+    for registration in super::graph_node_registrations() {
+        assert!(
+            registry.category_of(registration.name()).is_none(),
+            "graph-node inventory definition '{}' conflicts with an explicit catalog entry",
+            registration.name()
+        );
+        registration.apply_node(&mut registry);
+    }
     registry
 }
 

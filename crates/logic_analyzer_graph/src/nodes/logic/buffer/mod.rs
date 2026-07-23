@@ -1,5 +1,5 @@
 mod builder;
 mod definition;
+mod registration;
 
-pub(crate) use builder::BufferBuilder;
 pub use definition::{Buffer, BufferState};

@@ -1,5 +1,48 @@
 # TODO
 
+## Inventory-backed compile-time feature registration
+
+Use `inventory` to remove central built-in and compile-time-plugin registration lists while
+preserving explicit ownership, stable identities, deterministic startup, and native/WASM parity.
+Inventory discovers submitted feature descriptors; it does not infer trait implementations.
+
+Registration granularity follows independently usable capabilities:
+
+- one atomic graph-node submission per concrete `logic_analyzer_graph` node directory, pairing
+  its `NodeDef`, runtime builder factory, migrations, and output-specific presentation metadata;
+- no separate submission for a `logic_analyzer_processing` node, because its graph-owned builder
+  constructs it and must not be independently discoverable;
+- one payload submission per independently shared collected payload, owning typed channel setup,
+  ingestion, retained query/storage, and default presentation;
+- one UI submission per independently openable panel kind;
+- no submission for socket definitions, `PortValue` marker implementations, categories, or helper
+  types; their owning feature registers or references them;
+- an optional plugin manifest may submit package name/version metadata, but package boundaries do
+  not replace feature identities.
+
+Process inventories in dependency order: payloads, graph nodes, then UI panels. Sort every phase by
+stable ID before applying it. Reject duplicate stable IDs and graph names, missing builders or
+payload requirements, and advertised presentations without renderers. Select complete native or
+WASM submissions at platform module boundaries. A compile-time plugin crate must still be enabled
+and force-linked into the final application; inventory does not discover unlinked crates.
+
+Delivery plan:
+
+1. **Graph-node contract and proof — complete:** add the inventory-backed atomic graph-node
+   descriptor, deterministic validation/application, and migrate Buffer as the first built-in node.
+2. Migrate the remaining platform-neutral graph nodes one directory at a time and remove their
+   entries from the central node and builder catalogs.
+3. Move platform-sensitive nodes to whole-module native/WASM submissions with the same stable
+   feature identities, then remove `registry_native.rs` and `registry_web.rs`.
+4. Add the collected-payload inventory and migrate built-in payload/channel/adapter/default-renderer
+   registration before allowing graph-node requirements to resolve against it.
+5. Add UI-panel inventory registration and migrate the example Camera Frames panel.
+6. Migrate the example plugin to force-linked inventory submissions and remove explicit
+   `example_plugin::register` and application registration callbacks.
+7. Add collision, missing-dependency, deterministic-order, force-link, native, and WASM constructor
+   coverage; initialize WASM constructors once at the web platform entry point before iteration.
+8. Remove remaining compatibility registration functions and temporary migration scaffolding.
+
 ## Logic-analyzer viewer
 
 - Add global and per-lane height zoom, using modifier + scroll-wheel input.

@@ -38,6 +38,7 @@ pub use decoder_table::{
     DecoderTableCellMode, DecoderTableColumn, DecoderTableColumnPresentation, DecoderTableRegistry,
     DecoderTableSource,
 };
+pub use nodes::GraphNodeRegistration;
 #[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub use test_support::{

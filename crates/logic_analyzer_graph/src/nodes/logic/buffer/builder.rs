@@ -28,6 +28,7 @@ fn selected_kind(state: &Value) -> PortKind {
     }
 }
 
+#[derive(Default)]
 pub(crate) struct BufferBuilder;
 
 impl RuntimeBuilder for BufferBuilder {

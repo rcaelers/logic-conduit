@@ -1,6 +1,7 @@
 //! Concrete graph nodes and their registry infrastructure.
 
 mod catalog;
+mod registration;
 mod registry;
 
 pub mod decoders;
@@ -24,6 +25,8 @@ pub use logic::{
     Buffer, BufferState, Counter, CounterState, LogicGate, LogicGateState, SrFlipFlop,
     SrFlipFlopState, StringFormatter, StringFormatterState, WordMatcher, WordMatcherState,
 };
+pub use registration::GraphNodeRegistration;
+pub(crate) use registration::graph_node_registrations;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use registry::test_graphs_tests;
 pub use registry::{

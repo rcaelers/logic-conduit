@@ -4,8 +4,7 @@ use std::collections::HashMap;
 
 use super::decoders::{BinaryDecoderBuilder, SpiDecoderBuilder, UartDecoderBuilder};
 use super::logic::{
-    BufferBuilder, CounterBuilder, FormatterBuilder, LogicGateBuilder, SrFlipFlopBuilder,
-    WordMatcherBuilder,
+    CounterBuilder, FormatterBuilder, LogicGateBuilder, SrFlipFlopBuilder, WordMatcherBuilder,
 };
 use super::sinks::{TgckRecorderBuilder, ViewerSubscriptionBuilder};
 #[cfg(any(test, feature = "test-support"))]
@@ -36,10 +35,18 @@ pub(crate) fn standard_builders() -> HashMap<String, Box<dyn RuntimeBuilder>> {
     builders.insert("Word Matcher".into(), Box::new(WordMatcherBuilder));
     builders.insert("SR Flip-Flop".into(), Box::new(SrFlipFlopBuilder));
     builders.insert("Logic Gate".into(), Box::new(LogicGateBuilder));
-    builders.insert("Buffer".into(), Box::new(BufferBuilder));
     builders.insert("Counter".into(), Box::new(CounterBuilder));
     builders.insert("String Formatter".into(), Box::new(FormatterBuilder));
     builders.insert("TGCK Recorder".into(), Box::new(TgckRecorderBuilder));
     builders.insert("Viewer".into(), Box::new(ViewerSubscriptionBuilder));
+    for registration in super::graph_node_registrations() {
+        assert!(
+            builders
+                .insert(registration.name().to_owned(), registration.builder())
+                .is_none(),
+            "graph-node inventory builder '{}' conflicts with an explicit catalog entry",
+            registration.name()
+        );
+    }
     builders
 }
