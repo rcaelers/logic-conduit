@@ -19,6 +19,9 @@ example-plugin = { path = "../../plugins/example-plugin", optional = true }
 [features]
 example-plugin = ["dep:example-plugin"]
 
+[dev-dependencies]
+logic-analyzer-graph = { path = "../logic_analyzer_graph" }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage", "NSMenu", "NSMenuItem", "NSWindow"] }

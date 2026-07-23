@@ -2138,6 +2138,7 @@ dependencies = [
  "eframe",
  "egui",
  "example-plugin",
+ "logic-analyzer-graph",
  "logic-analyzer-ui",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
@@ -2150,6 +2151,7 @@ name = "logic-analyzer-app-web"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "example-plugin",
  "log",
  "logic-analyzer-ui",
  "node-graph",

@@ -95,7 +95,7 @@ pub(crate) fn run() -> MainResult {
         options,
         Box::new(move |cc| {
             #[cfg(feature = "example-plugin")]
-            example_plugin::force_link();
+            std::hint::black_box(example_plugin::force_link());
             let app = logic_analyzer_ui::App::new_with_file(cc, args.file.as_deref());
             #[cfg(target_os = "macos")]
             macos_menu::install(app.recent_files());
@@ -139,6 +139,24 @@ mod logging_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "example-plugin")]
+    #[test]
+    fn force_link_makes_example_plugin_inventories_visible_to_the_native_host() {
+        std::hint::black_box(example_plugin::force_link());
+
+        let nodes = logic_analyzer_graph::nodes::build_registry();
+        assert_eq!(nodes.category_of("Pulse Measure"), Some("Plugin"));
+        assert_eq!(nodes.category_of("Camera Frame Source"), Some("Plugin"));
+
+        let builders = logic_analyzer_graph::BuilderRegistry::standard();
+        assert!(
+            builders
+                .collected_payloads()
+                .descriptor_by_stable_id("org.logicconduit.example.camera-frame/v1")
+                .is_some()
+        );
+    }
 
     #[test]
     fn embedded_application_icon_is_available() {

@@ -46,10 +46,13 @@ Delivery plan:
    and no longer uses the application plugin callback for panel registration.
 6. **Inventory-native example plugin — complete:** Pulse Measure, Camera Frame Source, the custom
    CameraFrame collected payload, and Camera Frames panel are independent submissions. The host
-   force-links the optional plugin through a no-op anchor; explicit plugin registration and
+   force-links the optional plugin through a retained symbol anchor; explicit plugin registration and
    application registration callbacks have been removed.
-7. Add collision, missing-dependency, deterministic-order, force-link, native, and WASM constructor
-   coverage; initialize WASM constructors once at the web platform entry point before iteration.
+7. **Startup validation and platform coverage — complete:** injectable inventory validators cover
+   collisions, missing payload dependencies, and deterministic order; a native host test proves the
+   optional plugin's nodes and payload are force-linked; WASM targets compile the graph, UI, and
+   example-plugin inventories; and the web entry point invokes constructors once before inventory
+   iteration.
 8. Remove remaining compatibility registration functions and temporary migration scaffolding.
 
 ## Logic-analyzer viewer

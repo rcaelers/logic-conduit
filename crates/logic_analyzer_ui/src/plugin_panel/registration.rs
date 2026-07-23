@@ -84,10 +84,15 @@ pub(crate) fn ui_panel_registrations() -> Vec<&'static UiPanelRegistration> {
     let mut registrations = inventory::iter::<UiPanelRegistration>
         .into_iter()
         .collect::<Vec<_>>();
+    validate_ui_panel_registrations(&mut registrations);
+    registrations
+}
+
+fn validate_ui_panel_registrations(registrations: &mut Vec<&UiPanelRegistration>) {
     registrations.sort_by_key(|registration| registration.stable_id());
 
     let mut stable_ids = HashSet::new();
-    for registration in &registrations {
+    for registration in registrations {
         assert!(
             !registration.stable_id().trim().is_empty(),
             "UI-panel inventory contains an empty stable ID"
@@ -103,7 +108,6 @@ pub(crate) fn ui_panel_registrations() -> Vec<&'static UiPanelRegistration> {
             registration.stable_id()
         );
     }
-    registrations
 }
 
 #[cfg(test)]
@@ -144,5 +148,18 @@ mod registration_tests {
             .expect("inventory panel must be available to application composition");
         assert_eq!(definition.title, "Inventory Panel");
         assert_eq!(definition.icon, PluginPanelIcon::Image);
+    }
+
+    #[test]
+    fn duplicate_ui_panel_registration_is_rejected() {
+        let registration = ui_panel_registrations()[0];
+        let mut registrations = vec![registration, registration];
+
+        assert!(
+            std::panic::catch_unwind(move || {
+                validate_ui_panel_registrations(&mut registrations)
+            })
+            .is_err()
+        );
     }
 }

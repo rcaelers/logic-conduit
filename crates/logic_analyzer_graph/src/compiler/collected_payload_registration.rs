@@ -119,11 +119,18 @@ pub(crate) fn collected_payload_registrations() -> Vec<&'static CollectedPayload
     let mut registrations = inventory::iter::<CollectedPayloadRegistration>
         .into_iter()
         .collect::<Vec<_>>();
+    validate_collected_payload_registrations(&mut registrations);
+    registrations
+}
+
+fn validate_collected_payload_registrations(
+    registrations: &mut Vec<&CollectedPayloadRegistration>,
+) {
     registrations.sort_by_key(|registration| registration.stable_id());
 
     let mut stable_ids = HashSet::new();
     let mut type_ids = HashSet::new();
-    for registration in &registrations {
+    for registration in registrations {
         assert!(
             !registration.stable_id().trim().is_empty(),
             "collected-payload inventory contains an empty stable ID"
@@ -139,7 +146,6 @@ pub(crate) fn collected_payload_registrations() -> Vec<&'static CollectedPayload
             registration.payload_name()
         );
     }
-    registrations
 }
 
 #[cfg(test)]
@@ -180,5 +186,18 @@ mod collected_payload_registration_tests {
             );
             assert!(registry.has_payload_subscription(registration.stable_id()));
         }
+    }
+
+    #[test]
+    fn duplicate_collected_payload_registration_is_rejected() {
+        let registration = collected_payload_registrations()[0];
+        let mut registrations = vec![registration, registration];
+
+        assert!(
+            std::panic::catch_unwind(move || {
+                validate_collected_payload_registrations(&mut registrations)
+            })
+            .is_err()
+        );
     }
 }

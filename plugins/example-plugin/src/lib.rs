@@ -7,5 +7,10 @@ mod pulse_measure;
 pub use camera_frame::{CameraFrame, CameraFrameSocket, CameraFrameSource};
 pub use pulse_measure::{PulseMeasure, PulseSocket, PulseWidth};
 
+static LINK_ANCHOR: u8 = 0;
+
 /// Linker anchor used by a host that enables this compile-time plugin.
-pub fn force_link() {}
+#[inline(never)]
+pub fn force_link() -> usize {
+    std::ptr::addr_of!(LINK_ANCHOR) as usize
+}

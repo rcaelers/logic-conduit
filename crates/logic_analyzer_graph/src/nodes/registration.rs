@@ -94,11 +94,16 @@ pub(crate) fn graph_node_registrations() -> Vec<&'static GraphNodeRegistration> 
     let mut registrations = inventory::iter::<GraphNodeRegistration>
         .into_iter()
         .collect::<Vec<_>>();
+    validate_graph_node_registrations(&mut registrations);
+    registrations
+}
+
+fn validate_graph_node_registrations(registrations: &mut Vec<&GraphNodeRegistration>) {
     registrations.sort_by_key(|registration| registration.stable_id());
 
     let mut stable_ids = HashSet::new();
     let mut names = HashSet::new();
-    for registration in &registrations {
+    for registration in registrations {
         assert!(
             !registration.stable_id().trim().is_empty(),
             "graph-node inventory contains an empty stable ID"
@@ -114,13 +119,19 @@ pub(crate) fn graph_node_registrations() -> Vec<&'static GraphNodeRegistration> 
             registration.name()
         );
     }
-    registrations
 }
 
 pub(crate) fn validate_graph_node_payload_requirements(
     payloads: &signal_processing::CollectedPayloadRegistry,
 ) {
-    for registration in graph_node_registrations() {
+    validate_graph_node_payload_requirements_for(&graph_node_registrations(), payloads);
+}
+
+fn validate_graph_node_payload_requirements_for(
+    registrations: &[&GraphNodeRegistration],
+    payloads: &signal_processing::CollectedPayloadRegistry,
+) {
+    for registration in registrations {
         for stable_id in registration.required_payloads() {
             assert!(
                 payloads.descriptor_by_stable_id(stable_id).is_some(),
@@ -136,11 +147,58 @@ pub(crate) fn validate_graph_node_payload_requirements(
 mod registration_tests {
     use super::*;
 
+    fn unused_register_node(_registry: &mut NodeTypeRegistry) {}
+
+    fn unused_builder() -> Box<dyn RuntimeBuilder> {
+        panic!("test registration builder must not be constructed")
+    }
+
+    fn missing_payload_node_name() -> &'static str {
+        "Missing Payload Test Node"
+    }
+
+    static MISSING_PAYLOAD_REGISTRATION: GraphNodeRegistration = GraphNodeRegistration {
+        stable_id: "org.logicconduit.test.missing-payload/v1",
+        node_name: missing_payload_node_name,
+        register_node: unused_register_node,
+        create_builder: unused_builder,
+        required_payloads: &["org.logicconduit.test.absent-payload/v1"],
+        runtime_setup: &[],
+    };
+
     #[test]
     fn collected_registrations_are_stably_ordered_and_unique() {
         let registrations = graph_node_registrations();
         assert!(registrations.windows(2).all(|pair| {
             pair[0].stable_id() < pair[1].stable_id() && pair[0].name() != pair[1].name()
         }));
+    }
+
+    #[test]
+    fn duplicate_graph_node_registration_is_rejected() {
+        let registration = graph_node_registrations()[0];
+        let mut registrations = vec![registration, registration];
+
+        assert!(
+            std::panic::catch_unwind(move || {
+                validate_graph_node_registrations(&mut registrations)
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn missing_collected_payload_dependency_is_rejected() {
+        let payloads = signal_processing::CollectedPayloadRegistry::new();
+
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                validate_graph_node_payload_requirements_for(
+                    &[&MISSING_PAYLOAD_REGISTRATION],
+                    &payloads,
+                )
+            }))
+            .is_err()
+        );
     }
 }

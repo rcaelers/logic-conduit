@@ -34,8 +34,8 @@ One window, split by a draggable horizontal splitter:
 ```
 
 - `App::build` creates the node-type registry (`nodes::build_registry()`), the builder
-  registry (`compiler::BuilderRegistry::standard()`), runs plugin registration hooks, and
-  installs a platform symbol font (menu glyphs).
+  registry (`compiler::BuilderRegistry::standard()`), applies compile-time inventory submissions,
+  and installs a platform symbol font (menu glyphs).
 - Graphs are saved/loaded as the editor's JSON document (`⌘O` / `⌘S` / `⇧⌘S`); the binary
   accepts a graph file argument (`logic-conduit graphs/spi_controlled_decode.json`). Example graphs live in
   [graphs/](../graphs).
@@ -228,7 +228,9 @@ capabilities through `inventory`. The host enables and force-links the plugin cr
 composition then applies payloads, graph nodes, and panels in deterministic stable-ID order without
 a plugin registration callback. [plugins/example-plugin](../plugins/example-plugin) demonstrates
 custom channel and collected payload types, socket types, graph definitions and runtime builders,
-a waveform renderer, and an independently openable panel.
+a waveform renderer, and an independently openable panel. Native hosts retain an explicit symbol
+anchor for every enabled plugin. The web entry point invokes the module constructors exactly once
+before creating the application, so WASM inventory submissions are populated before iteration.
 
 ## wasm
 

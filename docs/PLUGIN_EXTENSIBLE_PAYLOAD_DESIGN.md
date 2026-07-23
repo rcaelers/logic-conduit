@@ -178,8 +178,10 @@ on native targets as part of the workspace and explicitly on `wasm32-unknown-unk
   for a data subscription and reports a targeted error for an unavailable subscription contract
   or adapter.
 - `logic_analyzer_ui` owns panel factories, panel state, and the read-only panel data context.
-- The application-level plugin registration entry point composes the lower-level registries without
-  making `signal_processing` depend on UI crates.
+- Application composition iterates the independent graph, payload, and panel inventories without
+  making `signal_processing` depend on graph or UI crates. Enabled plugin crates are retained by a
+  host symbol anchor; the web platform entry point invokes module constructors once before the
+  first inventory iteration.
 
 Compile-time Rust plugins are the initial extension mechanism. Runtime-loaded native plugins need
 an additional ABI-stable boundary and are outside this design phase.
