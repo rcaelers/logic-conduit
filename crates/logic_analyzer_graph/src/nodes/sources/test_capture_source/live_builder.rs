@@ -11,6 +11,7 @@ use crate::{
     RuntimeBuilder, SimpleTriggerChannel, TriggerConfigurationFeature,
 };
 
+#[derive(Default)]
 pub(crate) struct TestLiveCaptureSourceBuilder;
 
 pub(crate) fn conditions(

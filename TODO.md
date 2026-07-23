@@ -34,8 +34,9 @@ Delivery plan:
    definition and builder atomically, and the central node and builder catalogs no longer name
    those features. The editor-only I²C definition remains explicit because it has no runtime
    builder and is therefore not a runnable graph-node feature.
-3. Move platform-sensitive nodes to whole-module native/WASM submissions with the same stable
-   feature identities, then remove `registry_native.rs` and `registry_web.rs`.
+3. **Platform-sensitive graph nodes — complete:** sources and writers submit one stable feature
+   identity from their owning directory while selecting complete native or WASM builder files at
+   that boundary. `registry_native.rs` and `registry_web.rs` have been removed.
 4. Add the collected-payload inventory and migrate built-in payload/channel/adapter/default-renderer
    registration before allowing graph-node requirements to resolve against it.
 5. Add UI-panel inventory registration and migrate the example Camera Frames panel.

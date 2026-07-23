@@ -1,6 +1,10 @@
 //! Concrete graph nodes and their registry infrastructure.
 
 mod catalog;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod platform_registration_tests;
+#[cfg(all(test, target_arch = "wasm32"))]
+mod platform_registration_web_tests;
 mod registration;
 mod registry;
 
@@ -8,13 +12,6 @@ pub mod decoders;
 pub mod logic;
 pub mod sinks;
 pub mod sources;
-
-#[cfg(not(target_arch = "wasm32"))]
-#[path = "registry_native.rs"]
-mod registry_platform;
-#[cfg(target_arch = "wasm32")]
-#[path = "registry_web.rs"]
-mod registry_platform;
 
 pub(crate) use catalog::standard_builders;
 pub use decoders::{

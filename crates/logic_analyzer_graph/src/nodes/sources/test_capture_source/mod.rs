@@ -11,7 +11,6 @@ mod live_capture;
 mod registration;
 mod trigger;
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use builder::TestCaptureSourceBuilder;
 pub use definition::{TestCaptureSource, TestCaptureSourceState, TestLiveCaptureSource};
-pub(crate) use live_builder::TestLiveCaptureSourceBuilder;

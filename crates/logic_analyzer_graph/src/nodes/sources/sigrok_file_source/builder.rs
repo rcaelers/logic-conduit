@@ -12,6 +12,7 @@ use crate::{
     ResolvedInputs, RuntimeBuilder, parse_state,
 };
 
+#[derive(Default)]
 pub(crate) struct SigrokFileSourceBuilder;
 
 impl RuntimeBuilder for SigrokFileSourceBuilder {

@@ -12,6 +12,7 @@ use crate::{
     TriggerConfigurationFeature, parse_state,
 };
 
+#[derive(Default)]
 pub(crate) struct DsLogicU3Pro16Builder;
 
 impl RuntimeBuilder for DsLogicU3Pro16Builder {

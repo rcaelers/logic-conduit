@@ -15,6 +15,7 @@ use crate::{
     RuntimeBuilder, parse_state,
 };
 
+#[derive(Default)]
 pub(crate) struct FileSourceBuilder;
 
 impl RuntimeBuilder for FileSourceBuilder {

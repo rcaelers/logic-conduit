@@ -8,6 +8,7 @@ use signal_processing::{ProcessNode, TextSample, Word};
 
 use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
+#[derive(Default)]
 pub(crate) struct FileWriterBuilder;
 
 impl RuntimeBuilder for FileWriterBuilder {

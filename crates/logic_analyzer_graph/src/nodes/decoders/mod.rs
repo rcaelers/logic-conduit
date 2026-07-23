@@ -5,7 +5,7 @@ mod i2c_decoder;
 mod spi_decoder;
 mod uart_decoder;
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use binary_decoder::BinaryDecoderBuilder;
 #[cfg(test)]
 pub(crate) use binary_decoder::default_input_strategy;

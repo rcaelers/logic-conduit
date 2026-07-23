@@ -8,6 +8,7 @@ use signal_processing::{ProcessNode, Sample, SampleBlock};
 
 use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder};
 
+#[derive(Default)]
 pub(crate) struct TestLiveCaptureSourceBuilder;
 
 impl RuntimeBuilder for TestLiveCaptureSourceBuilder {

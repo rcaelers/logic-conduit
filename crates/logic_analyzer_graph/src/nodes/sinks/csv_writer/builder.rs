@@ -9,6 +9,7 @@ use signal_processing::{ProcessNode, TextSample, Word};
 
 use crate::{CompileCtx, PortKind, ResolvedInputs, RuntimeBuilder, parse_state};
 
+#[derive(Default)]
 pub(crate) struct CsvWriterBuilder;
 
 impl RuntimeBuilder for CsvWriterBuilder {

@@ -5,9 +5,9 @@ mod definition;
 mod implementation;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_capture;
+mod registration;
 mod trigger;
 #[cfg(not(target_arch = "wasm32"))]
 mod trigger_lowering;
 
-pub(crate) use builder::DsLogicU3Pro16Builder;
 pub use definition::{CaptureDurationValue, DsLogicU3Pro16, U3Pro16Metadata, U3Pro16State};

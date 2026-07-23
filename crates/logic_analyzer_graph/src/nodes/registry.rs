@@ -141,7 +141,6 @@ pub(crate) const COLOR_OUTPUT: Color32 = Color32::from_rgb(160, 80, 60);
 
 pub fn build_registry() -> NodeTypeRegistry {
     let mut registry = NodeTypeRegistry::new();
-    super::registry_platform::register_nodes(&mut registry);
     registry.register::<I2cDecoder>();
     for registration in super::graph_node_registrations() {
         assert!(

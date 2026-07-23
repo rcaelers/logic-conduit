@@ -12,8 +12,6 @@ pub(crate) fn standard_builders() -> HashMap<String, Box<dyn RuntimeBuilder>> {
         Box::new(crate::compiler::DataCollectorBuilder),
     );
 
-    super::registry_platform::register_builders(&mut builders);
-
     for registration in super::graph_node_registrations() {
         assert!(
             builders
