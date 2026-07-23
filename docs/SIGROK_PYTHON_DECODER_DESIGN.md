@@ -20,7 +20,7 @@ Actionable delivery work is tracked in the **Sigrok Python protocol decoders** s
 - Discover decoder identity, channels, options, protocol inputs and outputs, annotations, binary
   classes, logic outputs, tags, descriptions, and license information.
 - Run raw-logic decoders with compatible `wait()` behavior over finite and growing captures.
-- Run stacked decoders by routing `OUTPUT_PYTHON` packets between decoder instances.
+- Represent stacked decoders as independent graph nodes connected by typed protocol-packet edges.
 - Publish annotations and other supported outputs through registered, protocol-independent
   collected-payload contracts.
 - Derive graph controls, viewer lanes, and decoder-table columns from explicit decoder metadata.
@@ -78,7 +78,7 @@ logic_analyzer_processing
     outputs            Python-to-Rust output validation and conversion
     platform           native implementation and target selection
   nodes/decoders/sigrok_decoder/
-    implementation     ProcessNode facade and configured decoder stack
+    implementation     ProcessNode facade for one configured decoder instance
 
 logic_analyzer_graph_nodes
   nodes/decoders/sigrok_decoder/
@@ -115,7 +115,7 @@ attributes into a `SigrokDecoderDescriptor`. The descriptor contains:
 Search-path order is explicit. Duplicate stable IDs are rejected or resolved by a visible host
 policy; filesystem order never silently decides which implementation wins. Saved graphs retain
 the decoder ID, compatibility profile, relevant package fingerprint, configured channel mapping,
-options, and stack configuration.
+options, and protocol input/output schema.
 
 Discovery is cached outside the frame-rendering path. Refreshing decoder directories is an
 explicit host operation and cannot mutate an executing pipeline.
@@ -186,22 +186,26 @@ Growing captures expose only committed input. A decoder cannot observe staged or
 discarded samples. Backpressure is bounded and isolated from acquisition in the same way as other
 analysis nodes.
 
-## Stacked decoders
+## Graph-based decoder stacking
 
 Decoders with raw logic input call `wait()`. Decoders with protocol inputs receive calls to
 `decode(start_sample, end_sample, data)` for compatible `OUTPUT_PYTHON` packets emitted below
 them.
 
-Stack routing uses declared protocol IDs, not decoder names. A graph connection is valid when an
-emitted protocol ID intersects the receiving decoder's declared inputs. The Python packet remains
-owned by the Python host while it is delivered synchronously to downstream decoder instances; the
-generic runtime does not interpret its shape.
+Each decoder instance remains an independent processing node. Stack routing is expressed only by
+ordinary node-graph connections; the Python host does not construct, configure, or execute a
+hidden decoder stack. A graph connection is valid when the emitted protocol ID intersects the
+receiving decoder's declared inputs. Routing uses those declared IDs, not decoder names.
 
-When protocol packets must cross an asynchronous processing boundary, the Sigrok owner converts
-the supported Python value subset into an owned recursive value model containing null, booleans,
-integers, floats, strings, bytes, lists, tuples, and string-keyed mappings. A packet that cannot be
-represented produces a structured compatibility error. The initial implementation may keep a
-configured decoder stack inside one processing node until this owned packet boundary is proven.
+`OUTPUT_PYTHON` therefore crosses a processing boundary as an owned protocol packet. The Sigrok
+owner converts the supported Python value subset into a recursive value model containing null,
+booleans, integers, floats, strings, bytes, lists, tuples, and string-keyed mappings. A packet that
+cannot be represented produces a structured compatibility error. The receiving node reconstructs
+the corresponding Python value before invoking `decode(start_sample, end_sample, data)`.
+
+Raw-logic decoders and their annotation output are delivered first. Protocol-packet connections
+and stacked-decoder compatibility are lower priority and do not delay the initial useful decoder
+node.
 
 ## Output payloads
 
@@ -223,8 +227,8 @@ remain sibling subscribers and do not know that the payload originated in Python
 ## Graph node and saved state
 
 One generic `Sigrok Decoder` feature represents discovered decoders. Its state selects the decoder
-descriptor and stores options, channel mapping, compatibility profile, and optional stack
-configuration. It does not generate a Rust node type for every Python package.
+descriptor and stores options, channel mapping, compatibility profile, and protocol input/output
+connections. It does not generate a Rust node type for every Python package.
 
 The graph model needs an instance-schema contract so inputs, outputs, and controls can be derived
 from validated state and a host-supplied decoder catalog. That contract is generic: it allows a
@@ -267,13 +271,14 @@ files, and subprocess use before any decoder collection is redistributed.
 
 The scheduler and converters have Rust unit tests for every condition, boundary, EOF, malformed
 value, and cancellation case. Small fixture decoders exercise Python subclassing, metadata,
-options, all output types, stacking, exceptions, and teardown.
+options, all output types, protocol-packet conversion, exceptions, and teardown.
 
 Compatibility tests run representative unmodified decoders over deterministic captures. A
 test-only oracle may execute the same capture through `libsigrokdecode` and compare normalized
 sample spans and outputs. The production dependency graph remains free of the C library.
 
 The first end-to-end proof uses the standard SPI decoder because it exercises required and
-optional channels, edge and skip waits, annotations, Python packets, samplerate metadata, and
-decoder stacking. Success requires sample-exact agreement across multiple input chunkings,
-including transitions at every chunk boundary.
+optional channels, edge and skip waits, annotations, Python packets, and samplerate metadata.
+Success requires sample-exact agreement across multiple input chunkings, including transitions at
+every chunk boundary. Graph-based stacking is verified separately after the raw-logic decoder node
+and owned protocol-packet boundary exist.

@@ -135,7 +135,7 @@ The proposed architecture and compatibility boundary are defined in
 - [x] Add a native-only PyO3 feasibility harness that injects the `sigrokdecode` module, discovers
   the standard SPI decoder, validates its metadata, constructs it, and calls `start()` without
   linking `libsigrokdecode`.
-- [ ] Implement and unit-test the complete API-version-3 wait-condition model and a chunk-invariant
+- [x] Implement and unit-test the complete API-version-3 wait-condition model and a chunk-invariant
   Rust scheduler, including initial pins, optional channels, `matched`, EOF, and cancellation.
 - [ ] Implement the native decoder worker and PyO3 `Decoder` methods (`wait`, `register`, `put`, and
   `has_channel`) with bounded queues, GIL release while waiting, traceback-rich failures, and clean
@@ -144,14 +144,16 @@ The proposed architecture and compatibility boundary are defined in
   payload contracts with owner-provided retention, table, and viewer presentation.
 - [ ] Add the concrete processing node and prove the unmodified standard SPI decoder against
   deterministic captures and a test-only `libsigrokdecode` differential oracle.
-- [ ] Add protocol-ID-based decoder stacking and compatibility tests for both raw-logic
-  `decode(self)` and stacked `decode(self, ss, es, data)` decoders.
 - [ ] Add a generic instance-schema contract to `node_graph`/graph API, then implement one saved,
   migratable `Sigrok Decoder` graph feature whose stable sockets and controls come from validated
   decoder metadata.
 - [ ] Add native catalog/search-path UI, trust and missing-dependency diagnostics, packaging and
   license review, architecture enforcement, and representative performance tests. Keep wasm
   target selection at the complete backend/registration boundary.
+- [ ] Add low-priority graph-based decoder stacking: convert `OUTPUT_PYTHON` values to an owned
+  protocol-packet payload, connect independent decoder nodes by declared protocol IDs, reconstruct
+  Python values at the receiving node, and test `decode(self, ss, es, data)` compatibility. Do not
+  create hidden stacks inside the Python host or processing node.
 
 ### Graph crate responsibility split
 
