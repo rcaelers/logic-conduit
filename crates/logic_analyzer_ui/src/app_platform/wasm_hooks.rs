@@ -1,4 +1,5 @@
-use logic_analyzer_graph as compiler;
+use logic_analyzer_graph::host as compiler;
+use logic_analyzer_graph::node_support::CapturePresentation;
 
 use crate::app::App;
 use crate::product::APPLICATION_NAME;
@@ -102,20 +103,21 @@ impl App {
         if self.logic_analyzer.has_growing_capture() {
             return;
         }
-        let presentation =
-            compiler::discover_capture_presentation(self.node_graph.graph(), &self.builders)
-                .ok()
-                .flatten();
+        let presentation = self
+            .graph_compiler
+            .discover_capture_presentation(self.node_graph.graph())
+            .ok()
+            .flatten();
         let identity = presentation.as_ref().map(|value| value.identity.as_str());
         if identity == self.platform.capture_presentation_identity.as_deref() {
             return;
         }
         self.platform.capture_presentation_identity = identity.map(str::to_owned);
         match presentation.map(|value| value.presentation) {
-            Some(compiler::CapturePresentation::InMemory { signals, .. }) => {
+            Some(CapturePresentation::InMemory { signals, .. }) => {
                 self.set_capture_preview(signals)
             }
-            Some(compiler::CapturePresentation::Channels(channels)) => {
+            Some(CapturePresentation::Channels(channels)) => {
                 self.logic_analyzer.set_channels(
                     channels
                         .into_iter()
@@ -128,9 +130,7 @@ impl App {
                         .collect(),
                 );
             }
-            Some(compiler::CapturePresentation::Indexed { .. }) | None => {
-                self.logic_analyzer.clear_capture()
-            }
+            Some(CapturePresentation::Indexed { .. }) | None => self.logic_analyzer.clear_capture(),
         }
     }
 

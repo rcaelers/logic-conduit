@@ -536,9 +536,7 @@ inventory::submit! {
 
 #[cfg(test)]
 mod camera_frame_tests {
-    use logic_analyzer_graph::host::{
-        BuilderRegistry, CompileCtx, build_node_registry, lower, start_app_run,
-    };
+    use logic_analyzer_graph::host::{CompileCtx, GraphCompiler};
     use logic_analyzer_graph_api::node_support::PortKind;
     use node_graph::{NodeGraphWidget, SocketDirection, SocketId};
 
@@ -546,8 +544,8 @@ mod camera_frame_tests {
 
     #[test]
     fn custom_source_collects_bounded_typed_frames_through_an_explicit_viewer() {
-        let node_types = build_node_registry();
-        let builders = BuilderRegistry::standard();
+        let compiler = GraphCompiler::new();
+        let node_types = compiler.build_node_registry();
         let mut widget = NodeGraphWidget::new(node_types);
         let source = widget
             .add_node_at("Camera Frame Source", egui::Pos2::ZERO)
@@ -567,7 +565,7 @@ mod camera_frame_tests {
                 direction: SocketDirection::Input,
             },
         );
-        let compiled = lower(widget.graph(), &builders).unwrap();
+        let compiled = compiler.lower(widget.graph()).unwrap();
         assert!(
             compiled
                 .edges
@@ -577,7 +575,7 @@ mod camera_frame_tests {
         );
         let mut ctx = CompileCtx::default();
         let lanes = ctx.derived_lanes().clone();
-        let mut run = start_app_run(widget.graph(), &builders, &mut ctx).unwrap();
+        let mut run = compiler.start_app_run(widget.graph(), &mut ctx).unwrap();
         while !run.is_finished() {
             run.pump(64);
         }

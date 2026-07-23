@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use logic_analyzer_graph::{BuilderRegistry, discover_live_capture_feature};
+use logic_analyzer_graph::host::GraphCompiler;
 use node_graph::{GraphState, NodeId};
 use signal_processing::{
     CaptureAcquisitionPhase, CaptureCommandCapabilities, CaptureCompletion, CaptureHealth,
@@ -50,14 +50,14 @@ impl CaptureAvailability {
 
 pub(crate) fn capture_availability(
     graph: &GraphState,
-    builders: &BuilderRegistry,
+    compiler: &GraphCompiler,
 ) -> CaptureAvailability {
     if !CaptureCoordinator::backend_available() {
         return CaptureAvailability::Unavailable {
             reason: CaptureCoordinator::backend_unavailable_reason().into(),
         };
     }
-    match discover_live_capture_feature(graph, builders) {
+    match compiler.discover_live_capture_feature(graph) {
         Ok(Some(feature)) => CaptureAvailability::Available {
             source_node: feature.source_node(),
             source_title: feature.source_title().to_owned(),
@@ -186,7 +186,7 @@ mod tests {
             .expect("test capture source is registered");
 
         assert!(matches!(
-            capture_availability(graph.graph(), &BuilderRegistry::standard()),
+            capture_availability(graph.graph(), &GraphCompiler::new()),
             CaptureAvailability::Available { .. }
         ));
     }
@@ -202,7 +202,7 @@ mod tests {
             .expect("test capture source is registered");
 
         assert!(matches!(
-            capture_availability(graph.graph(), &BuilderRegistry::standard()),
+            capture_availability(graph.graph(), &GraphCompiler::new()),
             CaptureAvailability::Unavailable { .. }
         ));
     }

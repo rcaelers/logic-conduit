@@ -3,7 +3,7 @@
 pub use crate::compiler::{
     ApplyError, ApplySummary, BuilderRegistry, CompileCtx, CompileError, CompiledEdge,
     CompiledGraph, CompiledNode, DiscoveredCapturePresentation, DiscoveredLiveCaptureFeature,
-    DiscoveredTriggerConfiguration, GraphCompatibilityWarning, LiveAnalysisSource,
+    DiscoveredTriggerConfiguration, GraphCompatibilityWarning, GraphCompiler, LiveAnalysisSource,
     LiveCaptureDiscoveryError, LiveRun, SamplingOverlayCandidate, SourceProcessOverrides,
     apply_live_capture_edit, build_node_registry, derived_cache_configs_by_node,
     discover_capture_presentation, discover_live_capture_feature, discover_trigger_configuration,

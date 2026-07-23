@@ -3,7 +3,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use input_bindings::{InputBindings, PointerButtonName, PointerGesture, Trigger};
-use logic_analyzer_graph as compiler;
+use logic_analyzer_graph::host as compiler;
+use logic_analyzer_graph::node_support::{CapturePresentationSignal, LiveCaptureEdit};
 use logic_analyzer_viewer::{
     LogicAnalyzerViewer, SimpleTriggerEdit, SimpleTriggerLane, ViewerLaneGroupId, ViewerRowId,
 };
@@ -126,7 +127,7 @@ pub struct App {
     pub(crate) logic_analyzer: LogicAnalyzerViewer,
     pub(crate) input_bindings: Arc<InputBindings>,
     pub(crate) panel_layout: PanelLayout,
-    pub(crate) builders: compiler::BuilderRegistry,
+    pub(crate) graph_compiler: compiler::GraphCompiler,
     pub(crate) capture: CaptureCoordinator,
     pub(crate) capture_availability: CaptureAvailability,
     pub(crate) trigger_configuration: Option<compiler::DiscoveredTriggerConfiguration>,
@@ -177,7 +178,10 @@ impl App {
     }
 
     fn refresh_trigger_configuration(&mut self) {
-        match compiler::discover_trigger_configuration(self.node_graph.graph(), &self.builders) {
+        match self
+            .graph_compiler
+            .discover_trigger_configuration(self.node_graph.graph())
+        {
             Ok(configuration) => {
                 self.trigger_configuration = configuration;
                 self.trigger_configuration_error = self
@@ -206,7 +210,7 @@ impl App {
                     .map(|channel| {
                         (
                             configuration.source_node,
-                            compiler::LiveCaptureEdit::SetSimpleTrigger {
+                            LiveCaptureEdit::SetSimpleTrigger {
                                 channel_id: channel.channel_id.clone(),
                                 condition: edit.condition,
                             },
@@ -219,9 +223,8 @@ impl App {
             self.refresh_simple_trigger_ui();
             return;
         };
-        let state = match compiler::apply_live_capture_edit(
+        let state = match self.graph_compiler.apply_live_capture_edit(
             self.node_graph.graph(),
-            &self.builders,
             source_node,
             &request,
         ) {
@@ -238,7 +241,8 @@ impl App {
             self.refresh_simple_trigger_ui();
             return;
         }
-        self.capture_availability = capture_availability(self.node_graph.graph(), &self.builders);
+        self.capture_availability =
+            capture_availability(self.node_graph.graph(), &self.graph_compiler);
         self.refresh_trigger_configuration();
     }
 
@@ -253,10 +257,9 @@ impl App {
             self.refresh_trigger_configuration();
             return;
         };
-        let request = compiler::LiveCaptureEdit::SetTriggerProgram { program };
-        let state = match compiler::apply_live_capture_edit(
+        let request = LiveCaptureEdit::SetTriggerProgram { program };
+        let state = match self.graph_compiler.apply_live_capture_edit(
             self.node_graph.graph(),
-            &self.builders,
             source_node,
             &request,
         ) {
@@ -271,14 +274,12 @@ impl App {
             self.toasts
                 .error("The trigger could not be changed while the graph is read-only");
         }
-        self.capture_availability = capture_availability(self.node_graph.graph(), &self.builders);
+        self.capture_availability =
+            capture_availability(self.node_graph.graph(), &self.graph_compiler);
         self.refresh_trigger_configuration();
     }
 
-    pub(crate) fn set_capture_preview(
-        &mut self,
-        signals: Vec<compiler::CapturePresentationSignal>,
-    ) {
+    pub(crate) fn set_capture_preview(&mut self, signals: Vec<CapturePresentationSignal>) {
         let duration_us = signals
             .iter()
             .flat_map(|signal| signal.transitions.last().map(|(time, _)| *time))
@@ -313,10 +314,10 @@ impl App {
     }
 
     pub(crate) fn synchronize_payload_subscription_manifest(&mut self, report_warnings: bool) {
-        match compiler::synchronize_payload_subscriptions(
-            self.node_graph.graph_mut(),
-            &self.builders,
-        ) {
+        match self
+            .graph_compiler
+            .synchronize_payload_subscriptions(self.node_graph.graph_mut())
+        {
             Ok(warnings) if report_warnings => {
                 for warning in warnings {
                     if let Some(node) = warning.node {
@@ -353,9 +354,9 @@ impl App {
         // controls, or their dark foreground text becomes unreadable there.
         cc.egui_ctx.set_theme(egui::Theme::Dark);
         install_fonts(&cc.egui_ctx);
-        let registry = compiler::host::build_node_registry();
+        let graph_compiler = compiler::GraphCompiler::new();
+        let registry = graph_compiler.build_node_registry();
         let input_bindings = Arc::new(crate::application_input_bindings().clone());
-        let builders = compiler::BuilderRegistry::standard();
         let plugin_panel_registry = PluginPanelRegistry::standard();
         let mut widget = NodeGraphWidget::new(registry);
         widget.set_input_bindings(input_bindings.clone());
@@ -376,13 +377,13 @@ impl App {
                 .max_storage_gib
                 .saturating_mul(1024 * 1024 * 1024),
         );
-        let capture_availability = capture_availability(widget.graph(), &builders);
+        let capture_availability = capture_availability(widget.graph(), &graph_compiler);
         Self {
             node_graph: widget,
             logic_analyzer,
             input_bindings,
             panel_layout: Self::default_panel_layout(),
-            builders,
+            graph_compiler,
             capture,
             capture_availability,
             trigger_configuration: None,
@@ -650,7 +651,7 @@ impl App {
 
         if replay.is_none()
             && matches!(
-                capture_availability(self.node_graph.graph(), &self.builders),
+                capture_availability(self.node_graph.graph(), &self.graph_compiler),
                 CaptureAvailability::Available { .. }
             )
         {
@@ -680,14 +681,15 @@ impl App {
             }) => {
                 let mut overrides = compiler::SourceProcessOverrides::new();
                 overrides.insert(source_node, process);
-                compiler::start_app_run_with_source_overrides(
+                self.graph_compiler.start_app_run_with_source_overrides(
                     self.node_graph.graph(),
-                    &self.builders,
                     &mut ctx,
                     overrides,
                 )
             }
-            None => compiler::start_app_run(self.node_graph.graph(), &self.builders, &mut ctx),
+            None => self
+                .graph_compiler
+                .start_app_run(self.node_graph.graph(), &mut ctx),
         };
         match started {
             Ok(run) => {
@@ -763,10 +765,10 @@ impl App {
         self.node_graph.clear_node_statuses();
         self.run_message = None;
         self.node_graph.sync_node_states();
-        let feature = match compiler::discover_live_capture_feature(
-            self.node_graph.graph(),
-            &self.builders,
-        ) {
+        let feature = match self
+            .graph_compiler
+            .discover_live_capture_feature(self.node_graph.graph())
+        {
             Ok(Some(feature)) => feature,
             Ok(None) => {
                 self.toasts.error("The graph has no live capture source");
@@ -872,7 +874,7 @@ impl App {
             self.capture_analysis_error = Some("capture graph snapshot is unavailable".into());
             return;
         };
-        let compiled = match compiler::lower(&graph, &self.builders) {
+        let compiled = match self.graph_compiler.lower(&graph) {
             Ok(compiled) => compiled,
             Err(_) => return,
         };
@@ -895,7 +897,10 @@ impl App {
             source_node: attachment.source_node,
             process: attachment.process,
         };
-        match compiler::start_live_analysis(&graph, &self.builders, &mut ctx, source) {
+        match self
+            .graph_compiler
+            .start_live_analysis(&graph, &mut ctx, source)
+        {
             Ok(run) => {
                 self.set_sampling_overlay_candidates(ctx.take_sampling_overlays());
                 self.capture_analysis = Some(run);
@@ -941,15 +946,11 @@ impl App {
             self.capture_epoch_request_in_flight = false;
             match preparation {
                 Ok(prepared) => {
-                    let result = self
-                        .capture_analysis
-                        .as_mut()
-                        .unwrap()
-                        .apply_configuration_epoch(
-                            &prepared.graph,
-                            &self.builders,
-                            prepared.boundary,
-                        );
+                    let result = self.graph_compiler.apply_configuration_epoch(
+                        self.capture_analysis.as_mut().unwrap(),
+                        &prepared.graph,
+                        prepared.boundary,
+                    );
                     let resolution = match result {
                         Ok(summary) => {
                             self.toasts.info(format!(
@@ -1355,10 +1356,11 @@ impl App {
             if now - self.last_live_sync >= SYNC_INTERVAL_S {
                 self.last_live_sync = now;
                 self.capture_availability =
-                    capture_availability(self.node_graph.graph(), &self.builders);
+                    capture_availability(self.node_graph.graph(), &self.graph_compiler);
                 self.refresh_trigger_configuration();
-                if let Ok(candidates) =
-                    compiler::sampling_overlay_candidates(self.node_graph.graph(), &self.builders)
+                if let Ok(candidates) = self
+                    .graph_compiler
+                    .sampling_overlay_candidates(self.node_graph.graph())
                 {
                     self.set_sampling_overlay_candidates(candidates);
                 }
@@ -1395,7 +1397,7 @@ impl App {
         }
 
         let mut refresh_sampling_overlays = false;
-        match run.apply(self.node_graph.graph(), &self.builders) {
+        match self.graph_compiler.apply_run(run, self.node_graph.graph()) {
             Ok(summary) if summary.is_empty() => {
                 refresh_sampling_overlays = true;
             }

@@ -10,10 +10,11 @@ use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
+use logic_analyzer_graph::host::DiscoveredLiveCaptureFeature;
+use logic_analyzer_graph::node::CaptureGraphSourceFactory;
 use logic_analyzer_graph::{
     CaptureExportFormat as CaptureRawExportFormat, CaptureExportObserver, CaptureExportProgress,
-    CaptureExportReport, CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature,
-    export_finalized_capture,
+    CaptureExportReport, export_finalized_capture,
 };
 use signal_processing::{
     AcquisitionContext, CaptureAcquisitionPhase, CaptureCompletion, CaptureDataDelivery,
@@ -1687,6 +1688,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
+    use logic_analyzer_graph::host::{DiscoveredLiveCaptureFeature, GraphCompiler};
     use logic_analyzer_graph::test_support::{
         TestBufferedFakeConfig as BufferedFakeConfig,
         TestBufferedFakeController as BufferedFakeController,
@@ -1696,8 +1698,7 @@ mod tests {
         TestDeterministicFakeProvider as DeterministicFakeProvider,
     };
     use logic_analyzer_graph::{
-        self as compiler, CaptureGraphSourceFactory, DiscoveredLiveCaptureFeature, LiveCaptureEdit,
-        LiveCaptureFeature, SimpleTriggerChannel, nodes,
+        CaptureGraphSourceFactory, LiveCaptureEdit, LiveCaptureFeature, SimpleTriggerChannel, nodes,
     };
     use node_graph::{NodeGraphWidget, NodeId};
     use signal_processing::{
@@ -2284,12 +2285,10 @@ mod tests {
                 egui::Pos2::ZERO,
             )
             .unwrap();
-        let feature = compiler::discover_live_capture_feature(
-            graph.graph(),
-            &compiler::BuilderRegistry::standard(),
-        )
-        .unwrap()
-        .unwrap();
+        let feature = GraphCompiler::new()
+            .discover_live_capture_feature(graph.graph())
+            .unwrap()
+            .unwrap();
         assert_eq!(feature.source_node(), source);
 
         let mut coordinator = CaptureCoordinator::new();
@@ -2313,12 +2312,10 @@ mod tests {
                 egui::Pos2::ZERO,
             )
             .unwrap();
-        let feature = compiler::discover_live_capture_feature(
-            graph.graph(),
-            &compiler::BuilderRegistry::standard(),
-        )
-        .unwrap()
-        .unwrap();
+        let feature = GraphCompiler::new()
+            .discover_live_capture_feature(graph.graph())
+            .unwrap()
+            .unwrap();
 
         let mut coordinator = CaptureCoordinator::new();
         coordinator
@@ -2355,8 +2352,9 @@ mod tests {
                 egui::Pos2::ZERO,
             )
             .unwrap();
-        let builders = compiler::BuilderRegistry::standard();
-        let feature = compiler::discover_live_capture_feature(graph.graph(), &builders)
+        let compiler = GraphCompiler::new();
+        let feature = compiler
+            .discover_live_capture_feature(graph.graph())
             .unwrap()
             .unwrap();
         let mut coordinator = CaptureCoordinator::new();
@@ -2374,7 +2372,8 @@ mod tests {
             .to_owned();
         assert!(first_directory.exists());
 
-        let feature = compiler::discover_live_capture_feature(graph.graph(), &builders)
+        let feature = compiler
+            .discover_live_capture_feature(graph.graph())
             .unwrap()
             .unwrap();
         coordinator
@@ -2707,12 +2706,10 @@ mod tests {
         )
         .unwrap();
         graph.graph_mut().nodes.get_mut(&source).unwrap().state = edited;
-        let feature = compiler::discover_live_capture_feature(
-            graph.graph(),
-            &compiler::BuilderRegistry::standard(),
-        )
-        .unwrap()
-        .unwrap();
+        let feature = GraphCompiler::new()
+            .discover_live_capture_feature(graph.graph())
+            .unwrap()
+            .unwrap();
         assert_eq!(
             feature.session_plan().unwrap().policy.requested.start,
             signal_processing::RecordingStart::Trigger
@@ -2979,12 +2976,10 @@ mod tests {
             1,
             &[0, 1],
         );
-        let feature = compiler::discover_live_capture_feature(
-            graph.graph(),
-            &compiler::BuilderRegistry::standard(),
-        )
-        .unwrap()
-        .unwrap();
+        let feature = GraphCompiler::new()
+            .discover_live_capture_feature(graph.graph())
+            .unwrap()
+            .unwrap();
         let mut coordinator = CaptureCoordinator::new();
         coordinator
             .start(feature, CaptureStartMode::SavedPolicy)
@@ -3027,12 +3022,10 @@ mod tests {
             10,
             &[0, 1],
         );
-        let feature = compiler::discover_live_capture_feature(
-            graph.graph(),
-            &compiler::BuilderRegistry::standard(),
-        )
-        .unwrap()
-        .unwrap();
+        let feature = GraphCompiler::new()
+            .discover_live_capture_feature(graph.graph())
+            .unwrap()
+            .unwrap();
         assert_eq!(
             feature.capabilities().data_delivery(),
             signal_processing::CaptureDataDelivery::DuringAcquisition

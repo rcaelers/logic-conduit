@@ -45,6 +45,20 @@ end
 
 files = SOURCE_GLOBS.flat_map { |glob| Dir.glob(File.join(ROOT, glob)) }.sort
 
+ui_compiler_free_functions = %w[
+  apply_live_capture_edit
+  derived_cache_configs_by_node
+  discover_capture_presentation
+  discover_live_capture_feature
+  discover_trigger_configuration
+  lower
+  sampling_overlay_candidates
+  start_app_run
+  start_app_run_with_source_overrides
+  start_live_analysis
+  synchronize_payload_subscriptions
+].freeze
+
 graph_api_manifest = File.read(File.join(ROOT, "crates/logic_analyzer_graph_api/Cargo.toml"))
 %w[logic-analyzer-graph logic-analyzer-processing logic-analyzer-ui].each do |dependency|
   if graph_api_manifest.match?(/^#{Regexp.escape(dependency)}\s*=/)
@@ -55,6 +69,18 @@ end
 files.each do |path|
   rel = relative(path)
   source = File.read(path)
+
+  if rel.start_with?("crates/logic_analyzer_ui/src/")
+    implementation = implementation_source(source)
+    implementation.to_enum(:scan, /\bBuilderRegistry\b/).each do
+      errors << "#{rel}:#{line_number(source, Regexp.last_match.begin(0))}: UI hosts use GraphCompiler, not BuilderRegistry"
+    end
+    ui_compiler_free_functions.each do |function|
+      implementation.to_enum(:scan, /\bcompiler::#{Regexp.escape(function)}\s*\(/).each do
+        errors << "#{rel}:#{line_number(source, Regexp.last_match.begin(0))}: UI hosts call GraphCompiler##{function}"
+      end
+    end
+  end
 
   graph_node_implementation = rel.start_with?("crates/logic_analyzer_graph/src/nodes/")
   plugin_implementation = rel.start_with?("plugins/")

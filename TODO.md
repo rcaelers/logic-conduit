@@ -143,7 +143,7 @@ order; update this single checklist as slices land:
   `crate::nodes`.
 - [x] Extract `logic_analyzer_graph_api` with only the `node` and `node_support` namespaces, then
   update the compiler, built-in nodes, and example plugin to use those paths.
-- [ ] Introduce `GraphCompiler` as the stateful `logic_analyzer_graph::host` facade and migrate UI
+- [x] Introduce `GraphCompiler` as the stateful `logic_analyzer_graph::host` facade and migrate UI
   and application composition away from independent compiler free functions.
 - [ ] Extract `logic_analyzer_graph_nodes`, including built-in socket definitions, concrete graph
   nodes, migrations, payload presentations, registrations, and isolated tests.

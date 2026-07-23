@@ -2,6 +2,7 @@ mod collected_payload_registration;
 mod data_collector;
 mod errors;
 mod graph;
+mod graph_compiler;
 mod graph_node_registration;
 mod saved_graph;
 
@@ -27,6 +28,7 @@ pub use graph::{
     lower, sampling_overlay_candidates, start_app_run, start_app_run_with_source_overrides,
     start_live_analysis,
 };
+pub use graph_compiler::GraphCompiler;
 pub use graph_node_registration::build_node_registry;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use graph_node_registration::graph_node_registrations;

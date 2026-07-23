@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use logic_analyzer_graph as compiler;
+use logic_analyzer_graph::host as compiler;
+use logic_analyzer_graph::node_support::CapturePresentation;
 use node_graph::NodeId;
 
 use crate::app::App;
@@ -126,10 +127,11 @@ impl App {
         if self.logic_analyzer.has_growing_capture() {
             return;
         }
-        let discovered =
-            compiler::discover_capture_presentation(self.node_graph.graph(), &self.builders)
-                .ok()
-                .flatten();
+        let discovered = self
+            .graph_compiler
+            .discover_capture_presentation(self.node_graph.graph())
+            .ok()
+            .flatten();
         let Some(discovered) = discovered else {
             if self.platform.capture_presentation_identity.take().is_some() {
                 self.logic_analyzer.clear_capture();
@@ -143,15 +145,15 @@ impl App {
         }
         self.platform.capture_presentation_identity = Some(discovered.identity);
         match discovered.presentation {
-            compiler::CapturePresentation::Indexed {
+            CapturePresentation::Indexed {
                 identity, factory, ..
             } => {
                 self.logic_analyzer.set_capture_factory(identity, factory);
             }
-            compiler::CapturePresentation::InMemory { signals, .. } => {
+            CapturePresentation::InMemory { signals, .. } => {
                 self.set_capture_preview(signals);
             }
-            compiler::CapturePresentation::Channels(channels) => {
+            CapturePresentation::Channels(channels) => {
                 self.logic_analyzer.set_channels(
                     channels
                         .into_iter()
@@ -750,18 +752,16 @@ impl App {
     }
 
     fn refresh_derived_cache_nodes(&mut self) {
-        self.platform.derived_cache_nodes = compiler::derived_cache_configs_by_node(
-            self.node_graph.graph(),
-            &self.builders,
-            &derived_cache_directory(),
-        )
-        .map(|inventory| {
-            inventory
-                .into_keys()
-                .filter(|id| self.node_graph.graph().nodes.contains_key(id))
-                .collect()
-        })
-        .unwrap_or_default();
+        self.platform.derived_cache_nodes = self
+            .graph_compiler
+            .derived_cache_configs_by_node(self.node_graph.graph(), &derived_cache_directory())
+            .map(|inventory| {
+                inventory
+                    .into_keys()
+                    .filter(|id| self.node_graph.graph().nodes.contains_key(id))
+                    .collect()
+            })
+            .unwrap_or_default();
     }
 
     fn clear_node_derived_cache(&mut self, node_id: NodeId) {
@@ -775,11 +775,10 @@ impl App {
             .get(&node_id)
             .map(|node| node.title.clone())
             .unwrap_or_else(|| "node".to_owned());
-        let configs = match compiler::derived_cache_configs_by_node(
-            self.node_graph.graph(),
-            &self.builders,
-            &derived_cache_directory(),
-        ) {
+        let configs = match self
+            .graph_compiler
+            .derived_cache_configs_by_node(self.node_graph.graph(), &derived_cache_directory())
+        {
             Ok(mut inventory) => inventory.remove(&node_id).unwrap_or_default(),
             Err(errors) => {
                 let message = errors

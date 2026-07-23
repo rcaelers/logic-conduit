@@ -145,13 +145,13 @@ mod tests {
     fn force_link_makes_example_plugin_inventories_visible_to_the_native_host() {
         std::hint::black_box(example_plugin::force_link());
 
-        let nodes = logic_analyzer_graph::host::build_node_registry();
+        let compiler = logic_analyzer_graph::host::GraphCompiler::new();
+        let nodes = compiler.build_node_registry();
         assert_eq!(nodes.category_of("Pulse Measure"), Some("Plugin"));
         assert_eq!(nodes.category_of("Camera Frame Source"), Some("Plugin"));
 
-        let builders = logic_analyzer_graph::BuilderRegistry::standard();
         assert!(
-            builders
+            compiler
                 .collected_payloads()
                 .descriptor_by_stable_id("org.logicconduit.example.camera-frame/v1")
                 .is_some()
