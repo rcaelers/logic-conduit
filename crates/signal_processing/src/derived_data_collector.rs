@@ -169,6 +169,15 @@ pub enum DigitalLaneSnapshot {
     },
 }
 
+/// Immutable bounded result of a built-in trigger-marker lane query.
+#[derive(Clone, Debug)]
+pub enum TriggerLaneSnapshot {
+    /// Exact trigger timestamps in the requested visible window.
+    Exact(Vec<u64>),
+    /// Bounded activity records for a dense visible window.
+    Activity(Vec<MipmapRecord>),
+}
+
 struct DigitalLaneQuery {
     store: DerivedLanes,
     name: String,
@@ -239,6 +248,67 @@ impl CollectedLaneQuery for DigitalLaneQuery {
             return None;
         };
         samples.last().map(|sample| sample.start_time_ns)
+    }
+}
+
+struct TriggerLaneQuery {
+    store: DerivedLanes,
+    name: String,
+}
+
+impl CollectedLaneQuery for TriggerLaneQuery {
+    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+        self
+    }
+
+    fn snapshot(
+        &self,
+        request: CollectedLaneSnapshotRequest,
+    ) -> Option<OpaqueCollectedLaneSnapshot> {
+        let snapshot = {
+            let lanes = self.store.read();
+            let lane = lanes.iter().find(|lane| lane.name == self.name)?;
+            let (DerivedLaneData::Markers(markers), LaneSummary::Markers(summary)) =
+                (&lane.data, &lane.summary)
+            else {
+                return None;
+            };
+            let first = markers.partition_point(|timestamp| *timestamp < request.start_time_ns);
+            let last = markers.partition_point(|timestamp| *timestamp <= request.end_time_ns);
+            if last - first <= request.max_items {
+                TriggerLaneSnapshot::Exact(markers[first..last].to_vec())
+            } else {
+                TriggerLaneSnapshot::Activity(summary.sampled_window(
+                    request.start_time_ns,
+                    request.end_time_ns,
+                    request.max_items,
+                ))
+            }
+        };
+        Some(OpaqueCollectedLaneSnapshot::new(Arc::new(snapshot)))
+    }
+
+    fn nearest_time_boundary(&self, timestamp_ns: u64, max_distance_ns: u64) -> Option<u64> {
+        let lanes = self.store.read();
+        let lane = lanes.iter().find(|lane| lane.name == self.name)?;
+        let DerivedLaneData::Markers(markers) = &lane.data else {
+            return None;
+        };
+        let index = markers.partition_point(|marker| *marker <= timestamp_ns);
+        markers[index.saturating_sub(1)..(index + 1).min(markers.len())]
+            .iter()
+            .copied()
+            .filter(|candidate| candidate.abs_diff(timestamp_ns) <= max_distance_ns)
+            .min_by_key(|candidate| candidate.abs_diff(timestamp_ns))
+    }
+
+    fn timeline_extent_end_ns(&self) -> Option<u64> {
+        let lanes = self.store.read();
+        let lane = lanes.iter().find(|lane| lane.name == self.name)?;
+        let DerivedLaneData::Markers(markers) = &lane.data else {
+            return None;
+        };
+        markers.last().copied()
     }
 }
 
@@ -1019,13 +1089,11 @@ impl DerivedLanes {
 /// presentations while payload adapters migrate to owned query handles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CollectedDataKind {
-    Trigger,
     Number,
     Text,
 }
 
 enum LaneBuffer {
-    Trigger(VecDeque<Trigger>),
     Number(VecDeque<NumberSample>),
     Text(VecDeque<TextSample>),
 }
@@ -1058,7 +1126,6 @@ impl Lane {
         payload: Option<CollectedPayloadDescriptor>,
     ) -> Self {
         let data = match kind {
-            CollectedDataKind::Trigger => DerivedLaneData::Markers(Vec::new()),
             CollectedDataKind::Number | CollectedDataKind::Text => {
                 let value_kind = if kind == CollectedDataKind::Number {
                     CollectedValueKind::Number
@@ -1072,7 +1139,6 @@ impl Lane {
             }
         };
         let buffer = match kind {
-            CollectedDataKind::Trigger => LaneBuffer::Trigger(VecDeque::new()),
             CollectedDataKind::Number => LaneBuffer::Number(VecDeque::new()),
             CollectedDataKind::Text => LaneBuffer::Text(VecDeque::new()),
         };
@@ -1092,9 +1158,6 @@ impl CollectedLaneIngestor for Lane {
     fn input_schema(&self, index: usize) -> PortSchema {
         let name = format!("in{index}");
         match self.kind {
-            CollectedDataKind::Trigger => {
-                PortSchema::new::<Trigger>(name, index, PortDirection::Input)
-            }
             CollectedDataKind::Number => {
                 PortSchema::new::<NumberSample>(name, index, PortDirection::Input)
             }
@@ -1125,18 +1188,6 @@ impl CollectedLaneIngestor for Lane {
         let store = self.store.clone();
         let retention = self.retention;
         let batch_len = match &mut self.buffer {
-            LaneBuffer::Trigger(buffer) => {
-                let batch = drain_batch!(Trigger, buffer);
-                let len = batch.len();
-                if !batch.is_empty() {
-                    store.append_marker_batch_retained(
-                        self.store_index,
-                        batch.into_iter().map(|trigger| trigger.timestamp_ns),
-                        retention,
-                    );
-                }
-                len
-            }
             LaneBuffer::Number(buffer) => {
                 let batch = drain_batch!(NumberSample, buffer);
                 let len = batch.len();
@@ -1245,6 +1296,83 @@ impl CollectedLaneIngestor for DigitalLane {
         if !batch.is_empty() {
             self.store
                 .append_digital_batch_retained(self.store_index, batch, self.retention);
+        }
+        Ok(batch_len)
+    }
+
+    fn is_finished(&self) -> bool {
+        self.eos
+    }
+}
+
+/// Typed append state for the built-in trigger payload.
+struct TriggerLane {
+    store: DerivedLanes,
+    store_index: usize,
+    buffer: VecDeque<Trigger>,
+    eos: bool,
+    retention: DerivedDataRetention,
+}
+
+impl TriggerLane {
+    fn new(request: CollectedLaneRequest) -> Self {
+        let name = request.name().to_owned();
+        let store = request.lanes().clone();
+        let store_index = store.register_with_payload(
+            name.clone(),
+            Some(request.payload().clone()),
+            DerivedLaneData::Markers(Vec::new()),
+        );
+        request.publish_query(Arc::new(TriggerLaneQuery {
+            store: store.clone(),
+            name,
+        }));
+        Self {
+            store,
+            store_index,
+            buffer: VecDeque::new(),
+            eos: false,
+            retention: request.retention(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_store(name: String, store: DerivedLanes, retention: DerivedDataRetention) -> Self {
+        let store_index = store.register(name, DerivedLaneData::Markers(Vec::new()));
+        Self {
+            store,
+            store_index,
+            buffer: VecDeque::new(),
+            eos: false,
+            retention,
+        }
+    }
+}
+
+impl CollectedLaneIngestor for TriggerLane {
+    fn input_schema(&self, index: usize) -> PortSchema {
+        PortSchema::new::<Trigger>(format!("in{index}"), index, PortDirection::Input)
+    }
+
+    fn drain(&mut self, input: &InputPort, _retention: DerivedDataRetention) -> WorkResult<usize> {
+        use crossbeam_channel::TryRecvError;
+
+        let mut batch = Vec::with_capacity(DRAIN_BATCH_SIZE);
+        if let Some(mut receiver) = input.get::<Trigger>(&mut self.buffer) {
+            match receiver.try_recv_many(&mut batch, DRAIN_BATCH_SIZE) {
+                Ok(_) | Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => self.eos = true,
+            }
+        } else {
+            self.eos = true;
+        }
+        let batch_len = batch.len();
+        if !batch.is_empty() {
+            self.store.append_marker_batch_retained(
+                self.store_index,
+                batch.into_iter().map(|trigger| trigger.timestamp_ns),
+                self.retention,
+            );
         }
         Ok(batch_len)
     }
@@ -1467,6 +1595,8 @@ struct BuiltinPayloadAdapter {
 
 struct DigitalPayloadAdapter;
 
+struct TriggerPayloadAdapter;
+
 struct WordPayloadAdapter;
 
 impl CollectedPayloadAdapter for DigitalPayloadAdapter {
@@ -1475,6 +1605,15 @@ impl CollectedPayloadAdapter for DigitalPayloadAdapter {
         request: CollectedLaneRequest,
     ) -> Result<Box<dyn CollectedLaneIngestor>, String> {
         Ok(Box::new(DigitalLane::new(request)))
+    }
+}
+
+impl CollectedPayloadAdapter for TriggerPayloadAdapter {
+    fn create_ingestor(
+        &self,
+        request: CollectedLaneRequest,
+    ) -> Result<Box<dyn CollectedLaneIngestor>, String> {
+        Ok(Box::new(TriggerLane::new(request)))
     }
 }
 
@@ -1514,11 +1653,8 @@ pub fn register_builtin_collected_payload_adapters(
     registry.register_adapter::<Sample>(Arc::new(DigitalPayloadAdapter))?;
     registry.register::<Word>("org.logicconduit.word/v1")?;
     registry.register_adapter::<Word>(Arc::new(WordPayloadAdapter))?;
-    register::<Trigger>(
-        registry,
-        "org.logicconduit.trigger/v1",
-        CollectedDataKind::Trigger,
-    )?;
+    registry.register::<Trigger>("org.logicconduit.trigger/v1")?;
+    registry.register_adapter::<Trigger>(Arc::new(TriggerPayloadAdapter))?;
     register::<NumberSample>(
         registry,
         "org.logicconduit.number-sample/v1",
@@ -1689,6 +1825,15 @@ mod tests {
 
         fn with_digital(mut self, name: impl Into<String>) -> Self {
             self.lanes.push(Box::new(DigitalLane::with_store(
+                name.into(),
+                self.test_lanes.clone(),
+                self.retention,
+            )));
+            self
+        }
+
+        fn with_trigger(mut self, name: impl Into<String>) -> Self {
+            self.lanes.push(Box::new(TriggerLane::with_store(
                 name.into(),
                 self.test_lanes.clone(),
                 self.retention,
@@ -1947,6 +2092,38 @@ mod tests {
     }
 
     #[test]
+    fn trigger_adapter_publishes_an_opaque_snapshot_query() {
+        let lanes = DerivedLanes::new();
+        let mut payloads = crate::CollectedPayloadRegistry::new();
+        register_builtin_collected_payload_adapters(&mut payloads).unwrap();
+        let descriptor = payloads.descriptor::<Trigger>().unwrap().clone();
+        let ingestor = payloads
+            .adapter_by_type_id(std::any::TypeId::of::<Trigger>())
+            .unwrap()
+            .create_ingestor(CollectedLaneRequest::new(
+                "trigger",
+                0,
+                lanes.clone(),
+                descriptor,
+                DerivedDataRetention::Unlimited,
+            ))
+            .unwrap();
+
+        let _collector = DerivedDataCollector::new().with_ingestor(ingestor);
+        let snapshot = lanes.opaque_lanes()[0]
+            .snapshot(CollectedLaneSnapshotRequest {
+                start_time_ns: 0,
+                end_time_ns: 1,
+                max_items: 8,
+            })
+            .unwrap();
+        assert!(matches!(
+            snapshot.value::<TriggerLaneSnapshot>().as_deref(),
+            Some(TriggerLaneSnapshot::Exact(markers)) if markers.is_empty()
+        ));
+    }
+
+    #[test]
     fn word_query_returns_only_a_bounded_visible_snapshot() {
         let lanes = DerivedLanes::new();
         lanes.register(
@@ -2028,7 +2205,7 @@ mod tests {
         let mut sink = test_collector(store.clone())
             .with_digital("latch.q")
             .with_words("decoder.words")
-            .with_lane(CollectedDataKind::Trigger, "start.match");
+            .with_trigger("start.match");
 
         let wd = Watchdog::new();
         let (sig_tx, sig_rx) = bounded::<ChannelMessage<Sample>>(16);
@@ -2320,6 +2497,45 @@ mod tests {
     }
 
     #[test]
+    fn trigger_query_returns_bounded_exact_or_activity_snapshots() {
+        let store = DerivedLanes::new();
+        let lane = store.register("trigger", DerivedLaneData::Markers(Vec::new()));
+        store.append_marker_batch(lane, [100, 200, 300]);
+        let query = TriggerLaneQuery {
+            store,
+            name: "trigger".to_owned(),
+        };
+
+        let exact = query
+            .snapshot(CollectedLaneSnapshotRequest {
+                start_time_ns: 150,
+                end_time_ns: 350,
+                max_items: 3,
+            })
+            .and_then(|snapshot| snapshot.value::<TriggerLaneSnapshot>())
+            .expect("trigger exact snapshot");
+        assert!(matches!(
+            exact.as_ref(),
+            TriggerLaneSnapshot::Exact(markers) if markers == &[200, 300]
+        ));
+
+        let activity = query
+            .snapshot(CollectedLaneSnapshotRequest {
+                start_time_ns: 0,
+                end_time_ns: 400,
+                max_items: 1,
+            })
+            .and_then(|snapshot| snapshot.value::<TriggerLaneSnapshot>())
+            .expect("trigger activity snapshot");
+        assert!(matches!(
+            activity.as_ref(),
+            TriggerLaneSnapshot::Activity(records) if !records.is_empty()
+        ));
+        assert_eq!(query.timeline_extent_end_ns(), Some(300));
+        assert_eq!(query.nearest_time_boundary(190, 20), Some(200));
+    }
+
+    #[test]
     fn summary_tracks_markers_as_they_arrive() {
         let store = DerivedLanes::new();
         let lane = store.register("m", DerivedLaneData::Markers(Vec::new()));
@@ -2568,7 +2784,7 @@ mod tests {
         let mut sink = test_collector(store.clone())
             .with_word_store_config(config)
             .with_words("words")
-            .with_lane(CollectedDataKind::Trigger, "trigger");
+            .with_trigger("trigger");
         let wd = Watchdog::new();
         let (word_tx, word_rx) = bounded::<ChannelMessage<Word>>(4);
         word_tx

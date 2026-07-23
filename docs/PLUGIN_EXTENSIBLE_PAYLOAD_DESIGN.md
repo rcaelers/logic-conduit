@@ -26,6 +26,10 @@ those snapshots through the same renderer contract as a plugin payload. The lega
 storage remains only as a compatibility fallback while row interactions migrate to query
 capabilities.
 
+The built-in trigger adapter provides the same query capabilities with exact marker timestamps or
+dense marker-activity snapshots. Its presentation is likewise adapter-owned; neither the generic
+collector nor the generic viewer interprets trigger values to render the normal subscribed row.
+
 `CollectedLaneQuery` supplies an immutable snapshot only when its payload has waveform
 semantics. The request is bounded by a visible time window and item limit. The viewer passes the
 returned `OpaqueCollectedLaneSnapshot` to the payload's renderer only after it has released

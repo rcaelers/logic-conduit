@@ -43,7 +43,7 @@ use super::data_collector::DataCollectorBuilder;
 use super::errors::{ApplyError, CompileError};
 use super::port_kind::{PortKind, PortValue};
 use crate::decoder_table::{DecoderTableColumnPresentation, DecoderTableRegistry};
-use crate::nodes::sinks::{DigitalSnapshotRenderer, WordSnapshotRenderer};
+use crate::nodes::sinks::{DigitalSnapshotRenderer, TriggerSnapshotRenderer, WordSnapshotRenderer};
 
 /// Shared resources handed to builders. A fresh `DerivedLanes` store per
 /// run makes stale collected data vanish atomically on re-run.
@@ -699,10 +699,10 @@ impl BuilderRegistry {
             .expect("built-in word payload must be viewable");
         registry
             .register_viewable_collected_payload::<signal_processing::Trigger>(
-                DefaultViewerPayloadPresentation::new(ViewerLaneBadge::new(
-                    "T",
-                    Color32::from_rgb(230, 190, 80),
-                )),
+                DefaultViewerPayloadPresentation::with_renderer(
+                    ViewerLaneBadge::new("T", Color32::from_rgb(230, 190, 80)),
+                    Arc::new(TriggerSnapshotRenderer),
+                ),
             )
             .expect("built-in trigger payload must be viewable");
         registry
@@ -2572,6 +2572,18 @@ mod tests {
                 .uses_opaque_snapshot(&ViewerLaneTrack::new(
                     "signal",
                     DerivedLaneId::new("signal"),
+                    1.0,
+                ))
+        );
+        let trigger_presentation = registry
+            .viewable_payload_presentation(PortKind::of::<Trigger>())
+            .unwrap();
+        assert!(
+            trigger_presentation
+                .renderer()
+                .uses_opaque_snapshot(&ViewerLaneTrack::new(
+                    "trigger",
+                    DerivedLaneId::new("trigger"),
                     1.0,
                 ))
         );

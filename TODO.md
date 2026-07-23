@@ -32,10 +32,10 @@ fallback representation and completes the payload capabilities required by arbit
   type-safe-or-contract-checked snapshots and no `LogicAnalyzerViewer` internals or locked
   runtime storage.
 - Complete the built-in lane migration in dependency order. Word already exposes viewer snapshots,
-  cursor snapping, timeline extent, and table rows through its query. Digital signals now have a
-  dedicated ingestor/query plus exact and dense viewer snapshots. Migrate trigger markers next,
-  followed by numeric and text values. Then move each adapter's remaining legacy storage behind
-  its query and remove the shared `CollectedDataKind`/`LaneBuffer` implementation. Default
+  cursor snapping, timeline extent, and table rows through its query. Digital signals and trigger
+  markers now have dedicated ingestors/queries plus exact and dense viewer snapshots. Migrate
+  numeric and text values next. Then move each adapter's remaining legacy storage behind its
+  query and remove the shared `CollectedDataKind`/`LaneBuffer` implementation. Default
   singleton presentation, cursor snapping, timeline fitting, row activity, retention, and
   native/wasm behavior must be capabilities of the registered adapter rather than exhaustive
   matches over built-in variants.

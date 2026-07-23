@@ -7,9 +7,12 @@ use egui::Color32;
 use logic_analyzer_viewer::{
     AnnotationVisual, DerivedLaneId, OpaqueLaneDrawContext, ViewerLaneGroup, ViewerLaneRenderer,
     ViewerLaneTrack, ViewerLaneTrackId, default_annotation_visual, draw_annotation_presence,
-    draw_annotation_snapshot, draw_digital_activity, draw_digital_snapshot,
+    draw_annotation_snapshot, draw_digital_activity, draw_digital_snapshot, draw_trigger_activity,
+    draw_trigger_snapshot,
 };
-use signal_processing::{DigitalLaneSnapshot, OpaqueCollectedLaneSnapshot, WordLaneSnapshot};
+use signal_processing::{
+    DigitalLaneSnapshot, OpaqueCollectedLaneSnapshot, TriggerLaneSnapshot, WordLaneSnapshot,
+};
 
 /// Renders the built-in digital payload from its adapter-owned snapshot.
 pub(crate) struct DigitalSnapshotRenderer;
@@ -36,6 +39,32 @@ impl ViewerLaneRenderer for DigitalSnapshotRenderer {
             DigitalLaneSnapshot::Activity { records, initial } => {
                 draw_digital_activity(&context, records, *initial)
             }
+        }
+        true
+    }
+}
+
+/// Renders the built-in trigger payload from its adapter-owned snapshot.
+pub(crate) struct TriggerSnapshotRenderer;
+
+impl ViewerLaneRenderer for TriggerSnapshotRenderer {
+    fn uses_opaque_snapshot(&self, _track: &ViewerLaneTrack) -> bool {
+        true
+    }
+
+    fn draw_opaque_lane(
+        &self,
+        _track: &ViewerLaneTrack,
+        snapshot: Option<&OpaqueCollectedLaneSnapshot>,
+        context: OpaqueLaneDrawContext<'_>,
+    ) -> bool {
+        let Some(snapshot) = snapshot.and_then(|snapshot| snapshot.value::<TriggerLaneSnapshot>())
+        else {
+            return false;
+        };
+        match snapshot.as_ref() {
+            TriggerLaneSnapshot::Exact(markers) => draw_trigger_snapshot(&context, markers),
+            TriggerLaneSnapshot::Activity(records) => draw_trigger_activity(&context, records),
         }
         true
     }

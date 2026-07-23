@@ -128,6 +128,53 @@ pub fn draw_digital_activity(
     );
 }
 
+/// Draws exact trigger markers supplied by a lane adapter.
+pub fn draw_trigger_snapshot(context: &OpaqueLaneDrawContext<'_>, markers: &[u64]) {
+    let color = Color32::from_rgb(230, 190, 80);
+    let top = context.top + context.height * 0.18;
+    let bottom = context.top + context.height * 0.82;
+    for timestamp_ns in markers {
+        let x = context.time_to_x(*timestamp_ns);
+        context.painter.line_segment(
+            [Pos2::new(x, top), Pos2::new(x, bottom)],
+            Stroke::new(1.4, color),
+        );
+        context.painter.add(Shape::convex_polygon(
+            vec![
+                Pos2::new(x - 4.0, top),
+                Pos2::new(x + 4.0, top),
+                Pos2::new(x, top + 6.0),
+            ],
+            color,
+            Stroke::NONE,
+        ));
+    }
+}
+
+/// Draws bounded trigger activity supplied by a dense lane query.
+pub fn draw_trigger_activity(context: &OpaqueLaneDrawContext<'_>, records: &[MipmapRecord]) {
+    let color = Color32::from_rgb(230, 190, 80);
+    let top = context.top + context.height * 0.18;
+    let bottom = context.top + context.height * 0.82;
+    for record in records {
+        let start_ns = record.start_ns.max(context.visible_start_ns);
+        let end_ns = record.end_ns.min(context.visible_end_ns);
+        if start_ns > end_ns || record.count == 0 {
+            continue;
+        }
+        let x0 = context.time_to_x(start_ns).max(context.wave_rect.left());
+        let x1 = context
+            .time_to_x(end_ns)
+            .max(x0 + 1.0)
+            .min(context.wave_rect.right());
+        context.painter.rect_filled(
+            Rect::from_min_max(Pos2::new(x0, top), Pos2::new(x1, bottom)),
+            0.0,
+            color,
+        );
+    }
+}
+
 impl LogicAnalyzerViewer {
     // ── Derived lanes ─────────────────────────────────────────────────
     //
@@ -461,53 +508,18 @@ impl LogicAnalyzerViewer {
         row_height: f32,
         markers: &[u64],
     ) {
-        let color = Color32::from_rgb(230, 190, 80);
         let (start_ns, end_ns) = self.visible_window_ns();
         let first = markers.partition_point(|&ts| ts < start_ns);
         let last = markers.partition_point(|&ts| ts <= end_ns);
-        let visible = &markers[first..last];
-        let top = y_top + row_height * 0.18;
-        let bottom = y_top + row_height * 0.82;
-
-        if visible.len() > wave_rect.width() as usize {
-            let span_ns = (end_ns - start_ns).max(1);
-            let width = wave_rect.width().max(1.0);
-            let mut index = 0usize;
-            let mut column = 0u32;
-            while (column as f32) < width {
-                let column_end_ns =
-                    start_ns + ((column + 1) as u64).saturating_mul(span_ns) / width as u64;
-                let step = visible[index..].partition_point(|&ts| ts < column_end_ns);
-                if step > 0 {
-                    let x0 = wave_rect.left() + column as f32;
-                    painter.rect_filled(
-                        Rect::from_min_max(Pos2::new(x0, top), Pos2::new(x0 + 1.0, bottom)),
-                        0.0,
-                        color,
-                    );
-                    index += step;
-                }
-                column += 1;
-            }
-            return;
-        }
-
-        for &ts in visible {
-            let x = self.ns_to_x(wave_rect, ts);
-            painter.line_segment(
-                [Pos2::new(x, top), Pos2::new(x, bottom)],
-                Stroke::new(1.4, color),
-            );
-            painter.add(Shape::convex_polygon(
-                vec![
-                    Pos2::new(x - 4.0, top),
-                    Pos2::new(x + 4.0, top),
-                    Pos2::new(x, top + 6.0),
-                ],
-                color,
-                Stroke::NONE,
-            ));
-        }
+        let context = OpaqueLaneDrawContext {
+            painter,
+            wave_rect,
+            top: y_top,
+            height: row_height,
+            visible_start_ns: start_ns,
+            visible_end_ns: end_ns,
+        };
+        draw_trigger_snapshot(&context, &markers[first..last]);
     }
 }
 

@@ -103,8 +103,9 @@ pub use derived_data_collector::{
     CollectedWordLaneOptions, DEFAULT_DERIVED_DATA_MAX_ENTRIES, DerivedDataCollector,
     DerivedDataCollectorMetrics, DerivedDataCollectorMetricsSnapshot, DerivedDataRetention,
     DerivedLane, DerivedLaneData, DerivedLanes, DigitalFold, DigitalLaneSnapshot,
-    IndexedAnnotationLane, LaneSummary, MarkerFold, OpaqueCollectedLane, ValueFold,
-    WordLaneSnapshot, built_in_word_lane_ingestor, register_builtin_collected_payload_adapters,
+    IndexedAnnotationLane, LaneSummary, MarkerFold, OpaqueCollectedLane, TriggerLaneSnapshot,
+    ValueFold, WordLaneSnapshot, built_in_word_lane_ingestor,
+    register_builtin_collected_payload_adapters,
 };
 pub use derived_index::{AppendOnlyMipmap, ChunkedMipmap, LaneFold, MipmapRecord};
 pub use derived_word_store::{
