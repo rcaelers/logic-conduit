@@ -149,10 +149,20 @@ adapter may expose rows and columns when that is meaningful; no table-specific b
 required for arbitrary payloads.
 
 Extra panels are UI-owned plugin registrations, not graph or processing registrations. A panel
-receives a restricted read-only context containing collected-lane descriptors and query handles,
-plus an explicit application-command boundary. It keeps versioned serializable state under its own
-stable panel identifier. A panel can be opened after a capture finishes because it queries retained
-data rather than receiving the live stream.
+registers a stable identity, title, icon, minimum size, factory, and optional singleton constraint
+through `logic_analyzer_ui::PluginContext`. The application discovers those descriptors when it
+builds the View menu and panel-layout catalog, so adding a panel does not add an application dispatch
+branch. Each panel instance receives a restricted read-only context containing collected-lane
+descriptors and query handles. It keeps versioned serializable state under its stable panel identity
+and the layout instance identity. A panel can be opened after a capture finishes because it queries
+retained data rather than receiving the live stream. The current contract intentionally exposes no
+application mutation commands.
+
+The out-of-tree example plugin proves the complete route with `CameraFrame`: a custom socket and
+finite source produce timestamped RGB images, a custom adapter retains bounded frames, a viewer
+renderer draws bounded thumbnail snapshots, and a Camera Frames panel queries the same retained
+lane. The source reaches collection through an explicit Viewer connection; neither the collector,
+viewer, application panel catalog, nor panel layout contains a CameraFrame-specific branch.
 
 ### Crate ownership
 
@@ -161,7 +171,7 @@ data rather than receiving the live stream.
 - `logic_analyzer_graph` owns compiler negotiation: it accepts only registered collectable payloads
   for a data subscription and reports a targeted error for an unavailable subscription contract
   or adapter.
-- `logic_analyzer_ui` owns panel factories, panel state, and application command capabilities.
+- `logic_analyzer_ui` owns panel factories, panel state, and the read-only panel data context.
 - The application-level plugin registration entry point composes the lower-level registries without
   making `signal_processing` depend on UI crates.
 

@@ -1,0 +1,80 @@
+//! Public contracts implemented by compile-time plugin panels.
+
+use signal_processing::OpaqueCollectedLane;
+
+/// Read-only application data exposed while a plugin panel is drawn.
+pub struct PluginPanelContext<'a> {
+    lanes: &'a [OpaqueCollectedLane],
+}
+
+impl<'a> PluginPanelContext<'a> {
+    pub(crate) fn new(lanes: &'a [OpaqueCollectedLane]) -> Self {
+        Self { lanes }
+    }
+
+    pub fn collected_lanes(&self) -> &'a [OpaqueCollectedLane] {
+        self.lanes
+    }
+}
+
+/// One independently persisted panel instance.
+pub trait PluginPanel: Send {
+    fn show(&mut self, ui: &mut egui::Ui, context: PluginPanelContext<'_>);
+
+    fn save_state(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+
+    fn restore_state(&mut self, _state: serde_json::Value) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PluginPanelIcon {
+    #[default]
+    Panel,
+    Image,
+    List,
+    Table,
+}
+
+/// Stable registration metadata for one plugin-defined panel kind.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PluginPanelDescriptor {
+    pub stable_id: String,
+    pub title: String,
+    pub icon: PluginPanelIcon,
+    pub minimum_width: f32,
+    pub minimum_height: f32,
+    pub singleton: bool,
+}
+
+impl PluginPanelDescriptor {
+    pub fn new(stable_id: impl Into<String>, title: impl Into<String>) -> Self {
+        Self {
+            stable_id: stable_id.into(),
+            title: title.into(),
+            icon: PluginPanelIcon::Panel,
+            minimum_width: 180.0,
+            minimum_height: 120.0,
+            singleton: false,
+        }
+    }
+
+    pub fn icon(mut self, icon: PluginPanelIcon) -> Self {
+        self.icon = icon;
+        self
+    }
+
+    pub fn minimum_size(mut self, width: f32, height: f32) -> Self {
+        self.minimum_width = width;
+        self.minimum_height = height;
+        self
+    }
+
+    pub fn singleton(mut self) -> Self {
+        self.singleton = true;
+        self
+    }
+}

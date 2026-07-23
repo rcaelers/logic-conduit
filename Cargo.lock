@@ -1241,6 +1241,8 @@ dependencies = [
  "crossbeam-channel",
  "egui",
  "logic-analyzer-graph",
+ "logic-analyzer-ui",
+ "logic-analyzer-viewer",
  "node-graph",
  "serde",
  "serde_json",

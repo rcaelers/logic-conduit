@@ -18,6 +18,7 @@ use crate::live_capture::{
     CaptureAnalysisAttachment, CaptureAvailability, CaptureCoordinator, CaptureCoordinatorContract,
     CaptureReplayAttachment, ConfigurationEpochResolution, capture_availability,
 };
+use crate::plugin_panel::{PluginPanelIcon, PluginPanelRegistry, PluginPanels, PluginPanelsState};
 use crate::toast::Toasts;
 
 const SAMPLING_OVERLAY_EXTENSION: &str = "logic_analyzer_ui.sampling_overlay";
@@ -29,6 +30,8 @@ struct SavedPanelLayout {
     layout: panel_layout::PanelLayoutState,
     #[serde(default)]
     decoder_panels: crate::decoder_panel::DecoderPanelsState,
+    #[serde(default)]
+    plugin_panels: PluginPanelsState,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -106,12 +109,14 @@ fn save_panel_layout(
     graph: &mut GraphState,
     layout: panel_layout::PanelLayoutState,
     decoder_panels: crate::decoder_panel::DecoderPanelsState,
+    plugin_panels: PluginPanelsState,
 ) -> Result<(), serde_json::Error> {
     graph.set_extension(
         PANEL_LAYOUT_EXTENSION,
         SavedPanelLayout {
             layout,
             decoder_panels,
+            plugin_panels,
         },
     )
 }
@@ -151,6 +156,7 @@ pub struct App {
     pub(crate) selected_sampling_overlay: Option<NodeId>,
     viewer_lane_order: Vec<SavedViewerRow>,
     pub(crate) decoder_panels: DecoderPanels,
+    pub(crate) plugin_panels: PluginPanels,
 }
 
 impl App {
@@ -336,7 +342,7 @@ impl App {
     }
 
     /// Like [`Self::new`], but first runs `register_plugins` against a
-    /// [`compiler::PluginContext`] wrapping the freshly built registries.
+    /// [`crate::PluginContext`] wrapping the freshly built registries.
     /// This is the hook a downstream crate (e.g. `logic-analyzer-app-native`) uses to link in
     /// compile-time plugin crates — `logic-analyzer-ui` itself never depends on any
     /// plugin (a plugin depends on `logic-analyzer-graph`, so the reverse would be a
@@ -344,7 +350,7 @@ impl App {
     /// call lives at the binary crate that depends on both.
     pub fn new_with_plugins(
         cc: &eframe::CreationContext,
-        register_plugins: impl FnOnce(&mut compiler::PluginContext),
+        register_plugins: impl FnOnce(&mut crate::PluginContext),
     ) -> Self {
         Self::new_with_plugins_and_file(cc, None, register_plugins)
     }
@@ -352,7 +358,7 @@ impl App {
     pub fn new_with_plugins_and_file(
         cc: &eframe::CreationContext,
         file: Option<&Path>,
-        register_plugins: impl FnOnce(&mut compiler::PluginContext),
+        register_plugins: impl FnOnce(&mut crate::PluginContext),
     ) -> Self {
         let mut app = Self::build(cc, register_plugins);
         app.platform_load_startup_file(file);
@@ -361,7 +367,7 @@ impl App {
 
     fn build(
         cc: &eframe::CreationContext,
-        register_plugins: impl FnOnce(&mut compiler::PluginContext),
+        register_plugins: impl FnOnce(&mut crate::PluginContext),
     ) -> Self {
         // The graph canvas and its custom widgets use a dark palette. Do not
         // inherit a light OS/browser preference for the surrounding egui
@@ -371,9 +377,11 @@ impl App {
         let mut registry = nodes::build_registry();
         let input_bindings = Arc::new(crate::application_input_bindings().clone());
         let mut builders = compiler::BuilderRegistry::standard();
-        register_plugins(&mut compiler::PluginContext::new(
-            &mut registry,
-            &mut builders,
+        let mut plugin_panel_registry = PluginPanelRegistry::default();
+        let graph_plugins = compiler::PluginContext::new(&mut registry, &mut builders);
+        register_plugins(&mut crate::PluginContext::new(
+            graph_plugins,
+            &mut plugin_panel_registry,
         ));
         let mut widget = NodeGraphWidget::new(registry);
         widget.set_input_bindings(input_bindings.clone());
@@ -424,6 +432,7 @@ impl App {
             selected_sampling_overlay: None,
             viewer_lane_order: Vec::new(),
             decoder_panels: DecoderPanels::default(),
+            plugin_panels: PluginPanels::new(plugin_panel_registry),
         }
     }
 
@@ -439,14 +448,17 @@ impl App {
             Ok(Some(saved)) => {
                 self.panel_layout = PanelLayout::from_state(saved.layout);
                 self.decoder_panels = DecoderPanels::from_state(saved.decoder_panels);
+                self.plugin_panels.restore_state(saved.plugin_panels);
             }
             Ok(None) => {
                 self.panel_layout = Self::default_panel_layout();
                 self.decoder_panels = DecoderPanels::default();
+                self.plugin_panels.reset_state();
             }
             Err(error) => {
                 self.panel_layout = Self::default_panel_layout();
                 self.decoder_panels = DecoderPanels::default();
+                self.plugin_panels.reset_state();
                 self.toasts
                     .error(format!("Could not restore the saved panel layout: {error}"));
             }
@@ -458,6 +470,7 @@ impl App {
             self.node_graph.graph_mut(),
             self.panel_layout.state().clone(),
             self.decoder_panels.state().clone(),
+            self.plugin_panels.state(),
         )
     }
 
@@ -684,6 +697,7 @@ impl App {
             .set_waveform_presentations(ctx.waveform_presentations().clone());
         self.decoder_panels
             .set_run_data(ctx.derived_lanes().clone(), ctx.decoder_tables().clone());
+        self.plugin_panels.set_run_data(ctx.derived_lanes().clone());
 
         let started = match replay {
             Some(CaptureReplayAttachment {
@@ -902,6 +916,7 @@ impl App {
             .set_waveform_presentations(ctx.waveform_presentations().clone());
         self.decoder_panels
             .set_run_data(ctx.derived_lanes().clone(), ctx.decoder_tables().clone());
+        self.plugin_panels.set_run_data(ctx.derived_lanes().clone());
         let source = compiler::LiveAnalysisSource {
             source_node: attachment.source_node,
             process: attachment.process,
@@ -1578,16 +1593,44 @@ impl App {
     }
 
     pub(crate) fn show_view_panel(&mut self, content_id: &str) {
+        let order = self.view_panel_order();
         self.panel_layout.ensure_right_column_content(
             content_id,
-            &VIEW_PANEL_ORDER,
+            &order.iter().map(String::as_str).collect::<Vec<_>>(),
             RIGHT_COLUMN_LAYOUT_FRACTION,
         );
+    }
+
+    pub(crate) fn available_view_panels(&self) -> Vec<(String, String, panel_layout::PanelIcon)> {
+        let mut panels = vec![
+            ("Watches".to_owned(), "watches".to_owned(), PanelIcon::List),
+            (
+                "Triggers".to_owned(),
+                "triggers".to_owned(),
+                PanelIcon::Target,
+            ),
+            ("Decoder".to_owned(), "decoder".to_owned(), PanelIcon::Table),
+        ];
+        panels.extend(
+            self.plugin_panels
+                .definitions()
+                .into_iter()
+                .map(|panel| (panel.title, panel.stable_id, panel_icon(panel.icon))),
+        );
+        panels
+    }
+
+    fn view_panel_order(&self) -> Vec<String> {
+        self.available_view_panels()
+            .into_iter()
+            .map(|(_, content_id, _)| content_id)
+            .collect()
     }
 
     pub(crate) fn reset_panel_layout(&mut self) {
         self.panel_layout = Self::default_panel_layout();
         self.decoder_panels = DecoderPanels::default();
+        self.plugin_panels.reset_state();
     }
 
     fn status_actions(
@@ -1639,7 +1682,15 @@ impl App {
 const STATUS_BAR_HEIGHT: f32 = 28.0;
 const DEFAULT_ANALYZER_SPLIT: f32 = 0.42;
 const RIGHT_COLUMN_LAYOUT_FRACTION: f32 = 0.82;
-const VIEW_PANEL_ORDER: [&str; 3] = ["watches", "triggers", "decoder"];
+
+fn panel_icon(icon: PluginPanelIcon) -> PanelIcon {
+    match icon {
+        PluginPanelIcon::Panel => PanelIcon::Panel,
+        PluginPanelIcon::Image => PanelIcon::Image,
+        PluginPanelIcon::List => PanelIcon::List,
+        PluginPanelIcon::Table => PanelIcon::Table,
+    }
+}
 
 #[derive(Clone, Copy)]
 enum MouseButtonHint {
@@ -1964,7 +2015,8 @@ impl eframe::App for App {
         self.poll_capture(ui.ctx());
         self.platform_sync_capture();
         self.sync_run(ui.ctx());
-        let specs = [
+        let plugin_panel_definitions = self.plugin_panels.definitions();
+        let mut specs = vec![
             PanelSpec::new("logic_analyzer", "Logic Analyzer", 160.0)
                 .icon(PanelIcon::Waveform)
                 .minimum_width(220.0)
@@ -1983,6 +2035,20 @@ impl eframe::App for App {
                 .icon(PanelIcon::Table)
                 .minimum_width(220.0),
         ];
+        specs.extend(plugin_panel_definitions.iter().map(|panel| {
+            let spec = PanelSpec::new(
+                panel.stable_id.as_str(),
+                panel.title.as_str(),
+                panel.minimum_height,
+            )
+            .icon(panel_icon(panel.icon))
+            .minimum_width(panel.minimum_width);
+            if panel.singleton {
+                spec.singleton()
+            } else {
+                spec
+            }
+        }));
         let mut panel_layout = std::mem::take(&mut self.panel_layout);
         panel_layout
             .set_maximize_shortcut(self.input_bindings.shortcut(&["panel"], "toggle_maximize"));
@@ -2045,7 +2111,14 @@ impl eframe::App for App {
                     content_id: "decoder",
                     ..
                 } => self.decoder_panels.show(panel_id, panel_ui),
-                PanelSlot::TitleBar { .. } | PanelSlot::Body { .. } => {}
+                PanelSlot::Body {
+                    panel_id,
+                    content_id,
+                    ..
+                } => {
+                    self.plugin_panels.show(content_id, panel_id, panel_ui);
+                }
+                PanelSlot::TitleBar { .. } => {}
             },
         );
         self.panel_layout = panel_layout;
@@ -2096,9 +2169,9 @@ mod font_tests {
     use node_graph::{GraphState, NodeId};
 
     use super::{
-        SavedViewerRow, StatusAction, install_fonts, load_symbol_fonts, save_panel_layout,
-        save_sampling_overlay, save_viewer_lane_order, saved_panel_layout, saved_sampling_overlay,
-        saved_viewer_lane_order,
+        PluginPanelsState, SavedViewerRow, StatusAction, install_fonts, load_symbol_fonts,
+        save_panel_layout, save_sampling_overlay, save_viewer_lane_order, saved_panel_layout,
+        saved_sampling_overlay, saved_viewer_lane_order,
     };
 
     #[test]
@@ -2163,6 +2236,7 @@ mod font_tests {
             &mut graph,
             layout.state().clone(),
             crate::decoder_panel::DecoderPanelsState::default(),
+            PluginPanelsState::default(),
         )
         .unwrap();
 

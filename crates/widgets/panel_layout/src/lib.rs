@@ -75,6 +75,7 @@ pub enum PanelIcon {
     Panel,
     Waveform,
     Network,
+    Image,
     List,
     Target,
     Table,
@@ -112,6 +113,24 @@ impl PanelIcon {
                         egui::pos2(left + quarter * 3.0, high),
                         egui::pos2(left + quarter * 3.0, low),
                         egui::pos2(right, low),
+                    ],
+                    stroke,
+                ));
+            }
+            Self::Image => {
+                let image = rect.shrink(2.0);
+                painter.rect_stroke(image, 2.0, stroke, StrokeKind::Inside);
+                painter.circle_filled(
+                    egui::pos2(image.right() - 4.0, image.top() + 4.0),
+                    1.5,
+                    color,
+                );
+                painter.add(egui::Shape::line(
+                    vec![
+                        egui::pos2(image.left() + 2.0, image.bottom() - 3.0),
+                        egui::pos2(image.center().x - 1.0, image.center().y),
+                        egui::pos2(image.center().x + 2.0, image.bottom() - 5.0),
+                        egui::pos2(image.right() - 2.0, image.bottom() - 2.0),
                     ],
                     stroke,
                 ));

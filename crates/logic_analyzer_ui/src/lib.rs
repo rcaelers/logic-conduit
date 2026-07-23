@@ -5,6 +5,8 @@ mod application_config;
 mod decoder_panel;
 mod input_binding_config;
 mod live_capture;
+mod plugin;
+mod plugin_panel;
 mod product;
 mod toast;
 
@@ -16,6 +18,8 @@ pub use app_platform::{
     NativeMenuCommand, dispatch_native_menu_command, set_recent_files_listener,
 };
 use input_bindings::InputBindings;
+pub use plugin::PluginContext;
+pub use plugin_panel::{PluginPanel, PluginPanelContext, PluginPanelDescriptor, PluginPanelIcon};
 pub use product::{APPLICATION_ID, APPLICATION_NAME};
 
 pub fn application_input_bindings() -> &'static InputBindings {

@@ -670,13 +670,9 @@ impl App {
                 }
             });
             ui.menu_button("View", |ui| {
-                for (label, content_id, icon) in [
-                    ("Watches", "watches", panel_layout::PanelIcon::List),
-                    ("Triggers", "triggers", panel_layout::PanelIcon::Target),
-                    ("Decoder", "decoder", panel_layout::PanelIcon::Table),
-                ] {
-                    if icon.menu_item(ui, label).clicked() {
-                        self.show_view_panel(content_id);
+                for (label, content_id, icon) in self.available_view_panels() {
+                    if icon.menu_item(ui, &label).clicked() {
+                        self.show_view_panel(&content_id);
                         ui.close();
                     }
                 }

@@ -192,7 +192,7 @@ mod tests {
         let mut nodes = node_graph::NodeTypeRegistry::new();
         let mut builders = logic_analyzer_graph::BuilderRegistry::standard();
         let mut ctx = logic_analyzer_graph::PluginContext::new(&mut nodes, &mut builders);
-        crate::register(&mut ctx);
+        crate::register_graph(&mut ctx);
         assert_eq!(nodes.category_of("Pulse Measure"), Some("Plugin"));
     }
 
