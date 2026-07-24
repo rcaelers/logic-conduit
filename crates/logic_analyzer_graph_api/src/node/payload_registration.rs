@@ -33,6 +33,24 @@ impl CollectedPayloadRegistration {
         )
     }
 
+    /// Registers a collectable kind whose payload type is owned below the
+    /// graph-plugin layer and is therefore supplied as an explicit kind factory.
+    pub const fn subscribable_kind(
+        stable_id: &'static str,
+        kind: fn() -> PortKind,
+        adapter: fn() -> Arc<dyn CollectedPayloadAdapter>,
+        presentation: fn() -> DefaultViewerPayloadPresentation,
+    ) -> Self {
+        Self {
+            stable_id,
+            kind,
+            adapter,
+            presentation,
+            configure_request: identity_request,
+            persistent_cache: false,
+        }
+    }
+
     pub const fn subscribable_with_request_configurator<T: PortValue>(
         stable_id: &'static str,
         adapter: fn() -> Arc<dyn CollectedPayloadAdapter>,

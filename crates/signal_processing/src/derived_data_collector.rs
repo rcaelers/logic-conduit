@@ -96,7 +96,9 @@ pub enum DerivedDataRetention {
 }
 
 impl DerivedDataRetention {
-    fn trim_target(self, len: usize) -> Option<usize> {
+    /// Returns the retained entry target when an adapter should trim its
+    /// current exact-detail sequence.
+    pub fn trim_target(self, len: usize) -> Option<usize> {
         let Self::MaxEntries(max) = self else {
             return None;
         };

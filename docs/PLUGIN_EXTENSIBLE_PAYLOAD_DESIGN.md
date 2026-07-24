@@ -2,10 +2,13 @@
 
 ## Current architecture
 
-`PortKind` is an open runtime payload identity. A compile-time plugin implements `PortValue` for its
-Rust payload type. A graph-node inventory submission carries any idempotent runtime channel setup
-needed for a non-collected custom payload; collected payload capability registration performs the
-same typed channel setup as part of its atomic submission.
+`PortKind` is an open runtime payload identity. A compile-time plugin implements `PortValue` for a
+Rust payload type it owns. A split processing/graph plugin whose lower-level runtime crate owns the
+type instead constructs the same identity with `PortKind::of_named`; this avoids making processing
+depend on graph contracts merely to satisfy trait coherence. A graph-node inventory submission
+carries any idempotent runtime channel setup needed for a non-collected custom payload; collected
+payload capability registration performs the same typed channel setup as part of its atomic
+submission.
 
 `CollectedPayloadRegistry` records a durable, plugin-owned identity for each payload intended to
 become collectable. `CollectedPayloadRegistration` inventory submissions atomically provide that

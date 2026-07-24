@@ -140,7 +140,7 @@ The proposed architecture and compatibility boundary are defined in
 - [x] Implement the native decoder worker and PyO3 `Decoder` methods (`wait`, `register`, `put`, and
   `has_channel`) with bounded queues, GIL release while waiting, traceback-rich failures, and clean
   teardown.
-- [ ] Add registered Sigrok annotation, binary, generated-logic, metadata, and protocol-packet
+- [x] Add registered Sigrok annotation, binary, generated-logic, metadata, and protocol-packet
   payload contracts with owner-provided retention, table, and viewer presentation.
 - [ ] Add the concrete processing node and prove the unmodified standard SPI decoder against
   deterministic captures and a test-only `libsigrokdecode` differential oracle.

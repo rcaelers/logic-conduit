@@ -43,6 +43,17 @@ impl PortKind {
         }
     }
 
+    /// Creates an open payload kind whose Rust value type is owned by another
+    /// workspace layer or compile-time plugin.
+    pub fn of_named<T: Clone + Send + Sync + 'static>(name: &'static str) -> Self {
+        Self {
+            type_id: TypeId::of::<T>(),
+            name,
+            buffer_size_fn: default_buffer_size,
+            register_type_fn: signal_processing::register_type::<T>,
+        }
+    }
+
     pub fn type_id(&self) -> TypeId {
         self.type_id
     }
@@ -58,6 +69,10 @@ impl PortKind {
     pub fn register_runtime_type(&self) {
         (self.register_type_fn)();
     }
+}
+
+fn default_buffer_size(_producer_is_source: bool) -> usize {
+    100
 }
 
 impl fmt::Debug for PortKind {
@@ -127,5 +142,16 @@ mod port_tests {
         assert_eq!(PortKind::of::<Sample>(), PortKind::of::<Sample>());
         assert_ne!(PortKind::of::<Sample>(), PortKind::of::<SampleBlock>());
         assert_eq!(format!("{:?}", PortKind::of::<Sample>()), "SampleEdge");
+    }
+
+    #[test]
+    fn named_kind_supports_a_payload_owned_by_a_lower_layer() {
+        #[derive(Clone)]
+        struct ExternalPayload;
+
+        let kind = PortKind::of_named::<ExternalPayload>("External");
+        assert_eq!(kind.type_id(), TypeId::of::<ExternalPayload>());
+        assert_eq!(kind.name(), "External");
+        assert_eq!(kind.buffer_size(false), 100);
     }
 }

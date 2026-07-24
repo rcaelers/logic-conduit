@@ -14,7 +14,7 @@ PUBLIC_MODULES = {
   "crates/logic_analyzer_processing/src/lib.rs" => %w[nodes support types],
   "crates/logic_analyzer_processing/src/support/mod.rs" => %w[logic_analyzer],
   "crates/logic_analyzer_processing/src/nodes/mod.rs" => %w[decoders logic sinks sources],
-  "crates/logic_analyzer_processing/src/nodes/decoders/mod.rs" => %w[parallel_decoder spi_decoder uart_decoder],
+  "crates/logic_analyzer_processing/src/nodes/decoders/mod.rs" => %w[parallel_decoder sigrok_decoder spi_decoder uart_decoder],
   "crates/logic_analyzer_processing/src/nodes/logic/mod.rs" => %w[
     buffer logic_gate sr_latch text_formatter trigger_counter word_matcher
   ],
