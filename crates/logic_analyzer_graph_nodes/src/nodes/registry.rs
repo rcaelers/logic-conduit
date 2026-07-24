@@ -22,7 +22,7 @@ use node_graph::{SocketDef, SocketShape};
 // ── Stream socket types (`docs/APP_DESIGN.md`) ───────────────────────────────────────────────
 
 /// Logic level stream (`Sample` at runtime): defined at every instant.
-pub struct Signal;
+pub(crate) struct Signal;
 impl SocketDef for Signal {
     type Value = bool;
 
@@ -35,7 +35,7 @@ impl SocketDef for Signal {
 }
 
 /// Decoded word events (`Word` at runtime).
-pub struct Words;
+pub(crate) struct Words;
 impl SocketDef for Words {
     type Value = u64;
 
@@ -51,7 +51,7 @@ impl SocketDef for Words {
 }
 
 /// Instantaneous events with no payload beyond time (`Trigger` at runtime).
-pub struct Trigger;
+pub(crate) struct Trigger;
 impl SocketDef for Trigger {
     type Value = ();
 
@@ -67,7 +67,7 @@ impl SocketDef for Trigger {
 }
 
 /// Integer level stream (`NumberSample` at runtime).
-pub struct Number;
+pub(crate) struct Number;
 impl SocketDef for Number {
     type Value = i64;
 
@@ -80,7 +80,7 @@ impl SocketDef for Number {
 }
 
 /// Text level stream (`TextSample` at runtime).
-pub struct Text;
+pub(crate) struct Text;
 impl SocketDef for Text {
     type Value = String;
 
@@ -95,7 +95,7 @@ impl SocketDef for Text {
 /// A [`Text`] input (same wire type, so any `Text` output connects) whose
 /// inline control — shown in the node body only while the socket is
 /// unconnected — is a save-file picker instead of a plain string field.
-pub struct TextSavePath;
+pub(crate) struct TextSavePath;
 impl SocketDef for TextSavePath {
     type Value = String;
 
@@ -113,7 +113,7 @@ impl node_graph::SocketWithControlDef for TextSavePath {
 /// The open-dialog counterpart of [`TextSavePath`]: a [`Text`] input whose
 /// inline control (shown while unconnected) is an open-file picker — pick
 /// an existing file, or wire a text filename in.
-pub struct TextOpenPath;
+pub(crate) struct TextOpenPath;
 impl SocketDef for TextOpenPath {
     type Value = String;
 
