@@ -17,7 +17,7 @@ use node_graph::{
 
 use crate::nodes::registry::{COLOR_DECODERS, Signal};
 
-const CURRENT_SCHEMA_VERSION: u8 = 1;
+const CURRENT_SCHEMA_VERSION: u8 = 2;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CatalogChoice {
@@ -266,6 +266,10 @@ pub(crate) struct SigrokDecoderState {
     #[serde(default)]
     pub(crate) channels: Vec<SavedChannel>,
     #[serde(default)]
+    pub(crate) protocol_inputs: Vec<String>,
+    #[serde(default)]
+    pub(crate) protocol_outputs: Vec<String>,
+    #[serde(default)]
     pub(crate) options: Vec<SavedOption>,
     #[serde(default)]
     pub(crate) outputs: Vec<SavedOutputKind>,
@@ -293,6 +297,8 @@ impl Default for SigrokDecoderState {
             package_fingerprint: String::new(),
             sample_rate: None,
             channels: Vec::new(),
+            protocol_inputs: Vec::new(),
+            protocol_outputs: Vec::new(),
             options: Vec::new(),
             outputs: Vec::new(),
             annotation_rows: Vec::new(),
@@ -364,6 +370,13 @@ impl SigrokDecoderState {
             package_fingerprint: descriptor.package_fingerprint.clone(),
             sample_rate: Some(IntValue::new(1_000_000, 1, i32::MAX)),
             channels,
+            protocol_inputs: descriptor
+                .inputs
+                .iter()
+                .filter(|input| input.as_str() != "logic")
+                .cloned()
+                .collect(),
+            protocol_outputs: descriptor.outputs.clone(),
             options,
             outputs,
             annotation_rows: descriptor
@@ -430,6 +443,9 @@ impl NodeDef for SigrokDecoderDefinition {
             .channels
             .iter()
             .map(|channel| InputDef::new::<Signal>(&channel.label).stable_id(channel.id.clone()))
+            .chain((!state.protocol_inputs.is_empty()).then(|| {
+                InputDef::new::<SigrokProtocolPacketSocket>("Packets").stable_id("protocol_packets")
+            }))
             .collect();
         let outputs = state
             .outputs
@@ -499,18 +515,27 @@ impl NodeDef for SigrokDecoderDefinition {
     fn on_update(state: &mut Self::State, inputs: &mut [Socket], _outputs: &mut [Socket]) {
         refresh_catalog(state);
         apply_catalog_selection(state);
-        if state.schema_version == 0 && !state.decoder_id.is_empty() {
+        if state.schema_version < CURRENT_SCHEMA_VERSION
+            && (!state.protocol_inputs.is_empty()
+                || !state.protocol_outputs.is_empty()
+                || !state.outputs.contains(&SavedOutputKind::ProtocolPacket))
+        {
             state.schema_version = CURRENT_SCHEMA_VERSION;
             state.compatibility_warning = Some(
-                "Upgraded the saved Sigrok decoder schema; socket identities were preserved"
+                "Upgraded the saved Sigrok decoder with explicit protocol connection contracts; existing socket identities were preserved"
                     .to_owned(),
             );
         }
         for input in inputs.iter_mut() {
-            input.visible = state
-                .channels
-                .get(input.def_index)
-                .is_some_and(|channel| channel.required || channel.enabled.value);
+            input.visible =
+                if input.def_index == state.channels.len() && !state.protocol_inputs.is_empty() {
+                    true
+                } else {
+                    state
+                        .channels
+                        .get(input.def_index)
+                        .is_some_and(|channel| channel.required || channel.enabled.value)
+                };
         }
     }
 
@@ -563,6 +588,26 @@ fn refresh_catalog(state: &mut SigrokDecoderState) {
     state.catalog.selection_diagnostic = None;
     if state.catalog.selected_id.is_empty() && !state.decoder_id.is_empty() {
         state.catalog.selected_id = state.decoder_id.clone();
+    }
+    if state.schema_version < CURRENT_SCHEMA_VERSION
+        && let Some(current) = snapshot.entries.iter().find(|entry| {
+            entry.descriptor.id == state.decoder_id
+                && entry.descriptor.package_fingerprint == state.package_fingerprint
+        })
+    {
+        state.protocol_inputs = current
+            .descriptor
+            .inputs
+            .iter()
+            .filter(|input| input.as_str() != "logic")
+            .cloned()
+            .collect();
+        state.protocol_outputs = current.descriptor.outputs.clone();
+        state.schema_version = CURRENT_SCHEMA_VERSION;
+        state.compatibility_warning = Some(
+            "Upgraded the saved Sigrok decoder with explicit protocol connection contracts; existing socket identities were preserved"
+                .to_owned(),
+        );
     }
     if let Some(current) = snapshot
         .entries
@@ -682,6 +727,11 @@ fn option_control(default: &SigrokScalarValue, values: &[SigrokScalarValue]) -> 
 }
 
 fn validate_saved_schema(state: &SigrokDecoderState) -> Result<(), String> {
+    if !state.channels.is_empty() && !state.protocol_inputs.is_empty() {
+        return Err(
+            "The saved Sigrok decoder mixes raw-logic and protocol input contracts".to_owned(),
+        );
+    }
     let mut identities = HashSet::new();
     for channel in &state.channels {
         if channel.id.is_empty() || !identities.insert(("channel", channel.id.as_str())) {
@@ -691,6 +741,20 @@ fn validate_saved_schema(state: &SigrokDecoderState) -> Result<(), String> {
     for option in &state.options {
         if option.id.is_empty() || !identities.insert(("option", option.id.as_str())) {
             return Err("The saved Sigrok decoder has invalid option identities".to_owned());
+        }
+    }
+    for protocol in &state.protocol_inputs {
+        if protocol.is_empty() || !identities.insert(("protocol input", protocol.as_str())) {
+            return Err(
+                "The saved Sigrok decoder has invalid protocol input identities".to_owned(),
+            );
+        }
+    }
+    for protocol in &state.protocol_outputs {
+        if protocol.is_empty() || !identities.insert(("protocol output", protocol.as_str())) {
+            return Err(
+                "The saved Sigrok decoder has invalid protocol output identities".to_owned(),
+            );
         }
     }
     Ok(())
@@ -846,6 +910,8 @@ mod definition_tests {
                     initial_pin: initial_pin_control(),
                 },
             ],
+            protocol_inputs: Vec::new(),
+            protocol_outputs: vec!["fixture".into()],
             options: vec![SavedOption {
                 id: "mode".into(),
                 label: "Mode".into(),

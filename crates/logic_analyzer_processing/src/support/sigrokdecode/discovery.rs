@@ -303,12 +303,42 @@ fn descriptor_from_class(decoder_class: &Bound<'_, PyAny>) -> PyResult<SigrokDec
         inputs: string_sequence(&decoder_class.getattr("inputs")?)?,
         outputs: string_sequence(&decoder_class.getattr("outputs")?)?,
         tags: string_sequence(&decoder_class.getattr("tags")?)?,
-        channels: channels(&decoder_class.getattr("channels")?)?,
-        optional_channels: channels(&decoder_class.getattr("optional_channels")?)?,
-        options: options(&decoder_class.getattr("options")?)?,
-        annotations: annotation_classes(&decoder_class.getattr("annotations")?)?,
-        annotation_rows: annotation_rows(&decoder_class.getattr("annotation_rows")?)?,
-        binary: annotation_classes(&decoder_class.getattr("binary")?)?,
+        channels: decoder_class
+            .getattr("channels")
+            .ok()
+            .map(|value| channels(&value))
+            .transpose()?
+            .unwrap_or_default(),
+        optional_channels: decoder_class
+            .getattr("optional_channels")
+            .ok()
+            .map(|value| channels(&value))
+            .transpose()?
+            .unwrap_or_default(),
+        options: decoder_class
+            .getattr("options")
+            .ok()
+            .map(|value| options(&value))
+            .transpose()?
+            .unwrap_or_default(),
+        annotations: decoder_class
+            .getattr("annotations")
+            .ok()
+            .map(|value| annotation_classes(&value))
+            .transpose()?
+            .unwrap_or_default(),
+        annotation_rows: decoder_class
+            .getattr("annotation_rows")
+            .ok()
+            .map(|value| annotation_rows(&value))
+            .transpose()?
+            .unwrap_or_default(),
+        binary: decoder_class
+            .getattr("binary")
+            .ok()
+            .map(|value| annotation_classes(&value))
+            .transpose()?
+            .unwrap_or_default(),
         logic_output_channels: decoder_class
             .getattr("logic_output_channels")
             .ok()
@@ -327,8 +357,12 @@ fn start_decoder<'py>(
 ) -> PyResult<(Bound<'py, PyAny>, Arc<DecoderBridge>)> {
     let decoder = decoder_class.call0()?;
     let channel_count = descriptor.channels.len() + descriptor.optional_channels.len();
-    let (bridge, _outputs) = DecoderBridge::new(vec![Some(InitialPin::Low); channel_count], 16)
-        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let (bridge, _outputs) = if channel_count == 0 && !descriptor.inputs.is_empty() {
+        DecoderBridge::new_protocol(16)
+    } else {
+        DecoderBridge::new(vec![Some(InitialPin::Low); channel_count], 16)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?
+    };
     decoder
         .cast::<HostDecoder>()?
         .borrow_mut()
@@ -340,7 +374,9 @@ fn start_decoder<'py>(
     decoder.setattr("options", configured_options)?;
     decoder.setattr("samplenum", 0)?;
     decoder.setattr("matched", py.None())?;
-    decoder.call_method1("metadata", (SRD_CONF_SAMPLERATE, 1_000_000_u64))?;
+    if decoder.hasattr("metadata")? {
+        decoder.call_method1("metadata", (SRD_CONF_SAMPLERATE, 1_000_000_u64))?;
+    }
     decoder.call_method0("start")?;
     Ok((decoder, bridge))
 }

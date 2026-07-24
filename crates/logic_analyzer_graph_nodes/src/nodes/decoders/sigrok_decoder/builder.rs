@@ -28,8 +28,15 @@ impl SigrokDecoderBuilder {
 }
 
 impl RuntimeBuilder for SigrokDecoderBuilder {
-    fn accepted_kinds(&self, _socket: &Socket, _state: &Value) -> Vec<PortKind> {
-        vec![PortKind::of::<SampleBlock>()]
+    fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
+        let Ok(state) = Self::parsed(state) else {
+            return Vec::new();
+        };
+        if socket.def_index == state.channels.len() && !state.protocol_inputs.is_empty() {
+            vec![PortKind::of_named::<SigrokProtocolPacket>("Sigrok Packet")]
+        } else {
+            vec![PortKind::of::<SampleBlock>()]
+        }
     }
 
     fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind> {
@@ -45,6 +52,32 @@ impl RuntimeBuilder for SigrokDecoderBuilder {
             .collect()
     }
 
+    fn offered_connection_contracts(&self, socket: &Socket, state: &Value) -> Vec<String> {
+        let Ok(state) = Self::parsed(state) else {
+            return Vec::new();
+        };
+        if state
+            .outputs
+            .get(socket.def_index)
+            .is_some_and(|output| *output == SavedOutputKind::ProtocolPacket)
+        {
+            state.protocol_outputs
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn accepted_connection_contracts(&self, socket: &Socket, state: &Value) -> Vec<String> {
+        let Ok(state) = Self::parsed(state) else {
+            return Vec::new();
+        };
+        if socket.def_index == state.channels.len() && !state.protocol_inputs.is_empty() {
+            state.protocol_inputs
+        } else {
+            Vec::new()
+        }
+    }
+
     fn input_port(
         &self,
         socket: &Socket,
@@ -52,11 +85,15 @@ impl RuntimeBuilder for SigrokDecoderBuilder {
         state: &Value,
         kind: PortKind,
     ) -> Option<String> {
+        let state = Self::parsed(state).ok()?;
+        if socket.def_index == state.channels.len() && !state.protocol_inputs.is_empty() {
+            return (kind == PortKind::of_named::<SigrokProtocolPacket>("Sigrok Packet"))
+                .then(|| "packets".to_owned());
+        }
         if kind != PortKind::of::<SampleBlock>() {
             return None;
         }
-        Self::parsed(state)
-            .ok()?
+        state
             .channels
             .get(socket.def_index)
             .map(|channel| channel.id.clone())
@@ -69,9 +106,15 @@ impl RuntimeBuilder for SigrokDecoderBuilder {
     }
 
     fn input_required(&self, socket: &Socket, state: &Value) -> bool {
-        Self::parsed(state)
-            .ok()
-            .and_then(|state| state.channels.get(socket.def_index).cloned())
+        let Ok(state) = Self::parsed(state) else {
+            return true;
+        };
+        if socket.def_index == state.channels.len() && !state.protocol_inputs.is_empty() {
+            return true;
+        }
+        state
+            .channels
+            .get(socket.def_index)
             .is_none_or(|channel| channel.required || channel.enabled.value)
     }
 
@@ -130,6 +173,7 @@ impl RuntimeBuilder for SigrokDecoderBuilder {
             decoder_id: state.decoder_id,
             sample_rate,
             channels,
+            protocol_inputs: state.protocol_inputs,
             options,
             annotation_rows_by_class: annotation_rows_by_class
                 .into_iter()
@@ -219,6 +263,8 @@ fn validate_descriptor_schema(
         ));
     }
     if expected.outputs != state.outputs
+        || expected.protocol_inputs != state.protocol_inputs
+        || expected.protocol_outputs != state.protocol_outputs
         || expected.annotation_class_count != state.annotation_class_count
         || expected.binary_class_count != state.binary_class_count
         || expected.logic_groups != state.logic_groups

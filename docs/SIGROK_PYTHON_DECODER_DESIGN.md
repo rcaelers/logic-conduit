@@ -20,6 +20,7 @@ Actionable delivery work is tracked in the **Sigrok Python protocol decoders** s
 - Discover decoder identity, channels, options, protocol inputs and outputs, annotations, binary
   classes, logic outputs, tags, descriptions, and license information.
 - Run raw-logic decoders with compatible `wait()` behavior over finite and growing captures.
+- Route owned protocol packets between independent decoder nodes for graph-defined stacking.
 - Publish annotations and other supported outputs through registered, protocol-independent
   collected-payload contracts.
 - Derive graph controls, viewer lanes, and decoder-table columns from explicit decoder metadata.
@@ -186,7 +187,7 @@ Growing captures expose only committed input. A decoder cannot observe staged or
 discarded samples. Backpressure is bounded and isolated from acquisition in the same way as other
 analysis nodes.
 
-## Proposed future: graph-based decoder stacking
+## Graph-based decoder stacking
 
 Decoders with raw logic input call `wait()`. Decoders with protocol inputs receive calls to
 `decode(start_sample, end_sample, data)` for compatible `OUTPUT_PYTHON` packets emitted below
@@ -202,10 +203,6 @@ owner converts the supported Python value subset into a recursive value model co
 booleans, integers, floats, strings, bytes, lists, tuples, and string-keyed mappings. A packet that
 cannot be represented produces a structured compatibility error. The receiving node reconstructs
 the corresponding Python value before invoking `decode(start_sample, end_sample, data)`.
-
-Raw-logic decoders and their annotation output are delivered first. Protocol-packet connections
-and stacked-decoder compatibility are lower priority and do not delay the initial useful decoder
-node.
 
 ## Output payloads
 
@@ -235,6 +232,11 @@ from validated saved state and a host-supplied decoder catalog. That contract is
 node owner to return an explicit socket/control schema and is not named after Sigrok or any
 protocol. The schema is deterministic for a saved state and carries stable socket identities so a
 catalog refresh does not reconnect edges by display position.
+
+Graph builders may attach opaque semantic contract identities to typed outputs and inputs. The
+generic compiler requires an intersection when both endpoints declare contracts, without knowing
+what those identities mean. The Sigrok node owner uses declared protocol IDs for these contracts,
+so incompatible decoder stacks fail during graph lowering rather than inside Python execution.
 
 If a saved decoder is missing or its schema fingerprint changes, the node remains loadable in a
 disabled state. The concrete node migration reports missing channels, options, or outputs through

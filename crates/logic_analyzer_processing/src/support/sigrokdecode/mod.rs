@@ -22,7 +22,7 @@ pub use discovery::{
 };
 pub(crate) use python_host::{OUTPUT_ANN, OUTPUT_BINARY, OUTPUT_LOGIC, OUTPUT_META, OUTPUT_PYTHON};
 pub(crate) use scheduler::{InitialPin, LogicChunk};
-pub(crate) use worker::{DecoderWorker, OptionValue, WorkerConfig, WorkerError};
+pub(crate) use worker::{DecoderWorker, OptionValue, WorkerConfig, WorkerError, WorkerInputConfig};
 
 #[cfg(test)]
 mod worker_tests;

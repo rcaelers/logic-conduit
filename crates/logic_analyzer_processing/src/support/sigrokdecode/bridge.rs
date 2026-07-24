@@ -58,10 +58,16 @@ pub(crate) enum BridgeError {
     UnknownOutput(usize),
     #[error("decoder output ends before it starts")]
     ReversedOutputRange,
+    #[error("wait() is unavailable for a protocol-input decoder")]
+    WaitUnavailable,
+    #[error("raw logic input is unavailable for a protocol-input decoder")]
+    RawInputUnavailable,
+    #[error("protocol input is unavailable for a raw-logic decoder")]
+    ProtocolInputUnavailable,
 }
 
 pub(crate) struct DecoderBridge {
-    scheduler: Mutex<WaitScheduler>,
+    scheduler: Option<Mutex<WaitScheduler>>,
     input_sender: Sender<InputMessage>,
     input_receiver: Receiver<InputMessage>,
     cancel_sender: Sender<()>,
@@ -83,7 +89,7 @@ impl DecoderBridge {
         let (output_sender, output_receiver) = bounded(queue_capacity);
         Ok((
             Arc::new(Self {
-                scheduler: Mutex::new(scheduler),
+                scheduler: Some(Mutex::new(scheduler)),
                 input_sender,
                 input_receiver,
                 cancel_sender,
@@ -96,11 +102,36 @@ impl DecoderBridge {
         ))
     }
 
+    pub(crate) fn new_protocol(queue_capacity: usize) -> (Arc<Self>, Receiver<DecoderOutput>) {
+        let (input_sender, input_receiver) = bounded(queue_capacity);
+        let (cancel_sender, cancel_receiver) = bounded(1);
+        let (output_sender, output_receiver) = bounded(queue_capacity);
+        (
+            Arc::new(Self {
+                scheduler: None,
+                input_sender,
+                input_receiver,
+                cancel_sender,
+                cancel_receiver,
+                output_sender,
+                registrations: Mutex::new(Vec::new()),
+                connected_channels: Vec::new(),
+            }),
+            output_receiver,
+        )
+    }
+
     pub(crate) fn push_chunk(&self, chunk: LogicChunk) -> Result<(), BridgeError> {
+        if self.scheduler.is_none() {
+            return Err(BridgeError::RawInputUnavailable);
+        }
         map_input_send(self.input_sender.try_send(InputMessage::Chunk(chunk)))
     }
 
     pub(crate) fn finish(&self) -> Result<(), BridgeError> {
+        if self.scheduler.is_none() {
+            return Err(BridgeError::RawInputUnavailable);
+        }
         map_input_send(self.input_sender.try_send(InputMessage::Finish))
     }
 
@@ -109,19 +140,23 @@ impl DecoderBridge {
     }
 
     pub(crate) fn wait(&self, request: WaitRequest) -> Result<SchedulerStatus, BridgeError> {
-        let mut status = self.scheduler.lock().unwrap().begin_wait(request)?;
+        let scheduler = self
+            .scheduler
+            .as_ref()
+            .ok_or(BridgeError::WaitUnavailable)?;
+        let mut status = scheduler.lock().unwrap().begin_wait(request)?;
         loop {
             if status != SchedulerStatus::Waiting {
                 return Ok(status);
             }
             select_biased! {
                 recv(self.cancel_receiver) -> _ => {
-                    return Ok(self.scheduler.lock().unwrap().cancel());
+                    return Ok(scheduler.lock().unwrap().cancel());
                 }
                 recv(self.input_receiver) -> message => {
                     status = match message.map_err(|_| BridgeError::InputQueueClosed)? {
-                        InputMessage::Chunk(chunk) => self.scheduler.lock().unwrap().push_chunk(chunk)?,
-                        InputMessage::Finish => self.scheduler.lock().unwrap().finish()?,
+                        InputMessage::Chunk(chunk) => scheduler.lock().unwrap().push_chunk(chunk)?,
+                        InputMessage::Finish => scheduler.lock().unwrap().finish()?,
                     };
                 }
             }

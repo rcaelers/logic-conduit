@@ -1173,6 +1173,23 @@ pub(crate) fn lower(
             errors.push(CompileError::on(wire.to.node, message));
             continue;
         };
+        let offered_contracts =
+            from_builder.offered_connection_contracts(from_socket, &from_node.state);
+        let accepted_contracts =
+            to_builder.accepted_connection_contracts(to_socket, &to_node.state);
+        if !connection_contracts_overlap(&offered_contracts, &accepted_contracts) {
+            errors.push(CompileError::on(
+                wire.to.node,
+                format!(
+                    "'{}' accepts contracts [{}], but '{}' offers [{}]",
+                    to_socket.name,
+                    accepted_contracts.join(", "),
+                    from_socket.name,
+                    offered_contracts.join(", ")
+                ),
+            ));
+            continue;
+        }
 
         let Some(out_port) = from_builder.output_port(from_socket, &from_node.state, kind) else {
             errors.push(CompileError::on(
@@ -1350,6 +1367,12 @@ pub(crate) fn lower(
     let mut compiled = compiled;
     cache_platform::assign_derived_word_caches(&mut compiled, registry);
     Ok(compiled)
+}
+
+fn connection_contracts_overlap(offered: &[String], accepted: &[String]) -> bool {
+    offered.is_empty()
+        || accepted.is_empty()
+        || offered.iter().any(|contract| accepted.contains(contract))
 }
 
 /// Resolves the clocked-node sampling presentations available for the
@@ -2145,6 +2168,20 @@ mod tests {
         discover_live_capture_feature_from(graph, builders, |node| retained.contains(&node.id))
     }
     use crate::nodes;
+
+    #[test]
+    fn opaque_connection_contracts_require_an_intersection_when_both_ends_declare_them() {
+        assert!(connection_contracts_overlap(&[], &["spi".into()]));
+        assert!(connection_contracts_overlap(&["spi".into()], &[]));
+        assert!(connection_contracts_overlap(
+            &["spi".into(), "uart".into()],
+            &["spi".into()]
+        ));
+        assert!(!connection_contracts_overlap(
+            &["uart".into()],
+            &["spi".into()]
+        ));
+    }
 
     #[test]
     fn payload_subscriptions_register_subscription_and_default_presentation() {

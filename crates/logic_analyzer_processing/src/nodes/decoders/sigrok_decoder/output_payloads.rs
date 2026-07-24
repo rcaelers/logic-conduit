@@ -106,6 +106,8 @@ pub enum SigrokValue {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SigrokProtocolPacket {
+    pub start_sample: u64,
+    pub end_sample: u64,
     pub start_time_ns: u64,
     pub end_time_ns: u64,
     pub protocol_id: String,

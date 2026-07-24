@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
-use crossbeam_channel::{Receiver, RecvTimeoutError, TryRecvError};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, unbounded};
 use pyo3::exceptions::PyEOFError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyDictMethods, PyList, PyModule};
@@ -27,9 +27,26 @@ pub(crate) struct WorkerConfig {
     pub(crate) decoder_root: PathBuf,
     pub(crate) decoder_id: String,
     pub(crate) sample_rate: u64,
-    pub(crate) channels: Vec<Option<InitialPin>>,
+    pub(crate) input: WorkerInputConfig,
     pub(crate) options: BTreeMap<String, OptionValue>,
     pub(crate) queue_capacity: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum WorkerInputConfig {
+    Logic(Vec<Option<InitialPin>>),
+    Protocol(Vec<String>),
+}
+
+enum ProtocolInputMessage {
+    Packet {
+        start_sample: u64,
+        end_sample: u64,
+        protocol_id: String,
+        value: Py<PyAny>,
+    },
+    Finish,
+    Cancel,
 }
 
 #[derive(Debug, Error)]
@@ -48,20 +65,30 @@ pub(crate) struct DecoderWorker {
     bridge: Arc<DecoderBridge>,
     outputs: Receiver<DecoderOutput>,
     thread: Option<JoinHandle<Result<(), WorkerError>>>,
+    protocol_input: Option<Sender<ProtocolInputMessage>>,
 }
 
 impl DecoderWorker {
     pub(crate) fn spawn(config: WorkerConfig) -> Result<Self, WorkerError> {
-        let (bridge, outputs) = DecoderBridge::new(config.channels.clone(), config.queue_capacity)?;
+        let (bridge, outputs) = match &config.input {
+            WorkerInputConfig::Logic(channels) => {
+                DecoderBridge::new(channels.clone(), config.queue_capacity)?
+            }
+            WorkerInputConfig::Protocol(_) => DecoderBridge::new_protocol(config.queue_capacity),
+        };
+        let (protocol_sender, protocol_receiver) = unbounded();
+        let protocol_input =
+            matches!(&config.input, WorkerInputConfig::Protocol(_)).then_some(protocol_sender);
         let thread_bridge = Arc::clone(&bridge);
         let thread = thread::Builder::new()
             .name(format!("sigrok-{}", config.decoder_id))
-            .spawn(move || run_decoder(config, thread_bridge))
+            .spawn(move || run_decoder(config, thread_bridge, protocol_receiver))
             .map_err(WorkerError::Spawn)?;
         Ok(Self {
             bridge,
             outputs,
             thread: Some(thread),
+            protocol_input,
         })
     }
 
@@ -69,12 +96,43 @@ impl DecoderWorker {
         self.bridge.push_chunk(chunk).map_err(Into::into)
     }
 
+    pub(crate) fn push_protocol_packet(
+        &self,
+        start_sample: u64,
+        end_sample: u64,
+        protocol_id: String,
+        value: Py<PyAny>,
+    ) -> Result<(), WorkerError> {
+        let sender = self
+            .protocol_input
+            .as_ref()
+            .ok_or(BridgeError::ProtocolInputUnavailable)?;
+        sender
+            .send(ProtocolInputMessage::Packet {
+                start_sample,
+                end_sample,
+                protocol_id,
+                value,
+            })
+            .map_err(|_| BridgeError::InputQueueClosed.into())
+    }
+
     pub(crate) fn finish(&self) -> Result<(), WorkerError> {
-        self.bridge.finish().map_err(Into::into)
+        if let Some(sender) = &self.protocol_input {
+            sender
+                .send(ProtocolInputMessage::Finish)
+                .map_err(|_| BridgeError::InputQueueClosed.into())
+        } else {
+            self.bridge.finish().map_err(Into::into)
+        }
     }
 
     pub(crate) fn cancel(&self) {
-        self.bridge.cancel();
+        if let Some(sender) = &self.protocol_input {
+            let _ = sender.send(ProtocolInputMessage::Cancel);
+        } else {
+            self.bridge.cancel();
+        }
     }
 
     pub(crate) fn try_output(&self) -> Result<Option<DecoderOutput>, WorkerError> {
@@ -126,7 +184,11 @@ impl Drop for DecoderWorker {
     }
 }
 
-fn run_decoder(config: WorkerConfig, bridge: Arc<DecoderBridge>) -> Result<(), WorkerError> {
+fn run_decoder(
+    config: WorkerConfig,
+    bridge: Arc<DecoderBridge>,
+    protocol_input: Receiver<ProtocolInputMessage>,
+) -> Result<(), WorkerError> {
     Python::initialize();
     Python::attach(|py| {
         install_sigrokdecode_module(py)?;
@@ -146,12 +208,38 @@ fn run_decoder(config: WorkerConfig, bridge: Arc<DecoderBridge>) -> Result<(), W
         decoder.setattr("options", options)?;
         decoder.setattr("samplenum", 0)?;
         decoder.setattr("matched", py.None())?;
-        decoder.call_method1("metadata", (SRD_CONF_SAMPLERATE, config.sample_rate))?;
+        if decoder.hasattr("metadata")? {
+            decoder.call_method1("metadata", (SRD_CONF_SAMPLERATE, config.sample_rate))?;
+        }
         decoder.call_method0("start")?;
-        match decoder.call_method0("decode") {
-            Ok(_) => Ok(()),
-            Err(error) if error.is_instance_of::<PyEOFError>(py) => Ok(()),
-            Err(error) => Err(error),
+        match &config.input {
+            WorkerInputConfig::Logic(_) => match decoder.call_method0("decode") {
+                Ok(_) => Ok(()),
+                Err(error) if error.is_instance_of::<PyEOFError>(py) => Ok(()),
+                Err(error) => Err(error),
+            },
+            WorkerInputConfig::Protocol(accepted_protocols) => loop {
+                match protocol_input.recv().map_err(|_| {
+                    pyo3::exceptions::PyRuntimeError::new_err("protocol input closed")
+                })? {
+                    ProtocolInputMessage::Packet {
+                        start_sample,
+                        end_sample,
+                        protocol_id,
+                        value,
+                    } => {
+                        if !accepted_protocols.contains(&protocol_id) {
+                            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                                "decoder '{}' does not accept protocol '{protocol_id}'",
+                                config.decoder_id
+                            )));
+                        }
+                        decoder
+                            .call_method1("decode", (start_sample, end_sample, value.bind(py)))?;
+                    }
+                    ProtocolInputMessage::Finish | ProtocolInputMessage::Cancel => return Ok(()),
+                }
+            },
         }
     })
     .map_err(|error| WorkerError::Python(format_python_error(error)))

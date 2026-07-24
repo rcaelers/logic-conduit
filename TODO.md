@@ -150,7 +150,7 @@ The proposed architecture and compatibility boundary are defined in
 - [x] Add native catalog/search-path UI, trust and missing-dependency diagnostics, packaging and
   license review, architecture enforcement, and representative performance tests. Keep wasm
   target selection at the complete backend/registration boundary.
-- [ ] Add low-priority graph-based decoder stacking: convert `OUTPUT_PYTHON` values to an owned
+- [x] Add low-priority graph-based decoder stacking: convert `OUTPUT_PYTHON` values to an owned
   protocol-packet payload, connect independent decoder nodes by declared protocol IDs, reconstruct
   Python values at the receiving node, and test `decode(self, ss, es, data)` compatibility. Do not
   create hidden stacks inside the Python host or processing node.

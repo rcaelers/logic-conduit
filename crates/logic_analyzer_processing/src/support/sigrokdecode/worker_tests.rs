@@ -9,7 +9,7 @@ use pyo3::types::{PyAnyMethods, PyStringMethods};
 
 use super::python_host::{OUTPUT_ANN, OUTPUT_PYTHON};
 use super::scheduler::{InitialPin, LogicChunk};
-use super::worker::{DecoderWorker, OptionValue, WorkerConfig, WorkerError};
+use super::worker::{DecoderWorker, OptionValue, WorkerConfig, WorkerError, WorkerInputConfig};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -148,12 +148,12 @@ fn unmodified_spi_decoder_runs_through_the_worker() {
         decoder_root,
         decoder_id: "spi".into(),
         sample_rate: 1_000_000,
-        channels: vec![
+        input: WorkerInputConfig::Logic(vec![
             Some(InitialPin::SameAsFirstSample),
             None,
             Some(InitialPin::SameAsFirstSample),
             None,
-        ],
+        ]),
         options,
         queue_capacity: 128,
     };
@@ -241,7 +241,7 @@ impl DecoderFixture {
             decoder_root: self.root.clone(),
             decoder_id: self.id.clone(),
             sample_rate: 1_000_000,
-            channels,
+            input: WorkerInputConfig::Logic(channels),
             options: BTreeMap::new(),
             queue_capacity: 16,
         })

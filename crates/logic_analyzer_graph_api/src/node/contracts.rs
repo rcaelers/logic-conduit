@@ -86,6 +86,16 @@ pub trait RuntimeBuilder {
     }
     fn accepted_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind>;
     fn offered_kinds(&self, socket: &Socket, state: &Value) -> Vec<PortKind>;
+    /// Optional owner-defined semantic contracts carried by an output.
+    /// Empty means the payload type alone defines compatibility.
+    fn offered_connection_contracts(&self, _socket: &Socket, _state: &Value) -> Vec<String> {
+        Vec::new()
+    }
+    /// Optional owner-defined semantic contracts accepted by an input.
+    /// When both ends declare contracts, at least one identity must match.
+    fn accepted_connection_contracts(&self, _socket: &Socket, _state: &Value) -> Vec<String> {
+        Vec::new()
+    }
     fn input_port(
         &self,
         socket: &Socket,

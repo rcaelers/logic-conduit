@@ -18,7 +18,7 @@ use super::output_payloads::{
 use crate::support::{
     DecoderOutput, DecoderWorker, InitialPin, LogicChunk, MetadataType, OUTPUT_ANN, OUTPUT_BINARY,
     OUTPUT_LOGIC, OUTPUT_META, OUTPUT_PYTHON, OptionValue, OutputRegistration, WorkerConfig,
-    WorkerError,
+    WorkerError, WorkerInputConfig,
 };
 
 const OUTPUT_QUEUE_CAPACITY: usize = 65_536;
@@ -53,6 +53,7 @@ pub struct SigrokDecoderConfig {
     pub decoder_id: String,
     pub sample_rate: u64,
     pub channels: Vec<SigrokChannel>,
+    pub protocol_inputs: Vec<String>,
     pub options: BTreeMap<String, SigrokOptionValue>,
     pub annotation_rows_by_class: Vec<Arc<[usize]>>,
     pub binary_class_count: usize,
@@ -68,6 +69,8 @@ pub struct SigrokDecoder {
     binary_class_count: usize,
     logic_groups: Vec<String>,
     input_buffers: Vec<VecDeque<SampleBlock>>,
+    protocol_inputs: Vec<String>,
+    protocol_buffer: VecDeque<SigrokProtocolPacket>,
     worker: DecoderWorker,
     finished: bool,
 }
@@ -77,8 +80,21 @@ impl SigrokDecoder {
         if config.sample_rate == 0 {
             return Err("Sigrok decoder sample rate must be positive".into());
         }
-        if config.channels.is_empty() || !config.channels.iter().any(|channel| channel.connected) {
-            return Err("Sigrok decoder requires at least one connected channel".into());
+        let connected_count = config
+            .channels
+            .iter()
+            .filter(|channel| channel.connected)
+            .count();
+        match (connected_count > 0, config.protocol_inputs.is_empty()) {
+            (false, true) => {
+                return Err("Sigrok decoder requires raw-logic or protocol input".into());
+            }
+            (true, false) => {
+                return Err(
+                    "Sigrok decoder cannot mix raw-logic channels and protocol input".into(),
+                );
+            }
+            _ => {}
         }
         let channel_initial = config
             .channels
@@ -104,20 +120,20 @@ impl SigrokDecoder {
                 (name.clone(), value)
             })
             .collect();
+        let worker_input = if config.protocol_inputs.is_empty() {
+            WorkerInputConfig::Logic(channel_initial)
+        } else {
+            WorkerInputConfig::Protocol(config.protocol_inputs.clone())
+        };
         let worker = DecoderWorker::spawn(WorkerConfig {
             decoder_root: config.decoder_root.clone(),
             decoder_id: config.decoder_id.clone(),
             sample_rate: config.sample_rate,
-            channels: channel_initial,
+            input: worker_input,
             options,
             queue_capacity: OUTPUT_QUEUE_CAPACITY,
         })
         .map_err(|error| error.to_string())?;
-        let connected_count = config
-            .channels
-            .iter()
-            .filter(|channel| channel.connected)
-            .count();
         Ok(Self {
             name: format!("sigrok_{}", config.decoder_id),
             decoder_id: config.decoder_id,
@@ -127,6 +143,8 @@ impl SigrokDecoder {
             binary_class_count: config.binary_class_count,
             logic_groups: config.logic_groups,
             input_buffers: (0..connected_count).map(|_| VecDeque::new()).collect(),
+            protocol_inputs: config.protocol_inputs,
+            protocol_buffer: VecDeque::new(),
             worker,
             finished: false,
         })
@@ -200,6 +218,28 @@ impl SigrokDecoder {
             sample_count,
             channels,
         )))
+    }
+
+    fn acquire_protocol_packet(
+        &mut self,
+        inputs: &[InputPort],
+    ) -> WorkResult<Option<SigrokProtocolPacket>> {
+        let Some(input) = inputs.first() else {
+            return Err(WorkError::NodeError(
+                "missing Sigrok decoder protocol input".into(),
+            ));
+        };
+        let Some(mut receiver) = input.get::<SigrokProtocolPacket>(&mut self.protocol_buffer)
+        else {
+            return Err(WorkError::NodeError(
+                "invalid Sigrok decoder protocol input".into(),
+            ));
+        };
+        match receiver.recv() {
+            Ok(packet) => Ok(Some(packet)),
+            Err(WorkError::Shutdown) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     fn drain_outputs(&mut self, outputs: &[OutputPort]) -> WorkResult<usize> {
@@ -276,7 +316,11 @@ impl ProcessNode for SigrokDecoder {
     }
 
     fn num_inputs(&self) -> usize {
-        self.input_buffers.len()
+        if self.protocol_inputs.is_empty() {
+            self.input_buffers.len()
+        } else {
+            1
+        }
     }
 
     fn num_outputs(&self) -> usize {
@@ -284,6 +328,13 @@ impl ProcessNode for SigrokDecoder {
     }
 
     fn input_schema(&self) -> Vec<PortSchema> {
+        if !self.protocol_inputs.is_empty() {
+            return vec![PortSchema::new::<SigrokProtocolPacket>(
+                "packets",
+                0,
+                PortDirection::Input,
+            )];
+        }
         self.channels
             .iter()
             .filter(|channel| channel.connected)
@@ -314,6 +365,32 @@ impl ProcessNode for SigrokDecoder {
             return Err(WorkError::NodeError(
                 "Sigrok decoder stopped before its inputs ended".into(),
             ));
+        }
+        if !self.protocol_inputs.is_empty() {
+            let Some(packet) = self.acquire_protocol_packet(inputs)? else {
+                let count = self.finalize(outputs)?;
+                return if count == 0 {
+                    Err(WorkError::Shutdown)
+                } else {
+                    Ok(count)
+                };
+            };
+            let value = Python::attach(|py| sigrok_value_to_python(py, &packet.value, 0)).map_err(
+                |error| {
+                    WorkError::NodeError(format!(
+                        "could not reconstruct Sigrok protocol packet: {error}"
+                    ))
+                },
+            )?;
+            self.worker
+                .push_protocol_packet(
+                    packet.start_sample,
+                    packet.end_sample,
+                    packet.protocol_id,
+                    value,
+                )
+                .map_err(worker_error)?;
+            return Ok(1 + self.drain_outputs(outputs)?);
         }
         let Some(chunk) = self.acquire_chunk(inputs)? else {
             let count = self.finalize(outputs)?;
@@ -466,6 +543,8 @@ fn convert_python_output(
             }))
         }
         OUTPUT_PYTHON => Ok(ConvertedOutput::Packet(SigrokProtocolPacket {
+            start_sample,
+            end_sample,
             start_time_ns,
             end_time_ns,
             protocol_id: registration
@@ -478,6 +557,48 @@ fn convert_python_output(
             "unsupported output type {output_type}"
         ))),
     }
+}
+
+fn sigrok_value_to_python(
+    py: Python<'_>,
+    value: &SigrokValue,
+    depth: usize,
+) -> PyResult<Py<PyAny>> {
+    if depth >= VALUE_RECURSION_LIMIT {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "protocol packet nesting exceeds 64 levels",
+        ));
+    }
+    let value = match value {
+        SigrokValue::Null => return Ok(py.None()),
+        SigrokValue::Bool(value) => PyBool::new(py, *value).to_owned().into_any(),
+        SigrokValue::Integer(value) => PyInt::new(py, *value).into_any(),
+        SigrokValue::Float(value) => PyFloat::new(py, *value).into_any(),
+        SigrokValue::String(value) => PyString::new(py, value).into_any(),
+        SigrokValue::Bytes(value) => PyBytes::new(py, value).into_any(),
+        SigrokValue::List(values) => {
+            let result = PyList::empty(py);
+            for value in values {
+                result.append(sigrok_value_to_python(py, value, depth + 1)?)?;
+            }
+            result.into_any()
+        }
+        SigrokValue::Tuple(values) => {
+            let values = values
+                .iter()
+                .map(|value| sigrok_value_to_python(py, value, depth + 1))
+                .collect::<PyResult<Vec<_>>>()?;
+            PyTuple::new(py, values)?.into_any()
+        }
+        SigrokValue::Mapping(values) => {
+            let result = PyDict::new(py);
+            for (key, value) in values {
+                result.set_item(key, sigrok_value_to_python(py, value, depth + 1)?)?;
+            }
+            result.into_any()
+        }
+    };
+    Ok(value.unbind())
 }
 
 fn convert_value(value: &Bound<'_, PyAny>, depth: usize) -> PyResult<SigrokValue> {
@@ -547,6 +668,7 @@ fn worker_error(error: WorkerError) -> WorkError {
 
 #[cfg(test)]
 mod implementation_tests {
+    use std::fs;
     use std::path::Path;
 
     use crossbeam_channel::{Receiver as ChannelReceiver, bounded};
@@ -599,6 +721,95 @@ mod implementation_tests {
                 "output changed at chunk boundary {boundary}"
             );
         }
+    }
+
+    #[test]
+    fn protocol_input_reconstructs_owned_values_for_stacked_decode_calls() {
+        let directory = tempfile::tempdir().unwrap();
+        let package = directory.path().join("stacked_fixture");
+        fs::create_dir(&package).unwrap();
+        fs::write(package.join("__init__.py"), "from .pd import Decoder\n").unwrap();
+        fs::write(
+            package.join("pd.py"),
+            r#"
+import sigrokdecode as srd
+
+class Decoder(srd.Decoder):
+    def start(self):
+        self.ann = self.register(srd.OUTPUT_ANN)
+    def decode(self, ss, es, data):
+        kind, number, details = data
+        assert kind == 'DATA'
+        assert number == 165
+        assert details == {'valid': True, 'bytes': b'\x10\x20'}
+        self.put(ss, es, self.ann, [0, [f'{kind}:{number}:{details["valid"]}']])
+"#,
+        )
+        .unwrap();
+
+        let watchdog = Watchdog::new();
+        let (input_sender, input_receiver) = bounded(4);
+        input_sender
+            .send(ChannelMessage::Sample(SigrokProtocolPacket {
+                start_sample: 12,
+                end_sample: 20,
+                start_time_ns: 12_000,
+                end_time_ns: 20_000,
+                protocol_id: "spi".into(),
+                value: SigrokValue::Tuple(vec![
+                    SigrokValue::String("DATA".into()),
+                    SigrokValue::Integer(165),
+                    SigrokValue::Mapping(BTreeMap::from([
+                        ("valid".into(), SigrokValue::Bool(true)),
+                        ("bytes".into(), SigrokValue::Bytes(Arc::from([0x10, 0x20]))),
+                    ])),
+                ]),
+            }))
+            .unwrap();
+        drop(input_sender);
+        let inputs = vec![InputPort::new_with_watchdog(
+            input_receiver,
+            &watchdog,
+            "stacked-test",
+            "packets",
+        )];
+        let (annotation_output, annotation_receiver) = output::<SigrokAnnotation>(&watchdog, 0);
+        let (binary_output, _binary_receiver) = output::<SigrokBinary>(&watchdog, 1);
+        let (logic_output, _logic_receiver) = output::<SigrokGeneratedLogic>(&watchdog, 2);
+        let (metadata_output, _metadata_receiver) = output::<SigrokMetadata>(&watchdog, 3);
+        let (packet_output, _packet_receiver) = output::<SigrokProtocolPacket>(&watchdog, 4);
+        let outputs = vec![
+            annotation_output,
+            binary_output,
+            logic_output,
+            metadata_output,
+            packet_output,
+        ];
+        let mut decoder = SigrokDecoder::new(SigrokDecoderConfig {
+            decoder_root: directory.path().to_owned(),
+            decoder_id: "stacked_fixture".into(),
+            sample_rate: 1_000_000,
+            channels: Vec::new(),
+            protocol_inputs: vec!["spi".into()],
+            options: BTreeMap::new(),
+            annotation_rows_by_class: vec![Arc::from([0])],
+            binary_class_count: 0,
+            logic_groups: Vec::new(),
+        })
+        .unwrap();
+        loop {
+            match decoder.work(&inputs, &outputs) {
+                Ok(_) if decoder.should_stop() => break,
+                Ok(_) => {}
+                Err(WorkError::Shutdown) => break,
+                Err(error) => panic!("unexpected stacked decoder error: {error}"),
+            }
+        }
+        let annotations = collect(annotation_receiver);
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0].start_time_ns, 12_000);
+        assert_eq!(annotations[0].end_time_ns, 20_000);
+        assert_eq!(annotations[0].texts.as_ref(), ["DATA:165:True"]);
     }
 
     fn run_spi(decoder_root: &Path, signals: &[Vec<bool>; 3], chunks: &[usize]) -> SpiResult {
@@ -683,6 +894,7 @@ mod implementation_tests {
                     initial_pin: SigrokInitialPin::SameAsFirstSample,
                 },
             ],
+            protocol_inputs: Vec::new(),
             options: BTreeMap::from([
                 (
                     "bitorder".into(),
