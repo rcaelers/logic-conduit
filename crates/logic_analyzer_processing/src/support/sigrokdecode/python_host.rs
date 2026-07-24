@@ -2,9 +2,12 @@ use std::sync::Arc;
 
 use pyo3::exceptions::{PyEOFError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyDictMethods, PyModule};
+use pyo3::types::{PyAny, PyDict, PyDictMethods, PyFloat, PyInt, PyModule, PyTuple};
 
-use super::bridge::{DecoderBridge, DecoderOutput, OutputRegistration, matched_parts};
+use super::bridge::{
+    DecoderBridge, DecoderOutput, MetadataRegistration, MetadataType, OutputRegistration,
+    matched_parts,
+};
 use super::conditions::{PinCondition, WaitCondition, WaitRequest, WaitTerm};
 use super::scheduler::SchedulerStatus;
 
@@ -57,9 +60,16 @@ impl HostDecoder {
                 "metadata descriptors are valid only for OUTPUT_META",
             ));
         }
+        if output_type == OUTPUT_META && meta.is_none() {
+            return Err(PyValueError::new_err(
+                "OUTPUT_META requires (type, name, description)",
+            ));
+        }
+        let metadata = meta.map(parse_metadata_registration).transpose()?;
         Ok(self.bridge()?.register(OutputRegistration {
             output_type,
             protocol_id: proto_id.map(str::to_owned),
+            metadata,
         }))
     }
 
@@ -110,6 +120,30 @@ impl HostDecoder {
     fn has_channel(&self, channel_index: usize) -> PyResult<bool> {
         Ok(self.bridge()?.has_channel(channel_index))
     }
+}
+
+fn parse_metadata_registration(meta: &Bound<'_, PyAny>) -> PyResult<MetadataRegistration> {
+    let meta = meta.cast::<PyTuple>()?;
+    if meta.len() != 3 {
+        return Err(PyValueError::new_err(
+            "metadata registration must be (type, name, description)",
+        ));
+    }
+    let value_type = meta.get_item(0)?;
+    let value_type = if value_type.is(value_type.py().get_type::<PyInt>()) {
+        MetadataType::Integer
+    } else if value_type.is(value_type.py().get_type::<PyFloat>()) {
+        MetadataType::Float
+    } else {
+        return Err(PyValueError::new_err(
+            "metadata value type must be int or float",
+        ));
+    };
+    Ok(MetadataRegistration {
+        value_type,
+        name: meta.get_item(1)?.extract()?,
+        description: meta.get_item(2)?.extract()?,
+    })
 }
 
 pub(crate) fn install_sigrokdecode_module(py: Python<'_>) -> PyResult<()> {

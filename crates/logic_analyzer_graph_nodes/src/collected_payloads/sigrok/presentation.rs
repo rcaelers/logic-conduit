@@ -3,10 +3,9 @@ use logic_analyzer_processing::nodes::decoders::sigrok_decoder::{
     SigrokProtocolPacket,
 };
 use logic_analyzer_viewer::{
-    OpaqueLaneDrawContext, ViewerLaneRenderer, ViewerLaneTrack, draw_digital_snapshot,
-    draw_value_snapshot,
+    OpaqueLaneDrawContext, ViewerLaneRenderer, ViewerLaneTrack, draw_value_snapshot,
 };
-use signal_processing::{OpaqueCollectedLaneSnapshot, Sample};
+use signal_processing::OpaqueCollectedLaneSnapshot;
 
 macro_rules! span_renderer {
     ($renderer:ident, $payload:ty) => {
@@ -38,45 +37,6 @@ macro_rules! span_renderer {
 
 span_renderer!(SigrokAnnotationRenderer, SigrokAnnotation);
 span_renderer!(SigrokBinaryRenderer, SigrokBinary);
+span_renderer!(SigrokGeneratedLogicRenderer, SigrokGeneratedLogic);
 span_renderer!(SigrokMetadataRenderer, SigrokMetadata);
 span_renderer!(SigrokProtocolPacketRenderer, SigrokProtocolPacket);
-
-pub(crate) struct SigrokGeneratedLogicRenderer;
-
-impl ViewerLaneRenderer for SigrokGeneratedLogicRenderer {
-    fn draw_opaque_lane(
-        &self,
-        _track: &ViewerLaneTrack,
-        snapshot: Option<&OpaqueCollectedLaneSnapshot>,
-        context: OpaqueLaneDrawContext<'_>,
-    ) -> bool {
-        let Some(snapshot) = snapshot
-            .and_then(|snapshot| snapshot.value::<SigrokLaneSnapshot<SigrokGeneratedLogic>>())
-        else {
-            return false;
-        };
-        let mut transitions = Vec::new();
-        let mut previous = None;
-        for output in snapshot.entries() {
-            let count = output.sample_count.min(output.samples.len());
-            if count == 0 {
-                continue;
-            }
-            let duration = output.end_time_ns.saturating_sub(output.start_time_ns);
-            for (index, value) in output.samples.iter().copied().take(count).enumerate() {
-                let value = value != 0;
-                if previous == Some(value) {
-                    continue;
-                }
-                let offset = (u128::from(duration) * index as u128 / count as u128) as u64;
-                transitions.push(Sample::new(
-                    value,
-                    output.start_time_ns.saturating_add(offset),
-                ));
-                previous = Some(value);
-            }
-        }
-        draw_digital_snapshot(&context, &transitions, false);
-        true
-    }
-}

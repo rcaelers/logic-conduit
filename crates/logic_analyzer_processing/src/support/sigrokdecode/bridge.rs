@@ -18,6 +18,20 @@ enum InputMessage {
 pub(crate) struct OutputRegistration {
     pub(crate) output_type: i32,
     pub(crate) protocol_id: Option<String>,
+    pub(crate) metadata: Option<MetadataRegistration>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MetadataType {
+    Integer,
+    Float,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MetadataRegistration {
+    pub(crate) value_type: MetadataType,
+    pub(crate) name: String,
+    pub(crate) description: String,
 }
 
 #[derive(Debug)]
@@ -116,6 +130,13 @@ impl DecoderBridge {
 
     pub(crate) fn register(&self, registration: OutputRegistration) -> usize {
         let mut registrations = self.registrations.lock().unwrap();
+        if let Some((id, _)) = registrations
+            .iter()
+            .enumerate()
+            .find(|(_, existing)| **existing == registration)
+        {
+            return id;
+        }
         let id = registrations.len();
         registrations.push(registration);
         id

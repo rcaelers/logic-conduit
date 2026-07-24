@@ -88,6 +88,12 @@ impl DecoderWorker {
         self.bridge.registrations()
     }
 
+    pub(crate) fn is_finished(&self) -> bool {
+        self.thread
+            .as_ref()
+            .is_none_or(std::thread::JoinHandle::is_finished)
+    }
+
     pub(crate) fn receive_output(
         &self,
         timeout: std::time::Duration,

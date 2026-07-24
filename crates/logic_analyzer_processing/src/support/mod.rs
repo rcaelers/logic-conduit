@@ -6,3 +6,8 @@ pub(crate) mod sigrok_file;
 mod sigrokdecode;
 
 pub(crate) use capture_format::{get_packed_bit, parse_sample_rate};
+pub(crate) use sigrokdecode::{
+    DecoderOutput, DecoderWorker, InitialPin, LogicChunk, MetadataType, OUTPUT_ANN, OUTPUT_BINARY,
+    OUTPUT_LOGIC, OUTPUT_META, OUTPUT_PYTHON, OptionValue, OutputRegistration, WorkerConfig,
+    WorkerError,
+};

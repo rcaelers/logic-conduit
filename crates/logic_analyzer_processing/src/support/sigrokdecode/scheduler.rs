@@ -33,6 +33,10 @@ impl LogicChunk {
         }
     }
 
+    pub(crate) fn sample_count(&self) -> usize {
+        self.sample_count
+    }
+
     fn end_sample(&self) -> Option<u64> {
         self.start_sample.checked_add(self.sample_count as u64)
     }

@@ -13,5 +13,10 @@ mod scheduler;
 #[allow(dead_code)]
 mod worker;
 
+pub(crate) use bridge::{DecoderOutput, MetadataType, OutputRegistration};
+pub(crate) use python_host::{OUTPUT_ANN, OUTPUT_BINARY, OUTPUT_LOGIC, OUTPUT_META, OUTPUT_PYTHON};
+pub(crate) use scheduler::{InitialPin, LogicChunk};
+pub(crate) use worker::{DecoderWorker, OptionValue, WorkerConfig, WorkerError};
+
 #[cfg(test)]
 mod worker_tests;
