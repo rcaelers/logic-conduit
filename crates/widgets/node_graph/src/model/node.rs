@@ -163,6 +163,7 @@ impl Node {
 impl Node {
     pub fn new_reroute(id: NodeId, pos: Pos2) -> Self {
         let input = Socket {
+            schema_id: String::new(),
             name: String::new(),
             type_name: "Any".to_string(),
             color: Color32::from_rgb(150, 150, 150),

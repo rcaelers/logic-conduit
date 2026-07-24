@@ -10,6 +10,7 @@ use crate::model::{Node, NodeId, NodeKind, Socket, SocketDirection, SocketShape,
 
 fn input_socket<S>(def_index: usize, input: &InputDef<S>) -> Socket {
     Socket {
+        schema_id: input.stable_id.clone(),
         name: input.label.clone(),
         type_name: input.type_name.to_owned(),
         color: input.color,
@@ -38,6 +39,7 @@ fn input_socket<S>(def_index: usize, input: &InputDef<S>) -> Socket {
 
 fn output_socket<S>(def_index: usize, output: &OutputDef<S>) -> Socket {
     Socket {
+        schema_id: output.stable_id.clone(),
         name: output.label.clone(),
         type_name: output.type_name.to_owned(),
         color: output.color,
@@ -76,6 +78,41 @@ fn build_output_sockets<S>(outputs: &[OutputDef<S>]) -> Vec<Socket> {
 /// preserving per-output user state across append-only schema growth.
 /// Semantic reorders remain the concrete node's migration responsibility.
 fn reconcile_output_sockets<S>(sockets: &mut Vec<Socket>, defs: &[OutputDef<S>]) {
+    if sockets.iter().any(|socket| !socket.schema_id.is_empty()) {
+        let definitions = defs
+            .iter()
+            .enumerate()
+            .map(|(index, definition)| (definition.stable_id.as_str(), index))
+            .collect::<HashMap<_, _>>();
+        let mut seen = vec![false; defs.len()];
+        let mut reconciled = Vec::new();
+        for previous in std::mem::take(sockets) {
+            let Some(&index) = definitions.get(previous.schema_id.as_str()) else {
+                let mut removed = previous;
+                removed.visible = false;
+                removed.view_selectable = false;
+                removed.has_control = false;
+                removed.def_index = usize::MAX;
+                reconciled.push(removed);
+                continue;
+            };
+            seen[index] = true;
+            let mut socket = output_socket(index, &defs[index]);
+            socket.resolved_type = previous.resolved_type;
+            socket.hidden = previous.hidden;
+            socket.show_in_view = previous.show_in_view;
+            reconciled.push(socket);
+        }
+        reconciled.extend(
+            defs.iter()
+                .enumerate()
+                .filter(|(index, _)| !seen[*index])
+                .map(|(index, definition)| output_socket(index, definition)),
+        );
+        *sockets = reconciled;
+        return;
+    }
+
     if sockets.len() <= defs.len()
         && sockets
             .iter()
@@ -105,6 +142,43 @@ fn reconcile_output_sockets<S>(sockets: &mut Vec<Socket>, defs: &[OutputDef<S>])
 /// them as saved with per-def data refreshed, anything else rebuilds from the
 /// defs (matching the old count-mismatch behavior).
 fn reconcile_input_sockets<S>(sockets: &mut Vec<Socket>, defs: &[InputDef<S>]) {
+    if defs
+        .iter()
+        .all(|definition| definition.variadic_max.is_none())
+        && sockets.iter().any(|socket| !socket.schema_id.is_empty())
+    {
+        let definitions = defs
+            .iter()
+            .enumerate()
+            .map(|(index, definition)| (definition.stable_id.as_str(), index))
+            .collect::<HashMap<_, _>>();
+        let mut seen = vec![false; defs.len()];
+        let mut reconciled = Vec::new();
+        for previous in std::mem::take(sockets) {
+            let Some(&index) = definitions.get(previous.schema_id.as_str()) else {
+                let mut removed = previous;
+                removed.visible = false;
+                removed.has_control = false;
+                removed.def_index = usize::MAX;
+                reconciled.push(removed);
+                continue;
+            };
+            seen[index] = true;
+            let mut socket = input_socket(index, &defs[index]);
+            socket.resolved_type = previous.resolved_type;
+            socket.hidden = previous.hidden;
+            reconciled.push(socket);
+        }
+        reconciled.extend(
+            defs.iter()
+                .enumerate()
+                .filter(|(index, _)| !seen[*index])
+                .map(|(index, definition)| input_socket(index, definition)),
+        );
+        *sockets = reconciled;
+        return;
+    }
+
     // Files saved before `def_index` existed default it to 0 everywhere;
     // upgrade positionally when the layout is plainly pre-variadic.
     if sockets.len() == defs.len()
@@ -155,6 +229,7 @@ fn reconcile_input_sockets<S>(sockets: &mut Vec<Socket>, defs: &[InputDef<S>]) {
     let mut variadic_member_counts = HashMap::<usize, usize>::new();
     for socket in sockets.iter_mut() {
         let definition = &defs[socket.def_index];
+        socket.schema_id = definition.stable_id.clone();
         socket.type_name = definition.type_name.to_owned();
         socket.color = definition.color;
         socket.shape = definition.shape;
@@ -226,11 +301,12 @@ fn input_sockets_match_defs<S>(sockets: &[Socket], defs: &[InputDef<S>]) -> bool
 }
 
 fn build_node<T: NodeDef>(id: NodeId, pos: Pos2, state: T::State) -> NodeRuntime {
-    let inputs = T::inputs();
-    let outputs = T::outputs();
-    let properties = T::props();
-    let panel = T::panel();
-    let view_panel = T::view_panel();
+    let schema = T::instance_schema(&state);
+    let inputs = schema.inputs;
+    let outputs = schema.outputs;
+    let properties = schema.props;
+    let panel = schema.panel;
+    let view_panel = schema.view_panel;
     let state_json = serde_json::to_value(&state).expect("node state must serialize");
     let input_sockets = build_input_sockets(&inputs);
     let output_sockets = build_output_sockets(&outputs);
@@ -270,11 +346,12 @@ fn create_node<T: NodeDef>(id: NodeId, pos: Pos2) -> NodeRuntime {
 
 fn restore_node<T: NodeDef>(node: &mut Node) -> Box<dyn NodeInstance> {
     let state = serde_json::from_value(node.state.clone()).unwrap_or_else(|_| T::state());
-    let inputs = T::inputs();
-    let outputs = T::outputs();
-    let properties = T::props();
-    let panel = T::panel();
-    let view_panel = T::view_panel();
+    let schema = T::instance_schema(&state);
+    let inputs = schema.inputs;
+    let outputs = schema.outputs;
+    let properties = schema.props;
+    let panel = schema.panel;
+    let view_panel = schema.view_panel;
 
     reconcile_input_sockets(&mut node.inputs, &inputs);
     reconcile_output_sockets(&mut node.outputs, &outputs);
@@ -446,8 +523,8 @@ mod tests {
 
     use super::*;
     use crate::api::{
-        AnySocket, FloatSocket, InputDef, IntSocket, NodeDef, OutputDef, PanelSection, PropDef,
-        StringValue,
+        AnySocket, FloatSocket, InputDef, IntSocket, NodeDef, NodeInstanceSchema, OutputDef,
+        PanelSection, PropDef, StringValue,
     };
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -691,6 +768,109 @@ mod tests {
         assert!(node.outputs[0].show_in_view);
     }
 
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    struct InstanceSchemaState {
+        expanded: bool,
+        reversed: bool,
+        label: StringValue,
+    }
+
+    struct InstanceSchemaNode;
+
+    impl NodeDef for InstanceSchemaNode {
+        type State = InstanceSchemaState;
+
+        fn name() -> &'static str {
+            "InstanceSchema"
+        }
+
+        fn category() -> &'static str {
+            "Test"
+        }
+
+        fn inputs() -> Vec<InputDef<Self::State>> {
+            Vec::new()
+        }
+
+        fn outputs() -> Vec<OutputDef<Self::State>> {
+            Vec::new()
+        }
+
+        fn state() -> Self::State {
+            InstanceSchemaState {
+                expanded: false,
+                reversed: false,
+                label: StringValue::new("default"),
+            }
+        }
+
+        fn instance_schema(state: &Self::State) -> NodeInstanceSchema<Self::State> {
+            let required = InputDef::new::<IntSocket>("Required").stable_id("required");
+            let optional =
+                InputDef::new::<FloatSocket>("Saved optional").stable_id("saved-optional");
+            let mut inputs = vec![required];
+            if state.expanded {
+                inputs.push(optional);
+            }
+            if state.reversed {
+                inputs.reverse();
+            }
+            NodeInstanceSchema::new(inputs, Vec::new()).panel(vec![PanelSection::new(
+                "Instance controls",
+                vec![PropDef::instance_control(
+                    "label",
+                    "Label",
+                    |state: &mut InstanceSchemaState| &mut state.label,
+                )],
+            )])
+        }
+    }
+
+    #[test]
+    fn restored_instance_schema_is_derived_from_saved_state() {
+        let runtime = build_node::<InstanceSchemaNode>(
+            NodeId(0),
+            Pos2::ZERO,
+            InstanceSchemaState {
+                expanded: true,
+                reversed: false,
+                label: StringValue::new("saved"),
+            },
+        );
+        assert_eq!(runtime.node.inputs.len(), 2);
+        assert_eq!(runtime.node.inputs[1].name, "Saved optional");
+        let sections = runtime.instance.panel_sections();
+        assert_eq!(sections[0].title, "Instance controls");
+        assert_eq!(sections[0].props[0].id, "label");
+    }
+
+    #[test]
+    fn stable_schema_ids_preserve_socket_positions_across_definition_reordering() {
+        let runtime = build_node::<InstanceSchemaNode>(
+            NodeId(0),
+            Pos2::ZERO,
+            InstanceSchemaState {
+                expanded: true,
+                reversed: false,
+                label: StringValue::new("saved"),
+            },
+        );
+        let mut node = runtime.node;
+        node.state = serde_json::to_value(InstanceSchemaState {
+            expanded: true,
+            reversed: true,
+            label: StringValue::new("saved"),
+        })
+        .unwrap();
+
+        restore_node::<InstanceSchemaNode>(&mut node);
+
+        assert_eq!(node.inputs[0].schema_id, "required");
+        assert_eq!(node.inputs[0].def_index, 1);
+        assert_eq!(node.inputs[1].schema_id, "saved-optional");
+        assert_eq!(node.inputs[1].def_index, 0);
+    }
+
     fn test_registry() -> NodeTypeRegistry {
         let mut registry = NodeTypeRegistry::new();
         registry.register::<MixNode>();
@@ -705,6 +885,7 @@ mod tests {
         // match defs with a Float- (or Any-) accepting input. MixNode's own
         // "Gain" input accepts Int, so a dragged Int output should match it.
         let float_output = Socket {
+            schema_id: String::new(),
             name: String::new(),
             type_name: "Float".to_owned(),
             color: Color32::WHITE,
@@ -730,6 +911,7 @@ mod tests {
     fn connectable_types_any_type_matches_broadly() {
         let registry = test_registry();
         let any_output = Socket {
+            schema_id: String::new(),
             name: String::new(),
             type_name: "Any".to_owned(),
             color: Color32::WHITE,

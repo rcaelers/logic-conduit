@@ -3,5 +3,7 @@
 mod binary_decoder;
 mod display_format;
 mod i2c_decoder;
+#[cfg(not(target_arch = "wasm32"))]
+mod sigrok_decoder;
 mod spi_decoder;
 mod uart_decoder;

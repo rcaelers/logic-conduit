@@ -1,4 +1,5 @@
 use std::fmt;
+use std::marker::PhantomData;
 
 use egui::{Color32, Rect, Ui};
 use serde::Serialize;
@@ -28,6 +29,7 @@ impl SocketTypeIdentity {
 }
 
 pub struct InputDef<S> {
+    pub(crate) stable_id: String,
     pub(crate) label: String,
     pub(crate) type_name: &'static str,
     /// Idle look shown while unconnected; defaults to the native type's
@@ -47,8 +49,10 @@ pub struct InputDef<S> {
 
 impl<S: 'static> InputDef<S> {
     pub fn new<T: SocketDef>(label: impl Into<String>) -> Self {
+        let label = label.into();
         Self {
-            label: label.into(),
+            stable_id: label.clone(),
+            label,
             type_name: T::type_name(),
             color: T::color(),
             shape: T::shape(),
@@ -65,6 +69,7 @@ impl<S: 'static> InputDef<S> {
     ) -> Self {
         let label = label.into();
         Self {
+            stable_id: label.clone(),
             label: label.clone(),
             type_name: T::type_name(),
             color: T::color(),
@@ -74,6 +79,12 @@ impl<S: 'static> InputDef<S> {
             variadic_max: None,
             control: Some(Box::new(ControlBindingRenderer { label, accessor })),
         }
+    }
+
+    /// Sets the persisted schema identity independently of the display label.
+    pub fn stable_id(mut self, stable_id: impl Into<String>) -> Self {
+        self.stable_id = stable_id.into();
+        self
     }
 
     /// Declares that this input also accepts `T` — the node's processing is
@@ -102,6 +113,7 @@ impl<S: 'static> InputDef<S> {
 }
 
 pub struct OutputDef<S> {
+    pub(crate) stable_id: String,
     pub(crate) label: String,
     pub(crate) type_name: &'static str,
     pub(crate) color: Color32,
@@ -115,8 +127,10 @@ pub struct OutputDef<S> {
 
 impl<S: 'static> OutputDef<S> {
     pub fn new<T: SocketDef>(label: impl Into<String>) -> Self {
+        let label = label.into();
         Self {
-            label: label.into(),
+            stable_id: label.clone(),
+            label,
             type_name: T::type_name(),
             color: T::color(),
             shape: T::shape(),
@@ -134,6 +148,7 @@ impl<S: 'static> OutputDef<S> {
     ) -> Self {
         let label = label.into();
         Self {
+            stable_id: label.clone(),
             label: label.clone(),
             type_name: T::type_name(),
             color: T::color(),
@@ -144,6 +159,12 @@ impl<S: 'static> OutputDef<S> {
             editor_visible: true,
             view_indicator_sources: Vec::new(),
         }
+    }
+
+    /// Sets the persisted schema identity independently of the display label.
+    pub fn stable_id(mut self, stable_id: impl Into<String>) -> Self {
+        self.stable_id = stable_id.into();
+        self
     }
 
     /// Controls whether this output appears in the generic View panel's lane
@@ -186,9 +207,25 @@ impl<S, T: InlineControl> ControlBinding<S> for ControlBindingRenderer<S, T> {
     }
 }
 
+struct InstanceControlBindingRenderer<S, T, F> {
+    label: String,
+    accessor: F,
+    marker: PhantomData<fn(&mut S) -> &mut T>,
+}
+
+impl<S, T, F> ControlBinding<S> for InstanceControlBindingRenderer<S, T, F>
+where
+    T: InlineControl,
+    F: for<'a> Fn(&'a mut S) -> &'a mut T,
+{
+    fn draw(&self, state: &mut S, ui: &mut Ui, rect: Rect, zoom: f32, clip_rect: Rect) -> bool {
+        (self.accessor)(state).draw_widget(ui, &self.label, rect, zoom, clip_rect)
+    }
+}
+
 /// Declarative binding between a node-state field and an inline control.
 pub struct PropDef<S> {
-    pub(crate) id: &'static str,
+    pub(crate) id: String,
     /// Row height when rendered in a side panel; `None` uses the
     /// panel's default row height. Controls that need more vertical room
     /// (e.g. a channel grid) set this.
@@ -198,16 +235,36 @@ pub struct PropDef<S> {
 
 impl<S: 'static> PropDef<S> {
     pub fn control<T: InlineControl + 'static>(
-        id: &'static str,
-        label: &'static str,
+        id: impl Into<String>,
+        label: impl Into<String>,
         accessor: for<'a> fn(&'a mut S) -> &'a mut T,
     ) -> Self {
+        let label = label.into();
         Self {
-            id,
+            id: id.into(),
             panel_height: None,
-            binding: Box::new(ControlBindingRenderer {
-                label: label.to_owned(),
+            binding: Box::new(ControlBindingRenderer { label, accessor }),
+        }
+    }
+
+    /// Binds a control selected from instance state. Unlike [`Self::control`],
+    /// the accessor may capture stable schema data such as an option index.
+    pub fn instance_control<T, F>(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        accessor: F,
+    ) -> Self
+    where
+        T: InlineControl + 'static,
+        F: for<'a> Fn(&'a mut S) -> &'a mut T + Send + Sync + 'static,
+    {
+        Self {
+            id: id.into(),
+            panel_height: None,
+            binding: Box::new(InstanceControlBindingRenderer {
+                label: label.into(),
                 accessor,
+                marker: PhantomData,
             }),
         }
     }
@@ -221,13 +278,52 @@ impl<S: 'static> PropDef<S> {
 
 /// A titled, collapsible group of controls in a side panel.
 pub struct PanelSection<S> {
-    pub title: &'static str,
+    pub title: String,
     pub props: Vec<PropDef<S>>,
 }
 
 impl<S> PanelSection<S> {
-    pub fn new(title: &'static str, props: Vec<PropDef<S>>) -> Self {
-        Self { title, props }
+    pub fn new(title: impl Into<String>, props: Vec<PropDef<S>>) -> Self {
+        Self {
+            title: title.into(),
+            props,
+        }
+    }
+}
+
+/// Complete socket and control schema for one saved node instance.
+pub struct NodeInstanceSchema<S> {
+    pub inputs: Vec<InputDef<S>>,
+    pub outputs: Vec<OutputDef<S>>,
+    pub props: Vec<PropDef<S>>,
+    pub panel: Vec<PanelSection<S>>,
+    pub view_panel: Vec<PanelSection<S>>,
+}
+
+impl<S> NodeInstanceSchema<S> {
+    pub fn new(inputs: Vec<InputDef<S>>, outputs: Vec<OutputDef<S>>) -> Self {
+        Self {
+            inputs,
+            outputs,
+            props: Vec::new(),
+            panel: Vec::new(),
+            view_panel: Vec::new(),
+        }
+    }
+
+    pub fn props(mut self, props: Vec<PropDef<S>>) -> Self {
+        self.props = props;
+        self
+    }
+
+    pub fn panel(mut self, panel: Vec<PanelSection<S>>) -> Self {
+        self.panel = panel;
+        self
+    }
+
+    pub fn view_panel(mut self, view_panel: Vec<PanelSection<S>>) -> Self {
+        self.view_panel = view_panel;
+        self
     }
 }
 
@@ -255,6 +351,20 @@ pub trait NodeDef: 'static {
     fn state() -> Self::State
     where
         Self: Sized;
+    /// Returns the deterministic schema for one saved state. Static node
+    /// definitions inherit the traditional methods; plugin-owned dynamic
+    /// definitions override this method and keep their schema snapshot in
+    /// state.
+    fn instance_schema(state: &Self::State) -> NodeInstanceSchema<Self::State>
+    where
+        Self: Sized,
+    {
+        let _ = state;
+        NodeInstanceSchema::new(Self::inputs(), Self::outputs())
+            .props(Self::props())
+            .panel(Self::panel())
+            .view_panel(Self::view_panel())
+    }
     fn props() -> Vec<PropDef<Self::State>>
     where
         Self: Sized,

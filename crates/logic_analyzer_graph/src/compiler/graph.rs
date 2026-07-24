@@ -951,6 +951,7 @@ fn with_auto_view_sink(graph: &GraphState, registry: &BuilderRegistry) -> GraphS
     let inputs: Vec<Socket> = watched
         .iter()
         .map(|(_, label)| Socket {
+            schema_id: String::new(),
             name: label.clone(),
             type_name: "Any".to_owned(),
             color: Color32::from_rgb(0, 205, 160),
@@ -999,6 +1000,7 @@ fn with_auto_view_sink(graph: &GraphState, registry: &BuilderRegistry) -> GraphS
         let inputs = tabled
             .iter()
             .map(|(_, label)| Socket {
+                schema_id: String::new(),
                 name: label.clone(),
                 type_name: "Any".to_owned(),
                 color: Color32::from_rgb(160, 80, 60),
@@ -4173,6 +4175,7 @@ mod tests {
         state["channels"]["value"] = 4.into();
 
         let file_socket = Socket {
+            schema_id: String::new(),
             name: "File".into(),
             type_name: "Text".into(),
             color: egui::Color32::WHITE,

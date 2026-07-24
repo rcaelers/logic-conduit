@@ -343,17 +343,21 @@ impl NodeGraphWidget {
                                 });
 
                             for (section_index, section) in sections.iter().enumerate() {
-                                egui::CollapsingHeader::new(section.title)
-                                    .id_salt(("props-panel-section", section.title, section_index))
+                                egui::CollapsingHeader::new(section.title.as_str())
+                                    .id_salt((
+                                        "props-panel-section",
+                                        section.title.as_str(),
+                                        section_index,
+                                    ))
                                     .default_open(true)
                                     .show(ui, |ui| {
                                         for (prop_index, prop) in section.props.iter().enumerate() {
                                             ui.push_id(
                                                 (
                                                     "props-panel-property",
-                                                    section.title,
+                                                    section.title.as_str(),
                                                     section_index,
-                                                    prop.id,
+                                                    prop.id.as_str(),
                                                 ),
                                                 |ui| {
                                                     let height =
@@ -483,17 +487,21 @@ impl NodeGraphWidget {
                             }
 
                             for (section_index, section) in sections.iter().enumerate() {
-                                egui::CollapsingHeader::new(section.title)
-                                    .id_salt(("view-panel-section", section.title, section_index))
+                                egui::CollapsingHeader::new(section.title.as_str())
+                                    .id_salt((
+                                        "view-panel-section",
+                                        section.title.as_str(),
+                                        section_index,
+                                    ))
                                     .default_open(true)
                                     .show(ui, |ui| {
                                         for (prop_index, prop) in section.props.iter().enumerate() {
                                             ui.push_id(
                                                 (
                                                     "view-panel-property",
-                                                    section.title,
+                                                    section.title.as_str(),
                                                     section_index,
-                                                    prop.id,
+                                                    prop.id.as_str(),
                                                 ),
                                                 |ui| {
                                                     let height =

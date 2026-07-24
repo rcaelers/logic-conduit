@@ -230,8 +230,8 @@ One generic `Sigrok Decoder` feature represents discovered decoders. Its state s
 descriptor and stores options, channel mapping, compatibility profile, and protocol input/output
 connections. It does not generate a Rust node type for every Python package.
 
-The graph model needs an instance-schema contract so inputs, outputs, and controls can be derived
-from validated state and a host-supplied decoder catalog. That contract is generic: it allows a
+The graph model provides an instance-schema contract so inputs, outputs, and controls are derived
+from validated saved state and a host-supplied decoder catalog. That contract is generic: it allows a
 node owner to return an explicit socket/control schema and is not named after Sigrok or any
 protocol. The schema is deterministic for a saved state and carries stable socket identities so a
 catalog refresh does not reconnect edges by display position.

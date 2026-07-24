@@ -144,7 +144,7 @@ The proposed architecture and compatibility boundary are defined in
   payload contracts with owner-provided retention, table, and viewer presentation.
 - [x] Add the concrete processing node and prove the unmodified standard SPI decoder against
   deterministic captures and a test-only `libsigrokdecode` differential oracle.
-- [ ] Add a generic instance-schema contract to `node_graph`/graph API, then implement one saved,
+- [x] Add a generic instance-schema contract to `node_graph`/graph API, then implement one saved,
   migratable `Sigrok Decoder` graph feature whose stable sockets and controls come from validated
   decoder metadata.
 - [ ] Add native catalog/search-path UI, trust and missing-dependency diagnostics, packaging and

@@ -11,3 +11,8 @@ pub(crate) use sigrokdecode::{
     OUTPUT_LOGIC, OUTPUT_META, OUTPUT_PYTHON, OptionValue, OutputRegistration, WorkerConfig,
     WorkerError,
 };
+pub use sigrokdecode::{
+    SigrokAnnotationClassDescriptor, SigrokAnnotationRowDescriptor, SigrokDecoderChannelDescriptor,
+    SigrokDecoderDescriptor, SigrokDecoderOptionDescriptor, SigrokOutputKind, SigrokScalarValue,
+    discover_sigrok_decoder,
+};

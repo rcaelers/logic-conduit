@@ -442,6 +442,7 @@ mod tests {
 
     fn socket(type_name: &str, allowed: &[&str]) -> Socket {
         Socket {
+            schema_id: String::new(),
             name: String::new(),
             type_name: type_name.to_owned(),
             color: Color32::GRAY,

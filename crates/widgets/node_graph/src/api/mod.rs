@@ -14,5 +14,7 @@ pub use builtins::{
     IntSocket, IntValue, StrSocket, StringValue,
 };
 pub use control::InlineControl;
-pub use node::{InputDef, NodeDef, OutputDef, PanelSection, PropDef, SocketTypeIdentity};
+pub use node::{
+    InputDef, NodeDef, NodeInstanceSchema, OutputDef, PanelSection, PropDef, SocketTypeIdentity,
+};
 pub use socket::{SocketDef, SocketWithControlDef};

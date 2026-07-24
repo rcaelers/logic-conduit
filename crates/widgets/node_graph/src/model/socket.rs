@@ -28,6 +28,9 @@ pub struct VariadicInfo {
 /// A socket on a node instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Socket {
+    /// Stable owner-defined identity within one node instance schema.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub schema_id: String,
     #[serde(default, skip_serializing)]
     pub name: String,
     /// Native type. For inputs this is what the node primarily expects; the
@@ -155,6 +158,7 @@ mod tests {
 
     fn socket(type_name: &str) -> Socket {
         Socket {
+            schema_id: String::new(),
             name: String::new(),
             type_name: type_name.to_owned(),
             color: Color32::WHITE,
