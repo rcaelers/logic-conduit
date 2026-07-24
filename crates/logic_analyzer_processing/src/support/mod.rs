@@ -12,7 +12,8 @@ pub(crate) use sigrokdecode::{
     WorkerError,
 };
 pub use sigrokdecode::{
-    SigrokAnnotationClassDescriptor, SigrokAnnotationRowDescriptor, SigrokDecoderChannelDescriptor,
-    SigrokDecoderDescriptor, SigrokDecoderOptionDescriptor, SigrokOutputKind, SigrokScalarValue,
-    discover_sigrok_decoder,
+    SigrokAnnotationClassDescriptor, SigrokAnnotationRowDescriptor, SigrokCatalogDiagnostic,
+    SigrokCatalogDiagnosticKind, SigrokCatalogEntry, SigrokCatalogSnapshot, SigrokDecoderCatalog,
+    SigrokDecoderChannelDescriptor, SigrokDecoderDescriptor, SigrokDecoderOptionDescriptor,
+    SigrokOutputKind, SigrokScalarValue, discover_sigrok_decoder,
 };

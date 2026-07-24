@@ -1,6 +1,6 @@
 # Sigrok Python Decoder Host
 
-## Proposed future architecture
+## Architecture
 
 LogicConduit can run API-version-3 Sigrok protocol-decoder scripts without linking or calling
 `libsigrokdecode`. A native PyO3 host provides the Python `sigrokdecode` module contract, while
@@ -20,7 +20,6 @@ Actionable delivery work is tracked in the **Sigrok Python protocol decoders** s
 - Discover decoder identity, channels, options, protocol inputs and outputs, annotations, binary
   classes, logic outputs, tags, descriptions, and license information.
 - Run raw-logic decoders with compatible `wait()` behavior over finite and growing captures.
-- Represent stacked decoders as independent graph nodes connected by typed protocol-packet edges.
 - Publish annotations and other supported outputs through registered, protocol-independent
   collected-payload contracts.
 - Derive graph controls, viewer lanes, and decoder-table columns from explicit decoder metadata.
@@ -112,8 +111,9 @@ attributes into a `SigrokDecoderDescriptor`. The descriptor contains:
 - binary output classes and generated-logic channel groups;
 - declared capability requirements and discovery diagnostics.
 
-Search-path order is explicit. Duplicate stable IDs are rejected or resolved by a visible host
-policy; filesystem order never silently decides which implementation wins. Saved graphs retain
+Search-path order is explicit. The first successfully discovered package for a stable ID wins and
+later duplicates produce visible catalog diagnostics; filesystem order never silently decides
+which implementation wins. Saved graphs retain
 the decoder ID, compatibility profile, relevant package fingerprint, configured channel mapping,
 options, and protocol input/output schema.
 
@@ -186,7 +186,7 @@ Growing captures expose only committed input. A decoder cannot observe staged or
 discarded samples. Backpressure is bounded and isolated from acquisition in the same way as other
 analysis nodes.
 
-## Graph-based decoder stacking
+## Proposed future: graph-based decoder stacking
 
 Decoders with raw logic input call `wait()`. Decoders with protocol inputs receive calls to
 `decode(start_sample, end_sample, data)` for compatible `OUTPUT_PYTHON` packets emitted below
@@ -266,6 +266,9 @@ contract.
 The application distinguishes support for external decoder directories from bundling decoder
 files. Packaging work inventories decoder licenses, Python dependencies, native extensions, data
 files, and subprocess use before any decoder collection is redistributed.
+
+The current native distribution policy and review boundary are defined in
+[`SIGROK_DECODER_DISTRIBUTION.md`](SIGROK_DECODER_DISTRIBUTION.md).
 
 ## Verification strategy
 

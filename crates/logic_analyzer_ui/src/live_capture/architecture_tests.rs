@@ -70,3 +70,35 @@ fn generic_trigger_editor_contains_no_provider_or_protocol_cases() {
         );
     }
 }
+
+#[test]
+fn generic_ui_compiler_and_widgets_contain_no_sigrok_host_cases() {
+    let sources = [
+        ("application", include_str!("../app.rs")),
+        (
+            "compiler",
+            include_str!("../../../logic_analyzer_graph/src/compiler/graph.rs"),
+        ),
+        (
+            "node graph definition API",
+            include_str!("../../../widgets/node_graph/src/api/node.rs"),
+        ),
+        (
+            "node graph registry",
+            include_str!("../../../widgets/node_graph/src/runtime/registry.rs"),
+        ),
+        (
+            "viewer",
+            include_str!("../../../widgets/logic_analyzer_viewer/src/viewer.rs"),
+        ),
+    ];
+    for (component, source) in sources {
+        let source = implementation_source(source);
+        for token in ["Sigrok", "sigrok", "Python decoder"] {
+            assert!(
+                !source.contains(token),
+                "generic {component} contains concrete decoder-host token {token:?}"
+            );
+        }
+    }
+}

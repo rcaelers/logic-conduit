@@ -10,6 +10,7 @@ use pyo3::types::{PyAny, PyDict, PyDictMethods, PyList, PyModule};
 use thiserror::Error;
 
 use super::bridge::{BridgeError, DecoderBridge, DecoderOutput, OutputRegistration};
+use super::python_error::format_python_error;
 use super::python_host::{HostDecoder, SRD_CONF_SAMPLERATE, install_sigrokdecode_module};
 use super::scheduler::{InitialPin, LogicChunk};
 
@@ -171,20 +172,4 @@ fn import_decoder<'py>(
     modules.del_item(decoder_id).ok();
     modules.del_item(format!("{decoder_id}.pd")).ok();
     PyModule::import(py, decoder_id)?.getattr("Decoder")
-}
-
-fn format_python_error(error: PyErr) -> String {
-    Python::attach(|py| {
-        let formatted = (|| -> PyResult<String> {
-            let traceback = PyModule::import(py, "traceback")?;
-            let lines = traceback
-                .call_method1(
-                    "format_exception",
-                    (error.get_type(py), error.value(py), error.traceback(py)),
-                )?
-                .extract::<Vec<String>>()?;
-            Ok(lines.concat())
-        })();
-        formatted.unwrap_or_else(|_| error.to_string())
-    })
 }

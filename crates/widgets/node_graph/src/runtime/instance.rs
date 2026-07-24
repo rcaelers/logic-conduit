@@ -1,6 +1,7 @@
 use egui::{Rect, Ui};
 use serde_json::Value;
 
+use super::registry::{reconcile_input_sockets, reconcile_output_sockets};
 use crate::api::{InputDef, NodeDef, OutputDef, PanelSection, PropDef};
 use crate::model::{Node, NodeBadge, Socket};
 
@@ -17,7 +18,7 @@ pub(crate) struct PanelPropMeta {
 }
 
 pub(crate) trait NodeInstance {
-    fn update(&mut self, inputs: &mut [Socket], outputs: &mut [Socket]);
+    fn update(&mut self, inputs: &mut Vec<Socket>, outputs: &mut Vec<Socket>);
     fn badge(&self) -> Option<NodeBadge>;
     fn draw_input_control(
         &mut self,
@@ -79,7 +80,16 @@ pub(crate) struct TypedNode<T: NodeDef> {
 }
 
 impl<T: NodeDef> NodeInstance for TypedNode<T> {
-    fn update(&mut self, inputs: &mut [Socket], outputs: &mut [Socket]) {
+    fn update(&mut self, inputs: &mut Vec<Socket>, outputs: &mut Vec<Socket>) {
+        T::on_update(&mut self.state, inputs, outputs);
+        let schema = T::instance_schema(&self.state);
+        reconcile_input_sockets(inputs, &schema.inputs);
+        reconcile_output_sockets(outputs, &schema.outputs);
+        self.inputs = schema.inputs;
+        self.outputs = schema.outputs;
+        self.properties = schema.props;
+        self.panel = schema.panel;
+        self.view_panel = schema.view_panel;
         T::on_update(&mut self.state, inputs, outputs);
     }
 

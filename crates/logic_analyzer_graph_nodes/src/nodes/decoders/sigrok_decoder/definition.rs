@@ -1,11 +1,13 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use egui::{Color32, Rect, Ui};
 use serde::{Deserialize, Serialize};
 
 use logic_analyzer_processing::support::{
-    SigrokDecoderDescriptor, SigrokOutputKind, SigrokScalarValue,
+    SigrokCatalogEntry, SigrokDecoderCatalog, SigrokDecoderDescriptor, SigrokOutputKind,
+    SigrokScalarValue,
 };
 use node_graph::{
     BoolValue, EnumValue, FloatValue, InlineControl, InputDef, IntValue, NodeBadge, NodeDef,
@@ -16,6 +18,111 @@ use node_graph::{
 use crate::nodes::registry::{COLOR_DECODERS, Signal};
 
 const CURRENT_SCHEMA_VERSION: u8 = 1;
+
+#[derive(Clone, Debug)]
+pub(crate) struct CatalogChoice {
+    pub(crate) decoder_root: PathBuf,
+    pub(crate) decoder_id: String,
+    pub(crate) label: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct SigrokCatalogControl {
+    pub(crate) search_paths: String,
+    pub(crate) selected_id: String,
+    #[serde(skip)]
+    pub(crate) entries: Vec<CatalogChoice>,
+    #[serde(skip)]
+    pub(crate) diagnostics: Vec<String>,
+    #[serde(skip)]
+    pub(crate) selection_diagnostic: Option<String>,
+    #[serde(skip)]
+    pub(crate) refresh_requested: bool,
+}
+
+impl Default for SigrokCatalogControl {
+    fn default() -> Self {
+        Self {
+            search_paths: default_decoder_search_paths()
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            selected_id: String::new(),
+            entries: Vec::new(),
+            diagnostics: Vec::new(),
+            selection_diagnostic: None,
+            refresh_requested: false,
+        }
+    }
+}
+
+impl InlineControl for SigrokCatalogControl {
+    fn draw_widget(
+        &mut self,
+        ui: &mut Ui,
+        label: &str,
+        rect: Rect,
+        _zoom: f32,
+        clip_rect: Rect,
+    ) -> bool {
+        let previous_paths = self.search_paths.clone();
+        let previous_selection = self.selected_id.clone();
+        let mut refresh = false;
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(rect)
+                .layout(egui::Layout::top_down(egui::Align::LEFT)),
+            |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(clip_rect));
+                ui.label(label);
+                if self.entries.is_empty() {
+                    ui.label("Click Refresh to scan the configured decoder directories.");
+                }
+                ui.horizontal(|ui| {
+                    ui.label("Decoder:");
+                    let selected = self
+                        .entries
+                        .iter()
+                        .find(|entry| entry.decoder_id == self.selected_id)
+                        .map_or("Select decoder", |entry| entry.label.as_str());
+                    egui::ComboBox::from_id_salt("sigrok-decoder-catalog")
+                        .selected_text(selected)
+                        .show_ui(ui, |ui| {
+                            for entry in &self.entries {
+                                ui.selectable_value(
+                                    &mut self.selected_id,
+                                    entry.decoder_id.clone(),
+                                    &entry.label,
+                                );
+                            }
+                        });
+                    refresh = ui.button("Refresh").clicked();
+                });
+                ui.label("Search paths (one per line):");
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.search_paths)
+                        .desired_rows(2)
+                        .desired_width(rect.width() - 8.0),
+                );
+                ui.colored_label(
+                    Color32::from_rgb(225, 175, 80),
+                    "Python decoders are trusted code and run with application permissions.",
+                );
+                if let Some(diagnostic) = &self.selection_diagnostic {
+                    ui.colored_label(Color32::from_rgb(220, 100, 90), diagnostic);
+                }
+                for diagnostic in self.diagnostics.iter().take(2) {
+                    ui.colored_label(Color32::from_rgb(220, 100, 90), diagnostic);
+                }
+            },
+        );
+        if refresh {
+            self.refresh_requested = true;
+        }
+        refresh || self.search_paths != previous_paths || self.selected_id != previous_selection
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum SavedOutputKind {
@@ -142,7 +249,7 @@ pub(crate) struct SavedAnnotationRow {
     pub(crate) classes: Vec<usize>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct SigrokDecoderState {
     #[serde(default)]
     pub(crate) schema_version: u8,
@@ -170,8 +277,32 @@ pub(crate) struct SigrokDecoderState {
     pub(crate) binary_class_count: usize,
     #[serde(default)]
     pub(crate) logic_groups: Vec<String>,
+    #[serde(default)]
+    pub(crate) catalog: SigrokCatalogControl,
     #[serde(skip)]
     pub(crate) compatibility_warning: Option<String>,
+}
+
+impl Default for SigrokDecoderState {
+    fn default() -> Self {
+        Self {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            decoder_root: PathBuf::new(),
+            decoder_id: String::new(),
+            decoder_name: String::new(),
+            package_fingerprint: String::new(),
+            sample_rate: None,
+            channels: Vec::new(),
+            options: Vec::new(),
+            outputs: Vec::new(),
+            annotation_rows: Vec::new(),
+            annotation_class_count: 0,
+            binary_class_count: 0,
+            logic_groups: Vec::new(),
+            catalog: SigrokCatalogControl::default(),
+            compatibility_warning: None,
+        }
+    }
 }
 
 impl SigrokDecoderState {
@@ -249,6 +380,10 @@ impl SigrokDecoderState {
                 .iter()
                 .map(|channel| channel.name.clone())
                 .collect(),
+            catalog: SigrokCatalogControl {
+                selected_id: descriptor.id.clone(),
+                ..SigrokCatalogControl::default()
+            },
             compatibility_warning: None,
         }
     }
@@ -341,7 +476,17 @@ impl NodeDef for SigrokDecoderDefinition {
                 )
             })
             .collect::<Vec<_>>();
-        let mut panel = Vec::new();
+        let mut panel = vec![PanelSection::new(
+            "Decoder catalog",
+            vec![
+                PropDef::instance_control(
+                    "catalog",
+                    "Sigrok decoder catalog",
+                    |state: &mut SigrokDecoderState| &mut state.catalog,
+                )
+                .panel_height(150.0),
+            ],
+        )];
         if !settings.is_empty() {
             panel.push(PanelSection::new("Channels", settings));
         }
@@ -352,6 +497,8 @@ impl NodeDef for SigrokDecoderDefinition {
     }
 
     fn on_update(state: &mut Self::State, inputs: &mut [Socket], _outputs: &mut [Socket]) {
+        refresh_catalog(state);
+        apply_catalog_selection(state);
         if state.schema_version == 0 && !state.decoder_id.is_empty() {
             state.schema_version = CURRENT_SCHEMA_VERSION;
             state.compatibility_warning = Some(
@@ -372,10 +519,136 @@ impl NodeDef for SigrokDecoderDefinition {
             Some(NodeBadge::warning("No Sigrok decoder is selected"))
         } else if let Some(warning) = &state.compatibility_warning {
             Some(NodeBadge::warning(warning))
+        } else if let Some(diagnostic) = &state.catalog.selection_diagnostic {
+            Some(NodeBadge::warning(diagnostic))
         } else {
             validate_saved_schema(state).err().map(NodeBadge::error)
         }
     }
+}
+
+fn catalog() -> &'static SigrokDecoderCatalog {
+    static CATALOG: OnceLock<SigrokDecoderCatalog> = OnceLock::new();
+    CATALOG.get_or_init(SigrokDecoderCatalog::default)
+}
+
+fn catalog_search_paths(control: &SigrokCatalogControl) -> Vec<PathBuf> {
+    control
+        .search_paths
+        .lines()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+fn refresh_catalog(state: &mut SigrokDecoderState) {
+    if !state.catalog.refresh_requested
+        && (state.decoder_id.is_empty() || !state.catalog.entries.is_empty())
+    {
+        return;
+    }
+    let search_paths = catalog_search_paths(&state.catalog);
+    let snapshot = if state.catalog.refresh_requested {
+        catalog().refresh(&search_paths)
+    } else {
+        catalog().snapshot(&search_paths)
+    };
+    state.catalog.entries = snapshot.entries.iter().map(catalog_choice).collect();
+    state.catalog.diagnostics = snapshot
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect();
+    state.catalog.selection_diagnostic = None;
+    if state.catalog.selected_id.is_empty() && !state.decoder_id.is_empty() {
+        state.catalog.selected_id = state.decoder_id.clone();
+    }
+    if let Some(current) = snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.descriptor.id == state.decoder_id)
+        && current.descriptor.package_fingerprint != state.package_fingerprint
+    {
+        state.catalog.selection_diagnostic = Some(format!(
+            "Sigrok decoder '{}' changed; reselect it to migrate its saved schema",
+            state.decoder_id
+        ));
+    }
+    if !state.decoder_id.is_empty()
+        && !state
+            .catalog
+            .entries
+            .iter()
+            .any(|entry| entry.decoder_id == state.decoder_id)
+    {
+        state.catalog.selection_diagnostic = Some(format!(
+            "Saved Sigrok decoder '{}' is unavailable; check its search path or Python dependencies",
+            state.decoder_id
+        ));
+    }
+    state.catalog.refresh_requested = false;
+}
+
+fn catalog_choice(entry: &SigrokCatalogEntry) -> CatalogChoice {
+    CatalogChoice {
+        decoder_root: entry.decoder_root.clone(),
+        decoder_id: entry.descriptor.id.clone(),
+        label: format!(
+            "{} ({}, {})",
+            entry.descriptor.name, entry.descriptor.id, entry.descriptor.license
+        ),
+    }
+}
+
+fn apply_catalog_selection(state: &mut SigrokDecoderState) {
+    if state.catalog.selected_id.is_empty() || state.catalog.selected_id == state.decoder_id {
+        return;
+    }
+    let selected = state
+        .catalog
+        .entries
+        .iter()
+        .find(|entry| entry.decoder_id == state.catalog.selected_id)
+        .cloned();
+    let Some(selected) = selected else {
+        return;
+    };
+    let Some(entry) = catalog()
+        .snapshot(&catalog_search_paths(&state.catalog))
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.decoder_root == selected.decoder_root
+                && entry.descriptor.id == selected.decoder_id
+        })
+        .cloned()
+    else {
+        return;
+    };
+    let catalog_control = state.catalog.clone();
+    let mut selected_state =
+        SigrokDecoderState::from_descriptor(entry.decoder_root, &entry.descriptor);
+    selected_state.catalog = catalog_control;
+    selected_state.catalog.selected_id = entry.descriptor.id;
+    *state = selected_state;
+}
+
+fn default_decoder_search_paths() -> Vec<PathBuf> {
+    let mut paths = std::env::var_os("SIGROK_DECODERS_DIR")
+        .map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+        .unwrap_or_default();
+    for path in [
+        PathBuf::from("/opt/homebrew/share/libsigrokdecode/decoders"),
+        PathBuf::from("/usr/local/share/libsigrokdecode/decoders"),
+        PathBuf::from("/usr/share/libsigrokdecode/decoders"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../dslogic/libsigrokdecode/decoders"),
+    ] {
+        if path.is_dir() && !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    paths
 }
 
 fn initial_pin_control() -> EnumValue {
@@ -589,6 +862,10 @@ mod definition_tests {
             annotation_class_count: 1,
             binary_class_count: 0,
             logic_groups: Vec::new(),
+            catalog: SigrokCatalogControl {
+                refresh_requested: false,
+                ..SigrokCatalogControl::default()
+            },
             compatibility_warning: None,
         }
     }

@@ -1,5 +1,6 @@
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -8,6 +9,7 @@ use pyo3::types::{
 };
 
 use super::bridge::DecoderBridge;
+use super::python_error::format_python_error;
 use super::python_host::{
     HostDecoder, OUTPUT_ANN, OUTPUT_BINARY, OUTPUT_LOGIC, OUTPUT_META, OUTPUT_PYTHON,
     SRD_CONF_SAMPLERATE, install_sigrokdecode_module,
@@ -81,6 +83,66 @@ pub struct SigrokDecoderDescriptor {
     pub package_fingerprint: String,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct SigrokCatalogEntry {
+    pub decoder_root: PathBuf,
+    pub descriptor: SigrokDecoderDescriptor,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SigrokCatalogDiagnosticKind {
+    MissingSearchPath,
+    UnreadableSearchPath,
+    InvalidDecoder,
+    DuplicateDecoder,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SigrokCatalogDiagnostic {
+    pub kind: SigrokCatalogDiagnosticKind,
+    pub path: PathBuf,
+    pub decoder_id: Option<String>,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SigrokCatalogSnapshot {
+    pub entries: Vec<SigrokCatalogEntry>,
+    pub diagnostics: Vec<SigrokCatalogDiagnostic>,
+}
+
+#[derive(Default)]
+pub struct SigrokDecoderCatalog {
+    snapshots: Mutex<HashMap<Vec<PathBuf>, Arc<SigrokCatalogSnapshot>>>,
+    scan_lock: Mutex<()>,
+}
+
+impl SigrokDecoderCatalog {
+    pub fn snapshot(&self, search_paths: &[PathBuf]) -> Arc<SigrokCatalogSnapshot> {
+        let key = normalized_search_paths(search_paths);
+        if let Some(snapshot) = self.snapshots.lock().unwrap().get(&key).cloned() {
+            return snapshot;
+        }
+        let _scan = self.scan_lock.lock().unwrap();
+        if let Some(snapshot) = self.snapshots.lock().unwrap().get(&key).cloned() {
+            return snapshot;
+        }
+        self.store_scan(key)
+    }
+
+    pub fn refresh(&self, search_paths: &[PathBuf]) -> Arc<SigrokCatalogSnapshot> {
+        let key = normalized_search_paths(search_paths);
+        let _scan = self.scan_lock.lock().unwrap();
+        self.store_scan(key)
+    }
+
+    fn store_scan(&self, key: Vec<PathBuf>) -> Arc<SigrokCatalogSnapshot> {
+        let snapshot = Arc::new(scan_catalog(&key));
+        self.snapshots.lock().unwrap().insert(key, snapshot.clone());
+        snapshot
+    }
+}
+
 pub fn discover_sigrok_decoder(
     decoder_root: impl Into<PathBuf>,
     id: &str,
@@ -101,7 +163,106 @@ pub fn discover_sigrok_decoder(
             package_fingerprint(&decoder_root.join(id)).map_err(PyValueError::new_err)?;
         PyResult::Ok(descriptor)
     })
-    .map_err(|error| format!("could not discover Sigrok decoder '{id}': {error}"))
+    .map_err(|error| {
+        format!(
+            "could not discover Sigrok decoder '{id}':\n{}",
+            format_python_error(error)
+        )
+    })
+}
+
+fn normalized_search_paths(search_paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    search_paths
+        .iter()
+        .filter_map(|path| {
+            let path = path.canonicalize().unwrap_or_else(|_| path.clone());
+            seen.insert(path.clone()).then_some(path)
+        })
+        .collect()
+}
+
+fn scan_catalog(search_paths: &[PathBuf]) -> SigrokCatalogSnapshot {
+    let mut snapshot = SigrokCatalogSnapshot::default();
+    let mut decoder_ids = HashMap::<String, PathBuf>::new();
+    for decoder_root in search_paths {
+        if !decoder_root.exists() {
+            snapshot.diagnostics.push(SigrokCatalogDiagnostic {
+                kind: SigrokCatalogDiagnosticKind::MissingSearchPath,
+                path: decoder_root.clone(),
+                decoder_id: None,
+                message: format!(
+                    "Sigrok decoder search path does not exist: {}",
+                    decoder_root.display()
+                ),
+            });
+            continue;
+        }
+        let directory = match std::fs::read_dir(decoder_root) {
+            Ok(directory) => directory,
+            Err(error) => {
+                snapshot.diagnostics.push(SigrokCatalogDiagnostic {
+                    kind: SigrokCatalogDiagnosticKind::UnreadableSearchPath,
+                    path: decoder_root.clone(),
+                    decoder_id: None,
+                    message: format!(
+                        "Could not read Sigrok decoder search path {}: {error}",
+                        decoder_root.display()
+                    ),
+                });
+                continue;
+            }
+        };
+        let mut packages = directory
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir() && path.join("pd.py").is_file())
+            .collect::<Vec<_>>();
+        packages.sort();
+        for package in packages {
+            let Some(decoder_id) = package
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+            else {
+                snapshot.diagnostics.push(SigrokCatalogDiagnostic {
+                    kind: SigrokCatalogDiagnosticKind::InvalidDecoder,
+                    path: package,
+                    decoder_id: None,
+                    message: "Sigrok decoder directory name is not valid UTF-8".to_owned(),
+                });
+                continue;
+            };
+            if let Some(first) = decoder_ids.get(&decoder_id) {
+                snapshot.diagnostics.push(SigrokCatalogDiagnostic {
+                    kind: SigrokCatalogDiagnosticKind::DuplicateDecoder,
+                    path: package,
+                    decoder_id: Some(decoder_id.clone()),
+                    message: format!(
+                        "Ignoring duplicate Sigrok decoder '{decoder_id}'; the earlier search path {} wins",
+                        first.display()
+                    ),
+                });
+                continue;
+            }
+            match discover_sigrok_decoder(decoder_root, &decoder_id) {
+                Ok(descriptor) => {
+                    decoder_ids.insert(decoder_id, decoder_root.clone());
+                    snapshot.entries.push(SigrokCatalogEntry {
+                        decoder_root: decoder_root.clone(),
+                        descriptor,
+                    });
+                }
+                Err(message) => snapshot.diagnostics.push(SigrokCatalogDiagnostic {
+                    kind: SigrokCatalogDiagnosticKind::InvalidDecoder,
+                    path: package,
+                    decoder_id: Some(decoder_id),
+                    message,
+                }),
+            }
+        }
+    }
+    snapshot
 }
 
 fn import_decoder<'py>(
@@ -347,6 +508,7 @@ fn package_fingerprint(package: &Path) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
 
@@ -420,5 +582,110 @@ mod tests {
     fn python_test_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn catalog_caches_ordered_search_results_and_reports_duplicates() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first");
+        let second = directory.path().join("second");
+        write_fixture_decoder(&first, "fixture", "First fixture", "mit");
+        write_fixture_decoder(&second, "fixture", "Second fixture", "gplv2+");
+        let catalog = SigrokDecoderCatalog::default();
+
+        let snapshot = catalog.snapshot(&[first.clone(), second.clone()]);
+
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(snapshot.entries[0].descriptor.name, "First fixture");
+        assert_eq!(snapshot.entries[0].descriptor.license, "mit");
+        assert!(snapshot.diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind == SigrokCatalogDiagnosticKind::DuplicateDecoder
+                && diagnostic.decoder_id.as_deref() == Some("fixture")
+        }));
+        assert!(Arc::ptr_eq(
+            &snapshot,
+            &catalog.snapshot(&[first.clone(), second.clone()])
+        ));
+        assert!(!Arc::ptr_eq(&snapshot, &catalog.refresh(&[first, second])));
+    }
+
+    #[test]
+    fn catalog_keeps_missing_paths_as_structured_diagnostics() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing");
+
+        let snapshot = SigrokDecoderCatalog::default().snapshot(std::slice::from_ref(&missing));
+
+        assert!(snapshot.entries.is_empty());
+        assert_eq!(snapshot.diagnostics.len(), 1);
+        assert_eq!(
+            snapshot.diagnostics[0].kind,
+            SigrokCatalogDiagnosticKind::MissingSearchPath
+        );
+        assert_eq!(snapshot.diagnostics[0].path, missing);
+    }
+
+    #[test]
+    #[ignore = "representative native catalog performance check; scans the complete decoder tree"]
+    fn benchmark_complete_standard_catalog_discovery() {
+        let decoder_root = local_decoder_root().expect("Sigrok decoder directory is unavailable");
+        let started = std::time::Instant::now();
+
+        let snapshot = SigrokDecoderCatalog::default().refresh(&[decoder_root]);
+
+        assert!(
+            snapshot
+                .entries
+                .iter()
+                .any(|entry| entry.descriptor.id == "spi")
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "catalog discovery took {:?}",
+            started.elapsed()
+        );
+        eprintln!(
+            "discovered {} decoders with {} diagnostics in {:?}",
+            snapshot.entries.len(),
+            snapshot.diagnostics.len(),
+            started.elapsed()
+        );
+    }
+
+    fn write_fixture_decoder(root: &Path, id: &str, name: &str, license: &str) {
+        let package = root.join(id);
+        fs::create_dir_all(&package).unwrap();
+        fs::write(package.join("__init__.py"), "from .pd import Decoder\n").unwrap();
+        fs::write(
+            package.join("pd.py"),
+            format!(
+                r#"import sigrokdecode as srd
+
+class Decoder(srd.Decoder):
+    api_version = 3
+    id = '{id}'
+    name = '{name}'
+    longname = '{name}'
+    desc = 'Fixture decoder.'
+    license = '{license}'
+    inputs = ['logic']
+    outputs = []
+    tags = ['Test']
+    channels = ({{'id': 'data', 'name': 'Data', 'desc': 'Data'}},)
+    optional_channels = ()
+    options = ()
+    annotations = ()
+    annotation_rows = ()
+    binary = ()
+
+    def metadata(self, key, value):
+        self.samplerate = value
+
+    def start(self):
+        pass
+"#
+            ),
+        )
+        .unwrap();
     }
 }

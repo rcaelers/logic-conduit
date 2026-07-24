@@ -147,7 +147,7 @@ The proposed architecture and compatibility boundary are defined in
 - [x] Add a generic instance-schema contract to `node_graph`/graph API, then implement one saved,
   migratable `Sigrok Decoder` graph feature whose stable sockets and controls come from validated
   decoder metadata.
-- [ ] Add native catalog/search-path UI, trust and missing-dependency diagnostics, packaging and
+- [x] Add native catalog/search-path UI, trust and missing-dependency diagnostics, packaging and
   license review, architecture enforcement, and representative performance tests. Keep wasm
   target selection at the complete backend/registration boundary.
 - [ ] Add low-priority graph-based decoder stacking: convert `OUTPUT_PYTHON` values to an owned

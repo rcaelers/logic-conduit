@@ -77,7 +77,7 @@ fn build_output_sockets<S>(outputs: &[OutputDef<S>]) -> Vec<Socket> {
 /// Refreshes restored output sockets from current definitions while
 /// preserving per-output user state across append-only schema growth.
 /// Semantic reorders remain the concrete node's migration responsibility.
-fn reconcile_output_sockets<S>(sockets: &mut Vec<Socket>, defs: &[OutputDef<S>]) {
+pub(crate) fn reconcile_output_sockets<S>(sockets: &mut Vec<Socket>, defs: &[OutputDef<S>]) {
     if sockets.iter().any(|socket| !socket.schema_id.is_empty()) {
         let definitions = defs
             .iter()
@@ -141,7 +141,7 @@ fn reconcile_output_sockets<S>(sockets: &mut Vec<Socket>, defs: &[OutputDef<S>])
 /// validated structurally against the defs (via `def_index`); a match keeps
 /// them as saved with per-def data refreshed, anything else rebuilds from the
 /// defs (matching the old count-mismatch behavior).
-fn reconcile_input_sockets<S>(sockets: &mut Vec<Socket>, defs: &[InputDef<S>]) {
+pub(crate) fn reconcile_input_sockets<S>(sockets: &mut Vec<Socket>, defs: &[InputDef<S>]) {
     if defs
         .iter()
         .all(|definition| definition.variadic_max.is_none())
