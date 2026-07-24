@@ -1,17 +1,14 @@
 use std::path::Path;
 
-use pyo3::exceptions::{PyNotImplementedError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{
     PyAny, PyBool, PyDict, PyDictMethods, PyFloat, PyInt, PyList, PyModule, PyString,
 };
 
-const OUTPUT_ANN: i32 = 0;
-const OUTPUT_PYTHON: i32 = 1;
-const OUTPUT_BINARY: i32 = 2;
-const OUTPUT_LOGIC: i32 = 3;
-const OUTPUT_META: i32 = 4;
-const SRD_CONF_SAMPLERATE: i32 = 10_000;
+use super::bridge::DecoderBridge;
+use super::python_host::{HostDecoder, SRD_CONF_SAMPLERATE, install_sigrokdecode_module};
+use super::scheduler::InitialPin;
 
 #[derive(Clone, Debug, PartialEq)]
 enum ScalarValue {
@@ -68,85 +65,6 @@ struct DecoderDescriptor {
     binary: Vec<AnnotationClass>,
 }
 
-#[pyclass(subclass, name = "Decoder", module = "sigrokdecode")]
-#[derive(Default)]
-struct HostDecoder {
-    next_output_id: usize,
-}
-
-#[pymethods]
-impl HostDecoder {
-    #[new]
-    fn new() -> Self {
-        Self::default()
-    }
-
-    #[pyo3(signature = (output_type, proto_id=None, meta=None))]
-    fn register(
-        &mut self,
-        output_type: i32,
-        proto_id: Option<&str>,
-        meta: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<usize> {
-        if !(OUTPUT_ANN..=OUTPUT_META).contains(&output_type) {
-            return Err(PyValueError::new_err(format!(
-                "unsupported Sigrok output type {output_type}"
-            )));
-        }
-        if output_type != OUTPUT_META && meta.is_some() {
-            return Err(PyValueError::new_err(
-                "metadata descriptors are valid only for OUTPUT_META",
-            ));
-        }
-        let _ = proto_id;
-
-        let output_id = self.next_output_id;
-        self.next_output_id += 1;
-        Ok(output_id)
-    }
-
-    #[pyo3(signature = (conditions=None))]
-    fn wait(&self, conditions: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        let _ = conditions;
-        Err(PyNotImplementedError::new_err(
-            "the feasibility harness does not yet schedule wait conditions",
-        ))
-    }
-
-    fn put(
-        &self,
-        start_sample: u64,
-        end_sample: u64,
-        output_id: usize,
-        data: &Bound<'_, PyAny>,
-    ) -> PyResult<()> {
-        let _ = (start_sample, end_sample, output_id, data);
-        Err(PyNotImplementedError::new_err(
-            "the feasibility harness does not yet collect decoder output",
-        ))
-    }
-
-    fn has_channel(&self, channel_index: usize) -> bool {
-        let _ = channel_index;
-        false
-    }
-}
-
-fn install_sigrokdecode_module(py: Python<'_>) -> PyResult<()> {
-    let module = PyModule::new(py, "sigrokdecode")?;
-    module.add_class::<HostDecoder>()?;
-    module.add("OUTPUT_ANN", OUTPUT_ANN)?;
-    module.add("OUTPUT_PYTHON", OUTPUT_PYTHON)?;
-    module.add("OUTPUT_BINARY", OUTPUT_BINARY)?;
-    module.add("OUTPUT_LOGIC", OUTPUT_LOGIC)?;
-    module.add("OUTPUT_META", OUTPUT_META)?;
-    module.add("SRD_CONF_SAMPLERATE", SRD_CONF_SAMPLERATE)?;
-
-    let sys = PyModule::import(py, "sys")?;
-    let modules: Bound<'_, PyDict> = sys.getattr("modules")?.cast_into()?;
-    modules.set_item("sigrokdecode", module)
-}
-
 fn import_decoder<'py>(
     py: Python<'py>,
     decoder_root: &Path,
@@ -199,6 +117,10 @@ fn start_decoder<'py>(
     descriptor: &DecoderDescriptor,
 ) -> PyResult<Bound<'py, PyAny>> {
     let decoder = decoder_class.call0()?;
+    let channel_count = descriptor.channels.len() + descriptor.optional_channels.len();
+    let (bridge, _outputs) = DecoderBridge::new(vec![Some(InitialPin::Low); channel_count], 16)
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    decoder.cast::<HostDecoder>()?.borrow_mut().attach(bridge);
     let configured_options = PyDict::new(py);
     for option in &descriptor.options {
         set_scalar(&configured_options, &option.id, &option.default)?;

@@ -137,7 +137,7 @@ The proposed architecture and compatibility boundary are defined in
   linking `libsigrokdecode`.
 - [x] Implement and unit-test the complete API-version-3 wait-condition model and a chunk-invariant
   Rust scheduler, including initial pins, optional channels, `matched`, EOF, and cancellation.
-- [ ] Implement the native decoder worker and PyO3 `Decoder` methods (`wait`, `register`, `put`, and
+- [x] Implement the native decoder worker and PyO3 `Decoder` methods (`wait`, `register`, `put`, and
   `has_channel`) with bounded queues, GIL release while waiting, traceback-rich failures, and clean
   teardown.
 - [ ] Add registered Sigrok annotation, binary, generated-logic, metadata, and protocol-packet

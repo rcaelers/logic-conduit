@@ -22,6 +22,7 @@ thiserror = { workspace = true }
 blake3 = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pyo3 = { workspace = true }
 rusb = { workspace = true }
 tempfile = { workspace = true }
 
@@ -32,6 +33,3 @@ libc = { workspace = true }
 logic-analyzer-test-support = { path = "../logic_analyzer_test_support" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-pyo3 = { workspace = true }
